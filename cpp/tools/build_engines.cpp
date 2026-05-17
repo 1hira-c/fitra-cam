@@ -5,12 +5,14 @@
 //                 [--workspace-mb N]
 //                 [--profile name:minD:optD:maxD]   (repeatable)
 //
-// Profile dims are comma-separated, e.g. "input:1x3x256x192:1x3x256x192:3x3x256x192".
+// Profile dims are comma-separated, e.g. "input:1x3x256x192:3x3x256x192:3x3x256x192".
 //
 // Convenience presets:
 //   --preset yolox        => static, no profile (engine consumes parser-provided shape)
 //   --preset rtmpose      => dynamic batch profile on input "input" with
-//                            min=1,opt=1,max=3 over (B,3,256,192)
+//                            min=1,opt=3,max=3 over (B,3,256,192)
+//   --preset rtmpose-384  => dynamic batch profile on input "input" with
+//                            min=1,opt=3,max=3 over (B,3,384,288)
 //
 // Phase 1 use (one command per model; line continuations omitted on purpose):
 //   build_engines --preset yolox   --onnx <yolox_tiny....onnx>   --output models/yolox_tiny.fp16.engine   --fp16
@@ -107,10 +109,23 @@ void print_help() {
         "  --int8                enable INT8 (Phase 4; no calibrator wired yet)\n"
         "  --workspace-mb N      builder workspace (default 1024)\n"
         "  --profile NAME:MIN:OPT:MAX  dynamic-shape profile (repeatable)\n"
-        "                              e.g. input:1x3x256x192:1x3x256x192:3x3x256x192\n"
+        "                              e.g. input:1x3x256x192:3x3x256x192:3x3x256x192\n"
         "  --preset yolox        no profile (static batch=1)\n"
-        "  --preset rtmpose      profile input min=1,opt=1,max=3 over Bx3x256x192\n"
+        "  --preset rtmpose      profile input min=1,opt=3,max=3 over Bx3x256x192\n"
+        "  --preset rtmpose-384  profile input min=1,opt=3,max=3 over Bx3x384x288\n"
         "  --help                show this help\n");
+}
+
+void add_rtmpose_profile(fitra::infer::BuildOptions& opts,
+                         const char* min_dims,
+                         const char* opt_dims,
+                         const char* max_dims) {
+    fitra::infer::DynamicProfile p;
+    p.input_name = "input";
+    p.min_dims   = parse_dims(min_dims);
+    p.opt_dims   = parse_dims(opt_dims);
+    p.max_dims   = parse_dims(max_dims);
+    opts.profiles.push_back(std::move(p));
 }
 
 }  // namespace
@@ -158,15 +173,12 @@ int main(int argc, char** argv) {
     }
 
     if (preset == "rtmpose" && opts.profiles.empty()) {
-        fitra::infer::DynamicProfile p;
-        p.input_name = "input";
-        p.min_dims   = parse_dims("1x3x256x192");
         // opt=3 matches the 3-camera target (one bbox per cam in single-
         // person mode). TRT picks kernels best for `opt`, so opt=1 leaves
         // multi-cam throughput on the table.
-        p.opt_dims   = parse_dims("3x3x256x192");
-        p.max_dims   = parse_dims("3x3x256x192");
-        opts.profiles.push_back(std::move(p));
+        add_rtmpose_profile(opts, "1x3x256x192", "3x3x256x192", "3x3x256x192");
+    } else if (preset == "rtmpose-384" && opts.profiles.empty()) {
+        add_rtmpose_profile(opts, "1x3x384x288", "3x3x384x288", "3x3x384x288");
     } else if (preset == "yolox") {
         // no profile; static shape from ONNX
     } else if (!preset.empty()) {

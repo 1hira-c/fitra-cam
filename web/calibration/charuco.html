@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>fitra-cam ChArUco calibration</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1>ChArUco Calibration</h1>
+      <p id="status">loading</p>
+    </div>
+    <div class="actions">
+      <button id="startBtn" type="button">Start</button>
+      <button id="pauseBtn" type="button">Pause</button>
+      <button id="resetBtn" type="button">Reset</button>
+      <button id="solveBtn" type="button">Solve</button>
+    </div>
+  </header>
+  <main class="charucoMain">
+    <section id="charucoGrid"></section>
+    <aside>
+      <h2>Status</h2>
+      <pre id="session">{}</pre>
+      <h2>Result</h2>
+      <pre id="result">{}</pre>
+    </aside>
+  </main>
+  <script src="/static/charuco.js"></script>
+</body>
+</html>

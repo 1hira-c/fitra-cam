@@ -45,3 +45,17 @@ set_target_properties(fitra_pose_bench PROPERTIES
     OUTPUT_NAME "pose_bench"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
+
+# Calibration YAML validator for measured/ChArUco camera parameters.
+add_executable(fitra_check_calibration
+    check_calibration.cpp
+)
+
+target_link_libraries(fitra_check_calibration PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_check_calibration PROPERTIES
+    OUTPUT_NAME "check_calibration"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)

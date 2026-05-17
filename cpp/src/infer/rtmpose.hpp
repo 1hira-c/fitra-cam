@@ -6,14 +6,14 @@
 // 3-point affine warp, ImageNet BGR mean/std normalization, SimCC argmax,
 // and inverse-affine remap.
 //
-// The wrapper batches up to `kMaxBatch` requests per TRT inference (the
-// engine is built with profile min=1/opt=1/max=3, matching the project's
-// 3-camera goal). Requests beyond that are split across multiple calls.
+// The wrapper batches up to `Options::max_batch` requests per TRT inference
+// (project engines use profile min=1/opt=3/max=3 for the 3-camera goal).
+// Requests beyond that are split across multiple calls.
 //
-// Spec (body7-256x192):
-//   input  : "input"   (B, 3, 256, 192) float32, BGR, ImageNet-normalized
-//   output : "simcc_x" (B, K=17, 384)   float32
-//   output : "simcc_y" (B, K=17, 512)   float32
+// Spec (body7):
+//   input  : "input"   (B, 3, H, W)      float32, BGR, ImageNet-normalized
+//   output : "simcc_x" (B, K=17, W*2)    float32
+//   output : "simcc_y" (B, K=17, H*2)    float32
 
 #include <array>
 #include <cstddef>
@@ -50,8 +50,8 @@ public:
         std::string input_name   = "input";
         std::string simcc_x_name = "simcc_x";
         std::string simcc_y_name = "simcc_y";
-        int   input_w   = 192;
-        int   input_h   = 256;
+        int   input_w   = 192;  // overridden from the TRT engine when available
+        int   input_h   = 256;  // overridden from the TRT engine when available
         float padding   = 1.25f;
         float simcc_split = 2.0f;
         int   max_batch = 3;  // matches engine profile max

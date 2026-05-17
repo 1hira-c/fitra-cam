@@ -94,7 +94,19 @@ void apply_affine_inplace(const cv::Mat& M_inv_2x3,
 RtmPose::RtmPose(TrtEngine& engine) : RtmPose(engine, Options{}) {}
 
 RtmPose::RtmPose(TrtEngine& engine, Options opts)
-    : engine_{engine}, opts_{std::move(opts)} {}
+    : engine_{engine}, opts_{std::move(opts)} {
+    auto in_shape = engine_.engine().getTensorShape(opts_.input_name.c_str());
+    if (in_shape.nbDims != 4) {
+        throw std::runtime_error("RTMPose engine input rank unexpected");
+    }
+    if (in_shape.d[1] != 3) {
+        throw std::runtime_error("RTMPose engine input channel count unexpected");
+    }
+    if (in_shape.d[2] > 0 && in_shape.d[3] > 0) {
+        opts_.input_h = in_shape.d[2];
+        opts_.input_w = in_shape.d[3];
+    }
+}
 
 // Free-standing preprocess: thread-safe, no shared state. Writes a normalized
 // BGR CHW tensor for one (frame, bbox) into `dst_chw` (3 * input_h * input_w

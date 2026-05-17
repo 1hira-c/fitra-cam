@@ -50,6 +50,19 @@ target_link_libraries(fitra_pipeline PUBLIC
     fitra_camera
 )
 
+# Calibration / lifting support shared by tools and the future 3D pipeline.
+add_library(fitra_lift STATIC
+    lift/calib_io.cpp
+)
+
+target_include_directories(fitra_lift PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(fitra_lift PUBLIC
+    opencv_core
+)
+
 # Crow HTTP+WebSocket server.
 add_library(fitra_web STATIC
     web/crow_server.cpp

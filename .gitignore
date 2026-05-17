@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 
 outputs/
+calibrations/
 *.png
 *.jpg
 *.jpeg

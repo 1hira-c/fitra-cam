@@ -13,7 +13,7 @@ Phase 6 で C++ 側 2-cam aggregate 170 fps を達成し、2D 推論のスルー
 
 ## ゴール / 完了条件
 
-1. ChArUco で 2/3 カメラの intrinsic + extrinsic が取得・保存できる。
+1. ChArUco で intrinsic が取得でき、外部パラメータは ChArUco またはメジャー測定床点 + PnP で取得・保存できる。
 2. 同時刻の per-cam 2D keypoint を時刻揃え → confidence-weighted triangulation で 3D skeleton (17 joint) を出せる。
 3. 各関節 3D に 6D Kalman を入れ、欠損フレームでは予測のみで補間。
 4. IK でボーン長を学習済み定数に固定、肘・膝・首・腰の hyperextension を防止。
@@ -23,14 +23,18 @@ Phase 6 で C++ 側 2-cam aggregate 170 fps を達成し、2D 推論のスルー
 
 ## 段階 (Phase 7a–f)
 
-### 7a: ChArUco キャリブレーションツール
+### 7a: キャリブレーションツール
 
 - 新規: `cpp/tools/calibrate_cameras.cpp` (CLI11)
   - 内部: 単カメラごとに `cv::aruco::CharucoDetector` + `cv::aruco::calibrateCameraCharuco` で intrinsic + distCoeffs
   - 外部: 全カメラから同時に見える ChArUco 画像を複数収集 → カメラ 0 を世界基準 → `cv::stereoCalibrate` を pair で順次解いてカメラ 1, 2 を 0 に位置合わせ
   - 入力: `--cam <path>` を複数、`--squares-x/-y`, `--square-len`, `--marker-len`, `--dict`
   - 出力: `calibrations/cam_params.yaml` (gitignore 必須) — `intrinsics[id]: { K[9], dist[5], width, height }`, `extrinsics[id]: { R[9], t[3] }` (世界 = cam0)
-- 新規: `cpp/src/lift/calib_io.{hpp,cpp}` — yaml-cpp で読み書き (FetchContent or apt `libyaml-cpp-dev`)、ランタイム側も使う
+- 追加済みの簡易外部校正: `python/scripts/calibrate_intrinsics_charuco.py` + `python/scripts/measure_extrinsics_web.py`
+  - intrinsic は ChArUco、外部はメジャーで測った床点の world座標とブラウザクリックした画像座標から `solvePnP` / `solvePnPRefineLM`
+  - カメラ高さ・baseline は品質レポートと解選択に使う
+  - 出力: `calibrations/<session>/cam_params.yaml`、`quality.json`、再投影 overlay
+- 新規: `cpp/src/lift/calib_io.{hpp,cpp}` — OpenCV FileStorage で YAML を読み込み、ランタイム側も使う
 - `.gitignore` に `calibrations/` を追加 (engine 同様にデバイス固有)
 - 検証: re-projection RMS を YAML の `quality` フィールドに記録、stdout にも出す
 
