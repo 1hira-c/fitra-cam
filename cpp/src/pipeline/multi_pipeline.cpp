@@ -1,5 +1,6 @@
 #include "pipeline/multi_pipeline.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 
@@ -11,16 +12,38 @@ MultiCameraDriver::MultiCameraDriver(
     std::vector<std::unique_ptr<camera::FrameSource>> sources,
     infer::RtmPose& rtmpose,
     SnapshotBus& bus)
+    : MultiCameraDriver(std::move(sources), rtmpose, bus, ThreeDConfig{}) {}
+
+MultiCameraDriver::MultiCameraDriver(
+    std::vector<std::unique_ptr<camera::FrameSource>> sources,
+    infer::RtmPose& rtmpose,
+    SnapshotBus& bus,
+    ThreeDConfig threed)
     : sources_{std::move(sources)},
       rtmpose_{rtmpose},
       bus_{bus},
+      threed_{threed},
+      kalman_{},
+      ik_{[&]() {
+          lift::IkSolver::Options opts;
+          opts.bone_calib_frames = std::max(1, threed_.bone_calib_frames);
+          opts.subject_height_m = threed_.subject_height_m;
+          return lift::IkSolver{opts};
+      }()},
       latest_per_cam_(sources_.size()),
+      latest_snapshots_(sources_.size()),
       per_cam_(sources_.size()) {
     for (const auto& source : sources_) {
         if (!source || !source->prebakes_pose()) {
             throw std::invalid_argument(
                 "MultiCameraDriver requires FrameSource with RTMPose prebaking enabled");
         }
+    }
+    if ((threed_.triangulator || threed_.bus) && (!threed_.triangulator || !threed_.bus)) {
+        throw std::invalid_argument("3D pipeline requires both triangulator and Skeleton3DBus");
+    }
+    for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
+        latest_snapshots_[i].id = static_cast<int>(i);
     }
 }
 
@@ -148,7 +171,9 @@ void MultiCameraDriver::loop() {
             snap.pending         = recv > snap.processed ? recv - snap.processed : 0;
             snap.stage_ms        = cs.stats.last_stage_ms;
             bus_.update(snap);
+            latest_snapshots_[pc.idx] = std::move(snap);
         }
+        maybe_update_3d(now, wall_now);
         auto t_after_snap = std::chrono::steady_clock::now();
 
         ++iter_count;
@@ -190,6 +215,93 @@ void MultiCameraDriver::update_stats(CamState& cs,
     auto elapsed = std::chrono::duration<double>(now - cs.start_time).count();
     if (elapsed > 0) cs.stats.avg_pose_fps = cs.stats.processed_count / elapsed;
     cs.stats.last_stage_ms = std::chrono::duration<double, std::milli>(now - captured_at).count();
+}
+
+void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point now,
+                                        std::chrono::system_clock::time_point wall_now) {
+    if (!threed_.triangulator || !threed_.bus) return;
+    if (latest_snapshots_.size() < 2) return;
+
+    std::chrono::steady_clock::time_point min_ts{};
+    std::chrono::steady_clock::time_point max_ts{};
+    bool first = true;
+    for (const auto& snap : latest_snapshots_) {
+        if (snap.processed == 0) return;
+        if (first) {
+            min_ts = max_ts = snap.captured_at;
+            first = false;
+        } else {
+            min_ts = std::min(min_ts, snap.captured_at);
+            max_ts = std::max(max_ts, snap.captured_at);
+        }
+    }
+
+    const double sync_dt_ms = std::chrono::duration<double, std::milli>(max_ts - min_ts).count();
+    const double sync_window = std::max(0.0, threed_.sync_window_ms);
+    if (sync_dt_ms > sync_window) {
+        ++tri_sync_miss_;
+        Skeleton3DSnapshot miss;
+        miss.ts = wall_now;
+        miss.stats.enabled = true;
+        miss.stats.sync_dt_ms = sync_dt_ms;
+        miss.stats.subject_height_m = threed_.subject_height_m;
+        miss.stats.sync_miss = tri_sync_miss_;
+        miss.stats.processed = tri_processed_;
+        miss.stats.ik_locked = ik_.locked();
+        threed_.bus->update(miss);
+        return;
+    }
+
+    auto t0 = std::chrono::steady_clock::now();
+    std::vector<lift::PerCameraObservation> observations;
+    observations.reserve(latest_snapshots_.size());
+    for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
+        const auto& snap = latest_snapshots_[i];
+        if (snap.persons.empty()) continue;
+        observations.push_back(lift::PerCameraObservation{
+            static_cast<int>(i), &snap.persons[0]});
+    }
+
+    auto tri = threed_.triangulator->triangulate(observations);
+    infer::Skeleton3D skel = tri.skeleton;
+    if (threed_.kalman_enabled) {
+        double dt_s = 1.0 / std::max(1.0, per_cam_[0].stats.recent_pose_fps);
+        skel = kalman_.update(skel, dt_s);
+    }
+    double drift = ik_.bone_drift_pct(skel);
+    if (threed_.ik_enabled) {
+        skel = ik_.update(skel);
+        drift = ik_.bone_drift_pct(skel);
+    }
+    auto t1 = std::chrono::steady_clock::now();
+
+    ++tri_processed_;
+    tri_recent_.push_back(now);
+    while (tri_recent_.size() > 60) tri_recent_.pop_front();
+    double tri_fps = 0.0;
+    if (tri_recent_.size() >= 2) {
+        auto span = std::chrono::duration<double>(tri_recent_.back() - tri_recent_.front()).count();
+        if (span > 0.0) tri_fps = (tri_recent_.size() - 1) / span;
+    }
+
+    Skeleton3DSnapshot out;
+    out.seq = tri_processed_;
+    out.ts = wall_now;
+    if (tri.valid_joints > 0) {
+        out.persons.push_back(skel);
+    }
+    out.stats.enabled = true;
+    out.stats.ik_locked = ik_.locked();
+    out.stats.valid_joints = tri.valid_joints;
+    out.stats.tri_fps = tri_fps;
+    out.stats.reproj_err_med_px = tri.median_reproj_px;
+    out.stats.bone_len_drift_pct = drift;
+    out.stats.sync_dt_ms = sync_dt_ms;
+    out.stats.stage_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    out.stats.subject_height_m = threed_.subject_height_m;
+    out.stats.processed = tri_processed_;
+    out.stats.sync_miss = tri_sync_miss_;
+    threed_.bus->update(out);
 }
 
 }  // namespace fitra::pipeline

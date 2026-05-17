@@ -29,7 +29,7 @@ find_package(TensorRT REQUIRED)
 
 # OpenCV (apt: libopencv-dev). We need imgproc + imgcodecs + videoio for the
 # correctness check tool; the hot pipeline avoids OpenCV.
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio calib3d)
 
 # Threads
 find_package(Threads REQUIRED)

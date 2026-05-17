@@ -48,11 +48,15 @@ add_library(fitra_pipeline STATIC
 target_link_libraries(fitra_pipeline PUBLIC
     fitra_infer
     fitra_camera
+    fitra_lift
 )
 
 # Calibration / lifting support shared by tools and the future 3D pipeline.
 add_library(fitra_lift STATIC
     lift/calib_io.cpp
+    lift/triangulator.cpp
+    lift/kalman.cpp
+    lift/ik.cpp
 )
 
 target_include_directories(fitra_lift PUBLIC
@@ -61,6 +65,7 @@ target_include_directories(fitra_lift PUBLIC
 
 target_link_libraries(fitra_lift PUBLIC
     opencv_core
+    opencv_calib3d
 )
 
 # Crow HTTP+WebSocket server.

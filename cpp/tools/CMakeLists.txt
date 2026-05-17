@@ -59,3 +59,21 @@ set_target_properties(fitra_check_calibration PROPERTIES
     OUTPUT_NAME "check_calibration"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
+
+# Phase 7: recorded two-camera 2D -> 3D dump with reprojection overlays.
+add_executable(fitra_dump_keypoints_3d
+    dump_keypoints_3d.cpp
+)
+
+target_link_libraries(fitra_dump_keypoints_3d PRIVATE
+    fitra_infer
+    fitra_lift
+    opencv_videoio
+    opencv_imgproc
+    opencv_core
+)
+
+set_target_properties(fitra_dump_keypoints_3d PROPERTIES
+    OUTPUT_NAME "dump_keypoints_3d"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)

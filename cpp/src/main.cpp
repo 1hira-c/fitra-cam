@@ -7,7 +7,7 @@
 //   fitra-cam --cam0 PATH [--cam1 PATH] [--cam2 PATH] --det-engine PATH --pose-engine PATH
 //             [--port 8000] [--host 0.0.0.0] [--static DIR] [--no-web]
 //             [--width 640] [--height 480] [--fps 30]
-//             [--det-frequency 10] [--multi-person] [--probe]
+//             [--det-frequency 10] [--multi-person] [--enable-3d --calib PATH] [--probe]
 //
 // `--probe` keeps the Phase 0 diagnostic (CUDA device + TRT runtime sanity check).
 
@@ -32,6 +32,8 @@
 #include "infer/rtmpose.hpp"
 #include "infer/trt_engine.hpp"
 #include "infer/yolox.hpp"
+#include "lift/calib_io.hpp"
+#include "lift/triangulator.hpp"
 #include "pipeline/multi_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
 #include "util/cuda_check.hpp"
@@ -80,6 +82,15 @@ void print_help() {
         "  --bench-fake-bbox         inject synthetic bbox when detections are empty (bench only)\n"
         "  --det-score F             detection score threshold (default 0.5)\n"
         "  --log-every-s F           stats interval in seconds (default 2.0)\n"
+        "  --enable-3d               enable live 2D -> 3D lifting and /ws3d\n"
+        "  --calib PATH              calibration YAML for --enable-3d\n"
+        "  --kp-conf-thresh F        3D triangulation keypoint threshold (default 0.3)\n"
+        "  --max-reproj-px F         3D reprojection outlier threshold (default 6.0)\n"
+        "  --sync-window-ms F        max camera timestamp gap for 3D (default 15.0)\n"
+        "  --bone-calib-frames N     frames used to lock IK bone lengths (default 150)\n"
+        "  --subject-height-m F      lock IK bone lengths from Japanese anthropometry and height\n"
+        "  --no-3d-kalman            disable 3D Kalman smoothing\n"
+        "  --no-3d-ik                disable 3D IK projection\n"
         "  --probe                   Phase 0 sanity check and exit\n"
         "  --help                    show this help\n");
 }
@@ -131,6 +142,15 @@ int main(int argc, char** argv) {
     bool  bench_fake_bbox = false;
     float det_score = 0.5f;
     double log_every_s = 2.0;
+    bool  enable_3d = false;
+    std::string calib_path;
+    float kp_conf_thresh = 0.3f;
+    float max_reproj_px = 6.0f;
+    double sync_window_ms = 15.0;
+    int bone_calib_frames = 150;
+    double subject_height_m = 0.0;
+    bool kalman_3d = true;
+    bool ik_3d = true;
     bool  want_probe = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -161,6 +181,15 @@ int main(int argc, char** argv) {
         else if (a == "--bench-fake-bbox")   { bench_fake_bbox = true; }
         else if (a == "--det-score")         { det_score = std::stof(need("--det-score")); }
         else if (a == "--log-every-s")       { log_every_s = std::stod(need("--log-every-s")); }
+        else if (a == "--enable-3d")         { enable_3d = true; }
+        else if (a == "--calib")             { calib_path = need("--calib"); }
+        else if (a == "--kp-conf-thresh")    { kp_conf_thresh = std::stof(need("--kp-conf-thresh")); }
+        else if (a == "--max-reproj-px")     { max_reproj_px = std::stof(need("--max-reproj-px")); }
+        else if (a == "--sync-window-ms")    { sync_window_ms = std::stod(need("--sync-window-ms")); }
+        else if (a == "--bone-calib-frames") { bone_calib_frames = std::atoi(need("--bone-calib-frames")); }
+        else if (a == "--subject-height-m")  { subject_height_m = std::stod(need("--subject-height-m")); }
+        else if (a == "--no-3d-kalman")      { kalman_3d = false; }
+        else if (a == "--no-3d-ik")          { ik_3d = false; }
         else {
             std::fprintf(stderr, "unknown arg: %s\n", argv[i]);
             print_help();
@@ -172,6 +201,14 @@ int main(int argc, char** argv) {
         if (want_probe) return probe();
         if (cam_paths[0].empty() || det_engine_path.empty() || pose_engine_path.empty()) {
             print_help();
+            return EXIT_FAILURE;
+        }
+        if (enable_3d && calib_path.empty()) {
+            std::fprintf(stderr, "--enable-3d requires --calib PATH\n");
+            return EXIT_FAILURE;
+        }
+        if (subject_height_m < 0.0 || subject_height_m > 2.5) {
+            std::fprintf(stderr, "--subject-height-m must be 0 or a plausible meter value <= 2.5\n");
             return EXIT_FAILURE;
         }
         std::signal(SIGINT, on_signal);
@@ -219,11 +256,46 @@ int main(int argc, char** argv) {
                 std::move(cap), std::move(yolox), src_opts, &rtmpose_opts));
         }
         std::size_t n_cams = sources.size();
+        if (enable_3d && n_cams < 2) {
+            std::fprintf(stderr, "--enable-3d requires at least two cameras\n");
+            return EXIT_FAILURE;
+        }
+
+        std::unique_ptr<fitra::lift::Triangulator> triangulator;
+        std::unique_ptr<fitra::pipeline::Skeleton3DBus> bus3d;
+        if (enable_3d) {
+            FITRA_LOG_INFO("loading calibration: {}", calib_path);
+            auto calib = fitra::lift::load_calibration(calib_path);
+            fitra::lift::Triangulator::Options tri_opts;
+            tri_opts.kp_conf_thresh = kp_conf_thresh;
+            tri_opts.max_reproj_px = max_reproj_px;
+            triangulator = std::make_unique<fitra::lift::Triangulator>(calib, tri_opts);
+            bus3d = std::make_unique<fitra::pipeline::Skeleton3DBus>();
+            FITRA_LOG_INFO("3D lifting enabled ({} calibrated cameras, sync_window={}ms)",
+                           triangulator->camera_count(), sync_window_ms);
+            if (subject_height_m > 0.0) {
+                FITRA_LOG_INFO("3D IK subject height prior enabled: {} m", subject_height_m);
+            }
+        }
 
         fitra::pipeline::SnapshotBus bus{n_cams};
-        fitra::pipeline::MultiCameraDriver driver{
-            std::move(sources), rtmpose, bus};
-        driver.start();
+        std::unique_ptr<fitra::pipeline::MultiCameraDriver> driver;
+        if (enable_3d) {
+            fitra::pipeline::MultiCameraDriver::ThreeDConfig cfg;
+            cfg.triangulator = triangulator.get();
+            cfg.bus = bus3d.get();
+            cfg.sync_window_ms = sync_window_ms;
+            cfg.kalman_enabled = kalman_3d;
+            cfg.ik_enabled = ik_3d;
+            cfg.bone_calib_frames = bone_calib_frames;
+            cfg.subject_height_m = subject_height_m;
+            driver = std::make_unique<fitra::pipeline::MultiCameraDriver>(
+                std::move(sources), rtmpose, bus, cfg);
+        } else {
+            driver = std::make_unique<fitra::pipeline::MultiCameraDriver>(
+                std::move(sources), rtmpose, bus);
+        }
+        driver->start();
 
         std::unique_ptr<fitra::web::CrowServer> server;
         if (!no_web) {
@@ -233,7 +305,8 @@ int main(int argc, char** argv) {
             sopts.static_dir = static_dir.empty()
                                 ? guess_static_dir().string()
                                 : static_dir;
-            server = std::make_unique<fitra::web::CrowServer>(bus, sopts);
+            server = std::make_unique<fitra::web::CrowServer>(
+                bus, enable_3d ? bus3d.get() : nullptr, sopts);
             server->start();
         }
 
@@ -243,16 +316,16 @@ int main(int argc, char** argv) {
             double dt = std::chrono::duration<double>(now - last_log).count();
             if (dt >= log_every_s) {
                 for (std::size_t i = 0; i < n_cams; ++i) {
-                    const auto& s = driver.stats_for(i);
+                    const auto& s = driver->stats_for(i);
                     char buf[256];
                     std::snprintf(buf, sizeof(buf),
                                   "cam%zu: recv=%5.2f avg_pose=%5.2f recent_pose=%5.2f "
                                   "stage_ms=%6.1f processed=%llu pending=%llu",
-                                  i, driver.recv_fps_for(i),
+                                  i, driver->recv_fps_for(i),
                                   s.avg_pose_fps, s.recent_pose_fps,
                                   s.last_stage_ms,
                                   static_cast<unsigned long long>(s.processed_count),
-                                  static_cast<unsigned long long>(driver.pending_for(i)));
+                                  static_cast<unsigned long long>(driver->pending_for(i)));
                     FITRA_LOG_INFO("{}", buf);
                 }
                 last_log = now;
@@ -261,7 +334,7 @@ int main(int argc, char** argv) {
         }
 
         if (server) server->stop();
-        driver.stop();
+        driver->stop();
         return EXIT_SUCCESS;
     } catch (const std::exception& e) {
         FITRA_LOG_ERROR("fatal: {}", e.what());

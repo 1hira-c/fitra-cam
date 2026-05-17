@@ -16,7 +16,7 @@ Phase 6 で C++ 側 2-cam aggregate 170 fps を達成し、2D 推論のスルー
 1. ChArUco で intrinsic が取得でき、外部パラメータは ChArUco またはメジャー測定床点 + PnP で取得・保存できる。
 2. 同時刻の per-cam 2D keypoint を時刻揃え → confidence-weighted triangulation で 3D skeleton (17 joint) を出せる。
 3. 各関節 3D に 6D Kalman を入れ、欠損フレームでは予測のみで補間。
-4. IK でボーン長を学習済み定数に固定、肘・膝・首・腰の hyperextension を防止。
+4. IK でボーン長を固定する。`--subject-height-m` 指定時は日本人の人体寸法比率から即時固定し、未指定時は起動直後の観測中央値で固定する。肘・膝・首・腰の hyperextension を防止。
 5. 既存 WebSocket JSON スキーマと両立する形で 3D を `/ws3d` (新 endpoint) に publish。
 6. 3-cam live で再投影誤差 median < 3 px、ボーン長変動 < 5%、3D 関節 jitter (静止時の SD) < 10 mm を測れる。
 7. aggregate スループット 90 fps 以上を維持 (3D 段階のレイテンシ ≤ 3 ms/frame target)。
@@ -63,7 +63,7 @@ Phase 6 で C++ 側 2-cam aggregate 170 fps を達成し、2D 推論のスルー
 
 - 新規: `cpp/src/lift/ik.{hpp,cpp}`
   - COCO-17 木構造を `cpp/src/lift/skeleton_def.hpp` に定数で定義: parent[17], bone_pairs[], hinge_joints (肘/膝)
-  - ボーン長キャリブ: 起動直後の N 秒間 (`--bone-calib-sec` 既定 5) で per-bone 長を中央値で確定 → 以降ロック
+  - ボーン長: `--subject-height-m` 指定時は AIST/HQL 日本人青年男女平均の人体寸法比率を身長でスケールして即ロック。未指定時は起動直後の N 秒間 (`--bone-calib-sec` 既定 5) で per-bone 長を中央値で確定 → 以降ロック
   - Solver: **FABRIK** ベース (CCD より関節角度限制との相性が良い)
     - 全関節を Kalman 後の 3D 位置に初期化
     - Forward pass: end effector (手首・足首・頭) を観測位置へ → 親に向かってボーン長を維持しながら戻す
