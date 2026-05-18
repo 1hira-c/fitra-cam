@@ -36,19 +36,16 @@ void Triangulator::require_camera_ids(const std::vector<std::string>& expected_i
         }
         return out;
     };
+    std::vector<std::string> actual;
+    actual.reserve(cameras_.size());
+    for (const auto& cam : cameras_) actual.push_back(cam.id);
     if (cameras_.size() != expected_ids.size()) {
-        std::vector<std::string> actual;
-        actual.reserve(cameras_.size());
-        for (const auto& cam : cameras_) actual.push_back(cam.id);
         throw std::runtime_error(
             "calibration camera ids must match runtime order exactly: expected [" +
             describe(expected_ids) + "], got [" + describe(actual) + "]");
     }
     for (std::size_t i = 0; i < expected_ids.size(); ++i) {
         if (cameras_[i].id != expected_ids[i]) {
-            std::vector<std::string> actual;
-            actual.reserve(cameras_.size());
-            for (const auto& cam : cameras_) actual.push_back(cam.id);
             throw std::runtime_error(
                 "calibration camera ids must match runtime order exactly: expected [" +
                 describe(expected_ids) + "], got [" + describe(actual) + "]");
@@ -79,8 +76,6 @@ Triangulator::Triangulator(const CalibrationSet& calib, Options opts)
         m.t.copyTo(m.Pn(cv::Rect(3, 0, 1, 3)));
         cameras_.push_back(std::move(m));
     }
-    std::sort(cameras_.begin(), cameras_.end(),
-              [](const auto& a, const auto& b) { return a.id < b.id; });
     if (cameras_.size() < 2) {
         throw std::runtime_error("triangulation requires at least 2 calibrated cameras");
     }
