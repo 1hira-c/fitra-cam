@@ -1,115 +1,112 @@
-# Phase 8 Subject Profile 手順書
+# Phase 8 Subject Profile 手順書 (C++統合版)
 
 この手順は、`standing` / `t_pose` / `elbow_flex` / `knee_flex` の姿勢シーケンスから個人別 IK profile を作り、ライブ 3D IK を起動直後から lock するためのもの。カメラ校正は既存の ChArUco intrinsics + 床点 PnP extrinsics を使い、Phase 8 では extrinsics を更新しない。
 
+ウィザードは `cpp/build/main` に統合されており、ライブ推論と並行で動く。同じ orchestrator を **WebUI からも CLI からも** 起動できる。
+
 ## 1. 前提確認
 
-先にカメラ校正 YAML と TensorRT engine があることを確認する。
+校正 YAML と TensorRT engine、新規ツール群があることを確認する。
 
 ```bash
 ./cpp/build/tools/check_calibration \
     --calib calibrations/measure_session/cam_params.yaml \
     --require-extrinsics
-```
 
-Phase 8 の追加ツールがビルド済みか確認する。
-
-```bash
 cmake --build cpp/build -j
-python -m py_compile python/scripts/subject_profile_wizard.py
-./cpp/build/tools/dump_keypoints_3d --help
-./cpp/build/main --help
+./cpp/build/main --help                       # --calibrate* セクションがある
+./cpp/build/tools/dump_keypoints_3d --help    # --pose-session, --subject-profile-out, --quality-out
 ```
 
-## 2. Subject Profile Wizard を起動
+## 2. ウィザードの起動 (WebUI)
 
-`subject_id` は被験者ごとに固定する。既定では `calibrations/subjects/<subject_id>/` に保存される。
+通常の live と同じコマンドで `main` を起動する。
 
 ```bash
-PYTHONNOUSERSITE=1 python python/scripts/subject_profile_wizard.py \
-    --subject-id subject01 \
+./cpp/build/main --enable-3d \
     --calib calibrations/measure_session/cam_params.yaml \
     --cam0 /dev/v4l/by-path/... \
     --cam1 /dev/v4l/by-path/... \
     --det-engine models/yolox_tiny.fp16.engine \
     --pose-engine models/rtmpose_m.fp16.engine \
-    --host 0.0.0.0 --port 8030
+    --host 0.0.0.0 --port 8000
 ```
 
-身長を prior として使う場合だけ `--subject-height-m 1.70` のように追加する。未指定なら姿勢観測から骨長を作る。
+ブラウザで `http://JETSON_IP:8000/subject-calib` を開く。Live UI (`/`) からは右上の「subject calib」リンクで遷移できる。
 
-ブラウザで `http://JETSON_IP:8030/` を開く。
+## 3. Preflight → 姿勢収録 (自動)
 
-## 3. 姿勢を収録
+1. `Subject ID` と身長 (cm) を入力し、`Preflight` を押す。
+2. `Start (auto)` で開始。`standing → t_pose → elbow_flex → knee_flex` の順に**完全自動**で進行する。
+   - 目標ポーズを 1.5 秒安定保持で録画開始 (`hold` バー)
+   - 規定フレーム数 (既定 75f ≈ 5s @ 15fps) で停止し、自動的に次のポーズへ
+   - 失敗時は当該ポーズの `Retake` ボタンで取り直し可能
+3. ポーズ判定は 3D 関節角 (左右の肘 flex、肩 abduction、膝 flex、torso tilt) と `bone_drift_pct` の組合せ。
+   `IkSolver::apply_subject_height_model()` が AIST/HQL 寸法比で IK を即時 lock するため、初回フレームから view 非依存の関節角が取れる。
 
-画面右側の `Sequence` で、各姿勢の `Record` を押す。既定は各姿勢 `3秒準備 + 5秒録画`。
-
-収録する姿勢:
-
-- `standing`: 正面を向いて自然に直立する。
-- `t_pose`: 肩と腕が水平になるように両腕を横へ伸ばす。
-- `elbow_flex`: 肩・肘・手首が見える状態で肘を曲げる。
-- `knee_flex`: 膝と足首が見える状態で軽く膝を曲げる。
-
-姿勢が崩れた、片方のカメラで隠れた、フレーム数が明らかに少ない場合は、その姿勢だけ `Retake` する。
+ポーズの取り方:
+- `standing`: 正面を向き自然に直立。
+- `t_pose`: 肩と腕が水平になるよう両腕を横へ伸ばす。
+- `elbow_flex`: 肩・肘・手首が見える状態で両肘を約 90° 曲げる (腕は前方〜横へ)。
+- `knee_flex`: 膝と足首が見える状態で両膝を約 90° 曲げる (軽い squat)。
 
 ## 4. 解析と承認
 
-4姿勢すべてが `recorded` になったら `Analyze` を押す。解析が終わると `Quality` に `pass` / `warn` / `fail` とメトリクスが出る。
+4 姿勢の録画完了後、自動的に `dump_keypoints_3d` を subprocess で起動して `subject_profile.yaml` と `quality.json` を生成する。
 
-判定の目安:
+判定:
+- `pass`: そのまま `Approve & apply live` で承認。
+- `warn`: `force` チェックを入れて承認。
+- `fail`: 承認不可。問題となった姿勢を Retake する。
 
-- `pass`: そのまま `Approve` してよい。
-- `warn`: overlay とメトリクスを見て、明らかな姿勢崩れがなければ承認してよい。
-- `fail`: 原則として該当姿勢を撮り直す。
-
-`Approve` すると、次のファイルが live の既定 profile になる。
-
-```text
-calibrations/subjects/<subject_id>/latest_profile.yaml
-```
-
-各セッションの成果物は以下に残る。
+承認すると `latest_profile.yaml` を atomic rename で配置し、**ライブ IK をホットリロード**する (main 再起動不要)。
 
 ```text
-calibrations/subjects/<subject_id>/sessions/<timestamp>/
-  pose_session.json
-  subject_profile.yaml
-  quality.json
-  summary.json
-  joints3d.jsonl
-  raw/<pose>_cam0.mp4
-  raw/<pose>_cam1.mp4
-  overlays/<pose>_cam0_reproj.mp4
-  overlays/<pose>_cam1_reproj.mp4
+calibrations/subjects/<subject_id>/
+├── latest_profile.yaml                # 承認時に更新
+└── sessions/<YYYYmmdd_HHMMSS>/
+    ├── pose_session.json
+    ├── subject_profile.yaml
+    ├── quality.json
+    ├── summary.json
+    ├── joints3d.jsonl
+    ├── raw/{pose}_cam{0,1}.mp4
+    └── overlays/
 ```
 
-## 5. Live で profile を使う
+## 5. CLI (headless) で実行
 
-`--subject-id` を指定すると、`calibrations/subjects/<subject_id>/latest_profile.yaml` を読み込む。
+WebUI なしで全自動承認まで走らせる:
 
 ```bash
-./cpp/build/main \
+./cpp/build/main --enable-3d --calibrate \
+    --calib-subject-id subject01 --calib-subject-height-m 1.72 \
+    --calib calibrations/measure_session/cam_params.yaml \
     --cam0 /dev/v4l/by-path/... \
     --cam1 /dev/v4l/by-path/... \
     --det-engine models/yolox_tiny.fp16.engine \
     --pose-engine models/rtmpose_m.fp16.engine \
-    --enable-3d \
+    --no-web --calib-auto-approve --calib-auto-exit
+```
+
+進捗は stderr の `[calib] ...` 行に出る (`AWAIT <pose>`, `RECORDING <pose>`, `[analyze] ...`, `quality status=...`)。pass 時は自動承認 → exit 0。warn / fail は WebUI で手動承認するため `--no-web` を外して起動する。
+
+## 6. Live で profile を使う
+
+```bash
+./cpp/build/main --enable-3d \
+    --cam0 /dev/v4l/by-path/... \
+    --cam1 /dev/v4l/by-path/... \
+    --det-engine models/yolox_tiny.fp16.engine \
+    --pose-engine models/rtmpose_m.fp16.engine \
     --calib calibrations/measure_session/cam_params.yaml \
     --subject-id subject01 \
     --host 0.0.0.0 --port 8000
 ```
 
-直接ファイルを指定したい場合は `--subject-profile PATH` を使う。`--subject-profile` は `--subject-id` より優先される。
+`/stats3d` で `ik_locked=true`, `profile_loaded=true`, `subject_id=subject01`, `quality_status=pass|warn` を確認する。直接指定したい場合は `--subject-profile PATH` (こちらが優先)。
 
-ブラウザまたは `/stats3d` で以下を確認する。
-
-- `ik_locked: true`
-- `profile_loaded: true`
-- `subject_id: subject01`
-- `quality_status: pass` または `warn`
-
-## 6. 解析だけを再実行する
+## 7. 解析だけを再実行する
 
 録画済みセッションから profile と quality を作り直す場合:
 
@@ -126,18 +123,13 @@ calibrations/subjects/<subject_id>/sessions/<timestamp>/
     --quality-out calibrations/subjects/subject01/sessions/<timestamp>/quality.json
 ```
 
-採用する場合は、内容を確認してから `latest_profile.yaml` へコピーする。
+採用する場合は内容を確認してから `latest_profile.yaml` へコピー (またはウィザードで Retake → Approve)。
 
-```bash
-cp calibrations/subjects/subject01/sessions/<timestamp>/subject_profile.yaml \
-   calibrations/subjects/subject01/latest_profile.yaml
-```
+## 8. トラブルシュート
 
-## 7. トラブルシュート
-
-- Wizard 起動直後に camera error が出る: `/dev/v4l/by-path/...` の指定、USB接続、他プロセスがカメラを掴んでいないかを確認する。
-- `Analyze` が失敗する: `dump_keypoints_3d`, `--calib`, `--det-engine`, `--pose-engine` のパスを確認する。
-- `fail` になる: まず overlay を見て、隠れ・左右取り違え・床点校正のズレを確認する。姿勢が崩れている場合は該当姿勢だけ Retake する。
-- Live で `profile_loaded=false`: `--enable-3d` と `--subject-id` / `--subject-profile` の指定、`latest_profile.yaml` の存在を確認する。
+- 起動直後に camera error: `/dev/v4l/by-path/...` の指定、USB 接続、他プロセスがカメラを掴んでいないかを確認。
+- `hold` バーが進まない: WebUI の `failing` 表示 (`left_elbow_flex`, `right_shoulder_abduction` 等) を見て、対応する関節を目標角度帯に合わせる。`bone_drift_pct` が常に閾値超なら `cpp/src/lift/pose_recognizer.cpp` の `max_bone_drift_pct` を調整する。
+- `analyze` が失敗する: stderr の `[calib] [analyze] ...` ログを確認。`dump_keypoints_3d`, `--calib`, `--det-engine`, `--pose-engine` のパスを再確認。
+- `fail`: まず該当 session の `overlays/` を見て、隠れ・左右取り違え・床点校正のズレを確認。姿勢が崩れている場合は該当姿勢だけ Retake する。
+- Live で `profile_loaded=false`: `--enable-3d` と `--subject-id` / `--subject-profile` の指定、`latest_profile.yaml` の存在を確認。
 - Live で `ik_locked=false`: profile が読み込まれていないか、`--no-3d-ik` を指定している可能性がある。
-

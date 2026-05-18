@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>fitra-cam Subject Calibration</title>
+  <link rel="stylesheet" href="/subject-calib/styles.css">
+</head>
+<body>
+  <header>
+    <h1>Subject Profile Calibration</h1>
+    <div class="conn-group">
+      <div id="conn" class="conn">connecting…</div>
+      <a class="conn link" href="/">live</a>
+    </div>
+  </header>
+
+  <main>
+    <section id="preflight" class="card">
+      <h2>1. Preflight</h2>
+      <p>身長を入力して開始します。3D 角度ベース自動ポーズ認識に必須です。</p>
+      <div class="form-row">
+        <label>Subject ID
+          <input id="subject_id" value="subject01" autocomplete="off">
+        </label>
+        <label>Height (cm)
+          <input id="subject_height_cm" type="number" min="100" max="230" step="0.1" value="170">
+        </label>
+        <label>Hold (s)
+          <input id="hold_sec" type="number" min="0.5" max="5" step="0.1" value="1.5">
+        </label>
+        <label>Frames/cam
+          <input id="frames" type="number" min="30" max="300" step="5" value="75">
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btn_preflight" type="button">Preflight</button>
+        <button id="btn_start" type="button" disabled>Start (auto)</button>
+        <button id="btn_cancel" type="button" disabled>Cancel</button>
+      </div>
+      <div id="preflight_msg" class="msg"></div>
+    </section>
+
+    <section id="capture" class="card">
+      <h2>2. Capture</h2>
+      <div class="capture-grid">
+        <div>
+          <h3>Target: <span id="target_pose">-</span></h3>
+          <div class="bar"><div id="hold_bar" class="bar-fill hold"></div></div>
+          <div class="bar-label">hold <span id="hold_pct">0%</span></div>
+          <div class="bar"><div id="rec_bar0" class="bar-fill rec"></div></div>
+          <div class="bar-label">cam0 <span id="rec_count0">0</span> frames</div>
+          <div class="bar"><div id="rec_bar1" class="bar-fill rec"></div></div>
+          <div class="bar-label">cam1 <span id="rec_count1">0</span> frames</div>
+          <div class="status-line">
+            state: <span id="state">idle</span> &middot;
+            drift: <span id="drift">-</span>% &middot;
+            in_band: <span id="in_band">-</span> &middot;
+            failing: <span id="failing">-</span>
+          </div>
+        </div>
+        <div>
+          <h3>3D angles (deg)</h3>
+          <table class="angles">
+            <tbody>
+              <tr><td>L elbow flex</td><td id="a_le">-</td></tr>
+              <tr><td>R elbow flex</td><td id="a_re">-</td></tr>
+              <tr><td>L shoulder abd</td><td id="a_ls">-</td></tr>
+              <tr><td>R shoulder abd</td><td id="a_rs">-</td></tr>
+              <tr><td>L knee flex</td><td id="a_lk">-</td></tr>
+              <tr><td>R knee flex</td><td id="a_rk">-</td></tr>
+              <tr><td>torso tilt</td><td id="a_tt">-</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="poses-list" id="poses_list"></div>
+    </section>
+
+    <section id="review" class="card">
+      <h2>3. Review</h2>
+      <div class="status-line">
+        quality: <span id="quality" class="badge">-</span> &middot;
+        analyze exit: <span id="analyze_exit">-</span>
+      </div>
+      <pre id="quality_summary" class="log"></pre>
+      <div class="actions">
+        <label class="checkbox">
+          <input id="force_chk" type="checkbox"> force (approve warn)
+        </label>
+        <button id="btn_approve" type="button" disabled>Approve &amp; apply live</button>
+      </div>
+      <div id="review_msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>Log</h2>
+      <pre id="log_tail" class="log"></pre>
+      <div class="status-line">
+        session dir: <span id="session_dir">-</span> &middot;
+        latest_profile: <span id="latest_profile">-</span>
+      </div>
+    </section>
+  </main>
+
+  <script src="/subject-calib/app.js"></script>
+</body>
+</html>
