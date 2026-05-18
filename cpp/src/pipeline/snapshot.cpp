@@ -99,4 +99,78 @@ std::string SnapshotBus::make_bundle_json() {
     return out;
 }
 
+Skeleton3DBus::Skeleton3DBus() {
+    snapshot_.stats.enabled = true;
+    snapshot_.ts = std::chrono::system_clock::now();
+}
+
+void Skeleton3DBus::update(const Skeleton3DSnapshot& s) {
+    std::lock_guard<std::mutex> lk{mu_};
+    snapshot_ = s;
+    snapshot_.stats.enabled = true;
+}
+
+std::string Skeleton3DBus::make_bundle_json() {
+    using clock = std::chrono::system_clock;
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> lk{mu_};
+    ++bundle_seq_;
+
+    const auto& s = snapshot_;
+    std::string out;
+    out.reserve(2048);
+    out += "{\"seq\":";
+    out += std::to_string(bundle_seq_);
+    out += ",\"ts_ms\":";
+    out += std::to_string(static_cast<long long>(now_ms));
+    out += ",\"enabled\":true";
+    out += ",\"persons_3d\":[";
+    for (std::size_t pi = 0; pi < s.persons.size(); ++pi) {
+        if (pi) out += ",";
+        out += "{\"id\":";
+        out += std::to_string(static_cast<int>(pi));
+        out += ",\"joints\":[";
+        const auto& skel = s.persons[pi];
+        for (std::size_t k = 0; k < skel.joints.size(); ++k) {
+            if (k) out += ",";
+            const auto& j = skel.joints[k];
+            out += "[";
+            append_float(out, j.x); out += ",";
+            append_float(out, j.y); out += ",";
+            append_float(out, j.z); out += ",";
+            append_float(out, j.score); out += ",";
+            out += (j.valid ? "true" : "false");
+            out += "]";
+        }
+        out += "]}";
+    }
+    out += "]";
+    out += ",\"stats\":{";
+    out += "\"enabled\":true";
+    out += ",\"tri_fps\":"; append_float(out, s.stats.tri_fps, 4);
+    out += ",\"reproj_err_med_px\":"; append_float(out, s.stats.reproj_err_med_px, 4);
+    out += ",\"bone_len_drift_pct\":"; append_float(out, s.stats.bone_len_drift_pct, 4);
+    out += ",\"valid_joints\":"; out += std::to_string(s.stats.valid_joints);
+    out += ",\"sync_dt_ms\":"; append_float(out, s.stats.sync_dt_ms, 4);
+    out += ",\"stage_ms\":"; append_float(out, s.stats.stage_ms, 4);
+    out += ",\"subject_height_m\":"; append_float(out, s.stats.subject_height_m, 4);
+    out += ",\"processed\":"; out += std::to_string(static_cast<long long>(s.stats.processed));
+    out += ",\"sync_miss\":"; out += std::to_string(static_cast<long long>(s.stats.sync_miss));
+    out += ",\"ik_locked\":"; out += (s.stats.ik_locked ? "true" : "false");
+    out += "}}";
+    return out;
+}
+
+std::string make_disabled_3d_json() {
+    using clock = std::chrono::system_clock;
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      clock::now().time_since_epoch()).count();
+    std::string out;
+    out += "{\"seq\":0,\"ts_ms\":";
+    out += std::to_string(static_cast<long long>(now_ms));
+    out += ",\"enabled\":false,\"persons_3d\":[],\"stats\":{\"enabled\":false}}";
+    return out;
+}
+
 }  // namespace fitra::pipeline

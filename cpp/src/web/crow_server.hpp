@@ -7,6 +7,8 @@
 //   - GET /<path>      serves files under web/dual_rtmpose/
 //   - GET /stats       returns the current bundle as JSON
 //   - WS  /ws          broadcasts the bundle at ≤30 Hz to every client
+//   - GET /stats3d     returns current 3D bundle or disabled JSON
+//   - WS  /ws3d        broadcasts the 3D bundle when enabled
 //
 // The publisher loop runs on its own thread; Crow's worker pool handles
 // the HTTP request and WS plumbing.
@@ -32,6 +34,9 @@ struct ServerOptions {
 class CrowServer {
 public:
     CrowServer(pipeline::SnapshotBus& bus, ServerOptions opts);
+    CrowServer(pipeline::SnapshotBus& bus,
+               pipeline::Skeleton3DBus* bus3d,
+               ServerOptions opts);
     ~CrowServer();
 
     CrowServer(const CrowServer&) = delete;
@@ -46,6 +51,7 @@ private:
     void publisher_loop();
 
     pipeline::SnapshotBus& bus_;
+    pipeline::Skeleton3DBus* bus3d_ = nullptr;
     ServerOptions          opts_;
     std::thread            server_thread_;
     std::thread            publisher_thread_;

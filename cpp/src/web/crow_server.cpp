@@ -43,11 +43,17 @@ std::string guess_content_type(const std::filesystem::path& p) {
 
 struct CrowServer::Impl {
     crow::SimpleApp app;
-    WsClients       clients;
+    WsClients       clients2d;
+    WsClients       clients3d;
 };
 
 CrowServer::CrowServer(pipeline::SnapshotBus& bus, ServerOptions opts)
-    : bus_{bus}, opts_{std::move(opts)}, impl_{std::make_unique<Impl>()} {}
+    : CrowServer(bus, nullptr, std::move(opts)) {}
+
+CrowServer::CrowServer(pipeline::SnapshotBus& bus,
+                       pipeline::Skeleton3DBus* bus3d,
+                       ServerOptions opts)
+    : bus_{bus}, bus3d_{bus3d}, opts_{std::move(opts)}, impl_{std::make_unique<Impl>()} {}
 
 CrowServer::~CrowServer() {
     try { stop(); } catch (...) {}
@@ -55,21 +61,39 @@ CrowServer::~CrowServer() {
 
 void CrowServer::start() {
     auto& app     = impl_->app;
-    auto& clients = impl_->clients;
+    auto& clients2d = impl_->clients2d;
+    auto& clients3d = impl_->clients3d;
 
     // WS /ws — register first so the catch-all HTTP route below does not
     // shadow upgrade requests (Crow's BaseRule::handle_upgrade returns
     // 404 without writing it, which the client sees as a closed socket).
     CROW_WEBSOCKET_ROUTE(app, "/ws")
-    .onopen([&clients](crow::websocket::connection& c) {
-        std::lock_guard<std::mutex> lk{clients.mu};
-        clients.conns.insert(&c);
+    .onopen([&clients2d](crow::websocket::connection& c) {
+        std::lock_guard<std::mutex> lk{clients2d.mu};
+        clients2d.conns.insert(&c);
     })
-    .onclose([&clients](crow::websocket::connection& c,
+    .onclose([&clients2d](crow::websocket::connection& c,
                        const std::string& /*reason*/,
                        uint16_t /*code*/) {
-        std::lock_guard<std::mutex> lk{clients.mu};
-        clients.conns.erase(&c);
+        std::lock_guard<std::mutex> lk{clients2d.mu};
+        clients2d.conns.erase(&c);
+    })
+    .onmessage([](crow::websocket::connection& /*c*/,
+                  const std::string& /*data*/,
+                  bool /*is_binary*/) {
+        // ignore client messages (ping etc.)
+    });
+
+    CROW_WEBSOCKET_ROUTE(app, "/ws3d")
+    .onopen([&clients3d](crow::websocket::connection& c) {
+        std::lock_guard<std::mutex> lk{clients3d.mu};
+        clients3d.conns.insert(&c);
+    })
+    .onclose([&clients3d](crow::websocket::connection& c,
+                       const std::string& /*reason*/,
+                       uint16_t /*code*/) {
+        std::lock_guard<std::mutex> lk{clients3d.mu};
+        clients3d.conns.erase(&c);
     })
     .onmessage([](crow::websocket::connection& /*c*/,
                   const std::string& /*data*/,
@@ -81,6 +105,14 @@ void CrowServer::start() {
     CROW_ROUTE(app, "/stats")
     ([this]() {
         crow::response resp{bus_.make_bundle_json()};
+        resp.set_header("Content-Type", "application/json; charset=utf-8");
+        return resp;
+    });
+
+    CROW_ROUTE(app, "/stats3d")
+    ([this]() {
+        crow::response resp{bus3d_ ? bus3d_->make_bundle_json()
+                                   : pipeline::make_disabled_3d_json()};
         resp.set_header("Content-Type", "application/json; charset=utf-8");
         return resp;
     });
@@ -154,12 +186,26 @@ void CrowServer::publisher_loop() {
         if (stop_.load()) break;
 
         auto msg = bus_.make_bundle_json();
-        std::lock_guard<std::mutex> lk{impl_->clients.mu};
-        for (auto* c : impl_->clients.conns) {
-            try {
-                c->send_text(msg);
-            } catch (...) {
-                // best-effort; client will be reaped on close
+        auto msg3d = bus3d_ ? bus3d_->make_bundle_json()
+                            : pipeline::make_disabled_3d_json();
+        {
+            std::lock_guard<std::mutex> lk{impl_->clients2d.mu};
+            for (auto* c : impl_->clients2d.conns) {
+                try {
+                    c->send_text(msg);
+                } catch (...) {
+                    // best-effort; client will be reaped on close
+                }
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lk{impl_->clients3d.mu};
+            for (auto* c : impl_->clients3d.conns) {
+                try {
+                    c->send_text(msg3d);
+                } catch (...) {
+                    // best-effort; client will be reaped on close
+                }
             }
         }
     }

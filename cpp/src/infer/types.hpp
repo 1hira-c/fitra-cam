@@ -28,4 +28,16 @@ struct Person {
     std::array<Keypoint, kNumKeypoints> kpts{};
 };
 
+struct Joint3D {
+    float x{0.0f};
+    float y{0.0f};
+    float z{0.0f};
+    float score{0.0f};
+    bool  valid{false};
+};
+
+struct Skeleton3D {
+    std::array<Joint3D, kNumKeypoints> joints{};
+};
+
 }  // namespace fitra::infer

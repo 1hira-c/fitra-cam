@@ -7,7 +7,7 @@ Phase 6 で C++ 側 2-cam aggregate 170 fps を達成し、2D 推論のスルー
 確定方針:
 
 - 実装言語: **最初から C++** (Python プロトタイプを挟まない)
-- IK スコープ: **ボーン長 + 関節角度制限** (FABRIK ベース、必要なら CCD フォールバック)
+- IK スコープ: **ボーン長 + 関節角度制限** (反復的なボーン長投影 + ヒンジ制約)
 - Kalman 位置: **3D 化後に各関節 6D 状態 (pos + vel)**
 - 段階: **Phase 7 として `docs/cpp-migration-plan.md` の "段階実装" に追記**
 
@@ -16,7 +16,7 @@ Phase 6 で C++ 側 2-cam aggregate 170 fps を達成し、2D 推論のスルー
 1. ChArUco で intrinsic が取得でき、外部パラメータは ChArUco またはメジャー測定床点 + PnP で取得・保存できる。
 2. 同時刻の per-cam 2D keypoint を時刻揃え → confidence-weighted triangulation で 3D skeleton (17 joint) を出せる。
 3. 各関節 3D に 6D Kalman を入れ、欠損フレームでは予測のみで補間。
-4. IK でボーン長を学習済み定数に固定、肘・膝・首・腰の hyperextension を防止。
+4. IK でボーン長を固定する。`--subject-height-m` 指定時は日本人の人体寸法比率から即時固定し、未指定時は起動直後の観測中央値で固定する。肘・膝・首・腰の hyperextension を防止。
 5. 既存 WebSocket JSON スキーマと両立する形で 3D を `/ws3d` (新 endpoint) に publish。
 6. 3-cam live で再投影誤差 median < 3 px、ボーン長変動 < 5%、3D 関節 jitter (静止時の SD) < 10 mm を測れる。
 7. aggregate スループット 90 fps 以上を維持 (3D 段階のレイテンシ ≤ 3 ms/frame target)。
@@ -63,12 +63,12 @@ Phase 6 で C++ 側 2-cam aggregate 170 fps を達成し、2D 推論のスルー
 
 - 新規: `cpp/src/lift/ik.{hpp,cpp}`
   - COCO-17 木構造を `cpp/src/lift/skeleton_def.hpp` に定数で定義: parent[17], bone_pairs[], hinge_joints (肘/膝)
-  - ボーン長キャリブ: 起動直後の N 秒間 (`--bone-calib-sec` 既定 5) で per-bone 長を中央値で確定 → 以降ロック
-  - Solver: **FABRIK** ベース (CCD より関節角度限制との相性が良い)
+  - ボーン長: `--subject-height-m` 指定時は AIST/HQL 日本人青年男女平均の人体寸法比率を身長でスケールして即ロック。未指定時は起動直後の N 秒間 (`--bone-calib-sec` 既定 5) で per-bone 長を中央値で確定 → 以降ロック
+  - Solver: 反復的なボーン長投影 + ヒンジ制約
     - 全関節を Kalman 後の 3D 位置に初期化
-    - Forward pass: end effector (手首・足首・頭) を観測位置へ → 親に向かってボーン長を維持しながら戻す
-    - Backward pass: 骨盤 (左右 hip の中点) を観測位置に戻す → 末端方向にボーン長維持しながら進む
-    - Hinge 制約: 肘・膝のステップ後に、隣接 3 関節の角度を [0°, 180°] にクランプ
+    - parent → child の向きを保ちながらロック済みボーン長へ投影
+    - 肩幅などの左右ペア長も中心を保って投影
+    - Hinge 制約: 肘・膝のステップ後に、隣接 3 関節の角度を特異点を避ける範囲にクランプ
   - 反復: 上限 5 回 or position delta < 1 mm で停止
 - 推定 < 0.5 ms / person、依存追加なし (Eigen で完結)
 
@@ -170,7 +170,7 @@ Phase 6 で C++ 側 2-cam aggregate 170 fps を達成し、2D 推論のスルー
 
 ## リスクと対応
 
-- **IK の関節定義**: COCO-17 には脊柱が無く、骨盤も hip 中点で代用。FABRIK が不安定なら段階的に CCD にフォールバック (実装枠は同じ `lift/ik.{hpp,cpp}`)。
+- **IK の関節定義**: COCO-17 には脊柱が無く、骨盤も hip 中点で代用。現行は end-effector 追従よりボーン長と肘膝の破綻抑制を優先する。
 - **Eigen + Crow + spdlog の ABI**: 既存 FetchContent 群と Eigen3 apt 版の混在はトラブルになりやすい。最初に空の `lift/` モジュールでビルド通過を確認してから中身を入れる。
 - **C++ から始めるリスクのヘッジ**: triangulator の単体テスト (合成 3D 点 → 既知 K/R/t で投影 → 復元) を `cpp/tools/test_triangulator.cpp` として最初に書き、Python 比較なしでも閉じた correctness が取れるようにする。
 - **3-cam 配線**: USB 2.0 帯域は 2-cam ですでに飽和しているので、3-cam 時の MJPG 解像度を下げる選択肢を `--cam2-size` で温存。

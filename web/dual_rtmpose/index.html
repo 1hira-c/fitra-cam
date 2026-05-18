@@ -8,11 +8,37 @@
 <body>
   <header>
     <h1>fitra-cam RTMPose</h1>
-    <div id="conn" class="conn">connecting…</div>
+    <div class="conn-group">
+      <div id="conn" class="conn">2D connecting…</div>
+      <div id="conn3d" class="conn">3D connecting…</div>
+    </div>
   </header>
   <main>
     <!-- Panes are inserted dynamically by app.js as cameras report in. -->
   </main>
-  <script src="app.js"></script>
+  <section id="view3d" class="view3d">
+    <div class="view3d-head">
+      <h2>3D</h2>
+      <div class="view3d-tabs" role="group" aria-label="3D view">
+        <button type="button" data-view="front" class="active">front</button>
+        <button type="button" data-view="side">side</button>
+        <button type="button" data-view="top">top</button>
+      </div>
+    </div>
+    <div class="canvas3d-wrap">
+      <canvas id="canvas3d" width="640" height="480"></canvas>
+      <div id="status3d" class="canvas-status">(no 3D data)</div>
+    </div>
+    <pre id="stats3d" class="stats">waiting…</pre>
+  </section>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.min.js",
+        "OrbitControls": "./vendor/OrbitControls.js"
+      }
+    }
+  </script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
