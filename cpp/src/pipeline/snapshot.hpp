@@ -65,6 +65,9 @@ struct Skeleton3DStats {
     double sync_dt_ms = 0.0;
     double stage_ms = 0.0;
     double subject_height_m = 0.0;
+    bool profile_loaded = false;
+    std::string subject_id;
+    std::string profile_quality_status;
     std::uint64_t processed = 0;
     std::uint64_t sync_miss = 0;
 };

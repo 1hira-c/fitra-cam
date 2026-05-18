@@ -57,6 +57,7 @@ add_library(fitra_lift STATIC
     lift/triangulator.cpp
     lift/kalman.cpp
     lift/ik.cpp
+    lift/subject_profile.cpp
 )
 
 target_include_directories(fitra_lift PUBLIC

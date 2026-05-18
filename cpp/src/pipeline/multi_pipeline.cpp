@@ -28,6 +28,8 @@ MultiCameraDriver::MultiCameraDriver(
           lift::IkSolver::Options opts;
           opts.bone_calib_frames = std::max(1, threed_.bone_calib_frames);
           opts.subject_height_m = threed_.subject_height_m;
+          opts.has_subject_profile = threed_.has_subject_profile;
+          opts.subject_profile = threed_.subject_profile;
           return lift::IkSolver{opts};
       }()},
       latest_per_cam_(sources_.size()),
@@ -245,6 +247,9 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         miss.stats.enabled = true;
         miss.stats.sync_dt_ms = sync_dt_ms;
         miss.stats.subject_height_m = threed_.subject_height_m;
+        miss.stats.profile_loaded = ik_.profile_loaded();
+        miss.stats.subject_id = ik_.subject_id();
+        miss.stats.profile_quality_status = ik_.profile_quality_status();
         miss.stats.sync_miss = tri_sync_miss_;
         miss.stats.processed = tri_processed_;
         miss.stats.ik_locked = ik_.locked();
@@ -299,6 +304,9 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     out.stats.sync_dt_ms = sync_dt_ms;
     out.stats.stage_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     out.stats.subject_height_m = threed_.subject_height_m;
+    out.stats.profile_loaded = ik_.profile_loaded();
+    out.stats.subject_id = ik_.subject_id();
+    out.stats.profile_quality_status = ik_.profile_quality_status();
     out.stats.processed = tri_processed_;
     out.stats.sync_miss = tri_sync_miss_;
     threed_.bus->update(out);

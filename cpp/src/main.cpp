@@ -33,6 +33,7 @@
 #include "infer/trt_engine.hpp"
 #include "infer/yolox.hpp"
 #include "lift/calib_io.hpp"
+#include "lift/subject_profile.hpp"
 #include "lift/triangulator.hpp"
 #include "pipeline/multi_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
@@ -89,6 +90,9 @@ void print_help() {
         "  --sync-window-ms F        max camera timestamp gap for 3D (default 15.0)\n"
         "  --bone-calib-frames N     frames used to lock IK bone lengths (default 150)\n"
         "  --subject-height-m F      lock IK bone lengths from Japanese anthropometry and height\n"
+        "  --subject-id ID           load calibrations/subjects/<ID>/latest_profile.yaml for IK\n"
+        "  --subjects-dir DIR        subject profile root (default calibrations/subjects)\n"
+        "  --subject-profile PATH    direct subject profile YAML path for IK\n"
         "  --no-3d-kalman            disable 3D Kalman smoothing\n"
         "  --no-3d-ik                disable 3D IK projection\n"
         "  --probe                   Phase 0 sanity check and exit\n"
@@ -149,6 +153,9 @@ int main(int argc, char** argv) {
     double sync_window_ms = 15.0;
     int bone_calib_frames = 150;
     double subject_height_m = 0.0;
+    std::string subject_id;
+    std::string subjects_dir = "calibrations/subjects";
+    std::string subject_profile_path;
     bool kalman_3d = true;
     bool ik_3d = true;
     bool  want_probe = false;
@@ -188,6 +195,9 @@ int main(int argc, char** argv) {
         else if (a == "--sync-window-ms")    { sync_window_ms = std::stod(need("--sync-window-ms")); }
         else if (a == "--bone-calib-frames") { bone_calib_frames = std::atoi(need("--bone-calib-frames")); }
         else if (a == "--subject-height-m")  { subject_height_m = std::stod(need("--subject-height-m")); }
+        else if (a == "--subject-id")         { subject_id = need("--subject-id"); }
+        else if (a == "--subjects-dir")       { subjects_dir = need("--subjects-dir"); }
+        else if (a == "--subject-profile")    { subject_profile_path = need("--subject-profile"); }
         else if (a == "--no-3d-kalman")      { kalman_3d = false; }
         else if (a == "--no-3d-ik")          { ik_3d = false; }
         else {
@@ -209,6 +219,10 @@ int main(int argc, char** argv) {
         }
         if (subject_height_m < 0.0 || subject_height_m > 2.5) {
             std::fprintf(stderr, "--subject-height-m must be 0 or a plausible meter value <= 2.5\n");
+            return EXIT_FAILURE;
+        }
+        if (!enable_3d && (!subject_id.empty() || !subject_profile_path.empty())) {
+            std::fprintf(stderr, "--subject-id/--subject-profile require --enable-3d\n");
             return EXIT_FAILURE;
         }
         std::signal(SIGINT, on_signal);
@@ -263,6 +277,8 @@ int main(int argc, char** argv) {
 
         std::unique_ptr<fitra::lift::Triangulator> triangulator;
         std::unique_ptr<fitra::pipeline::Skeleton3DBus> bus3d;
+        fitra::lift::SubjectProfile subject_profile;
+        bool has_subject_profile = false;
         if (enable_3d) {
             FITRA_LOG_INFO("loading calibration: {}", calib_path);
             auto calib = fitra::lift::load_calibration(calib_path);
@@ -275,6 +291,21 @@ int main(int argc, char** argv) {
                            triangulator->camera_count(), sync_window_ms);
             if (subject_height_m > 0.0) {
                 FITRA_LOG_INFO("3D IK subject height prior enabled: {} m", subject_height_m);
+            }
+            if (subject_profile_path.empty() && !subject_id.empty()) {
+                subject_profile_path = fitra::lift::default_subject_profile_path(subjects_dir, subject_id);
+            }
+            if (!subject_profile_path.empty()) {
+                FITRA_LOG_INFO("loading subject profile: {}", subject_profile_path);
+                subject_profile = fitra::lift::load_subject_profile(subject_profile_path);
+                if (subject_profile.subject_height_m > 0.0) {
+                    subject_height_m = subject_profile.subject_height_m;
+                } else if (subject_height_m > 0.0) {
+                    subject_profile.subject_height_m = subject_height_m;
+                }
+                has_subject_profile = true;
+                FITRA_LOG_INFO("3D IK subject profile enabled: id={} quality={}",
+                               subject_profile.subject_id, subject_profile.quality_status);
             }
         }
 
@@ -289,6 +320,8 @@ int main(int argc, char** argv) {
             cfg.ik_enabled = ik_3d;
             cfg.bone_calib_frames = bone_calib_frames;
             cfg.subject_height_m = subject_height_m;
+            cfg.has_subject_profile = has_subject_profile;
+            cfg.subject_profile = subject_profile;
             driver = std::make_unique<fitra::pipeline::MultiCameraDriver>(
                 std::move(sources), rtmpose, bus, cfg);
         } else {

@@ -56,7 +56,9 @@ double median(std::vector<double> vals) {
 IkSolver::IkSolver() : IkSolver(Options{}) {}
 
 IkSolver::IkSolver(Options opts) : opts_{opts} {
-    if (opts_.subject_height_m > 0.0) {
+    if (opts_.has_subject_profile) {
+        apply_subject_profile(opts_.subject_profile);
+    } else if (opts_.subject_height_m > 0.0) {
         apply_subject_height_model();
     }
 }
@@ -90,6 +92,25 @@ void IkSolver::apply_subject_height_model() {
     locked_parent_len_[15] = kLowerLeg * h;   // l_ankle <- l_knee
     locked_parent_len_[16] = kLowerLeg * h;   // r_ankle <- r_knee
     locked_shoulder_width_ = kShoulderWidth * h;
+    locked_ = true;
+}
+
+void IkSolver::apply_subject_profile(const SubjectProfile& profile) {
+    validate_subject_profile(profile);
+    locked_parent_len_.fill(0.0);
+    for (std::size_t child = 0; child < profile.bone_lengths_m.size(); ++child) {
+        if (profile.bone_lengths_m[child] > 1.0e-6) {
+            locked_parent_len_[child] = profile.bone_lengths_m[child];
+        }
+    }
+    if (profile.hip_width_m > 1.0e-6 && locked_parent_len_[12] <= 1.0e-6) {
+        locked_parent_len_[12] = profile.hip_width_m;
+    }
+    locked_shoulder_width_ = profile.shoulder_width_m;
+    opts_.subject_height_m = profile.subject_height_m;
+    subject_id_ = profile.subject_id;
+    profile_quality_status_ = profile.quality_status;
+    profile_loaded_ = true;
     locked_ = true;
 }
 

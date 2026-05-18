@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>fitra-cam subject profile</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Subject Profile</h1>
+      <p id="status">loading</p>
+    </div>
+    <div class="actions">
+      <button id="analyzeBtn" type="button">Analyze</button>
+      <button id="approveBtn" type="button">Approve</button>
+    </div>
+  </header>
+  <main>
+    <section class="previewGrid">
+      <article class="camera">
+        <h2>cam0</h2>
+        <img src="/preview/cam0.mjpg" alt="cam0 preview">
+      </article>
+      <article class="camera">
+        <h2>cam1</h2>
+        <img src="/preview/cam1.mjpg" alt="cam1 preview">
+      </article>
+    </section>
+    <aside>
+      <h2>Sequence</h2>
+      <div id="poseList"></div>
+      <h2>Quality</h2>
+      <pre id="quality">waiting</pre>
+      <h2>Paths</h2>
+      <pre id="paths">waiting</pre>
+    </aside>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

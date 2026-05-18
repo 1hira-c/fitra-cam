@@ -492,6 +492,9 @@ function update3DStats() {
     `sync_dt_ms     ${(s.sync_dt_ms ?? 0).toFixed(1)}\n` +
     `stage_ms       ${(s.stage_ms ?? 0).toFixed(2)}\n` +
     `height_m       ${(s.subject_height_m ?? 0).toFixed(2)}\n` +
+    `profile_loaded ${s.profile_loaded ? "true" : "false"}\n` +
+    `subject_id     ${s.subject_id || "-"}\n` +
+    `quality        ${s.quality_status || "-"}\n` +
     `processed      ${s.processed ?? 0}\n` +
     `sync_miss      ${s.sync_miss ?? 0}\n` +
     `ik_locked      ${s.ik_locked ? "true" : "false"}\n` +

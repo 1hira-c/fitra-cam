@@ -39,6 +39,8 @@ public:
         bool ik_enabled = true;
         int bone_calib_frames = 150;
         double subject_height_m = 0.0;
+        bool has_subject_profile = false;
+        lift::SubjectProfile subject_profile;
     };
 
     MultiCameraDriver(std::vector<std::unique_ptr<camera::FrameSource>> sources,
