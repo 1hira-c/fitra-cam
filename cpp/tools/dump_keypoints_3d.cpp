@@ -78,7 +78,7 @@ void print_help() {
         "\n"
         "Required:\n"
         "  --video PATH              input MP4, repeat twice in cam order\n"
-        "  --calib PATH              calibration YAML with intrinsics/extrinsics\n"
+        "  --calib PATH              calibration YAML with intrinsics/extrinsics (ids must be cam0,cam1)\n"
         "  --det-engine PATH         YOLOX .engine\n"
         "  --pose-engine PATH        RTMPose .engine\n"
         "  --out PATH                output JSONL\n"
@@ -263,6 +263,7 @@ int main(int argc, char** argv) {
         tri_opts.kp_conf_thresh = args.kp_conf_thresh;
         tri_opts.max_reproj_px = args.max_reproj_px;
         fitra::lift::Triangulator triangulator{calib, tri_opts};
+        triangulator.require_camera_ids({"cam0", "cam1"});
 
         TrtLogger tlog;
         std::unique_ptr<nvinfer1::IRuntime> runtime{nvinfer1::createInferRuntime(tlog)};

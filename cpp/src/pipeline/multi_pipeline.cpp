@@ -32,6 +32,7 @@ MultiCameraDriver::MultiCameraDriver(
       }()},
       latest_per_cam_(sources_.size()),
       latest_snapshots_(sources_.size()),
+      last_3d_input_seqs_(sources_.size(), 0),
       per_cam_(sources_.size()) {
     for (const auto& source : sources_) {
         if (!source || !source->prebakes_pose()) {
@@ -235,6 +236,14 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
             max_ts = std::max(max_ts, snap.captured_at);
         }
     }
+    bool has_new_input = false;
+    for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
+        if (latest_snapshots_[i].seq != last_3d_input_seqs_[i]) {
+            has_new_input = true;
+            break;
+        }
+    }
+    if (!has_new_input) return;
 
     const double sync_dt_ms = std::chrono::duration<double, std::milli>(max_ts - min_ts).count();
     const double sync_window = std::max(0.0, threed_.sync_window_ms);
@@ -249,6 +258,9 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         miss.stats.processed = tri_processed_;
         miss.stats.ik_locked = ik_.locked();
         threed_.bus->update(miss);
+        for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
+            last_3d_input_seqs_[i] = latest_snapshots_[i].seq;
+        }
         return;
     }
 
@@ -265,10 +277,13 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     auto tri = threed_.triangulator->triangulate(observations);
     infer::Skeleton3D skel = tri.skeleton;
     if (threed_.kalman_enabled) {
-        double dt_s = 1.0 / std::max(1.0, per_cam_[0].stats.recent_pose_fps);
+        double dt_s = 1.0 / 30.0;
+        if (has_last_3d_update_) {
+            dt_s = std::chrono::duration<double>(now - last_3d_update_).count();
+        }
         skel = kalman_.update(skel, dt_s);
     }
-    double drift = ik_.bone_drift_pct(skel);
+    double drift = ik_.locked() ? ik_.bone_drift_pct(skel) : 0.0;
     if (threed_.ik_enabled) {
         skel = ik_.update(skel);
         drift = ik_.bone_drift_pct(skel);
@@ -302,6 +317,11 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     out.stats.processed = tri_processed_;
     out.stats.sync_miss = tri_sync_miss_;
     threed_.bus->update(out);
+    for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
+        last_3d_input_seqs_[i] = latest_snapshots_[i].seq;
+    }
+    last_3d_update_ = now;
+    has_last_3d_update_ = true;
 }
 
 }  // namespace fitra::pipeline

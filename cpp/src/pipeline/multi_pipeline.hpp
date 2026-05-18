@@ -90,10 +90,13 @@ private:
     // RTMPose batched call so we can hand cv::Mat pointers into reqs.
     std::vector<camera::DecodedFrame> latest_per_cam_;
     std::vector<CameraSnapshot>        latest_snapshots_;
+    std::vector<std::uint64_t>         last_3d_input_seqs_;
     std::vector<CamState>             per_cam_;
     std::deque<std::chrono::steady_clock::time_point> tri_recent_;
+    std::chrono::steady_clock::time_point last_3d_update_{};
     std::uint64_t                     tri_processed_ = 0;
     std::uint64_t                     tri_sync_miss_ = 0;
+    bool                              has_last_3d_update_ = false;
     std::thread                       worker_;
     std::atomic<bool>                 stop_{false};
 };

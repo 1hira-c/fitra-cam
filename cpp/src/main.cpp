@@ -83,7 +83,7 @@ void print_help() {
         "  --det-score F             detection score threshold (default 0.5)\n"
         "  --log-every-s F           stats interval in seconds (default 2.0)\n"
         "  --enable-3d               enable live 2D -> 3D lifting and /ws3d\n"
-        "  --calib PATH              calibration YAML for --enable-3d\n"
+        "  --calib PATH              calibration YAML for --enable-3d (ids must be cam0..camN)\n"
         "  --kp-conf-thresh F        3D triangulation keypoint threshold (default 0.3)\n"
         "  --max-reproj-px F         3D reprojection outlier threshold (default 6.0)\n"
         "  --sync-window-ms F        max camera timestamp gap for 3D (default 15.0)\n"
@@ -120,6 +120,13 @@ std::filesystem::path guess_static_dir() {
     // build/main lives at <repo>/cpp/build/main; we want <repo>/web/dual_rtmpose
     auto repo = exe.parent_path().parent_path().parent_path();
     return repo / "web" / "dual_rtmpose";
+}
+
+std::vector<std::string> expected_camera_ids(std::size_t count) {
+    std::vector<std::string> ids;
+    ids.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) ids.push_back("cam" + std::to_string(i));
+    return ids;
 }
 
 std::atomic<bool> g_stop{false};
@@ -270,6 +277,7 @@ int main(int argc, char** argv) {
             tri_opts.kp_conf_thresh = kp_conf_thresh;
             tri_opts.max_reproj_px = max_reproj_px;
             triangulator = std::make_unique<fitra::lift::Triangulator>(calib, tri_opts);
+            triangulator->require_camera_ids(expected_camera_ids(n_cams));
             bus3d = std::make_unique<fitra::pipeline::Skeleton3DBus>();
             FITRA_LOG_INFO("3D lifting enabled ({} calibrated cameras, sync_window={}ms)",
                            triangulator->camera_count(), sync_window_ms);
