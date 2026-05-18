@@ -248,11 +248,4 @@ double IkSolver::bone_drift_pct(const infer::Skeleton3D& skel) const {
     return n > 0 ? sum / n : 0.0;
 }
 
-int IkSolver::bone_index(int parent, int child) const {
-    for (std::size_t i = 0; i < kCocoParent.size(); ++i) {
-        if (kCocoParent[i] == parent && static_cast<int>(i) == child) return static_cast<int>(i);
-    }
-    return -1;
-}
-
 }  // namespace fitra::lift

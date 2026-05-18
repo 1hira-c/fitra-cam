@@ -38,6 +38,7 @@ public:
     bool project(int cam_index, const infer::Joint3D& joint, cv::Point2f& out) const;
     std::size_t camera_count() const { return cameras_.size(); }
     const std::string& camera_id(std::size_t i) const { return cameras_[i].id; }
+    void require_camera_ids(const std::vector<std::string>& expected_ids) const;
 
 private:
     struct CameraModel {

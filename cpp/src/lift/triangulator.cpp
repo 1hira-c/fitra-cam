@@ -4,6 +4,7 @@
 #include <cmath>
 #include <numeric>
 #include <stdexcept>
+#include <string>
 
 #include <opencv2/calib3d.hpp>
 
@@ -25,6 +26,32 @@ double median(std::vector<double> vals) {
 }
 
 }  // namespace
+
+void Triangulator::require_camera_ids(const std::vector<std::string>& expected_ids) const {
+    auto describe = [](const auto& ids) {
+        std::string out;
+        for (std::size_t i = 0; i < ids.size(); ++i) {
+            if (i) out += ",";
+            out += ids[i];
+        }
+        return out;
+    };
+    std::vector<std::string> actual;
+    actual.reserve(cameras_.size());
+    for (const auto& cam : cameras_) actual.push_back(cam.id);
+    if (cameras_.size() != expected_ids.size()) {
+        throw std::runtime_error(
+            "calibration camera ids must match runtime order exactly: expected [" +
+            describe(expected_ids) + "], got [" + describe(actual) + "]");
+    }
+    for (std::size_t i = 0; i < expected_ids.size(); ++i) {
+        if (cameras_[i].id != expected_ids[i]) {
+            throw std::runtime_error(
+                "calibration camera ids must match runtime order exactly: expected [" +
+                describe(expected_ids) + "], got [" + describe(actual) + "]");
+        }
+    }
+}
 
 Triangulator::Triangulator(const CalibrationSet& calib)
     : Triangulator(calib, Options{}) {}
@@ -49,8 +76,6 @@ Triangulator::Triangulator(const CalibrationSet& calib, Options opts)
         m.t.copyTo(m.Pn(cv::Rect(3, 0, 1, 3)));
         cameras_.push_back(std::move(m));
     }
-    std::sort(cameras_.begin(), cameras_.end(),
-              [](const auto& a, const auto& b) { return a.id < b.id; });
     if (cameras_.size() < 2) {
         throw std::runtime_error("triangulation requires at least 2 calibrated cameras");
     }
@@ -164,7 +189,7 @@ bool Triangulator::solve_dlt(const std::vector<JointView>& views,
         row += 2;
     }
 
-    cv::SVD svd(A, cv::SVD::FULL_UV);
+    cv::SVD svd(A);
     cv::Mat h = svd.vt.row(3);
     double hw = h.at<double>(0, 3);
     if (std::abs(hw) < 1.0e-12 || !std::isfinite(hw)) return false;

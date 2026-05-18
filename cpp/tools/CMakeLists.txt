@@ -77,3 +77,18 @@ set_target_properties(fitra_dump_keypoints_3d PROPERTIES
     OUTPUT_NAME "dump_keypoints_3d"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
+
+add_executable(fitra_test_triangulator
+    test_triangulator.cpp
+)
+
+target_link_libraries(fitra_test_triangulator PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_triangulator PROPERTIES
+    OUTPUT_NAME "test_triangulator"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_triangulator COMMAND fitra_test_triangulator)

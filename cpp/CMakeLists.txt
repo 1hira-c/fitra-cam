@@ -16,6 +16,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+enable_testing()
 
 add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
 

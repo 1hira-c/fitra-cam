@@ -13,6 +13,7 @@ public:
     struct Options {
         int bone_calib_frames = 150;
         int iterations = 5;
+        // Keep hinge joints slightly away from singular 0/180 degree extremes.
         double min_hinge_deg = 5.0;
         double max_hinge_deg = 175.0;
         double subject_height_m = 0.0;
@@ -39,7 +40,6 @@ private:
     void enforce_lengths(infer::Skeleton3D& skel) const;
     void enforce_pair_lengths(infer::Skeleton3D& skel) const;
     void enforce_hinges(infer::Skeleton3D& skel) const;
-    int bone_index(int parent, int child) const;
 
     Options opts_;
     bool locked_ = false;

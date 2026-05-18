@@ -325,19 +325,29 @@ function ensurePane(camId) {
 function connect() {
   const wsProto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${wsProto}://${location.host}/ws`);
+  let pingTimer = null;
+  const clearPing = () => {
+    if (pingTimer !== null) {
+      clearInterval(pingTimer);
+      pingTimer = null;
+    }
+  };
   ws.onopen = () => {
     conn.textContent = "2D live";
     conn.className = "conn live";
-    setInterval(() => {
+    clearPing();
+    pingTimer = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) ws.send("ping");
     }, 5000);
   };
   ws.onclose = () => {
+    clearPing();
     conn.textContent = "2D disconnected — retrying";
     conn.className = "conn dead";
     setTimeout(connect, 1500);
   };
   ws.onerror = () => {
+    clearPing();
     conn.textContent = "2D error";
     conn.className = "conn dead";
   };
@@ -360,19 +370,29 @@ function connect() {
 function connect3d() {
   const wsProto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${wsProto}://${location.host}/ws3d`);
+  let pingTimer = null;
+  const clearPing = () => {
+    if (pingTimer !== null) {
+      clearInterval(pingTimer);
+      pingTimer = null;
+    }
+  };
   ws.onopen = () => {
     conn3d.textContent = "3D live";
     conn3d.className = "conn live";
-    setInterval(() => {
+    clearPing();
+    pingTimer = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) ws.send("ping");
     }, 5000);
   };
   ws.onclose = () => {
+    clearPing();
     conn3d.textContent = "3D disconnected — retrying";
     conn3d.className = "conn dead";
     setTimeout(connect3d, 1500);
   };
   ws.onerror = () => {
+    clearPing();
     conn3d.textContent = "3D error";
     conn3d.className = "conn dead";
   };
