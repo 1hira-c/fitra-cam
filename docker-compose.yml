@@ -17,6 +17,12 @@
 # ---------------------------------------------------------------------
 # 共通設定 (YAML アンカー)。サービス側で `<<: *common-*` で取り込む。
 # ---------------------------------------------------------------------
+x-build: &common-build
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: fitra-cam:latest
+
 x-runtime: &nvidia-runtime
   runtime: nvidia
 
@@ -41,12 +47,8 @@ services:
   # 本サービス: 2 カメラ + Crow Web を起動する。
   # ---------------------------------------------------------------------
   fitra-cam:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: fitra-cam:latest
+    <<: [*common-build, *nvidia-runtime, *common-volumes, *common-devices]
     container_name: fitra-cam
-    <<: [*nvidia-runtime, *common-volumes, *common-devices]
     ports:
       - "8000:8000"
     # main の CLI は "--flag value" 形式 (= 区切りは受け付けない)。
@@ -71,10 +73,9 @@ services:
   # ---------------------------------------------------------------------
   # build_engines の CLI は "--flag value" 形式 (= 区切りは受け付けない)。
   build-engines-yolox:
-    image: fitra-cam:latest
+    <<: [*common-build, *nvidia-runtime, *common-volumes]
     profiles: ["tools"]
     container_name: fitra-cam-build-yolox
-    <<: [*nvidia-runtime, *common-volumes]
     entrypoint: ["/workspace/cpp/build/tools/build_engines"]
     command:
       - "--preset"
@@ -86,10 +87,9 @@ services:
       - "--fp16"
 
   build-engines-rtmpose:
-    image: fitra-cam:latest
+    <<: [*common-build, *nvidia-runtime, *common-volumes]
     profiles: ["tools"]
     container_name: fitra-cam-build-rtmpose
-    <<: [*nvidia-runtime, *common-volumes]
     entrypoint: ["/workspace/cpp/build/tools/build_engines"]
     command:
       - "--preset"
