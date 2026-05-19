@@ -154,3 +154,4 @@ KeypointFormat active_keypoint_format();
 - 足部 (heel/toe) を活用したバランス指標 / 接地検出 / 歩行解析。
 - head_top を使った身長推定の精度向上 (現状は kp[0]=nose 起点)。
 - coco17 サポートの廃止判断 (halpe26 既定昇格後 1–2 phase 後)。
+- **Pluggable PoseBackend + YAML topology**: infer 層全体 (YOLOX+RTMPose / BlazePose / YOLO-Pose 等) を backend 単位で差し替え可能にする抽象化。設計案は [`backlog-pose-backend-abstraction.md`](backlog-pose-backend-abstraction.md) に温存。
