@@ -484,3 +484,20 @@ SimCC head の argmax が FP16 のビン比較反転で別位置に飛んでい�
 - 既存 `web/dual_rtmpose/` 静的ファイルがそのまま使え、ブラウザで 3 ペイン skeleton が見える
 - `python/` 配下に旧実装が残り、README から退避場所が辿れる
 - engine prebuild → cold start ≤ 3 秒
+
+## Phase 番外編: Docker 化 (2026-05-19)
+
+別 Jetson へ持ち運ぶたびに `docs/build-environment.md` の apt 手順を踏む負担を減らすため、C++ 実装を Docker コンテナで完結させる。
+
+- ベースイメージ: `nvcr.io/nvidia/l4t-jetpack:r36.4.0` (CUDA 12.6 + TensorRT 10.3 同梱)
+- `Dockerfile` / `docker-compose.yml` / `.dockerignore` / `scripts/install_docker.sh` を追加
+- engine cache は `./outputs/tensorrt_engines/` をホスト bind mount でコンテナと共有
+- 起動コマンド (sudo 不要、 docker グループのユーザーで実行):
+
+  ```bash
+  docker compose --profile tools run --rm build-engines-yolox       # 初回のみ
+  docker compose --profile tools run --rm build-engines-rtmpose     # 初回のみ
+  docker compose up
+  ```
+
+詳細は **[docs/docker-setup.md](./docker-setup.md)** を参照。

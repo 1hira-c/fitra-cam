@@ -1,0 +1,101 @@
+# fitra-cam — Jetson Orin Nano Super 上で C++ 実装を Docker から起動するための定義。
+#
+# 前提:
+#   - Docker Engine と nvidia-container-toolkit が導入済み
+#     (scripts/install_docker.sh + `sudo nvidia-ctk runtime configure --runtime=docker`)
+#   - ./outputs/tensorrt_engines/ に .engine が存在
+#     (なければ profile=tools の build-engines-* を先に走らせる)
+#   - ホストでカメラが /dev/video0..3 に出ている (現状の 2 カメラ x 2 ストリーム)
+#
+# 使い方:
+#   1) 初回 (ONNX → engine 変換):
+#        docker compose --profile tools run --rm build-engines-yolox
+#        docker compose --profile tools run --rm build-engines-rtmpose
+#   2) 本起動:
+#        docker compose up --build
+
+# ---------------------------------------------------------------------
+# 共通設定 (YAML アンカー)。サービス側で `<<: *common-*` で取り込む。
+# ---------------------------------------------------------------------
+x-runtime: &nvidia-runtime
+  runtime: nvidia
+
+x-volumes: &common-volumes
+  volumes:
+    # /dev/v4l/by-path は symlink ディレクトリ。bind mount で持ち込む。
+    - /dev/v4l:/dev/v4l:ro
+    # engine cache (ホストと共有)。初回ビルド後はここに残り、再起動が秒オーダーになる。
+    - ./outputs:/workspace/outputs
+    # 静的フロントエンドはホスト側を即時反映できるよう ro マウント。
+    - ./web:/workspace/web:ro
+
+x-devices: &common-devices
+  devices:
+    - /dev/video0:/dev/video0
+    - /dev/video1:/dev/video1
+    - /dev/video2:/dev/video2
+    - /dev/video3:/dev/video3
+
+services:
+  # ---------------------------------------------------------------------
+  # 本サービス: 2 カメラ + Crow Web を起動する。
+  # ---------------------------------------------------------------------
+  fitra-cam:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fitra-cam:latest
+    container_name: fitra-cam
+    <<: [*nvidia-runtime, *common-volumes, *common-devices]
+    ports:
+      - "8000:8000"
+    # main の CLI は "--flag value" 形式 (= 区切りは受け付けない)。
+    command:
+      - "--cam0"
+      - "/dev/v4l/by-path/platform-3610000.usb-usb-0:2.3:1.0-video-index0"
+      - "--cam1"
+      - "/dev/v4l/by-path/platform-3610000.usb-usb-0:2.4:1.0-video-index0"
+      - "--det-engine"
+      - "/workspace/outputs/tensorrt_engines/yolox_tiny.fp16.engine"
+      - "--pose-engine"
+      - "/workspace/outputs/tensorrt_engines/rtmpose_s.fp16.engine"
+      - "--port"
+      - "8000"
+      - "--host"
+      - "0.0.0.0"
+    restart: "no"
+
+  # ---------------------------------------------------------------------
+  # ツールサービス: ONNX → TensorRT engine 変換。
+  # `--profile tools` を付けない限り起動しない。
+  # ---------------------------------------------------------------------
+  # build_engines の CLI は "--flag value" 形式 (= 区切りは受け付けない)。
+  build-engines-yolox:
+    image: fitra-cam:latest
+    profiles: ["tools"]
+    container_name: fitra-cam-build-yolox
+    <<: [*nvidia-runtime, *common-volumes]
+    entrypoint: ["/workspace/cpp/build/tools/build_engines"]
+    command:
+      - "--preset"
+      - "yolox"
+      - "--onnx"
+      - "/workspace/outputs/onnx/yolox_tiny_8xb8-300e_humanart-6f3252f9.onnx"
+      - "--output"
+      - "/workspace/outputs/tensorrt_engines/yolox_tiny.fp16.engine"
+      - "--fp16"
+
+  build-engines-rtmpose:
+    image: fitra-cam:latest
+    profiles: ["tools"]
+    container_name: fitra-cam-build-rtmpose
+    <<: [*nvidia-runtime, *common-volumes]
+    entrypoint: ["/workspace/cpp/build/tools/build_engines"]
+    command:
+      - "--preset"
+      - "rtmpose"
+      - "--onnx"
+      - "/workspace/outputs/onnx/rtmpose-s_simcc-body7_pt-body7_420e-256x192-acd4a1ef_20230504.onnx"
+      - "--output"
+      - "/workspace/outputs/tensorrt_engines/rtmpose_s.fp16.engine"
+      - "--fp16"
