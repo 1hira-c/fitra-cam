@@ -36,6 +36,10 @@ Phase status is tracked in `docs/cpp-migration-plan.md` ("段階実装"). Curren
 - Phase 3: 3-camera Crow server with skeleton bundles to `web/dual_rtmpose/`
 - Phase 4: FP16/INT8/pinned-memory, aggregate ≥ 90 fps
 
+### Docker から起動する場合
+
+Jetson 上で `Dockerfile` + `docker-compose.yml` でビルド/起動可能。詳細は `docs/docker-setup.md`。Docker Engine 自体の導入だけ `sudo bash scripts/install_docker.sh` (ユーザー実行) が必要。
+
 ## Python build (reference / fallback)
 
 ```bash

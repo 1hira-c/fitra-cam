@@ -1,0 +1,23 @@
+.git
+.github
+.gitignore
+.vscode
+.claude
+
+cpp/build
+cpp/build-*
+
+outputs
+
+python/.venv
+python/__pycache__
+**/__pycache__
+**/*.pyc
+
+# Web assets are needed at runtime; keep them in the image.
+# Exclude only generated artifacts.
+web/**/node_modules
+
+# Editor / OS noise
+.DS_Store
+*.swp
