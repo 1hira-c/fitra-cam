@@ -124,3 +124,13 @@ set_target_properties(fitra_test_tracker_extract PROPERTIES
 )
 
 add_test(NAME test_tracker_extract COMMAND fitra_test_tracker_extract)
+
+# Phase 11: standalone OSC dump tool for SlimeVR-Server-free smoke testing.
+add_executable(fitra_slimevr_loopback
+    slimevr_loopback.cpp
+)
+
+set_target_properties(fitra_slimevr_loopback PROPERTIES
+    OUTPUT_NAME "slimevr_loopback"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
