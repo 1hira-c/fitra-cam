@@ -176,6 +176,15 @@ bool CalibrationSession::preflight(const CalibPreflight& in, std::string& err) {
         err = "dump_keypoints_3d not found: " + in.dump_tool_path;
         return false;
     }
+    // Lower bound = 1s @ 15fps so dump_keypoints_3d has enough frames to
+    // estimate stable bone lengths; upper bound caps memory at ~600MB/cam.
+    // Without this clamp, a non-positive value would make on_frame() see
+    // buf.size() >= 0 == true and never buffer anything -> stuck in
+    // kRecording forever.
+    if (in.recording_frames_per_cam < 15 || in.recording_frames_per_cam > 600) {
+        err = "recording_frames_per_cam must be in [15, 600]";
+        return false;
+    }
 
     CalibPreflight applied;  // copy of pre_ after sanitize, for the callback
     {
@@ -283,6 +292,16 @@ bool CalibrationSession::retake(const std::string& pose_name, std::string& err) 
 
 bool CalibrationSession::cancel(std::string& err) {
     err.clear();
+    // Match retake's busy guard: finalize / analyzer / approve threads cannot
+    // be torn down safely from here, and if we let cancel set kCanceled while
+    // they're still alive they would later overwrite state with kAnalyzing /
+    // kReview / kFailed and clobber records_/quality_*.
+    CalibState s = state_.load();
+    if (s == CalibState::kFinalizing || s == CalibState::kAnalyzing
+        || s == CalibState::kApproving) {
+        err = "cannot cancel while busy";
+        return false;
+    }
     set_recording_active_(false);
     set_state_(CalibState::kCanceled);
     std::lock_guard<std::mutex> g(mu_);
@@ -373,10 +392,16 @@ void CalibrationSession::on_frame(std::size_t cam_idx, const cv::Mat& bgr, doubl
         std::size_t idx = target_pose_idx_;
         log_line("buffer full for " + records_[idx].name);
         set_recording_active_(false);
-        if (idx + 1 < kPoseCount) {
-            // Move to next pose AwaitHold immediately; finalize MP4 lazily
-            // when all poses are buffered.
-            target_pose_idx_ = idx + 1;
+        // Find the next pose still flagged for recording. For a fresh session
+        // this is just idx+1, but after a partial retake (records_[k].recorded
+        // already true for unaffected poses) it skips ahead to the next gap
+        // and finalize fires immediately once nothing remains.
+        std::size_t next_idx = kPoseCount;
+        for (std::size_t j = idx + 1; j < kPoseCount; ++j) {
+            if (!records_[j].recorded) { next_idx = j; break; }
+        }
+        if (next_idx < kPoseCount) {
+            target_pose_idx_ = next_idx;
             recognizer_.set_target(kSequence[target_pose_idx_]);
             recognizer_.reset();
             set_state_(CalibState::kAwaitHold);
@@ -443,10 +468,16 @@ void CalibrationSession::finalize_thread_main_() {
         // local copy is owned exclusively by this thread.
         std::array<std::array<std::vector<FrameItem>, 2>, kPoseCount> local_buffers;
         std::array<std::string, kPoseCount> pose_names;
+        // Snapshot of which poses were already finalized in a previous pass.
+        // A partial retake re-fills only the retaken pose's buffer; the rest
+        // arrive here empty but with records_[pi].recorded == true, and we
+        // must keep their existing clip metadata instead of throwing.
+        std::array<bool, kPoseCount> already_recorded{};
         {
             std::lock_guard<std::mutex> g(mu_);
             for (std::size_t pi = 0; pi < kPoseCount; ++pi) {
                 pose_names[pi] = records_[pi].name;
+                already_recorded[pi] = records_[pi].recorded;
                 for (std::size_t ci = 0; ci < 2; ++ci) {
                     local_buffers[pi][ci] = std::move(buffers_[pi][ci]);
                     buffers_[pi][ci].clear();
@@ -458,6 +489,19 @@ void CalibrationSession::finalize_thread_main_() {
         // want to block the WebUI poll.
         int width = 0, height = 0;
         for (std::size_t pi = 0; pi < kPoseCount; ++pi) {
+            const bool empty0 = local_buffers[pi][0].empty();
+            const bool empty1 = local_buffers[pi][1].empty();
+            if (empty0 && empty1) {
+                if (already_recorded[pi]) {
+                    // Skip; mp4s from the prior finalize are still on disk
+                    // and records_[pi] still carries the old clips/frames/fps.
+                    log_line("skipping " + pose_names[pi]
+                             + " (retained from previous finalize)");
+                    continue;
+                }
+                throw std::runtime_error(
+                    "missing buffered frames for " + pose_names[pi]);
+            }
             std::array<int, 2> pose_frames{{0, 0}};
             std::array<double, 2> pose_fps{{0.0, 0.0}};
             std::vector<std::string> pose_clips;

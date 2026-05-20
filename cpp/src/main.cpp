@@ -423,6 +423,17 @@ int main(int argc, char** argv) {
         }
         driver->start();
 
+        // Stop the driver worker on any scope exit (early return, exception,
+        // normal end). Calibration taps capture raw pointers into
+        // `calib_session`, which is declared below and therefore destroyed
+        // *before* `driver` on unwind. Without this guard, an early return
+        // after the taps are wired would let the still-running driver call
+        // into a freed CalibrationSession.
+        struct DriverStop {
+            fitra::pipeline::MultiCameraDriver* d;
+            ~DriverStop() { if (d) d->stop(); }
+        } driver_stop{driver.get()};
+
         // Phase 8 calibration session: only set up when 3D is enabled AND
         // exactly 2 cameras are attached. The session orchestrator and
         // dump_keypoints_3d both assume cam0/cam1 (Phase 7 spec); refuse to
