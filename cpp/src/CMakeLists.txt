@@ -82,6 +82,7 @@ target_link_libraries(fitra_pipeline PUBLIC
 # footprint flat.
 add_library(fitra_slimevr STATIC
     slimevr/osc_writer.cpp
+    slimevr/tracker_extract.cpp
 )
 
 target_include_directories(fitra_slimevr PUBLIC

@@ -108,3 +108,19 @@ set_target_properties(fitra_test_osc_roundtrip PROPERTIES
 )
 
 add_test(NAME test_osc_roundtrip COMMAND fitra_test_osc_roundtrip)
+
+# Phase 11: Halpe26 → 8 VMC tracker extraction + coord transform test.
+add_executable(fitra_test_tracker_extract
+    test_tracker_extract.cpp
+)
+
+target_link_libraries(fitra_test_tracker_extract PRIVATE
+    fitra_slimevr
+)
+
+set_target_properties(fitra_test_tracker_extract PROPERTIES
+    OUTPUT_NAME "test_tracker_extract"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_tracker_extract COMMAND fitra_test_tracker_extract)
