@@ -76,6 +76,23 @@ target_link_libraries(fitra_pipeline PUBLIC
     opencv_videoio
 )
 
+# SlimeVR / VMC integration: OSC writer, tracker extraction, UDP publisher.
+# Phase 11. Header-only deps + std + opencv_core (Vec3f / Vec4f). No external
+# OSC library; we hand-roll the OSC 1.0 wire format to keep the dependency
+# footprint flat.
+add_library(fitra_slimevr STATIC
+    slimevr/osc_writer.cpp
+)
+
+target_include_directories(fitra_slimevr PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(fitra_slimevr PUBLIC
+    fitra_lift          # active_keypoint_format() for Halpe26 assert + types
+    opencv_core
+)
+
 # Crow HTTP+WebSocket server.
 add_library(fitra_web STATIC
     web/crow_server.cpp

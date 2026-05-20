@@ -92,3 +92,19 @@ set_target_properties(fitra_test_triangulator PROPERTIES
 )
 
 add_test(NAME test_triangulator COMMAND fitra_test_triangulator)
+
+# Phase 11: OSC 1.0 wire-format byte-level round-trip test.
+add_executable(fitra_test_osc_roundtrip
+    test_osc_roundtrip.cpp
+)
+
+target_link_libraries(fitra_test_osc_roundtrip PRIVATE
+    fitra_slimevr
+)
+
+set_target_properties(fitra_test_osc_roundtrip PROPERTIES
+    OUTPUT_NAME "test_osc_roundtrip"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_osc_roundtrip COMMAND fitra_test_osc_roundtrip)
