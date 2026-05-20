@@ -2,8 +2,9 @@
 //
 // Runs YOLOX + RTMPose on every frame of an input MP4 and emits the same
 // JSON Lines schema as python/scripts/dump_reference_keypoints.py:
-//   {"frame":N,"persons":[{"bbox":[x1,y1,x2,y2,score],
-//                          "kpts":[[x,y,score], ...17]}]}
+//   {"frame":N,"kp_format":"coco17|halpe26",
+//    "persons":[{"bbox":[x1,y1,x2,y2,score],
+//                "kpts":[[x,y,score], ...17 or ...26]}]}
 //
 // Pair with python/scripts/compare_keypoints.py to compute bbox IoU and
 // keypoint L2 statistics against the Python reference.
@@ -284,7 +285,9 @@ int main(int argc, char** argv) {
 
             // emit JSON line
             std::ostringstream line;
-            line << "{\"frame\":" << i << ",\"persons\":[";
+            line << "{\"frame\":" << i << ",\"kp_format\":\""
+                 << fitra::lift::keypoint_format_name(fitra::lift::active_keypoint_format())
+                 << "\",\"persons\":[";
             for (std::size_t pi = 0; pi < persons.size(); ++pi) {
                 if (pi) line << ",";
                 const auto& p = persons[pi];

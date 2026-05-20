@@ -531,7 +531,10 @@ void write_json_line(std::ofstream& out,
                      double bone_drift_before,
                      double bone_drift_after,
                      bool ik_locked) {
-    out << "{\"frame\":" << frame << ",\"pose\":\"" << json_escape(pose)
+    out << "{\"frame\":" << frame
+        << ",\"kp_format\":\""
+        << fitra::lift::keypoint_format_name(fitra::lift::active_keypoint_format())
+        << "\",\"pose\":\"" << json_escape(pose)
         << "\",\"persons_3d\":[{\"id\":0,\"joints\":[";
     const std::size_t emit_n = std::min<std::size_t>(
         skel.kp_count, skel.joints.size());

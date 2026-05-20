@@ -11,9 +11,9 @@ Defaults:
   --multi-person off        (largest-bbox person only, matching default run mode)
 
 Output schema (one JSON object per line):
-  {"frame": int, "persons":
+  {"frame": int, "kp_format": "coco17|halpe26", "persons":
     [{"bbox": [x1, y1, x2, y2, score],
-      "kpts": [[x, y, score], ...17 keypoints]}]}
+      "kpts": [[x, y, score], ...17 or ...26 keypoints]}]}
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ def main() -> int:
                     "kpts": [[float(kpts[k, 0]), float(kpts[k, 1]), float(scores[k])]
                              for k in range(kpts.shape[0])],
                 })
-            line = {"frame": i, "persons": persons}
+            line = {"frame": i, "kp_format": args.keypoint_format, "persons": persons}
             fout.write(json.dumps(line, separators=(",", ":")) + "\n")
             written += 1
             i += 1

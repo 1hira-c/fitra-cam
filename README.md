@@ -1,6 +1,6 @@
 # fitra-cam
 
-Jetson Orin Nano Super 上で **3 USB カメラ同時 / リアルタイム** に YOLOX 人検出 + RTMPose 17 keypoint 2D 姿勢推定を回す。実装は TensorRT C++ + Jetson Multimedia API で zero-copy。
+Jetson Orin Nano Super 上で **3 USB カメラ同時 / リアルタイム** に YOLOX 人検出 + RTMPose 2D 姿勢推定 (COCO17 / Halpe26) を回す。実装は TensorRT C++ + Jetson Multimedia API で zero-copy。
 
 このリポジトリは現在 **C++ 移行中**:
 

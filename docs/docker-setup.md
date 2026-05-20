@@ -94,14 +94,14 @@ ONNX を engine に変換する。`outputs/tensorrt_engines/` に書き出され
 
 ```bash
 docker compose --profile tools run --rm build-engines-yolox
-docker compose --profile tools run --rm build-engines-rtmpose
+docker compose --profile tools run --rm build-engines-rtmpose-halpe26
 ```
 
 生成物:
 
 ```text
 outputs/tensorrt_engines/yolox_tiny.fp16.engine
-outputs/tensorrt_engines/rtmpose_s.fp16.engine
+outputs/tensorrt_engines/rtmpose_m_halpe26.fp16.engine
 ```
 
 これらは GPU/TRT バージョン依存。別 Jetson に持って行く場合は再生成。
