@@ -39,8 +39,8 @@
 namespace fitra::camera {
 
 struct DecodedFrame {
-    // Populated only for decode-only sources. Prebaked RTMPose sources leave
-    // this empty to avoid copying a full frame after preprocessing is done.
+    // Populated for decode-only sources, and for prebaked RTMPose sources
+    // when Options::retain_bgr is enabled (Phase 8 recording tap).
     cv::Mat                              bgr;
     std::uint64_t                        seq{0};
     std::chrono::steady_clock::time_point captured_at{};
@@ -64,6 +64,17 @@ public:
     struct Options {
         int  det_frequency = 10;
         bool single_person = true;
+        // Keep a BGR copy in DecodedFrame even when RTMPose prebaking is
+        // enabled. This costs a full-frame clone per decoded frame, so callers
+        // should enable it only when another consumer needs raw pixels.
+        bool retain_bgr = false;
+        // Phase 8 "calibration is actively recording" flag. When set, the
+        // decode worker (a) retains the BGR copy and (b) skips the RTMPose
+        // pre-bake (and YOLOX) so the per-camera worker can keep up with
+        // V4L2 dequeue while disk I/O is the bottleneck. The central
+        // inference thread naturally sees no bboxes => no pose work either.
+        // Stays empty when no shared flag is needed.
+        std::shared_ptr<std::atomic<bool>> calib_recording_flag;
         // Debug/bench: when YOLOX is enabled but the cache is empty after
         // detection, inject a synthetic bbox covering the central 60% of
         // the frame so the downstream RTMPose stage always has work. Use

@@ -55,6 +55,7 @@ class ThreeDViewer {
     this.view = "front";
     this.sceneRadius = 1.2;
     this.hasData = false;
+    this.lastDataAtMs = 0;
     this.bounds = new THREE.Box3();
     this.boundsCenter = new THREE.Vector3(0, 0.9, 0);
     this.boundsSize = new THREE.Vector3();
@@ -154,11 +155,18 @@ class ThreeDViewer {
 
     const persons = Array.isArray(bundle.persons_3d) ? bundle.persons_3d : [];
     if (!persons.length) {
+      // Hold the last skeleton on screen across short data dropouts. 3.5s
+      // covers a Phase 8 calibration recording window (~3s) during which the
+      // live pose estimator is intentionally paused.
+      if (this.hasData && performance.now() - this.lastDataAtMs < 3500) {
+        return;
+      }
       this.setStatus("(no 3D person)");
       this.updatePeople([]);
       return;
     }
 
+    this.lastDataAtMs = performance.now();
     this.setStatus("");
     this.updatePeople(persons);
   }
@@ -512,6 +520,9 @@ function update3DStats() {
     `sync_dt_ms     ${(s.sync_dt_ms ?? 0).toFixed(1)}\n` +
     `stage_ms       ${(s.stage_ms ?? 0).toFixed(2)}\n` +
     `height_m       ${(s.subject_height_m ?? 0).toFixed(2)}\n` +
+    `profile_loaded ${s.profile_loaded ? "true" : "false"}\n` +
+    `subject_id     ${s.subject_id || "-"}\n` +
+    `quality        ${s.quality_status || "-"}\n` +
     `processed      ${s.processed ?? 0}\n` +
     `sync_miss      ${s.sync_miss ?? 0}\n` +
     `ik_locked      ${s.ik_locked ? "true" : "false"}\n` +

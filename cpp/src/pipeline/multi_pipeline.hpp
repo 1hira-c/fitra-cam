@@ -15,7 +15,9 @@
 #include <atomic>
 #include <chrono>
 #include <deque>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -39,6 +41,8 @@ public:
         bool ik_enabled = true;
         int bone_calib_frames = 150;
         double subject_height_m = 0.0;
+        bool has_subject_profile = false;
+        lift::SubjectProfile subject_profile;
     };
 
     MultiCameraDriver(std::vector<std::unique_ptr<camera::FrameSource>> sources,
@@ -65,6 +69,29 @@ public:
         return recv > pr ? recv - pr : 0;
     }
 
+    // Taps for the Phase 8 calibration wizard. Set/replace before start(),
+    // or while running -- writes to the std::function are protected by a
+    // tiny mutex on the call side so they're safe to swap from another
+    // thread. Both taps default to no-op.
+    //
+    // The frame tap is called from the pipeline thread immediately after a
+    // FrameSource pop, with the decoded BGR Mat and a steady_clock-based
+    // timestamp (milliseconds since program start). The callback receives a
+    // const reference; the callee MUST clone() if it wants to keep the
+    // pixels past the call.
+    using FrameTapFn = std::function<void(std::size_t cam_idx,
+                                          const cv::Mat& bgr,
+                                          double ts_ms)>;
+    using Skeleton3DTapFn = std::function<void(const infer::Skeleton3D& skel,
+                                               double bone_drift_pct)>;
+
+    void set_frame_tap(FrameTapFn fn);
+    void set_skeleton3d_tap(Skeleton3DTapFn fn);
+
+    // For the calibration session approval flow: lets the API layer call
+    // ik().reload_from_profile() once a new profile is approved.
+    lift::IkSolver& ik() { return ik_; }
+
 private:
     struct CamState {
         PipelineStats        stats;
@@ -85,6 +112,14 @@ private:
     ThreeDConfig         threed_;
     lift::SkeletonKalman kalman_;
     lift::IkSolver       ik_;
+
+    // Phase 8 taps. Loop reads these via a local snapshot to avoid holding
+    // the mutex across the user callback.
+    std::mutex           tap_mu_;
+    FrameTapFn           frame_tap_;
+    Skeleton3DTapFn      skeleton3d_tap_;
+    std::chrono::steady_clock::time_point loop_t0_{};
+    bool                 loop_t0_set_ = false;
 
     // Latest decoded frame + bboxes per camera, kept alive across the
     // RTMPose batched call so we can hand cv::Mat pointers into reqs.

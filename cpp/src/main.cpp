@@ -33,7 +33,9 @@
 #include "infer/trt_engine.hpp"
 #include "infer/yolox.hpp"
 #include "lift/calib_io.hpp"
+#include "lift/subject_profile.hpp"
 #include "lift/triangulator.hpp"
+#include "pipeline/calibration_session.hpp"
 #include "pipeline/multi_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
 #include "util/cuda_check.hpp"
@@ -89,8 +91,24 @@ void print_help() {
         "  --sync-window-ms F        max camera timestamp gap for 3D (default 15.0)\n"
         "  --bone-calib-frames N     frames used to lock IK bone lengths (default 150)\n"
         "  --subject-height-m F      lock IK bone lengths from Japanese anthropometry and height\n"
+        "  --subject-id ID           load calibrations/subjects/<ID>/latest_profile.yaml for IK\n"
+        "  --subjects-dir DIR        subject profile root (default calibrations/subjects)\n"
+        "  --subject-profile PATH    direct subject profile YAML path for IK\n"
         "  --no-3d-kalman            disable 3D Kalman smoothing\n"
         "  --no-3d-ik                disable 3D IK projection\n"
+        "\n"
+        "Phase 8 — Subject calibration wizard (requires --enable-3d):\n"
+        "  --calibrate                 auto-start calibration session at boot\n"
+        "  --calib-subject-id ID       required with --calibrate (subject identifier)\n"
+        "  --calib-subject-height-m F  required with --calibrate (1.0 .. 2.3 m)\n"
+        "  --calib-frames-per-cam N    frames per camera per pose (default 75 ≈ 5s @ 15fps)\n"
+        "  --calib-hold-sec F          stability seconds before recording (default 1.5)\n"
+        "  --calib-auto-approve        auto approve when quality=pass (warn/fail stay manual)\n"
+        "  --calib-auto-exit           exit main after a successful approval\n"
+        "  --calib-static-dir DIR      override web/subject_calibration static path\n"
+        "  --calib-dump-tool PATH      override dump_keypoints_3d path used by analysis\n"
+        "  --subjects-dir DIR          subject profile root (also used by --calibrate)\n"
+        "\n"
         "  --probe                   Phase 0 sanity check and exit\n"
         "  --help                    show this help\n");
 }
@@ -120,6 +138,19 @@ std::filesystem::path guess_static_dir() {
     // build/main lives at <repo>/cpp/build/main; we want <repo>/web/dual_rtmpose
     auto repo = exe.parent_path().parent_path().parent_path();
     return repo / "web" / "dual_rtmpose";
+}
+
+std::filesystem::path guess_subject_calib_static_dir() {
+    auto exe = std::filesystem::canonical("/proc/self/exe");
+    auto repo = exe.parent_path().parent_path().parent_path();
+    return repo / "web" / "subject_calibration";
+}
+
+std::filesystem::path guess_dump_tool_path() {
+    auto exe = std::filesystem::canonical("/proc/self/exe");
+    // main is at <repo>/cpp/build/main; dump tool is <repo>/cpp/build/tools/dump_keypoints_3d
+    auto build_dir = exe.parent_path();
+    return build_dir / "tools" / "dump_keypoints_3d";
 }
 
 std::vector<std::string> expected_camera_ids(std::size_t count) {
@@ -156,9 +187,23 @@ int main(int argc, char** argv) {
     double sync_window_ms = 15.0;
     int bone_calib_frames = 150;
     double subject_height_m = 0.0;
+    std::string subject_id;
+    std::string subjects_dir = "calibrations/subjects";
+    std::string subject_profile_path;
     bool kalman_3d = true;
     bool ik_3d = true;
     bool  want_probe = false;
+
+    // Phase 8 — calibration wizard.
+    bool calibrate_on_boot = false;
+    std::string calib_subject_id;
+    double calib_subject_height_m = 0.0;
+    int calib_frames_per_cam = 75;
+    double calib_hold_sec = 1.5;
+    bool calib_auto_approve = false;
+    bool calib_auto_exit = false;
+    std::string calib_static_dir;
+    std::string calib_dump_tool;
 
     for (int i = 1; i < argc; ++i) {
         std::string_view a{argv[i]};
@@ -195,8 +240,20 @@ int main(int argc, char** argv) {
         else if (a == "--sync-window-ms")    { sync_window_ms = std::stod(need("--sync-window-ms")); }
         else if (a == "--bone-calib-frames") { bone_calib_frames = std::atoi(need("--bone-calib-frames")); }
         else if (a == "--subject-height-m")  { subject_height_m = std::stod(need("--subject-height-m")); }
+        else if (a == "--subject-id")         { subject_id = need("--subject-id"); }
+        else if (a == "--subjects-dir")       { subjects_dir = need("--subjects-dir"); }
+        else if (a == "--subject-profile")    { subject_profile_path = need("--subject-profile"); }
         else if (a == "--no-3d-kalman")      { kalman_3d = false; }
         else if (a == "--no-3d-ik")          { ik_3d = false; }
+        else if (a == "--calibrate")             { calibrate_on_boot = true; }
+        else if (a == "--calib-subject-id")      { calib_subject_id = need("--calib-subject-id"); }
+        else if (a == "--calib-subject-height-m"){ calib_subject_height_m = std::stod(need("--calib-subject-height-m")); }
+        else if (a == "--calib-frames-per-cam")  { calib_frames_per_cam = std::atoi(need("--calib-frames-per-cam")); }
+        else if (a == "--calib-hold-sec")        { calib_hold_sec = std::stod(need("--calib-hold-sec")); }
+        else if (a == "--calib-auto-approve")    { calib_auto_approve = true; }
+        else if (a == "--calib-auto-exit")       { calib_auto_exit = true; }
+        else if (a == "--calib-static-dir")      { calib_static_dir = need("--calib-static-dir"); }
+        else if (a == "--calib-dump-tool")       { calib_dump_tool = need("--calib-dump-tool"); }
         else {
             std::fprintf(stderr, "unknown arg: %s\n", argv[i]);
             print_help();
@@ -218,6 +275,41 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "--subject-height-m must be 0 or a plausible meter value <= 2.5\n");
             return EXIT_FAILURE;
         }
+        if (!enable_3d && (!subject_id.empty() || !subject_profile_path.empty())) {
+            std::fprintf(stderr, "--subject-id/--subject-profile require --enable-3d\n");
+            return EXIT_FAILURE;
+        }
+        if (calibrate_on_boot && !enable_3d) {
+            std::fprintf(stderr, "--calibrate requires --enable-3d\n");
+            return EXIT_FAILURE;
+        }
+        if (calibrate_on_boot
+            && (calib_subject_id.empty() || calib_subject_height_m <= 0.0)) {
+            std::fprintf(stderr,
+                "--calibrate requires --calib-subject-id and --calib-subject-height-m\n");
+            return EXIT_FAILURE;
+        }
+        // For the headless --calibrate path, prime the live IkSolver with the
+        // calibration height up-front. Without this, the IK is unlocked at
+        // boot and the 3D angle recognizer would have to wait for ~150 frames
+        // of observational locking before it can judge pose holds. If the
+        // user already passed --subject-height-m we honor that instead.
+        if (calibrate_on_boot && subject_height_m <= 0.0
+            && subject_profile_path.empty() && subject_id.empty()) {
+            subject_height_m = calib_subject_height_m;
+        }
+        std::size_t requested_cam_count = 0;
+        for (const auto& path : cam_paths) {
+            if (!path.empty()) ++requested_cam_count;
+        }
+        const bool calib_frame_recording_possible =
+            enable_3d && requested_cam_count == 2;
+        // Shared "calibration is recording" flag. When true:
+        //   - FrameSource skips YOLOX + RTMPose pre-bake and retains BGR
+        //   - CalibrationSession collects raw frames into the per-pose buffer
+        // Wired from CalibrationSession::set_on_recording_active below.
+        auto calib_recording_flag =
+            std::make_shared<std::atomic<bool>>(false);
         std::signal(SIGINT, on_signal);
 
         TrtLogger tlog;
@@ -256,6 +348,13 @@ int main(int argc, char** argv) {
             src_opts.det_frequency = det_frequency;
             src_opts.single_person = !multi_person;
             src_opts.fake_bbox_if_empty = bench_fake_bbox;
+            // Phase 8 records raw per-camera clips through MultiCameraDriver's
+            // frame tap. The same flag pauses YOLOX + RTMPose pre-bake while
+            // recording so disk I/O has the CPU/GPU headroom and we don't burn
+            // cycles on a pose feed nobody is watching.
+            if (calib_frame_recording_possible) {
+                src_opts.calib_recording_flag = calib_recording_flag;
+            }
             // Have the per-camera worker pre-bake the RTMPose input so the
             // central inference thread only does memcpy + GPU + decode.
             const auto& rtmpose_opts = rtmpose.options();
@@ -270,6 +369,8 @@ int main(int argc, char** argv) {
 
         std::unique_ptr<fitra::lift::Triangulator> triangulator;
         std::unique_ptr<fitra::pipeline::Skeleton3DBus> bus3d;
+        fitra::lift::SubjectProfile subject_profile;
+        bool has_subject_profile = false;
         if (enable_3d) {
             FITRA_LOG_INFO("loading calibration: {}", calib_path);
             auto calib = fitra::lift::load_calibration(calib_path);
@@ -284,6 +385,21 @@ int main(int argc, char** argv) {
             if (subject_height_m > 0.0) {
                 FITRA_LOG_INFO("3D IK subject height prior enabled: {} m", subject_height_m);
             }
+            if (subject_profile_path.empty() && !subject_id.empty()) {
+                subject_profile_path = fitra::lift::default_subject_profile_path(subjects_dir, subject_id);
+            }
+            if (!subject_profile_path.empty()) {
+                FITRA_LOG_INFO("loading subject profile: {}", subject_profile_path);
+                subject_profile = fitra::lift::load_subject_profile(subject_profile_path);
+                if (subject_profile.subject_height_m > 0.0) {
+                    subject_height_m = subject_profile.subject_height_m;
+                } else if (subject_height_m > 0.0) {
+                    subject_profile.subject_height_m = subject_height_m;
+                }
+                has_subject_profile = true;
+                FITRA_LOG_INFO("3D IK subject profile enabled: id={} quality={}",
+                               subject_profile.subject_id, subject_profile.quality_status);
+            }
         }
 
         fitra::pipeline::SnapshotBus bus{n_cams};
@@ -297,6 +413,8 @@ int main(int argc, char** argv) {
             cfg.ik_enabled = ik_3d;
             cfg.bone_calib_frames = bone_calib_frames;
             cfg.subject_height_m = subject_height_m;
+            cfg.has_subject_profile = has_subject_profile;
+            cfg.subject_profile = subject_profile;
             driver = std::make_unique<fitra::pipeline::MultiCameraDriver>(
                 std::move(sources), rtmpose, bus, cfg);
         } else {
@@ -304,6 +422,85 @@ int main(int argc, char** argv) {
                 std::move(sources), rtmpose, bus);
         }
         driver->start();
+
+        // Stop the driver worker on any scope exit (early return, exception,
+        // normal end). Calibration taps capture raw pointers into
+        // `calib_session`, which is declared below and therefore destroyed
+        // *before* `driver` on unwind. Without this guard, an early return
+        // after the taps are wired would let the still-running driver call
+        // into a freed CalibrationSession.
+        struct DriverStop {
+            fitra::pipeline::MultiCameraDriver* d;
+            ~DriverStop() { if (d) d->stop(); }
+        } driver_stop{driver.get()};
+
+        // Phase 8 calibration session: only set up when 3D is enabled AND
+        // exactly 2 cameras are attached. The session orchestrator and
+        // dump_keypoints_3d both assume cam0/cam1 (Phase 7 spec); refuse to
+        // attach for 1- or 3-camera runs rather than silently dropping cam2.
+        std::unique_ptr<fitra::pipeline::CalibrationSession> calib_session;
+        fitra::pipeline::CalibPreflight calib_defaults;
+        const bool calib_available = enable_3d && n_cams == 2;
+        if (calibrate_on_boot && !calib_available) {
+            std::fprintf(stderr,
+                "--calibrate currently requires exactly 2 cameras (got %zu)\n",
+                n_cams);
+            return EXIT_FAILURE;
+        }
+        if (enable_3d && n_cams != 2) {
+            FITRA_LOG_WARN("calibration wizard disabled: needs exactly 2 cameras (got {})",
+                           n_cams);
+        }
+        if (calib_available) {
+            calib_session = std::make_unique<fitra::pipeline::CalibrationSession>();
+            calib_session->set_fps_hint(static_cast<double>(fps));
+            calib_session->set_auto_approve(calib_auto_approve);
+            calib_session->set_auto_exit(calib_auto_exit);
+            calib_session->set_log([](const std::string& l) {
+                std::fprintf(stderr, "[calib] %s\n", l.c_str());
+            });
+            calib_session->set_on_approved([&](const fitra::lift::SubjectProfile& p) {
+                FITRA_LOG_INFO("hot-reloading IK from approved profile (id={})",
+                               p.subject_id);
+                driver->ik().reload_from_profile(p);
+            });
+            // Prime the live IK with the subject's height the moment preflight
+            // succeeds, so the 3D angle recognizer has a sensible bone-length
+            // lock from the very first frame of capture.
+            calib_session->set_on_preflight(
+                [&](const fitra::pipeline::CalibPreflight& p) {
+                    FITRA_LOG_INFO("priming IK with calibration height: {} m",
+                                   p.subject_height_m);
+                    driver->ik().apply_subject_height(p.subject_height_m);
+                });
+            calib_session->set_on_recording_active(
+                [calib_recording_flag](bool active) {
+                    calib_recording_flag->store(active, std::memory_order_relaxed);
+                });
+            calib_session->set_on_exit_requested([&]() {
+                g_stop.store(true);
+            });
+
+            calib_defaults.subject_id = "";
+            calib_defaults.subjects_dir = subjects_dir;
+            calib_defaults.calib_yaml   = calib_path;
+            calib_defaults.det_engine   = det_engine_path;
+            calib_defaults.pose_engine  = pose_engine_path;
+            calib_defaults.recording_frames_per_cam = calib_frames_per_cam;
+            calib_defaults.required_hold_sec        = calib_hold_sec;
+            calib_defaults.dump_tool_path = calib_dump_tool.empty()
+                                            ? guess_dump_tool_path().string()
+                                            : calib_dump_tool;
+
+            driver->set_frame_tap(
+                [s = calib_session.get()](std::size_t cam, const cv::Mat& bgr, double ts) {
+                    s->on_frame(cam, bgr, ts);
+                });
+            driver->set_skeleton3d_tap(
+                [s = calib_session.get()](const fitra::infer::Skeleton3D& skel, double drift) {
+                    s->on_skeleton3d(skel, drift);
+                });
+        }
 
         std::unique_ptr<fitra::web::CrowServer> server;
         if (!no_web) {
@@ -313,9 +510,33 @@ int main(int argc, char** argv) {
             sopts.static_dir = static_dir.empty()
                                 ? guess_static_dir().string()
                                 : static_dir;
+            sopts.calib_static_dir = calib_static_dir.empty()
+                                ? guess_subject_calib_static_dir().string()
+                                : calib_static_dir;
             server = std::make_unique<fitra::web::CrowServer>(
                 bus, enable_3d ? bus3d.get() : nullptr, sopts);
+            if (calib_session) {
+                server->set_calibration_session(calib_session.get(), calib_defaults);
+            }
             server->start();
+        }
+
+        // Boot-time auto preflight + start if --calibrate is set.
+        if (calib_session && calibrate_on_boot) {
+            fitra::pipeline::CalibPreflight in = calib_defaults;
+            in.subject_id = calib_subject_id;
+            in.subject_height_m = calib_subject_height_m;
+            std::string err;
+            if (!calib_session->preflight(in, err)) {
+                std::fprintf(stderr, "calibrate preflight failed: %s\n", err.c_str());
+                return EXIT_FAILURE;
+            }
+            if (!calib_session->start(err)) {
+                std::fprintf(stderr, "calibrate start failed: %s\n", err.c_str());
+                return EXIT_FAILURE;
+            }
+            FITRA_LOG_INFO("calibration auto-start: subject={} height={} m",
+                           calib_subject_id, calib_subject_height_m);
         }
 
         auto last_log = std::chrono::steady_clock::now();

@@ -56,12 +56,14 @@ double median(std::vector<double> vals) {
 IkSolver::IkSolver() : IkSolver(Options{}) {}
 
 IkSolver::IkSolver(Options opts) : opts_{opts} {
-    if (opts_.subject_height_m > 0.0) {
-        apply_subject_height_model();
+    if (opts_.has_subject_profile) {
+        apply_subject_profile_locked(opts_.subject_profile);
+    } else if (opts_.subject_height_m > 0.0) {
+        apply_subject_height_model_locked();
     }
 }
 
-void IkSolver::apply_subject_height_model() {
+void IkSolver::apply_subject_height_model_locked() {
     const double h = opts_.subject_height_m;
     if (h <= 0.0) return;
 
@@ -93,11 +95,52 @@ void IkSolver::apply_subject_height_model() {
     locked_ = true;
 }
 
+void IkSolver::apply_subject_profile_locked(const SubjectProfile& profile) {
+    validate_subject_profile(profile);
+    locked_parent_len_.fill(0.0);
+    for (std::size_t child = 0; child < profile.bone_lengths_m.size(); ++child) {
+        if (profile.bone_lengths_m[child] > 1.0e-6) {
+            locked_parent_len_[child] = profile.bone_lengths_m[child];
+        }
+    }
+    if (profile.hip_width_m > 1.0e-6 && locked_parent_len_[12] <= 1.0e-6) {
+        locked_parent_len_[12] = profile.hip_width_m;
+    }
+    locked_shoulder_width_ = profile.shoulder_width_m;
+    if (profile.subject_height_m > 0.0) {
+        opts_.subject_height_m = profile.subject_height_m;
+    }
+    subject_id_ = profile.subject_id;
+    profile_quality_status_ = profile.quality_status;
+    profile_loaded_ = true;
+    locked_ = true;
+}
+
+void IkSolver::reload_from_profile(const SubjectProfile& profile) {
+    std::lock_guard<std::mutex> g(mu_);
+    for (auto& v : samples_) v.clear();
+    observed_frames_ = 0;
+    apply_subject_profile_locked(profile);
+}
+
+void IkSolver::apply_subject_height(double m) {
+    if (m <= 0.0) return;
+    std::lock_guard<std::mutex> g(mu_);
+    for (auto& v : samples_) v.clear();
+    observed_frames_ = 0;
+    profile_loaded_ = false;
+    subject_id_.clear();
+    profile_quality_status_.clear();
+    opts_.subject_height_m = m;
+    apply_subject_height_model_locked();
+}
+
 infer::Skeleton3D IkSolver::update(const infer::Skeleton3D& input) {
+    std::lock_guard<std::mutex> g(mu_);
     if (!locked_) {
-        observe_lengths(input);
+        observe_lengths_locked(input);
         if (observed_frames_ >= opts_.bone_calib_frames) {
-            lock_lengths();
+            lock_lengths_locked();
         }
     }
     infer::Skeleton3D out = input;
@@ -110,7 +153,7 @@ infer::Skeleton3D IkSolver::update(const infer::Skeleton3D& input) {
     return out;
 }
 
-void IkSolver::observe_lengths(const infer::Skeleton3D& skel) {
+void IkSolver::observe_lengths_locked(const infer::Skeleton3D& skel) {
     bool any = false;
     for (std::size_t child = 0; child < kCocoParent.size(); ++child) {
         int parent = kCocoParent[child];
@@ -127,7 +170,7 @@ void IkSolver::observe_lengths(const infer::Skeleton3D& skel) {
     if (any) observed_frames_ += 1;
 }
 
-void IkSolver::lock_lengths() {
+void IkSolver::lock_lengths_locked() {
     for (std::size_t child = 0; child < samples_.size(); ++child) {
         locked_parent_len_[child] = median(samples_[child]);
     }
@@ -203,6 +246,11 @@ void IkSolver::enforce_hinges(infer::Skeleton3D& skel) const {
 }
 
 double IkSolver::bone_drift_pct(const infer::Skeleton3D& skel) const {
+    std::lock_guard<std::mutex> g(mu_);
+    return bone_drift_pct_locked(skel);
+}
+
+double IkSolver::bone_drift_pct_locked(const infer::Skeleton3D& skel) const {
     if (!locked_) return 0.0;
     double sum = 0.0;
     int n = 0;
@@ -225,6 +273,31 @@ double IkSolver::bone_drift_pct(const infer::Skeleton3D& skel) const {
         }
     }
     return n > 0 ? sum / n : 0.0;
+}
+
+bool IkSolver::locked() const {
+    std::lock_guard<std::mutex> g(mu_);
+    return locked_;
+}
+
+bool IkSolver::profile_loaded() const {
+    std::lock_guard<std::mutex> g(mu_);
+    return profile_loaded_;
+}
+
+double IkSolver::subject_height_m() const {
+    std::lock_guard<std::mutex> g(mu_);
+    return opts_.subject_height_m;
+}
+
+std::string IkSolver::subject_id() const {
+    std::lock_guard<std::mutex> g(mu_);
+    return subject_id_;
+}
+
+std::string IkSolver::profile_quality_status() const {
+    std::lock_guard<std::mutex> g(mu_);
+    return profile_quality_status_;
 }
 
 }  // namespace fitra::lift

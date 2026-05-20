@@ -43,12 +43,14 @@ add_library(fitra_pipeline STATIC
     pipeline/pose_pipeline.cpp
     pipeline/multi_pipeline.cpp
     pipeline/snapshot.cpp
+    pipeline/calibration_session.cpp
 )
 
 target_link_libraries(fitra_pipeline PUBLIC
     fitra_infer
     fitra_camera
     fitra_lift
+    opencv_videoio
 )
 
 # Calibration / lifting support shared by tools and the future 3D pipeline.
@@ -57,6 +59,8 @@ add_library(fitra_lift STATIC
     lift/triangulator.cpp
     lift/kalman.cpp
     lift/ik.cpp
+    lift/subject_profile.cpp
+    lift/pose_recognizer.cpp
 )
 
 target_include_directories(fitra_lift PUBLIC

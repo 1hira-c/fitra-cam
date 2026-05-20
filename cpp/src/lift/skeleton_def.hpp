@@ -24,6 +24,10 @@ constexpr std::array<int, 17> kCocoParent{{
 
 constexpr std::array<int, 4> kHingeJoints{{7, 8, 13, 14}};  // elbows, knees
 
+constexpr std::array<int, 11> kMajorBoneChildren{{
+    5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16,
+}};
+
 inline int hinge_child(int joint) {
     switch (joint) {
         case 7: return 9;

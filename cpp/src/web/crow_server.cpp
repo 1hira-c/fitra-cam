@@ -59,6 +59,12 @@ CrowServer::~CrowServer() {
     try { stop(); } catch (...) {}
 }
 
+void CrowServer::set_calibration_session(pipeline::CalibrationSession* session,
+                                          pipeline::CalibPreflight defaults) {
+    calib_session_  = session;
+    calib_defaults_ = std::move(defaults);
+}
+
 void CrowServer::start() {
     auto& app     = impl_->app;
     auto& clients2d = impl_->clients2d;
@@ -117,6 +123,11 @@ void CrowServer::start() {
         return resp;
     });
 
+    // Phase 8 calibration routes. Registered before the catch-all so /calib,
+    // /api/calib/* and /artifacts/<path> are not shadowed by the static
+    // handler below.
+    register_calibration_routes_();
+
     // Static files under opts_.static_dir
     std::filesystem::path static_root{opts_.static_dir};
     CROW_ROUTE(app, "/")
@@ -174,6 +185,117 @@ void CrowServer::stop() {
     if (impl_) impl_->app.stop();
     if (publisher_thread_.joinable()) publisher_thread_.join();
     if (server_thread_.joinable())    server_thread_.join();
+}
+
+void CrowServer::register_calibration_routes_() {
+    if (!calib_session_) return;
+    auto& app = impl_->app;
+    auto* session = calib_session_;
+    auto defaults = calib_defaults_;
+
+    std::filesystem::path calib_root{opts_.calib_static_dir};
+    CROW_ROUTE(app, "/subject-calib")
+    ([calib_root]() {
+        auto body = read_file(calib_root / "index.html");
+        if (body.empty()) return crow::response{404, "calibration UI not installed"};
+        crow::response r{body};
+        r.set_header("Content-Type", "text/html; charset=utf-8");
+        return r;
+    });
+    CROW_ROUTE(app, "/subject-calib/<path>")
+    ([calib_root](const std::string& sub) {
+        std::filesystem::path req = calib_root / sub;
+        auto canon_req  = std::filesystem::weakly_canonical(req);
+        auto canon_root = std::filesystem::weakly_canonical(calib_root);
+        if (canon_req.string().rfind(canon_root.string(), 0) != 0) {
+            return crow::response{403, "forbidden"};
+        }
+        if (!std::filesystem::is_regular_file(canon_req)) {
+            return crow::response{404, "not found"};
+        }
+        crow::response r{read_file(canon_req)};
+        r.set_header("Content-Type", guess_content_type(canon_req));
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/calib/state")
+    ([session]() {
+        crow::response r{session->state_json()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/calib/preflight").methods(crow::HTTPMethod::POST)
+    ([session, defaults](const crow::request& req) {
+        auto body = crow::json::load(req.body);
+        if (!body) return crow::response{400, "{\"ok\":false,\"err\":\"invalid json\"}"};
+        pipeline::CalibPreflight in = defaults;
+        if (body.has("subject_id"))         in.subject_id       = body["subject_id"].s();
+        if (body.has("subject_height_m"))   in.subject_height_m = body["subject_height_m"].d();
+        if (body.has("required_hold_sec"))  in.required_hold_sec = body["required_hold_sec"].d();
+        if (body.has("recording_frames_per_cam"))
+            in.recording_frames_per_cam = static_cast<int>(body["recording_frames_per_cam"].i());
+        std::string err;
+        bool ok = session->preflight(in, err);
+        std::ostringstream o;
+        o << "{\"ok\":" << (ok ? "true" : "false")
+          << ",\"err\":\"" << err << "\"}";
+        crow::response r{o.str()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/calib/start").methods(crow::HTTPMethod::POST)
+    ([session](const crow::request& /*req*/) {
+        std::string err;
+        bool ok = session->start(err);
+        std::ostringstream o;
+        o << "{\"ok\":" << (ok ? "true" : "false")
+          << ",\"err\":\"" << err << "\"}";
+        crow::response r{o.str()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/calib/retake").methods(crow::HTTPMethod::POST)
+    ([session](const crow::request& req) {
+        auto body = crow::json::load(req.body);
+        std::string pose = body && body.has("pose") ? body["pose"].s() : std::string{};
+        std::string err;
+        bool ok = session->retake(pose, err);
+        std::ostringstream o;
+        o << "{\"ok\":" << (ok ? "true" : "false")
+          << ",\"err\":\"" << err << "\"}";
+        crow::response r{o.str()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/calib/cancel").methods(crow::HTTPMethod::POST)
+    ([session](const crow::request& /*req*/) {
+        std::string err;
+        bool ok = session->cancel(err);
+        std::ostringstream o;
+        o << "{\"ok\":" << (ok ? "true" : "false")
+          << ",\"err\":\"" << err << "\"}";
+        crow::response r{o.str()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/calib/approve").methods(crow::HTTPMethod::POST)
+    ([session](const crow::request& req) {
+        auto body = crow::json::load(req.body);
+        bool force = body && body.has("force") && body["force"].b();
+        std::string err;
+        bool ok = session->approve(force, err);
+        std::ostringstream o;
+        o << "{\"ok\":" << (ok ? "true" : "false")
+          << ",\"err\":\"" << err << "\"}";
+        crow::response r{o.str()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
 }
 
 void CrowServer::publisher_loop() {

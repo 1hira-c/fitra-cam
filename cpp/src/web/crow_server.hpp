@@ -19,6 +19,7 @@
 #include <string>
 #include <thread>
 
+#include "pipeline/calibration_session.hpp"
 #include "pipeline/snapshot.hpp"
 
 namespace fitra::web {
@@ -29,6 +30,11 @@ struct ServerOptions {
     std::string static_dir;        // absolute path to web/dual_rtmpose/
     double      publish_hz = 30.0;
     int         crow_threads = 2;
+
+    // Phase 8: directory that contains web/calibration/{index.html,app.js,...}.
+    // When non-empty (and a CalibrationSession is attached) /calib serves
+    // the wizard frontend and /api/calib/* exposes the orchestrator.
+    std::string calib_static_dir;
 };
 
 class CrowServer {
@@ -42,6 +48,12 @@ public:
     CrowServer(const CrowServer&) = delete;
     CrowServer& operator=(const CrowServer&) = delete;
 
+    // Attach a CalibrationSession + the static defaults used by /api/calib/preflight
+    // (calib_yaml/det_engine/pose_engine/subjects_dir/dump_tool_path/recording_frames_per_cam).
+    // Must be called before start().
+    void set_calibration_session(pipeline::CalibrationSession* session,
+                                 pipeline::CalibPreflight defaults);
+
     // Start listening + broadcasting on a background thread. Returns when
     // the server is bound and ready (best-effort; Crow's run() blocks).
     void start();
@@ -49,6 +61,7 @@ public:
 
 private:
     void publisher_loop();
+    void register_calibration_routes_();
 
     pipeline::SnapshotBus& bus_;
     pipeline::Skeleton3DBus* bus3d_ = nullptr;
@@ -56,6 +69,9 @@ private:
     std::thread            server_thread_;
     std::thread            publisher_thread_;
     std::atomic<bool>      stop_{false};
+
+    pipeline::CalibrationSession* calib_session_ = nullptr;
+    pipeline::CalibPreflight       calib_defaults_;
 
     struct Impl;
     std::unique_ptr<Impl>  impl_;

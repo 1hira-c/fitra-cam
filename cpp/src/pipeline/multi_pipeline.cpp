@@ -28,6 +28,8 @@ MultiCameraDriver::MultiCameraDriver(
           lift::IkSolver::Options opts;
           opts.bone_calib_frames = std::max(1, threed_.bone_calib_frames);
           opts.subject_height_m = threed_.subject_height_m;
+          opts.has_subject_profile = threed_.has_subject_profile;
+          opts.subject_profile = threed_.subject_profile;
           return lift::IkSolver{opts};
       }()},
       latest_per_cam_(sources_.size()),
@@ -57,6 +59,16 @@ void MultiCameraDriver::start() {
     stop_.store(false);
     worker_ = std::thread{&MultiCameraDriver::loop, this};
     FITRA_LOG_INFO("multi-camera driver started ({} cameras)", sources_.size());
+}
+
+void MultiCameraDriver::set_frame_tap(FrameTapFn fn) {
+    std::lock_guard<std::mutex> g(tap_mu_);
+    frame_tap_ = std::move(fn);
+}
+
+void MultiCameraDriver::set_skeleton3d_tap(Skeleton3DTapFn fn) {
+    std::lock_guard<std::mutex> g(tap_mu_);
+    skeleton3d_tap_ = std::move(fn);
 }
 
 void MultiCameraDriver::stop() {
@@ -97,6 +109,26 @@ void MultiCameraDriver::loop() {
             if (!sources_[i]->try_pop_latest_decoded(df)) continue;
 
             latest_per_cam_[i] = std::move(df);
+
+            // Phase 8: frame tap. Read the callback into a local std::function
+            // under the lock, then invoke without the lock held -- the user
+            // callback may take its own mutex and we must not let it back into
+            // tap_mu_ via a re-entrant set_frame_tap.
+            FrameTapFn tap_local;
+            {
+                std::lock_guard<std::mutex> g(tap_mu_);
+                tap_local = frame_tap_;
+            }
+            if (tap_local) {
+                auto now_tap = std::chrono::steady_clock::now();
+                if (!loop_t0_set_) {
+                    loop_t0_ = now_tap;
+                    loop_t0_set_ = true;
+                }
+                double ts_ms = std::chrono::duration<double, std::milli>(
+                                  latest_per_cam_[i].captured_at - loop_t0_).count();
+                tap_local(i, latest_per_cam_[i].bgr, ts_ms);
+            }
 
             PendingCam pc;
             pc.idx           = i;
@@ -254,6 +286,9 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         miss.stats.enabled = true;
         miss.stats.sync_dt_ms = sync_dt_ms;
         miss.stats.subject_height_m = threed_.subject_height_m;
+        miss.stats.profile_loaded = ik_.profile_loaded();
+        miss.stats.subject_id = ik_.subject_id();
+        miss.stats.profile_quality_status = ik_.profile_quality_status();
         miss.stats.sync_miss = tri_sync_miss_;
         miss.stats.processed = tri_processed_;
         miss.stats.ik_locked = ik_.locked();
@@ -288,6 +323,18 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         skel = ik_.update(skel);
         drift = ik_.bone_drift_pct(skel);
     }
+
+    // Phase 8: skeleton tap (after IK so the calibration session sees the
+    // same drift the snapshot publishes).
+    Skeleton3DTapFn skel_tap_local;
+    {
+        std::lock_guard<std::mutex> g(tap_mu_);
+        skel_tap_local = skeleton3d_tap_;
+    }
+    if (skel_tap_local && tri.valid_joints > 0) {
+        skel_tap_local(skel, drift);
+    }
+
     auto t1 = std::chrono::steady_clock::now();
 
     ++tri_processed_;
@@ -314,6 +361,9 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     out.stats.sync_dt_ms = sync_dt_ms;
     out.stats.stage_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     out.stats.subject_height_m = threed_.subject_height_m;
+    out.stats.profile_loaded = ik_.profile_loaded();
+    out.stats.subject_id = ik_.subject_id();
+    out.stats.profile_quality_status = ik_.profile_quality_status();
     out.stats.processed = tri_processed_;
     out.stats.sync_miss = tri_sync_miss_;
     threed_.bus->update(out);

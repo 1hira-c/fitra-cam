@@ -14,6 +14,21 @@ void append_float(std::string& out, double v, int precision = 6) {
     out += buf;
 }
 
+void append_json_string(std::string& out, const std::string& value) {
+    out += "\"";
+    for (char ch : value) {
+        switch (ch) {
+            case '\\': out += "\\\\"; break;
+            case '"': out += "\\\""; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default: out += ch; break;
+        }
+    }
+    out += "\"";
+}
+
 }  // namespace
 
 SnapshotBus::SnapshotBus(std::size_t n_cameras) : snapshots_(n_cameras) {
@@ -155,6 +170,9 @@ std::string Skeleton3DBus::make_bundle_json() {
     out += ",\"sync_dt_ms\":"; append_float(out, s.stats.sync_dt_ms, 4);
     out += ",\"stage_ms\":"; append_float(out, s.stats.stage_ms, 4);
     out += ",\"subject_height_m\":"; append_float(out, s.stats.subject_height_m, 4);
+    out += ",\"profile_loaded\":"; out += (s.stats.profile_loaded ? "true" : "false");
+    out += ",\"subject_id\":"; append_json_string(out, s.stats.subject_id);
+    out += ",\"quality_status\":"; append_json_string(out, s.stats.profile_quality_status);
     out += ",\"processed\":"; out += std::to_string(static_cast<long long>(s.stats.processed));
     out += ",\"sync_miss\":"; out += std::to_string(static_cast<long long>(s.stats.sync_miss));
     out += ",\"ik_locked\":"; out += (s.stats.ik_locked ? "true" : "false");

@@ -53,9 +53,15 @@ void FrameSource::decode_loop() {
             continue;
         }
 
+        const bool calib_recording =
+            opts_.calib_recording_flag
+            && opts_.calib_recording_flag->load(std::memory_order_relaxed);
+
         // YOLOX runs on this thread (one IExecutionContext per FrameSource),
-        // so all cameras detect in parallel.
-        if (yolox_) {
+        // so all cameras detect in parallel. Skipped during calib recording —
+        // raw mp4 capture is the priority, and dump_keypoints_3d re-runs
+        // detection offline on the resulting clips anyway.
+        if (yolox_ && !calib_recording) {
             bool do_detect = (frame_idx_ % opts_.det_frequency == 0)
                           || cached_bboxes_.empty();
             if (do_detect) {
@@ -91,7 +97,12 @@ void FrameSource::decode_loop() {
         DecodedFrame df;
         df.seq         = raw.seq;
         df.captured_at = raw.captured_at;
-        df.bboxes      = cached_bboxes_;  // copy of current cache
+        // During calib recording we drop bboxes too — the central thread sees
+        // bboxes.empty() and naturally skips RTMPose. (Without this the
+        // "missing prebake" warning would spam.)
+        if (!calib_recording) {
+            df.bboxes  = cached_bboxes_;  // copy of current cache
+        }
 
         if (rtmpose_enabled_ && !df.bboxes.empty()) {
             // Preprocess each (frame, bbox) into the contiguous CHW block
@@ -107,7 +118,8 @@ void FrameSource::decode_loop() {
                     df.chw_concat.data() + i * per_item,
                     df.M_invs[i]);
             }
-        } else if (!rtmpose_enabled_) {
+        }
+        if (!rtmpose_enabled_ || opts_.retain_bgr || calib_recording) {
             df.bgr = scratch.clone();
         }
 
