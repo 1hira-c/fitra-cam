@@ -4,10 +4,12 @@
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 #include <thread>
 
 #include <opencv2/imgproc.hpp>
 
+#include "lift/keypoint_format.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::infer {
@@ -75,13 +77,15 @@ cv::Mat warp_matrix(const cv::Point2f& center,
 }
 
 void apply_affine_inplace(const cv::Mat& M_inv_2x3,
-                          std::array<Keypoint, kNumKeypoints>& kpts) {
+                          std::array<Keypoint, kMaxKeypoints>& kpts,
+                          std::size_t k_count) {
     CV_Assert(M_inv_2x3.rows == 2 && M_inv_2x3.cols == 3
               && M_inv_2x3.type() == CV_64F);
     const double* m = M_inv_2x3.ptr<double>();
     double a = m[0], b = m[1], c = m[2];
     double d = m[3], e = m[4], f = m[5];
-    for (auto& kp : kpts) {
+    for (std::size_t i = 0; i < k_count; ++i) {
+        auto& kp = kpts[i];
         double x = a * kp.x + b * kp.y + c;
         double y = d * kp.x + e * kp.y + f;
         kp.x = static_cast<float>(x);
@@ -152,13 +156,36 @@ void RtmPose::prepare_batch_buffers(std::size_t n,
                                     int& simcc_x_width,
                                     int& simcc_y_width,
                                     std::size_t& per_item) {
-    // Engine-declared output shapes: (-1, K, Wx) and (-1, K, Wy).
+    // Engine-declared output shapes: (-1, K, Wx) and (-1, K, Wy). K is read
+    // once from the engine and validated against the active KeypointFormat
+    // so a Halpe26 engine loaded under --keypoint-format=coco17 (or vice
+    // versa) fails fast with a clear message rather than silently corrupting
+    // downstream consumers that index past kp_count.
     auto eng_sx = engine_.engine().getTensorShape(opts_.simcc_x_name.c_str());
     auto eng_sy = engine_.engine().getTensorShape(opts_.simcc_y_name.c_str());
-    if (eng_sx.nbDims != 3 || eng_sy.nbDims != 3
-        || eng_sx.d[1] != static_cast<int>(kNumKeypoints)
-        || eng_sy.d[1] != static_cast<int>(kNumKeypoints)) {
-        throw std::runtime_error("RTMPose engine output rank/K unexpected");
+    if (eng_sx.nbDims != 3 || eng_sy.nbDims != 3) {
+        throw std::runtime_error("RTMPose engine output rank unexpected");
+    }
+    if (eng_sx.d[1] != eng_sy.d[1]) {
+        throw std::runtime_error("RTMPose simcc_x/simcc_y K mismatch");
+    }
+    int k_from_engine = eng_sx.d[1];
+    if (engine_k_ == 0) {
+        const std::size_t expected_k = fitra::lift::active_kp_count();
+        if (k_from_engine != static_cast<int>(expected_k)) {
+            throw std::runtime_error(
+                "RTMPose engine K=" + std::to_string(k_from_engine)
+                + " does not match active --keypoint-format expected K="
+                + std::to_string(expected_k)
+                + "; pass --pose-engine that matches the format");
+        }
+        if (k_from_engine > static_cast<int>(kMaxKeypoints)) {
+            throw std::runtime_error(
+                "RTMPose engine K exceeds compiled kMaxKeypoints");
+        }
+        engine_k_ = k_from_engine;
+    } else if (k_from_engine != engine_k_) {
+        throw std::runtime_error("RTMPose engine K changed between calls");
     }
     simcc_x_width = eng_sx.d[2];
     simcc_y_width = eng_sy.d[2];
@@ -167,8 +194,10 @@ void RtmPose::prepare_batch_buffers(std::size_t n,
     int W = opts_.input_w;
     per_item = static_cast<std::size_t>(3) * H * W;
     input_blob_.resize(per_item * n);
-    simcc_x_host_.resize(static_cast<std::size_t>(n) * kNumKeypoints * simcc_x_width);
-    simcc_y_host_.resize(static_cast<std::size_t>(n) * kNumKeypoints * simcc_y_width);
+    simcc_x_host_.resize(
+        static_cast<std::size_t>(n) * static_cast<std::size_t>(engine_k_) * simcc_x_width);
+    simcc_y_host_.resize(
+        static_cast<std::size_t>(n) * static_cast<std::size_t>(engine_k_) * simcc_y_width);
 }
 
 void RtmPose::enqueue_current_input(std::size_t n) {
@@ -201,16 +230,16 @@ void RtmPose::decode_current_outputs(std::size_t n,
                                      const std::vector<Bbox>& bboxes,
                                      const std::vector<cv::Mat>& M_invs,
                                      std::vector<Person>& out) {
-    const std::size_t stride_x =
-        static_cast<std::size_t>(kNumKeypoints) * simcc_x_width;
-    const std::size_t stride_y =
-        static_cast<std::size_t>(kNumKeypoints) * simcc_y_width;
+    const std::size_t K = static_cast<std::size_t>(engine_k_);
+    const std::size_t stride_x = K * simcc_x_width;
+    const std::size_t stride_y = K * simcc_y_width;
     for (std::size_t i = 0; i < n; ++i) {
         Person p{};
         p.bbox = bboxes[i];
+        p.kp_count = static_cast<std::uint8_t>(K);
         const float* base_x = simcc_x_host_.data() + i * stride_x;
         const float* base_y = simcc_y_host_.data() + i * stride_y;
-        for (std::size_t k = 0; k < kNumKeypoints; ++k) {
+        for (std::size_t k = 0; k < K; ++k) {
             const float* row_x = base_x + k * simcc_x_width;
             const float* row_y = base_y + k * simcc_y_width;
             int   x_arg = 0;
@@ -229,7 +258,7 @@ void RtmPose::decode_current_outputs(std::size_t n,
             p.kpts[k].y = static_cast<float>(y_arg) / opts_.simcc_split;
             p.kpts[k].score = score;
         }
-        apply_affine_inplace(M_invs[i], p.kpts);
+        apply_affine_inplace(M_invs[i], p.kpts, K);
         out.push_back(p);
     }
 }

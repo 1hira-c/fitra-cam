@@ -64,9 +64,12 @@ private:
     std::string subject_id_;
     std::string profile_quality_status_;
     int observed_frames_ = 0;
-    std::array<double, infer::kNumKeypoints> locked_parent_len_{};
+    // Sized for the largest supported topology (Halpe26 = 26). COCO17 runs
+    // leave the trailing slots at zero; the iteration upper bound comes from
+    // the active SkeletonDef so those slots are never touched.
+    std::array<double, infer::kMaxKeypoints> locked_parent_len_{};
     double locked_shoulder_width_ = 0.0;
-    std::array<std::vector<double>, infer::kNumKeypoints> samples_;
+    std::array<std::vector<double>, infer::kMaxKeypoints> samples_;
 };
 
 }  // namespace fitra::lift

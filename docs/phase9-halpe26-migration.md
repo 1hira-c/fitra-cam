@@ -11,7 +11,7 @@
 
 | 項目 | 決定 |
 |---|---|
-| モデル | body8 系の Halpe26 RTMPose ONNX (例: `rtmpose-m_simcc-body8_pt-body8-halpe26_700e-256x192-*.onnx`)。配置は既存と同じ `~/.cache/rtmlib/hub/checkpoints/`。 |
+| モデル | Halpe26 RTMPose ONNX (現行 repo の検証済み artifact は `outputs/onnx/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.onnx`)。 |
 | 併存方式 | `--keypoint-format {coco17,halpe26}` で CLI 切替。既定 `coco17`。 |
 | 追加 9 点 | **選択的活用**。pose_recognizer / IK で hip-center(19) と neck(18) を直接使用。head_top / 足部はトポロジー拡張 (描画+JSON) のみ。 |
 | Subject profile 互換 | schema 文字列を `fitra_subject_profile_v1` → `v2` に bump。v1 を halpe26 モードで読込 → 明示エラーで拒否 (再キャリブ案内)。マイグレーションは行わない。 |
@@ -141,8 +141,8 @@ KeypointFormat active_keypoint_format();
 ## Verification
 
 1. **回帰**: `--keypoint-format=coco17 --pose-engine <既存COCO17.engine>` で 2-cam パイプライン起動 → `outputs/recorded_rtmpose/20260515_064342/overlay_cam{0,1}.mp4` と比較し bbox IoU > 0.99 / keypoint L2 < 1 px を満たすこと。
-2. **モデル準備**: body8-halpe26 ONNX を `~/.cache/rtmlib/hub/checkpoints/` に配置。`cpp/build/main --keypoint-format=halpe26 --pose-onnx <halpe26.onnx>` で engine を自動ビルド。
-3. **C++ 単体**: `./cpp/build/dump_keypoints --keypoint-format=halpe26 --video outputs/recorded_rtmpose/20260515_064342/raw_cam0.mp4` で 26 点を JSONL ダンプ。`jq '.[].kpts | length'` で 26 を確認、足部 (20–25) が被写体可視時にもっともらしい位置にあること。
+2. **モデル準備**: `./cpp/build/tools/build_engines --preset rtmpose --onnx outputs/onnx/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.onnx --output outputs/tensorrt_engines/rtmpose_m_halpe26.fp16.engine --fp16` で engine を生成。
+3. **C++ 単体**: `./cpp/build/tools/dump_keypoints --keypoint-format halpe26 --video outputs/recorded_rtmpose/20260515_064342/raw_cam0.mp4 --det-engine outputs/tensorrt_engines/yolox_tiny.fp16.engine --pose-engine outputs/tensorrt_engines/rtmpose_m_halpe26.fp16.engine --output /tmp/halpe26.jsonl` で 26 点を JSONL ダンプ。`jq '.persons[0].kpts | length' /tmp/halpe26.jsonl` で 26 を確認、足部 (20–25) が被写体可視時にもっともらしい位置にあること。
 4. **2-cam 統合**: `./cpp/build/main --keypoint-format=halpe26 --cameras 2 ...` で起動。`http://<jetson>:8080/dual_rtmpose/` で 26 関節と新規 edge (foot/head_top/neck) が描画されること、フレームレートが Phase 8 レベル (集約 ≥ 60 fps、目標 90 fps) を維持すること。
 5. **Phase 8 calibration**: `web/subject_calibration/` から halpe26 で新規 subject を作成 → `subject_profile.json` の schema が `fitra_subject_profile_v2`。angle 出力 (`l_elbow`/`r_knee` 等) が COCO17 動作との差 < 2°。
 6. **互換性チェック**: v1 schema の既存プロファイルを halpe26 モードで読込 → 起動失敗し、明示メッセージで再キャリブを案内すること。

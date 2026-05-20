@@ -8,6 +8,8 @@
 
 #include <opencv2/calib3d.hpp>
 
+#include "lift/keypoint_format.hpp"
+
 namespace fitra::lift {
 
 namespace {
@@ -85,8 +87,10 @@ TriangulatedSkeleton Triangulator::triangulate(
     const std::vector<PerCameraObservation>& observations) const {
     TriangulatedSkeleton out;
     std::vector<double> valid_errors;
+    const std::size_t kp_count = active_kp_count();
+    out.skeleton.kp_count = static_cast<std::uint8_t>(kp_count);
 
-    for (std::size_t k = 0; k < infer::kNumKeypoints; ++k) {
+    for (std::size_t k = 0; k < kp_count; ++k) {
         std::vector<JointView> views;
         for (const auto& obs : observations) {
             if (!obs.person || obs.cam_index < 0 ||

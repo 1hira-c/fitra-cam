@@ -5,6 +5,7 @@
 
 #include <opencv2/core.hpp>
 
+#include "lift/keypoint_format.hpp"
 #include "lift/skeleton_def.hpp"
 
 namespace fitra::lift {
@@ -69,7 +70,7 @@ void IkSolver::apply_subject_height_model_locked() {
 
     // Ratios are derived from AIST/HQL 3D Anthropometric Database 2003
     // young male/female means, normalized by stature and averaged into a
-    // sex-neutral Japanese adult prior. COCO joints are anatomical
+    // sex-neutral Japanese adult prior. COCO/Halpe joints are anatomical
     // approximations, so only robust limb/trunk segments are hard-coded.
     constexpr double kTorsoSide = 0.314;
     constexpr double kHipWidth = 0.199;
@@ -80,17 +81,37 @@ void IkSolver::apply_subject_height_model_locked() {
     constexpr double kLowerLeg = 0.224;
 
     locked_parent_len_.fill(0.0);
-    locked_parent_len_[5] = kTorsoSide * h;   // l_shoulder <- l_hip
-    locked_parent_len_[6] = kTorsoSide * h;   // r_shoulder <- r_hip
+
+    // Joints whose parent index is identical under COCO17 and Halpe26.
     locked_parent_len_[7] = kUpperArm * h;    // l_elbow <- l_shoulder
     locked_parent_len_[8] = kUpperArm * h;    // r_elbow <- r_shoulder
     locked_parent_len_[9] = kForearm * h;     // l_wrist <- l_elbow
     locked_parent_len_[10] = kForearm * h;    // r_wrist <- r_elbow
-    locked_parent_len_[12] = kHipWidth * h;   // r_hip <- l_hip
     locked_parent_len_[13] = kThigh * h;      // l_knee <- l_hip
     locked_parent_len_[14] = kThigh * h;      // r_knee <- r_hip
     locked_parent_len_[15] = kLowerLeg * h;   // l_ankle <- l_knee
     locked_parent_len_[16] = kLowerLeg * h;   // r_ankle <- r_knee
+
+    // Joints whose parent differs between COCO17 and Halpe26. enforce_lengths
+    // iterates the active SkeletonDef, so the value we lock must match the
+    // anatomical bone that the active parent tree expects -- otherwise the
+    // shoulders or r_hip get yanked to a wrong distance on the very first
+    // frame and bone_drift_pct stays inflated.
+    if (active_keypoint_format() == KeypointFormat::Halpe26) {
+        // Halpe26: 5/6 <- 18 (neck), 12 <- 19 (hip-center).
+        locked_parent_len_[5]  = 0.5 * kShoulderWidth * h;  // neck -> l_shoulder
+        locked_parent_len_[6]  = 0.5 * kShoulderWidth * h;  // neck -> r_shoulder
+        locked_parent_len_[12] = 0.5 * kHipWidth * h;       // hip-center -> r_hip
+    } else {
+        // COCO17: 5 <- 11 (l_hip), 6 <- 12 (r_hip), 12 <- 11 (l_hip).
+        locked_parent_len_[5]  = kTorsoSide * h;  // l_hip -> l_shoulder
+        locked_parent_len_[6]  = kTorsoSide * h;  // r_hip -> r_shoulder
+        locked_parent_len_[12] = kHipWidth * h;   // l_hip -> r_hip
+    }
+
+    // enforce_pair_lengths still anchors the shoulder pair distance, which is
+    // anatomically equivalent under either topology (joints 5/6 are
+    // l_shoulder/r_shoulder in both).
     locked_shoulder_width_ = kShoulderWidth * h;
     locked_ = true;
 }
@@ -154,9 +175,10 @@ infer::Skeleton3D IkSolver::update(const infer::Skeleton3D& input) {
 }
 
 void IkSolver::observe_lengths_locked(const infer::Skeleton3D& skel) {
+    const auto& def = active_skeleton_def();
     bool any = false;
-    for (std::size_t child = 0; child < kCocoParent.size(); ++child) {
-        int parent = kCocoParent[child];
+    for (std::size_t child = 0; child < def.parents.size(); ++child) {
+        int parent = def.parents[child];
         if (parent < 0) continue;
         const auto& a = skel.joints[static_cast<std::size_t>(parent)];
         const auto& b = skel.joints[child];
@@ -179,8 +201,9 @@ void IkSolver::lock_lengths_locked() {
 }
 
 void IkSolver::enforce_lengths(infer::Skeleton3D& skel) const {
-    for (std::size_t child = 0; child < kCocoParent.size(); ++child) {
-        int parent = kCocoParent[child];
+    const auto& def = active_skeleton_def();
+    for (std::size_t child = 0; child < def.parents.size(); ++child) {
+        int parent = def.parents[child];
         if (parent < 0) continue;
         double target = locked_parent_len_[child];
         if (target <= 1.0e-6) continue;
@@ -209,11 +232,12 @@ void IkSolver::enforce_pair_lengths(infer::Skeleton3D& skel) const {
 }
 
 void IkSolver::enforce_hinges(infer::Skeleton3D& skel) const {
+    const auto& def = active_skeleton_def();
     const double min_rad = opts_.min_hinge_deg * CV_PI / 180.0;
     const double max_rad = opts_.max_hinge_deg * CV_PI / 180.0;
-    for (int joint : kHingeJoints) {
-        int parent = kCocoParent[static_cast<std::size_t>(joint)];
-        int child = hinge_child(joint);
+    for (int joint : def.hinge_joints) {
+        int parent = def.parents[static_cast<std::size_t>(joint)];
+        int child = def.hinge_child(joint);
         if (parent < 0 || child < 0) continue;
         auto& a = skel.joints[static_cast<std::size_t>(parent)];
         auto& b = skel.joints[static_cast<std::size_t>(joint)];
@@ -252,10 +276,11 @@ double IkSolver::bone_drift_pct(const infer::Skeleton3D& skel) const {
 
 double IkSolver::bone_drift_pct_locked(const infer::Skeleton3D& skel) const {
     if (!locked_) return 0.0;
+    const auto& def = active_skeleton_def();
     double sum = 0.0;
     int n = 0;
-    for (std::size_t child = 0; child < kCocoParent.size(); ++child) {
-        int parent = kCocoParent[child];
+    for (std::size_t child = 0; child < def.parents.size(); ++child) {
+        int parent = def.parents[child];
         double target = locked_parent_len_[child];
         if (parent < 0 || target <= 1.0e-6) continue;
         const auto& a = skel.joints[static_cast<std::size_t>(parent)];

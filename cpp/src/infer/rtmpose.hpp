@@ -10,10 +10,14 @@
 // (project engines use profile min=1/opt=3/max=3 for the 3-camera goal).
 // Requests beyond that are split across multiple calls.
 //
-// Spec (body7):
-//   input  : "input"   (B, 3, H, W)      float32, BGR, ImageNet-normalized
-//   output : "simcc_x" (B, K=17, W*2)    float32
-//   output : "simcc_y" (B, K=17, H*2)    float32
+// Spec:
+//   input  : "input"   (B, 3, H, W)    float32, BGR, ImageNet-normalized
+//   output : "simcc_x" (B, K, W*2)     float32   (K is runtime — read from the engine)
+//   output : "simcc_y" (B, K, H*2)     float32
+//
+// K is read from the engine on construction and validated against the active
+// KeypointFormat (17 for COCO17, 26 for Halpe26). Mismatches throw at startup
+// with a message pointing at the --keypoint-format flag.
 
 #include <array>
 #include <cstddef>
@@ -110,6 +114,9 @@ private:
 
     TrtEngine& engine_;
     Options    opts_;
+    // Engine-declared K cached from the first prepare_batch_buffers() call.
+    // Stays zero until then; once set, all subsequent calls reuse it.
+    int        engine_k_ = 0;
 
     // Reusable host buffers; sized for max_batch.
     std::vector<float> input_blob_;      // B*3*H*W CHW float32

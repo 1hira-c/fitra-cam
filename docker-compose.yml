@@ -10,7 +10,7 @@
 # 使い方:
 #   1) 初回 (ONNX → engine 変換):
 #        docker compose --profile tools run --rm build-engines-yolox
-#        docker compose --profile tools run --rm build-engines-rtmpose
+#        docker compose --profile tools run --rm build-engines-rtmpose-halpe26
 #   2) 本起動:
 #        docker compose up --build
 
@@ -60,7 +60,9 @@ services:
       - "--det-engine"
       - "/workspace/outputs/tensorrt_engines/yolox_tiny.fp16.engine"
       - "--pose-engine"
-      - "/workspace/outputs/tensorrt_engines/rtmpose_s.fp16.engine"
+      - "/workspace/outputs/tensorrt_engines/rtmpose_m_halpe26.fp16.engine"
+      - "--keypoint-format"
+      - "halpe26"
       - "--port"
       - "8000"
       - "--host"
@@ -98,4 +100,18 @@ services:
       - "/workspace/outputs/onnx/rtmpose-s_simcc-body7_pt-body7_420e-256x192-acd4a1ef_20230504.onnx"
       - "--output"
       - "/workspace/outputs/tensorrt_engines/rtmpose_s.fp16.engine"
+      - "--fp16"
+
+  build-engines-rtmpose-halpe26:
+    <<: [*common-build, *nvidia-runtime, *common-volumes]
+    profiles: ["tools"]
+    container_name: fitra-cam-build-rtmpose-halpe26
+    entrypoint: ["/workspace/cpp/build/tools/build_engines"]
+    command:
+      - "--preset"
+      - "rtmpose"
+      - "--onnx"
+      - "/workspace/outputs/onnx/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.onnx"
+      - "--output"
+      - "/workspace/outputs/tensorrt_engines/rtmpose_m_halpe26.fp16.engine"
       - "--fp16"

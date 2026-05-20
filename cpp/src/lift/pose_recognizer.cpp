@@ -6,6 +6,8 @@
 
 #include <opencv2/core.hpp>
 
+#include "lift/keypoint_format.hpp"
+
 namespace fitra::lift {
 
 namespace {
@@ -121,17 +123,37 @@ PoseAngles compute_pose_angles(const infer::Skeleton3D& s) {
     a.right_knee_flex = flex_from_joint_angle(
         joint_angle_deg(s.joints[12], s.joints[14], s.joints[16]));
 
+    // Under Halpe26 the model produces explicit shoulder-midpoint (neck = 18)
+    // and hip-center (19) joints; use them directly so we don't reintroduce
+    // the small bias that a (L+R)/2 average has when the shoulders or hips
+    // are foreshortened. Fall back to the COCO17 midpoint formula whenever
+    // any of those Halpe26 joints is missing or we're running under COCO17.
     const auto& ls = s.joints[5];
     const auto& rs = s.joints[6];
     const auto& lh = s.joints[11];
     const auto& rh = s.joints[12];
-    if (ls.valid && rs.valid && lh.valid && rh.valid) {
-        cv::Vec3d mid_sh{(ls.x + rs.x) * 0.5,
-                         (ls.y + rs.y) * 0.5,
-                         (ls.z + rs.z) * 0.5};
-        cv::Vec3d mid_hp{(lh.x + rh.x) * 0.5,
-                         (lh.y + rh.y) * 0.5,
-                         (lh.z + rh.z) * 0.5};
+    bool have_midpoints = false;
+    cv::Vec3d mid_sh{0.0, 0.0, 0.0};
+    cv::Vec3d mid_hp{0.0, 0.0, 0.0};
+    if (active_keypoint_format() == KeypointFormat::Halpe26) {
+        const auto& neck = s.joints[18];
+        const auto& hipc = s.joints[19];
+        if (neck.valid && hipc.valid) {
+            mid_sh = cv::Vec3d{neck.x, neck.y, neck.z};
+            mid_hp = cv::Vec3d{hipc.x, hipc.y, hipc.z};
+            have_midpoints = true;
+        }
+    }
+    if (!have_midpoints && ls.valid && rs.valid && lh.valid && rh.valid) {
+        mid_sh = cv::Vec3d{(ls.x + rs.x) * 0.5,
+                           (ls.y + rs.y) * 0.5,
+                           (ls.z + rs.z) * 0.5};
+        mid_hp = cv::Vec3d{(lh.x + rh.x) * 0.5,
+                           (lh.y + rh.y) * 0.5,
+                           (lh.z + rh.z) * 0.5};
+        have_midpoints = true;
+    }
+    if (have_midpoints) {
         cv::Vec3d torso = mid_sh - mid_hp;
         cv::Vec3d up{0.0, 0.0, 1.0};
         a.torso_tilt = angle_between_deg(torso, up);

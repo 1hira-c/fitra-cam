@@ -34,9 +34,11 @@ YOLOX 側 INT8 は本計画のスコープ外。
 ## 設計の柱
 
 ### 入力サイズと preprocess は全 variant 共通
-RTMPose-S/M/L はいずれも **256×192 / 17 kp simcc 出力**
-(`cpp/src/infer/rtmpose.hpp:13-16`, `python/scripts/pose_pipeline.py:274-275`)。
-**前処理・後処理コードは変更不要**。engine 差し替えだけで variant 切替が完結する。
+RTMPose-S/M/L はいずれも **256×192 入力**。出力 K は body7 で 17、body8/halpe26 で 26
+(`cpp/src/infer/rtmpose.hpp` の output spec コメント / `python/scripts/pose_pipeline.py` の `RtmposeOnnx.num_keypoints`)。
+**前処理コードは変更不要**。Phase 9 以降は K を runtime に読み、`--keypoint-format` で
+COCO17/Halpe26 を切替える。本 INT8 評価は当初 COCO17 (body7) のみで進め、
+Halpe26 (body8) は別フェーズで再評価する想定。
 
 ### Calibration data
 **`outputs/recorded_rtmpose/20260515_064342/raw_cam{0,1}.mp4`**
@@ -66,8 +68,10 @@ RTMPose は person crop 入力なので、生フレームではなく
 ## 実装ステップ
 
 ### Step 1 — RTMPose-L ONNX 取得
-- 取得元: rtmlib body7 系
+- 取得元: rtmlib body7 系 (COCO17)
   (`rtmpose-l_simcc-body7_pt-body7_420e-256x192-*.onnx`、~85MB 想定)
+- Phase 9 (Halpe26) で別評価する際は body8/halpe26 系
+  (例 `rtmpose-l_simcc-body8_pt-body8-halpe26_700e-256x192-*.onnx`) を同じ場所に置く
 - 配置: `~/.cache/rtmlib/hub/checkpoints/` (S/M と同じ規約)
 - 取得手段: rtmlib の初回ロードを起こすか、URL を
   `python/scripts/setup_jetson_env.sh` に追記

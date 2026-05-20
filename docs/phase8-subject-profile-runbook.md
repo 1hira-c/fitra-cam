@@ -18,6 +18,12 @@ cmake --build cpp/build -j
 ./cpp/build/tools/dump_keypoints_3d --help    # --pose-session, --subject-profile-out, --quality-out
 ```
 
+### Phase 9 — `--keypoint-format` 注意
+
+- 既定は `coco17`。Halpe26 を使うなら `--keypoint-format=halpe26` を起動コマンド全てに付け、対応する 26 キーポイント版 RTMPose engine を `--pose-engine` で指定する。
+- Subject profile schema は `fitra_subject_profile_v1` (COCO17) / `v2` (Halpe26) に分かれる。**自動マイグレーションは行わない**。例えば v1 (COCO17) で作成したプロファイルを `--keypoint-format=halpe26` で読込もうとすると `load_subject_profile()` が「subject profile schema fitra_subject_profile_v1 does not match active --keypoint-format (fitra_subject_profile_v2); re-run the calibration wizard」で起動失敗する。再キャリブが必要。
+- ウィザード経由で作った場合は `web/subject_calibration/` の API は無改修。Halpe26 でも angle キー (`l_elbow`/`r_knee` 等) は不変。
+
 ## 2. ウィザードの起動 (WebUI)
 
 通常の live と同じコマンドで `main` を起動する。

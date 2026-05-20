@@ -4,12 +4,37 @@ import { OrbitControls } from "OrbitControls";
 const CAM_COLORS = ["#00dc00", "#ffb400", "#48aaff", "#ff6f6f"];
 const PERSON_3D_COLORS = ["#ff4cff", "#48aaff", "#ffd166", "#5cff8d"];
 const KP_THR = 0.3;
-const SKELETON = [
+// COCO17 edge table — the original Phase 6 viewer expected exactly these
+// keypoints.
+const SKELETON_COCO17 = [
   [0, 1], [0, 2], [1, 3], [2, 4],
   [5, 7], [7, 9], [6, 8], [8, 10],
   [5, 6], [5, 11], [6, 12], [11, 12],
   [11, 13], [13, 15], [12, 14], [14, 16],
 ];
+// Halpe26 adds neck (18), hip-center (19) and per-side toes/heels. Indices
+// 0–16 still match COCO17, so the upper-body edges are shared. Lower body and
+// feet are extended.
+const SKELETON_HALPE26 = [
+  // Head
+  [17, 18], [0, 17], [0, 1], [0, 2], [1, 3], [2, 4],
+  // Torso
+  [18, 5], [18, 6], [18, 19], [11, 19], [12, 19], [5, 6], [11, 12],
+  // Arms
+  [5, 7], [7, 9], [6, 8], [8, 10],
+  // Legs
+  [11, 13], [13, 15], [12, 14], [14, 16],
+  // Feet (representative line per side)
+  [15, 24], [16, 25],
+];
+const KP_COUNT_BY_FORMAT = { coco17: 17, halpe26: 26 };
+
+function skeletonFor(format) {
+  return format === "halpe26" ? SKELETON_HALPE26 : SKELETON_COCO17;
+}
+function kpCountFor(format) {
+  return KP_COUNT_BY_FORMAT[format] ?? 17;
+}
 
 const main = document.querySelector("main");
 const conn = document.getElementById("conn");
@@ -31,6 +56,11 @@ const state = {
   bundle3d: null,
   server3dSeq: 0,
   server3dLastMs: 0,
+  // Active keypoint topology from the most recent /ws bundle ("coco17" or
+  // "halpe26"). Backend started emitting `kp_format` in Phase 9; older
+  // servers omit it, so we default to coco17 for compatibility.
+  kpFormat2D: "coco17",
+  kpFormat3D: "coco17",
 };
 
 function isVisible3DJoint(joint) {
@@ -119,7 +149,8 @@ class ThreeDViewer {
     const jointMaterial = new THREE.MeshBasicMaterial({ color });
     const boneMaterial = new THREE.LineBasicMaterial({ color });
 
-    const joints = Array.from({ length: 17 }, () => {
+    // Allocate the maximum we might receive; unused slots stay hidden.
+    const joints = Array.from({ length: kpCountFor("halpe26") }, () => {
       const mesh = new THREE.Mesh(jointGeometry, jointMaterial);
       mesh.visible = false;
       mesh.frustumCulled = false;
@@ -127,21 +158,31 @@ class ThreeDViewer {
       return mesh;
     });
 
-    const bones = SKELETON.map(() => {
+    // Bone lines are rebuilt lazily when the active topology changes; start
+    // empty so the first update() pass populates them for the current format.
+    const view = { group, joints, bones: [], boneMaterial, boneFormat: null };
+    this.peopleRoot.add(group);
+    this.personViews[index] = view;
+    return view;
+  }
+
+  ensureBones(view, format) {
+    if (view.boneFormat === format) return;
+    for (const bone of view.bones) {
+      view.group.remove(bone.line);
+      bone.line.geometry.dispose();
+    }
+    view.bones = skeletonFor(format).map(() => {
       const positions = new Float32Array(6);
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-      const line = new THREE.Line(geometry, boneMaterial);
+      const line = new THREE.Line(geometry, view.boneMaterial);
       line.visible = false;
       line.frustumCulled = false;
-      group.add(line);
+      view.group.add(line);
       return { line, positions };
     });
-
-    this.peopleRoot.add(group);
-    const view = { group, joints, bones };
-    this.personViews[index] = view;
-    return view;
+    view.boneFormat = format;
   }
 
   update(bundle) {
@@ -174,14 +215,22 @@ class ThreeDViewer {
   updatePeople(persons) {
     const visiblePoints = [];
     const scratch = new THREE.Vector3();
+    const format = state.kpFormat3D;
+    const kpCount = kpCountFor(format);
+    const skeleton = skeletonFor(format);
 
     persons.forEach((person, personIndex) => {
       const view = this.ensurePersonView(personIndex);
+      this.ensureBones(view, format);
       view.group.visible = true;
       const joints = Array.isArray(person.joints) ? person.joints : [];
-      const jointVectors = Array.from({ length: 17 }, () => null);
+      const jointVectors = Array.from({ length: kpCount }, () => null);
 
-      for (let i = 0; i < 17; i += 1) {
+      for (let i = 0; i < view.joints.length; i += 1) {
+        if (i >= kpCount) {
+          view.joints[i].visible = false;
+          continue;
+        }
         const joint = joints[i];
         const mesh = view.joints[i];
         if (!isVisible3DJoint(joint)) {
@@ -195,7 +244,7 @@ class ThreeDViewer {
         visiblePoints.push(pos.clone());
       }
 
-      SKELETON.forEach(([a, b], boneIndex) => {
+      skeleton.forEach(([a, b], boneIndex) => {
         const bone = view.bones[boneIndex];
         const pa = jointVectors[a];
         const pb = jointVectors[b];
@@ -368,6 +417,9 @@ function connect() {
     }
     state.serverSeq = bundle.seq;
     state.serverLastMs = bundle.ts_ms;
+    if (typeof bundle.kp_format === "string") {
+      state.kpFormat2D = bundle.kp_format;
+    }
     for (const cam of bundle.cameras || []) {
       ensurePane(cam.id);
       state.bundles[cam.id] = cam;
@@ -414,6 +466,9 @@ function connect3d() {
     state.bundle3d = bundle;
     state.server3dSeq = bundle.seq || 0;
     state.server3dLastMs = bundle.ts_ms || 0;
+    if (typeof bundle.kp_format === "string") {
+      state.kpFormat3D = bundle.kp_format;
+    }
     if (bundle.enabled === false) {
       conn3d.textContent = "3D disabled";
       conn3d.className = "conn";
@@ -447,6 +502,7 @@ function drawCamera(camId) {
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
   ctx.lineWidth = 2;
+  const skeleton = skeletonFor(state.kpFormat2D);
   for (const person of bundle.persons || []) {
     if (person.bbox) {
       const [x1, y1, x2, y2] = person.bbox;
@@ -457,7 +513,7 @@ function drawCamera(camId) {
       ctx.lineWidth = 2;
     }
     const kpts = person.kpts || [];
-    for (const [a, b] of SKELETON) {
+    for (const [a, b] of skeleton) {
       if (!kpts[a] || !kpts[b]) continue;
       if (kpts[a][2] < KP_THR || kpts[b][2] < KP_THR) continue;
       ctx.beginPath();

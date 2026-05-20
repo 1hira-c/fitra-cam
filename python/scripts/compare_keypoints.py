@@ -7,9 +7,9 @@ Pass/fail criteria from docs/cpp-migration-plan.md Phase 1:
   - per-keypoint L2 distance < 1.0 px
 
 Each line in the JSONL files must have the shape:
-  {"frame": N, "persons":
+  {"frame": N, "kp_format": "coco17|halpe26", "persons":
     [{"bbox": [x1,y1,x2,y2,score],
-      "kpts": [[x,y,score], ...17]}]}
+      "kpts": [[x,y,score], ...17 or ...26]}]}
 """
 
 from __future__ import annotations
@@ -88,10 +88,18 @@ def main() -> int:
     score_diffs: list[float] = []
     per_frame_max_kpt: list[float] = []
     skipped_frames = 0
+    kpt_count_mismatches = 0
+    format_mismatches = 0
 
     for i in range(n_frames):
         r = ref[i]
         c = cand[i]
+        if r.get("kp_format") and c.get("kp_format") and r.get("kp_format") != c.get("kp_format"):
+            format_mismatches += 1
+            if args.verbose:
+                print(f"frame {i}: kp_format differs ref={r.get('kp_format')} "
+                      f"cand={c.get('kp_format')}")
+            continue
         if len(r["persons"]) != len(c["persons"]):
             skipped_frames += 1
             if args.verbose:
@@ -102,6 +110,12 @@ def main() -> int:
         for pr, pc in zip(r["persons"], c["persons"]):
             iou = iou_xyxy(pr["bbox"], pc["bbox"])
             bbox_ious.append(iou)
+            if len(pr["kpts"]) != len(pc["kpts"]):
+                kpt_count_mismatches += 1
+                if args.verbose:
+                    print(f"frame {i}: keypoint count differs "
+                          f"ref={len(pr['kpts'])} cand={len(pc['kpts'])}")
+                continue
             for kr, kc in zip(pr["kpts"], pc["kpts"]):
                 # only compare keypoints the reference considers reliable
                 if kr[2] < args.score_threshold:
@@ -132,6 +146,7 @@ def main() -> int:
 
     print("=" * 60)
     print(f"frames compared : {n_frames}  skipped(person count mismatch): {skipped_frames}")
+    print(f"format mismatches: {format_mismatches}  keypoint count mismatches: {kpt_count_mismatches}")
     print(fmt_stats("bbox IoU       ", bbox_ious, ""))
     print(fmt_stats("kpt L2         ", kpt_dists, "px"))
     print(fmt_stats("kpt score diff ", score_diffs, ""))
@@ -147,6 +162,12 @@ def main() -> int:
         ok = False
     if skipped_frames > 0:
         print(f"FAIL: {skipped_frames} frames had differing person count")
+        ok = False
+    if format_mismatches > 0:
+        print(f"FAIL: {format_mismatches} frames had differing kp_format")
+        ok = False
+    if kpt_count_mismatches > 0:
+        print(f"FAIL: {kpt_count_mismatches} persons had differing keypoint counts")
         ok = False
     if ok:
         print("PASS")

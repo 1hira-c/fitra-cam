@@ -4,6 +4,8 @@
 #include <ctime>
 #include <sstream>
 
+#include "lift/keypoint_format.hpp"
+
 namespace fitra::pipeline {
 
 namespace {
@@ -56,6 +58,12 @@ std::string SnapshotBus::make_bundle_json() {
     out += std::to_string(bundle_seq_);
     out += ",\"ts_ms\":";
     out += std::to_string(static_cast<long long>(now_ms));
+    // Phase 9: surface the active topology so the frontend knows whether the
+    // keypoint array has 17 (COCO17) or 26 (Halpe26) entries and which edge
+    // table to draw.
+    out += ",\"kp_format\":\"";
+    out += fitra::lift::keypoint_format_name(fitra::lift::active_keypoint_format());
+    out += "\"";
     out += ",\"cameras\":[";
     for (std::size_t i = 0; i < snapshots_.size(); ++i) {
         if (i) out += ",";
@@ -72,7 +80,9 @@ std::string SnapshotBus::make_bundle_json() {
             if (pi) out += ",";
             const auto& p = s.persons[pi];
             out += "{\"kpts\":[";
-            for (std::size_t k = 0; k < p.kpts.size(); ++k) {
+            const std::size_t emit_n = std::min<std::size_t>(
+                p.kp_count, p.kpts.size());
+            for (std::size_t k = 0; k < emit_n; ++k) {
                 if (k) out += ",";
                 out += "[";
                 append_float(out, p.kpts[k].x);     out += ",";
@@ -140,6 +150,9 @@ std::string Skeleton3DBus::make_bundle_json() {
     out += ",\"ts_ms\":";
     out += std::to_string(static_cast<long long>(now_ms));
     out += ",\"enabled\":true";
+    out += ",\"kp_format\":\"";
+    out += fitra::lift::keypoint_format_name(fitra::lift::active_keypoint_format());
+    out += "\"";
     out += ",\"persons_3d\":[";
     for (std::size_t pi = 0; pi < s.persons.size(); ++pi) {
         if (pi) out += ",";
@@ -147,7 +160,9 @@ std::string Skeleton3DBus::make_bundle_json() {
         out += std::to_string(static_cast<int>(pi));
         out += ",\"joints\":[";
         const auto& skel = s.persons[pi];
-        for (std::size_t k = 0; k < skel.joints.size(); ++k) {
+        const std::size_t emit_n = std::min<std::size_t>(
+            skel.kp_count, skel.joints.size());
+        for (std::size_t k = 0; k < emit_n; ++k) {
             if (k) out += ",";
             const auto& j = skel.joints[k];
             out += "[";

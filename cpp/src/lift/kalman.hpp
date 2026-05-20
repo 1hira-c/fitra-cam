@@ -34,7 +34,9 @@ private:
     void correct(JointState& s, const infer::Joint3D& z) const;
 
     Options opts_;
-    std::array<JointState, infer::kNumKeypoints> states_{};
+    // Sized for the largest supported topology. The update loop iterates only
+    // up to the active format's kp_count via active_skeleton_def().
+    std::array<JointState, infer::kMaxKeypoints> states_{};
 };
 
 }  // namespace fitra::lift

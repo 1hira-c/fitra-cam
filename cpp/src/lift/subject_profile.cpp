@@ -5,6 +5,7 @@
 
 #include <opencv2/core.hpp>
 
+#include "lift/keypoint_format.hpp"
 #include "lift/skeleton_def.hpp"
 
 namespace fitra::lift {
@@ -19,8 +20,8 @@ double node_real(const cv::FileNode& node, double fallback = 0.0) {
     return node.empty() ? fallback : static_cast<double>(node);
 }
 
-std::array<double, infer::kNumKeypoints> read_lengths(const cv::FileNode& node) {
-    std::array<double, infer::kNumKeypoints> out{};
+std::array<double, infer::kMaxKeypoints> read_lengths(const cv::FileNode& node) {
+    std::array<double, infer::kMaxKeypoints> out{};
     if (node.empty()) return out;
     if (node.isSeq()) {
         std::size_t i = 0;
@@ -40,8 +41,14 @@ std::array<double, infer::kNumKeypoints> read_lengths(const cv::FileNode& node) 
     return out;
 }
 
-cv::Mat lengths_mat(const std::array<double, infer::kNumKeypoints>& vals) {
-    cv::Mat mat(1, static_cast<int>(vals.size()), CV_64F);
+cv::Mat lengths_mat(const std::array<double, infer::kMaxKeypoints>& vals,
+                    std::size_t logical_count) {
+    // Only emit the leading `logical_count` entries so a Halpe26 profile
+    // (26) and a COCO17 profile (17) round-trip with the right schema-implied
+    // length. Readers that overflow into the trailing zero slots would still
+    // work, but emitting the full 26 columns from a v1 profile would silently
+    // change its on-disk shape.
+    cv::Mat mat(1, static_cast<int>(logical_count), CV_64F);
     for (int c = 0; c < mat.cols; ++c) {
         mat.at<double>(0, c) = vals[static_cast<std::size_t>(c)];
     }
@@ -49,8 +56,9 @@ cv::Mat lengths_mat(const std::array<double, infer::kNumKeypoints>& vals) {
 }
 
 int usable_major_bones(const SubjectProfile& profile) {
+    const auto& def = active_skeleton_def();
     int n = 0;
-    for (int child : kMajorBoneChildren) {
+    for (int child : def.major_bone_children) {
         if (profile.bone_lengths_m[static_cast<std::size_t>(child)] > 1.0e-6) {
             ++n;
         }
@@ -60,6 +68,12 @@ int usable_major_bones(const SubjectProfile& profile) {
 }
 
 }  // namespace
+
+SubjectProfile make_default_subject_profile() {
+    SubjectProfile p;
+    p.schema = subject_profile_schema(active_keypoint_format());
+    return p;
+}
 
 SubjectProfile load_subject_profile(const std::string& path) {
     cv::FileStorage fs{path, cv::FileStorage::READ};
@@ -90,7 +104,8 @@ SubjectProfile load_subject_profile(const std::string& path) {
 }
 
 void write_subject_profile(const std::string& path, const SubjectProfile& profile) {
-    if (profile.schema != "fitra_subject_profile_v1" || profile.subject_id.empty()) {
+    const char* expected_schema = subject_profile_schema(active_keypoint_format());
+    if (profile.schema != expected_schema || profile.subject_id.empty()) {
         throw std::runtime_error("invalid subject profile metadata for write");
     }
     std::filesystem::path out{path};
@@ -107,14 +122,22 @@ void write_subject_profile(const std::string& path, const SubjectProfile& profil
     fs << "source_session" << profile.source_session;
     fs << "quality_status" << profile.quality_status;
     fs << "subject_height_m" << profile.subject_height_m;
-    fs << "bone_lengths_m" << lengths_mat(profile.bone_lengths_m);
+    fs << "bone_lengths_m" << lengths_mat(profile.bone_lengths_m, active_kp_count());
     fs << "shoulder_width_m" << profile.shoulder_width_m;
     fs << "hip_width_m" << profile.hip_width_m;
 }
 
 void validate_subject_profile(const SubjectProfile& profile) {
-    if (profile.schema != "fitra_subject_profile_v1") {
-        throw std::runtime_error("unsupported subject profile schema: " + profile.schema);
+    const char* expected_schema = subject_profile_schema(active_keypoint_format());
+    if (profile.schema != expected_schema) {
+        // A profile recorded under a different topology cannot be migrated
+        // automatically (bone-length indices and major-bone subsets differ).
+        // The Phase 8 wizard rewrites the profile when the operator runs a
+        // fresh session.
+        throw std::runtime_error(
+            "subject profile schema " + profile.schema
+            + " does not match active --keypoint-format ("
+            + expected_schema + "); re-run the calibration wizard");
     }
     if (profile.subject_id.empty()) {
         throw std::runtime_error("subject profile has empty subject_id");

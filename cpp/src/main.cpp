@@ -33,6 +33,7 @@
 #include "infer/trt_engine.hpp"
 #include "infer/yolox.hpp"
 #include "lift/calib_io.hpp"
+#include "lift/keypoint_format.hpp"
 #include "lift/subject_profile.hpp"
 #include "lift/triangulator.hpp"
 #include "pipeline/calibration_session.hpp"
@@ -80,6 +81,8 @@ void print_help() {
         "  --width N / --height N    capture size per camera (default 640x480)\n"
         "  --fps N                   requested capture fps (default 30)\n"
         "  --det-frequency N         run YOLOX every N frames (default 10)\n"
+        "  --keypoint-format FMT     pose topology: coco17 (17 kpts, default) or halpe26 (26 kpts).\n"
+        "                            Must match the K of the supplied --pose-engine.\n"
         "  --multi-person            process all bboxes per camera (default: largest only)\n"
         "  --bench-fake-bbox         inject synthetic bbox when detections are empty (bench only)\n"
         "  --det-score F             detection score threshold (default 0.5)\n"
@@ -176,6 +179,7 @@ int main(int argc, char** argv) {
     bool  no_web = false;
     int   width = 640, height = 480, fps = 30;
     int   det_frequency = 10;
+    std::string keypoint_format_str = "coco17";
     bool  multi_person = false;
     bool  bench_fake_bbox = false;
     float det_score = 0.5f;
@@ -229,6 +233,7 @@ int main(int argc, char** argv) {
         else if (a == "--height")            { height = std::atoi(need("--height")); }
         else if (a == "--fps")               { fps    = std::atoi(need("--fps")); }
         else if (a == "--det-frequency")     { det_frequency = std::atoi(need("--det-frequency")); }
+        else if (a == "--keypoint-format")   { keypoint_format_str = need("--keypoint-format"); }
         else if (a == "--multi-person")      { multi_person  = true; }
         else if (a == "--bench-fake-bbox")   { bench_fake_bbox = true; }
         else if (a == "--det-score")         { det_score = std::stof(need("--det-score")); }
@@ -263,6 +268,21 @@ int main(int argc, char** argv) {
 
     try {
         if (want_probe) return probe();
+        // Lock the process-wide keypoint topology before any pipeline thread
+        // starts. RTMPose validates --pose-engine K against this format.
+        {
+            fitra::lift::KeypointFormat fmt;
+            if (!fitra::lift::parse_keypoint_format(keypoint_format_str, fmt)) {
+                std::fprintf(stderr,
+                    "unknown --keypoint-format %s (use coco17 or halpe26)\n",
+                    keypoint_format_str.c_str());
+                return EXIT_FAILURE;
+            }
+            fitra::lift::set_active_keypoint_format(fmt);
+            FITRA_LOG_INFO("[fitra] kp_format={} ({} keypoints)",
+                           fitra::lift::keypoint_format_name(fmt),
+                           static_cast<int>(fitra::lift::active_kp_count()));
+        }
         if (cam_paths[0].empty() || det_engine_path.empty() || pose_engine_path.empty()) {
             print_help();
             return EXIT_FAILURE;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -16,6 +17,7 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/videoio.hpp>
 
+#include "lift/keypoint_format.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::pipeline {
@@ -48,6 +50,30 @@ const char* calib_state_name(CalibState s) {
 }
 
 namespace {
+
+constexpr double kDefaultWriterFps = 30.0;
+constexpr double kMinWriterFps = 1.0;
+constexpr double kMaxWriterFps = 240.0;
+
+double clamp_writer_fps(double fps) {
+    if (!std::isfinite(fps) || fps < kMinWriterFps) return kDefaultWriterFps;
+    return std::min(fps, kMaxWriterFps);
+}
+
+double choose_writer_fps(double measured_fps, double fallback_fps) {
+    if (std::isfinite(measured_fps)
+        && measured_fps >= kMinWriterFps
+        && measured_fps <= kMaxWriterFps) {
+        return measured_fps;
+    }
+    return clamp_writer_fps(fallback_fps);
+}
+
+std::string fmt_double(double v) {
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(3) << v;
+    return ss.str();
+}
 
 std::string json_escape(const std::string& s) {
     std::string out;
@@ -100,7 +126,8 @@ CalibrationSession::~CalibrationSession() {
 
 void CalibrationSession::set_fps_hint(double fps) {
     std::lock_guard<std::mutex> g(mu_);
-    recognizer_.set_fps_hint(fps);
+    fps_hint_ = clamp_writer_fps(fps);
+    recognizer_.set_fps_hint(fps_hint_);
 }
 
 std::string CalibrationSession::sanitize_id(const std::string& in) {
@@ -468,6 +495,7 @@ void CalibrationSession::finalize_thread_main_() {
         // local copy is owned exclusively by this thread.
         std::array<std::array<std::vector<FrameItem>, 2>, kPoseCount> local_buffers;
         std::array<std::string, kPoseCount> pose_names;
+        double fps_hint = kDefaultWriterFps;
         // Snapshot of which poses were already finalized in a previous pass.
         // A partial retake re-fills only the retaken pose's buffer; the rest
         // arrive here empty but with records_[pi].recorded == true, and we
@@ -475,6 +503,7 @@ void CalibrationSession::finalize_thread_main_() {
         std::array<bool, kPoseCount> already_recorded{};
         {
             std::lock_guard<std::mutex> g(mu_);
+            fps_hint = fps_hint_;
             for (std::size_t pi = 0; pi < kPoseCount; ++pi) {
                 pose_names[pi] = records_[pi].name;
                 already_recorded[pi] = records_[pi].recorded;
@@ -517,23 +546,66 @@ void CalibrationSession::finalize_thread_main_() {
                     width = buf.front().bgr.cols;
                     height = buf.front().bgr.rows;
                 }
-                double fps = 0.0;
+                double measured_fps = 0.0;
                 if (buf.size() >= 2) {
                     double span_ms = buf.back().ts_ms - buf.front().ts_ms;
                     if (span_ms > 0.0) {
-                        fps = (static_cast<double>(buf.size()) - 1.0) / (span_ms / 1000.0);
+                        measured_fps =
+                            (static_cast<double>(buf.size()) - 1.0) / (span_ms / 1000.0);
                     }
                 }
-                if (fps < 1.0) fps = 15.0;
+                double fps = choose_writer_fps(measured_fps, fps_hint);
                 std::string rel = std::string{"raw/"} + pose_names[pi] + "_cam"
                                 + std::to_string(ci) + ".mp4";
                 fs::path out_path = session_dir_ / rel;
                 int fourcc = cv::VideoWriter::fourcc('m','p','4','v');
-                log_line("writing " + rel + " frames=" + std::to_string(buf.size()));
-                cv::VideoWriter writer{out_path.string(), fourcc, fps,
-                                       {buf.front().bgr.cols, buf.front().bgr.rows}};
+                cv::Size frame_size{buf.front().bgr.cols, buf.front().bgr.rows};
+                if (frame_size.width <= 0 || frame_size.height <= 0) {
+                    throw std::runtime_error(
+                        "invalid frame size for " + rel + ": "
+                        + std::to_string(frame_size.width) + "x"
+                        + std::to_string(frame_size.height));
+                }
+                log_line("writing " + rel
+                         + " frames=" + std::to_string(buf.size())
+                         + " size=" + std::to_string(frame_size.width) + "x"
+                         + std::to_string(frame_size.height)
+                         + " fps=" + fmt_double(fps)
+                         + " measured_fps=" + fmt_double(measured_fps));
+
+                cv::VideoWriter writer;
+                const std::array<double, 4> fps_candidates{{
+                    fps,
+                    clamp_writer_fps(fps_hint),
+                    kDefaultWriterFps,
+                    15.0,
+                }};
+                std::vector<double> tried_fps;
+                for (double candidate : fps_candidates) {
+                    if (writer.isOpened()) break;
+                    bool already_tried = false;
+                    for (double tried : tried_fps) {
+                        if (std::abs(candidate - tried) < 1.0e-6) {
+                            already_tried = true;
+                            break;
+                        }
+                    }
+                    if (already_tried) continue;
+                    tried_fps.push_back(candidate);
+                    writer.open(out_path.string(), fourcc, candidate, frame_size);
+                    if (writer.isOpened()) {
+                        fps = candidate;
+                        break;
+                    }
+                    writer.release();
+                }
                 if (!writer.isOpened()) {
-                    throw std::runtime_error("VideoWriter open failed: " + out_path.string());
+                    throw std::runtime_error(
+                        "VideoWriter open failed: " + out_path.string()
+                        + " size=" + std::to_string(frame_size.width) + "x"
+                        + std::to_string(frame_size.height)
+                        + " fps=" + fmt_double(fps)
+                        + " measured_fps=" + fmt_double(measured_fps));
                 }
                 for (auto& it : buf) writer.write(it.bgr);
                 writer.release();
@@ -543,7 +615,7 @@ void CalibrationSession::finalize_thread_main_() {
                     throw std::runtime_error(
                         "VideoWriter produced empty clip: " + out_path.string());
                 }
-                log_line("wrote " + rel);
+                log_line("wrote " + rel + " fps=" + fmt_double(fps));
 
                 pose_clips.push_back(rel);
                 pose_frames[ci] = static_cast<int>(buf.size());
@@ -644,6 +716,11 @@ void CalibrationSession::analyzer_thread_main_() {
         << " --overlay-dir "  << shell_quote(overlay_dir_.string())
         << " --subject-profile-out " << shell_quote(subject_profile_yaml_.string())
         << " --quality-out "  << shell_quote(quality_json_path_.string());
+    // Phase 9: propagate the active topology to the analyzer subprocess.
+    // RtmPose validates the engine K against this flag, so omitting it here
+    // would fail every Halpe26 calibration with an engine-K mismatch.
+    cmd << " --keypoint-format "
+        << shell_quote(lift::keypoint_format_name(lift::active_keypoint_format()));
     if (pre_.subject_height_m > 0.0) {
         cmd << " --subject-height-m " << pre_.subject_height_m;
     }
