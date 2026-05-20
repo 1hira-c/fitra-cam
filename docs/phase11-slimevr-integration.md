@@ -1,5 +1,12 @@
 # Phase 11 — SlimeVR (VMC/OSC) 姿勢情報連携
 
+> **実装メモ (2026-05-20)**: 本ドキュメントは設計時点の正本。実装時点で以下の差分が判明したので、行間で参照する際は注意:
+>
+> 1. **Phase 10 はスキップ**。`--mode {pose,calib-*}` フラグは存在しないため、Phase 11 の launch gate は `--slimevr-out` && `--enable-3d` && `--keypoint-format=halpe26` && !`--calibrate` の 4 条件で判定 (main.cpp で early-fail)。
+> 2. **`CrowServer::publisher_loop` の行範囲**は `cpp/src/web/crow_server.cpp:301-334` (本文中の 179-212 から drift)。pacing 構造の参照は実装ファイルで確認すること。
+> 3. **VMC OSC quaternion order は xyzw on wire** ([protocol.vmc.info](https://protocol.vmc.info/english.html))。`VmcTracker::quat_wxyz` で wxyz 格納、publisher は `quat_wxyz[1..3, 0]` で xyzw に並べ替えて送信。
+> 4. **`/stats3d` 露出方法**: 設計案は CrowServer の `/stats` に追加だったが、3D 関連 stats が `/stats3d` 側にまとまっているので publisher の stats も `/stats3d` JSON 末尾に `"slimevr":{...}` として spliceさせている。`/stats` は変更なし。
+
 ## Context
 
 Phase 7 で多視点三角測量 + Kalman + IK による 3D skeleton 出力が安定し、Phase 8 で被験者プロファイルによるボーン長固定、Phase 9 で Halpe26 移行、Phase 10 で 3 カメラ + 完全 C++ キャリブが揃った。Phase 11 のゴールは **この 3D skeleton を SlimeVR Server に流し込み、SteamVR / VRChat の Full-Body Tracking (FBT) 用 tracker として使えるようにする** こと。これにより、IMU ベースの SlimeVR/owoTrack を補完する「カメラ駆動 FBT ソース」が成立する。

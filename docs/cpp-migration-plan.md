@@ -159,6 +159,18 @@ fitra-cam/
 - 完了条件 = halpe26 でフル機能 (検出→IK→Phase 8 calibration)
 - 詳細は [`phase9-halpe26-migration.md`](phase9-halpe26-migration.md)
 
+### Phase 11 — SlimeVR / VMC OSC 連携 (2026-05-20)
+
+- Phase 10 (3 カメラ + C++ ライブキャリブ) はスキップ。Phase 9 完了の Halpe26 を前提に直接 Phase 11 に着手
+- `--slimevr-out` フラグで VMC over OSC publisher 起動。`--enable-3d` && `--keypoint-format=halpe26` && !`--calibrate` をハードゲート
+- 8 trackers (WAIST/CHEST/L/R KNEE/L/R ELBOW/L/R FOOT) を 60Hz (既定) で `/VMC/Ext/Tra/Pos` に送信。HEAD は HMD 前提で除外
+- 依存追加なし: `cpp/src/slimevr/` で OSC 1.0 wire writer / tracker extract / quat 合成 / UDP publisher を自前実装
+- `Skeleton3DBus::snapshot()` getter を追加 (M1)。publisher スレッドは値コピーのみで pose pipeline と非干渉
+- `/stats3d` に `"slimevr":{sent_bundles,skipped_invalid,last_send_ms}` を露出
+- 検証ツール: `cpp/build/tools/slimevr_loopback` で UDP ループバック dump、SlimeVR Server 不要で wire 確認
+- 完了条件 = 8 trackers が SlimeVR Server に "VMC receiver" として認識され、live skeleton で avatar が動くこと
+- 詳細は [`phase11-slimevr-integration.md`](phase11-slimevr-integration.md)
+
 ## 検証戦略
 
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
@@ -170,6 +182,7 @@ fitra-cam/
 | 4     | `./cpp/build/main --device tensorrt --fp16 --bench`           | aggregate pose ≥ 90 fps / GPU 利用率 80% 超                                |
 | 5     | `./cpp/build/record_overlay --seconds 30`                    | 5 本の mp4 出力、メタデータ fps が実測通り                                       |
 | 9     | `./cpp/build/main --keypoint-format=halpe26 --pose-engine <halpe26.engine> ...` | 起動ログに `kp_format=halpe26 (26 keypoints)` / `/ws` JSON に `kp_format` フィールド / `grep -rn kNumKeypoints cpp/` = 0 件 |
+| 11    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --slimevr-out ...` + `./cpp/build/tools/slimevr_loopback --port 39539 --seconds 5` | 8 trackers × 60Hz ≈ 480 msg/s 受信、`/stats3d` に `slimevr` フィールド、`ctest` で `test_osc_roundtrip` + `test_tracker_extract` pass |
 
 ## リスク・未確定事項
 
