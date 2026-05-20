@@ -4,36 +4,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Communication language
 
-**ユーザーへの応答・git コミットメッセージ・コミット本文・PR description は日本語で書く。** Conventional Commits 形式の prefix (`feat(phaseN):`, `fix:`, `docs:`, `refactor:`, `chore:` 等) は英語のまま残す。Co-Authored-By トレーラも英語のまま。
+**Write user-facing replies, git commit subjects (after the prefix), commit bodies, and PR descriptions in Japanese.** Conventional Commits prefixes (`feat(phaseN):`, `fix:`, `docs:`, `refactor:`, `chore:`, ...) stay in English. The `Co-Authored-By` trailer also stays in English.
 
-- ユーザーへの最終回答・進捗報告・要約: 日本語
-- コミットメッセージの subject 行: `prefix(scope): 日本語サマリ` (prefix は英語、サマリは日本語)
-- コミットメッセージ本文: 日本語。技術用語 (CMake / ctest / 関数名 / ファイルパス) は英語のまま自然に混ぜてよい
-- コード中のコメント / 識別子 / 例外メッセージ: 既存の慣習に従う (このリポジトリは英語主体)
-- docs/ 配下のドキュメント: 既存の言語に合わせる (Phase 計画は日本語主体、build メモは英語主体)
+- Final answers to the user, progress reports, summaries: Japanese.
+- Commit subject line: `prefix(scope): <Japanese summary>` — prefix in English, summary in Japanese.
+- Commit body: Japanese. Technical tokens (CMake, ctest, function names, file paths) stay in English, mixed inline.
+- Code comments / identifiers / exception strings: follow the existing convention of the file (this repo is English-majority).
+- `docs/` content: match the existing language of the file (phase plans are Japanese-majority, build notes are English-majority).
 
-`git log --oneline` を見れば既存コミット (`feat(phase8):` / `fix(phase9):` / `docs(phase11):` 等) が同パターンなので、それを真似ること。
+`git log --oneline` shows the established pattern (`feat(phase8): ...`, `fix(phase9): ...`, `docs(phase11): ...`) — match it.
 
 ## Branching and commits
 
-**Phase レベルでブランチを切り、タスク (マイルストーン) レベルでコミットを刻む** のがこのリポジトリの基本運用。
+**One branch per phase, one commit per task (milestone)** is the established workflow.
 
-- **ブランチ命名**: `cpp-phaseN` (例: `cpp-phase8`, `cpp-phase9`, `cpp-phase11`)。Phase をスキップしてもブランチ番号は飛ばす (Phase 10 を飛ばしたら次は `cpp-phase11`)
-- **起点**: 直前 Phase の最終コミットから切る。Develop に merge される前でも、その Phase の作業が一段落していれば起点にしてよい
-- **コミット粒度**: `docs/phaseN-*.md` の milestone (M1, M2, ...) 単位。1 つの M で 1 コミットが基本。互いに密結合な M (publisher + CLI + stats など) は 1 コミットに束ねてもよい
-- **コミット prefix**: `feat(phaseN):` (機能追加) / `fix(phaseN):` (バグ修正) / `docs(phaseN):` (Phase 内ドキュメント更新) / `refactor:` / `chore:` 等。`docs:` 単独はリポジトリ横断のメモ用 (CLAUDE.md など)
-- **設計ドキュメント**: `docs/phaseN-*.md` に Phase の正本を置き、M1-M8 等のマイルストーンを切る。コミット本文から「詳細は `docs/phaseN-*.md` を参照」と指せる構造を維持する
-- **Phase 完了条件**: `docs/cpp-migration-plan.md` の「段階実装」「検証戦略」表に Phase 行を追加するまでが完了。設計ドキュメント単独で終わらせない
+- **Branch name**: `cpp-phaseN` (e.g. `cpp-phase8`, `cpp-phase9`, `cpp-phase11`). Skipping a phase skips the branch number too (Phase 10 was skipped → next branch was `cpp-phase11`, not `cpp-phase10`).
+- **Branch base**: cut from the previous phase's tip. The previous phase does not need to be merged into Develop first; once its work has settled, it's a valid base.
+- **Commit granularity**: one commit per milestone (M1, M2, ...) in `docs/phaseN-*.md`. Tightly coupled milestones (e.g. publisher + CLI + stats integration in Phase 11) may be bundled into a single commit when separating them would produce un-buildable intermediate states.
+- **Commit prefix**: `feat(phaseN):` (new feature), `fix(phaseN):` (bug fix), `docs(phaseN):` (phase-scoped doc update), `refactor:`, `chore:`, etc. Bare `docs:` (no phase scope) is for repo-wide meta files like CLAUDE.md.
+- **Design doc**: `docs/phaseN-*.md` is the source of truth for the phase, with milestones (M1–M8 etc.) defined there. Commit bodies should be able to point at "see `docs/phaseN-*.md`" rather than restating the design.
+- **Phase completion**: not done until `docs/cpp-migration-plan.md` has a row for the phase in both the "段階実装" section and the "検証戦略" table. Shipping the design doc alone is not enough.
 
-例 (Phase 11):
+Example (Phase 11):
 ```
-cpp-phase11 (cpp-phase9 から派生、Phase 10 をスキップ)
-  ├─ M1: feat(phase11): add Skeleton3DBus::snapshot() ...
-  ├─ M2: feat(phase11): hand-rolled OSC 1.0 wire writer ...
-  ├─ M3: feat(phase11): VMC tracker extraction ...
-  ├─ M4+5+6: feat(phase11): VMC publisher thread + CLI ...
-  ├─ M7: feat(phase11): slimevr_loopback OSC dump tool
-  └─ docs: docs(phase11): execution notes ...
+cpp-phase11 (branched from cpp-phase9; Phase 10 was skipped)
+  ├─ M1:    feat(phase11): add Skeleton3DBus::snapshot() ...
+  ├─ M2:    feat(phase11): hand-rolled OSC 1.0 wire writer ...
+  ├─ M3:    feat(phase11): VMC tracker extraction ...
+  ├─ M4-6:  feat(phase11): VMC publisher thread + CLI ...
+  ├─ M7:    feat(phase11): slimevr_loopback OSC dump tool
+  └─ docs:  docs(phase11): execution notes ...
 ```
 
 ## Scope and direction
