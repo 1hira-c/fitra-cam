@@ -156,6 +156,7 @@ private:
     std::size_t target_pose_idx_ = 0;
 
     lift::PoseRecognizer        recognizer_;
+    double                      fps_hint_ = 15.0;
     lift::PoseDetectionState    last_detection_{};
     double                      last_bone_drift_pct_ = 0.0;
     std::chrono::steady_clock::time_point last_skeleton_time_{};
