@@ -41,6 +41,8 @@
 #include "infer/rtmpose.hpp"
 #include "infer/trt_engine.hpp"
 #include "infer/yolox.hpp"
+#include "lift/keypoint_format.hpp"
+#include "lift/skeleton_def.hpp"
 #include "util/cuda_check.hpp"
 #include "util/logging.hpp"
 
@@ -74,6 +76,7 @@ void print_help() {
         "Optional:\n"
         "  --max-frames N            stop after N frames (default 0 = whole video)\n"
         "  --det-score F             detection score threshold (default 0.5)\n"
+        "  --keypoint-format FMT     pose topology: coco17 (default) or halpe26\n"
         "  --multi-person            run pose on all bboxes (default: largest only)\n"
         "  --prebaked                use Phase 6b infer_prebaked() path\n"
         "                             (preprocess_to_blob + infer_prebaked)\n"
@@ -87,24 +90,17 @@ std::string fmt_float(float v) {
     return buf;
 }
 
-// COCO 17-keypoint skeleton (same edges as python/scripts/pose_pipeline.py).
-constexpr std::pair<int, int> kSkel[] = {
-    {0, 1}, {0, 2}, {1, 3}, {2, 4},
-    {5, 7}, {7, 9}, {6, 8}, {8, 10},
-    {5, 6}, {5, 11}, {6, 12}, {11, 12},
-    {11, 13}, {13, 15}, {12, 14}, {14, 16},
-};
-
 void draw_overlay(cv::Mat& frame,
                   const std::vector<fitra::infer::Person>& persons,
                   float kp_thr = 0.3f) {
     const cv::Scalar color(0, 220, 0);
+    const auto& def = fitra::lift::active_skeleton_def();
     for (const auto& p : persons) {
         cv::rectangle(frame,
                       {static_cast<int>(p.bbox.x1), static_cast<int>(p.bbox.y1)},
                       {static_cast<int>(p.bbox.x2), static_cast<int>(p.bbox.y2)},
                       cv::Scalar(80, 80, 80), 1, cv::LINE_AA);
-        for (auto [a, b] : kSkel) {
+        for (auto [a, b] : def.edges) {
             const auto& ka = p.kpts[static_cast<std::size_t>(a)];
             const auto& kb = p.kpts[static_cast<std::size_t>(b)];
             if (ka.score < kp_thr || kb.score < kp_thr) continue;
@@ -113,7 +109,9 @@ void draw_overlay(cv::Mat& frame,
                      {static_cast<int>(kb.x), static_cast<int>(kb.y)},
                      color, 2, cv::LINE_AA);
         }
-        for (const auto& kp : p.kpts) {
+        const std::size_t n = std::min<std::size_t>(p.kp_count, p.kpts.size());
+        for (std::size_t k = 0; k < n; ++k) {
+            const auto& kp = p.kpts[k];
             if (kp.score < kp_thr) continue;
             cv::circle(frame, {static_cast<int>(kp.x), static_cast<int>(kp.y)},
                        3, color, -1, cv::LINE_AA);
@@ -131,6 +129,7 @@ int main(int argc, char** argv) {
     std::string overlay_path;
     int   max_frames = 0;
     float det_score  = 0.5f;
+    std::string keypoint_format_str = "coco17";
     bool  multi_person = false;
     bool  use_prebaked = false;
 
@@ -150,6 +149,7 @@ int main(int argc, char** argv) {
         else if (a == "--output")       { output      = need_arg("--output"); }
         else if (a == "--max-frames")   { max_frames  = std::atoi(need_arg("--max-frames")); }
         else if (a == "--det-score")    { det_score   = std::stof(need_arg("--det-score")); }
+        else if (a == "--keypoint-format") { keypoint_format_str = need_arg("--keypoint-format"); }
         else if (a == "--multi-person") { multi_person = true; }
         else if (a == "--prebaked")     { use_prebaked = true; }
         else if (a == "--overlay")      { overlay_path = need_arg("--overlay"); }
@@ -165,6 +165,16 @@ int main(int argc, char** argv) {
     }
 
     try {
+        {
+            fitra::lift::KeypointFormat fmt;
+            if (!fitra::lift::parse_keypoint_format(keypoint_format_str, fmt)) {
+                std::fprintf(stderr,
+                    "unknown --keypoint-format %s (use coco17 or halpe26)\n",
+                    keypoint_format_str.c_str());
+                return EXIT_FAILURE;
+            }
+            fitra::lift::set_active_keypoint_format(fmt);
+        }
         TrtLogger tlog;
         std::unique_ptr<nvinfer1::IRuntime> runtime{nvinfer1::createInferRuntime(tlog)};
         TRT_CHECK(runtime != nullptr);
@@ -281,7 +291,8 @@ int main(int argc, char** argv) {
                 line << "{\"bbox\":[" << fmt_float(p.bbox.x1) << "," << fmt_float(p.bbox.y1)
                      << "," << fmt_float(p.bbox.x2) << "," << fmt_float(p.bbox.y2)
                      << "," << fmt_float(p.bbox.score) << "],\"kpts\":[";
-                for (std::size_t k = 0; k < p.kpts.size(); ++k) {
+                const std::size_t n_emit = std::min<std::size_t>(p.kp_count, p.kpts.size());
+                for (std::size_t k = 0; k < n_emit; ++k) {
                     if (k) line << ",";
                     line << "[" << fmt_float(p.kpts[k].x) << "," << fmt_float(p.kpts[k].y)
                          << "," << fmt_float(p.kpts[k].score) << "]";

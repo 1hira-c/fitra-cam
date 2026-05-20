@@ -8,6 +8,7 @@
 
 #include <opencv2/calib3d.hpp>
 
+#include "lift/keypoint_format.hpp"
 #include "lift/triangulator.hpp"
 
 namespace {
@@ -41,8 +42,9 @@ fitra::lift::CalibrationSet make_calibration(const std::vector<std::string>& ids
 
 std::vector<cv::Point3d> make_points() {
     std::vector<cv::Point3d> points;
-    points.reserve(fitra::infer::kNumKeypoints);
-    for (std::size_t k = 0; k < fitra::infer::kNumKeypoints; ++k) {
+    const std::size_t kp_count = fitra::lift::active_kp_count();
+    points.reserve(kp_count);
+    for (std::size_t k = 0; k < kp_count; ++k) {
         const double x = (static_cast<int>(k % 5) - 2) * 0.08;
         const double y = (static_cast<int>(k / 5) - 1) * 0.07;
         const double z = 3.0 + static_cast<double>(k % 3) * 0.03;
@@ -63,6 +65,7 @@ fitra::infer::Person project_person(const fitra::lift::CameraCalibration& cam,
 
     fitra::infer::Person person;
     person.bbox = {0.0f, 0.0f, 640.0f, 480.0f, 1.0f};
+    person.kp_count = static_cast<std::uint8_t>(points.size());
     for (std::size_t k = 0; k < points.size(); ++k) {
         person.kpts[k].x = static_cast<float>(image[k].x);
         person.kpts[k].y = static_cast<float>(image[k].y);
@@ -85,7 +88,7 @@ void test_round_trip() {
     };
 
     auto tri = triangulator.triangulate(observations);
-    check(tri.valid_joints == static_cast<int>(fitra::infer::kNumKeypoints),
+    check(tri.valid_joints == static_cast<int>(fitra::lift::active_kp_count()),
           "expected all joints to triangulate");
     for (std::size_t k = 0; k < points.size(); ++k) {
         const auto& got = tri.skeleton.joints[k];

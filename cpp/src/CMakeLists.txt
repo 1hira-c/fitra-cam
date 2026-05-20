@@ -1,3 +1,25 @@
+# Calibration / lifting support shared by tools and the future 3D pipeline.
+# Declared before fitra_infer so RTMPose can use the active KeypointFormat
+# (Phase 9) to validate engine K against the runtime topology.
+add_library(fitra_lift STATIC
+    lift/calib_io.cpp
+    lift/triangulator.cpp
+    lift/kalman.cpp
+    lift/ik.cpp
+    lift/subject_profile.cpp
+    lift/pose_recognizer.cpp
+    lift/keypoint_format.cpp
+)
+
+target_include_directories(fitra_lift PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(fitra_lift PUBLIC
+    opencv_core
+    opencv_calib3d
+)
+
 # Inference library (TRT engine wrapper, ONNX -> engine builder, YOLOX, RTMPose).
 add_library(fitra_infer STATIC
     infer/trt_engine.cpp
@@ -16,6 +38,7 @@ target_link_libraries(fitra_infer PUBLIC
     Threads::Threads
     opencv_core
     opencv_imgproc
+    fitra_lift          # Phase 9: RTMPose validates engine K against the active topology
 )
 
 # Camera capture + JPEG decode + per-camera decode worker.
@@ -51,25 +74,6 @@ target_link_libraries(fitra_pipeline PUBLIC
     fitra_camera
     fitra_lift
     opencv_videoio
-)
-
-# Calibration / lifting support shared by tools and the future 3D pipeline.
-add_library(fitra_lift STATIC
-    lift/calib_io.cpp
-    lift/triangulator.cpp
-    lift/kalman.cpp
-    lift/ik.cpp
-    lift/subject_profile.cpp
-    lift/pose_recognizer.cpp
-)
-
-target_include_directories(fitra_lift PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}"
-)
-
-target_link_libraries(fitra_lift PUBLIC
-    opencv_core
-    opencv_calib3d
 )
 
 # Crow HTTP+WebSocket server.

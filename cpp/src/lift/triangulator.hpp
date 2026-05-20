@@ -18,8 +18,10 @@ struct PerCameraObservation {
 
 struct TriangulatedSkeleton {
     infer::Skeleton3D skeleton{};
-    std::array<float, infer::kNumKeypoints> reproj_error_px{};
-    std::array<int, infer::kNumKeypoints> view_count{};
+    // Sized for the largest supported topology; the per-frame triangulate()
+    // populates only the leading active-kp-count entries.
+    std::array<float, infer::kMaxKeypoints> reproj_error_px{};
+    std::array<int, infer::kMaxKeypoints> view_count{};
     double median_reproj_px = 0.0;
     int valid_joints = 0;
 };

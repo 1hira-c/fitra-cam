@@ -150,6 +150,15 @@ fitra-cam/
 - `cpp/tools/record_overlay.cpp`: raw mp4 を 3 本録 → 推論 overlay → side-by-side
 - `cv::VideoWriter` (mp4v) で十分。libav 直は不要
 
+### Phase 9 — COCO17 → Halpe26 キーポイント移行 (2026-05-20)
+
+- `--keypoint-format {coco17,halpe26}` で CLI 切替。既定は `coco17`、回帰検証後に `halpe26` を昇格予定
+- `kMaxKeypoints=26` で配列サイズを統一し、`Person::kp_count`/`Skeleton3D::kp_count` で論理点数を伝搬
+- 新規ヘッダ `cpp/src/lift/keypoint_format.hpp` に SkeletonDef + active format singleton
+- `fitra_subject_profile_v1`(COCO17) / `v2`(Halpe26) を厳格に分離。マイグレーション無しで再キャリブを要求
+- 完了条件 = halpe26 でフル機能 (検出→IK→Phase 8 calibration)
+- 詳細は [`phase9-halpe26-migration.md`](phase9-halpe26-migration.md)
+
 ## 検証戦略
 
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
@@ -160,6 +169,7 @@ fitra-cam/
 | 3     | `./cpp/build/main --cam0 ... --cam1 ... --cam2 ... --port 8000` + ブラウザ目視 | 3 ペイン分の skeleton が滑らかに描画され WS bundle 30Hz で届く |
 | 4     | `./cpp/build/main --device tensorrt --fp16 --bench`           | aggregate pose ≥ 90 fps / GPU 利用率 80% 超                                |
 | 5     | `./cpp/build/record_overlay --seconds 30`                    | 5 本の mp4 出力、メタデータ fps が実測通り                                       |
+| 9     | `./cpp/build/main --keypoint-format=halpe26 --pose-engine <halpe26.engine> ...` | 起動ログに `kp_format=halpe26 (26 keypoints)` / `/ws` JSON に `kp_format` フィールド / `grep -rn kNumKeypoints cpp/` = 0 件 |
 
 ## リスク・未確定事項
 

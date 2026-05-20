@@ -139,11 +139,12 @@ class CameraRuntime:
 
 
 class WebState:
-    def __init__(self, runtimes: list[CameraRuntime]):
+    def __init__(self, runtimes: list[CameraRuntime], kp_format: str = "coco17"):
         self.runtimes = runtimes
         self.clients: set[WebSocket] = set()
         self.clients_lock = asyncio.Lock()
         self._seq = 0
+        self.kp_format = kp_format
 
     def make_bundle(self) -> dict:
         self._seq += 1
@@ -151,6 +152,10 @@ class WebState:
         return {
             "seq": self._seq,
             "ts_ms": int(time.time() * 1000),
+            # Phase 9: surface the active topology so the frontend knows
+            # whether bundle.cameras[*].persons[*].kpts has 17 (COCO17) or 26
+            # (Halpe26) entries.
+            "kp_format": self.kp_format,
             "cameras": cams,
         }
 
@@ -177,7 +182,7 @@ def build_app(args: argparse.Namespace) -> FastAPI:
             rt = CameraRuntime(i, cfg, engine, publish_every=args.publish_every)
             rt.start()
             runtimes.append(rt)
-        web_state = WebState(runtimes)
+        web_state = WebState(runtimes, kp_format=getattr(args, "keypoint_format", "coco17"))
         publisher_task = asyncio.create_task(_publisher_loop(web_state))
         log_task = asyncio.create_task(_logger_loop(runtimes, args.log_every))
         print(f"[ready] http://{args.host}:{args.port}/ (Ctrl-C to stop)", file=sys.stderr)

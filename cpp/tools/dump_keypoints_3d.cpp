@@ -1,7 +1,8 @@
 // dump_keypoints_3d — Phase 7 offline 2-camera 3D MVP.
 //
-// Runs YOLOX + RTMPose on synchronized recorded videos, triangulates COCO-17
-// joints with a calibration YAML, then optionally applies 3D Kalman + IK.
+// Runs YOLOX + RTMPose on synchronized recorded videos, triangulates either
+// COCO17 (17 kpts, default) or Halpe26 (26 kpts) joints with a calibration
+// YAML, then optionally applies 3D Kalman + IK.
 
 #include <algorithm>
 #include <array>
@@ -35,6 +36,7 @@
 #include "lift/calib_io.hpp"
 #include "lift/ik.hpp"
 #include "lift/kalman.hpp"
+#include "lift/keypoint_format.hpp"
 #include "lift/skeleton_def.hpp"
 #include "lift/subject_profile.hpp"
 #include "lift/triangulator.hpp"
@@ -79,6 +81,7 @@ struct Args {
     bool multi_person = false;
     bool no_kalman = false;
     bool no_ik = false;
+    std::string keypoint_format_str = "coco17";
 };
 
 void print_help() {
@@ -109,6 +112,7 @@ void print_help() {
         "  --multi-person            keep all bboxes, but MVP triangulates person 0 only\n"
         "  --no-kalman               disable 3D Kalman smoothing\n"
         "  --no-ik                   disable IK length/hinge projection\n"
+        "  --keypoint-format FMT     pose topology: coco17 (default) or halpe26\n"
         "  --help                    show this help\n");
 }
 
@@ -144,6 +148,7 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--multi-person") { args.multi_person = true; }
         else if (a == "--no-kalman")    { args.no_kalman = true; }
         else if (a == "--no-ik")        { args.no_ik = true; }
+        else if (a == "--keypoint-format") { args.keypoint_format_str = need("--keypoint-format"); }
         else {
             std::fprintf(stderr, "unknown arg: %s\n", argv[i]);
             print_help();
@@ -304,7 +309,10 @@ struct ProfileAccumulator {
     int frames_with_3d = 0;
     std::vector<double> reproj;
     std::vector<double> valid_joints;
-    std::array<std::vector<double>, fitra::infer::kNumKeypoints> bone_samples;
+    // Sized for the largest topology; only the leading active_kp_count slots
+    // are written by observe(), and major-bone iteration uses the active
+    // SkeletonDef so the trailing zero-entries are never inspected.
+    std::array<std::vector<double>, fitra::infer::kMaxKeypoints> bone_samples;
     std::vector<double> shoulder_samples;
     std::vector<double> hip_samples;
     std::map<std::string, PoseStats> poses;
@@ -322,8 +330,9 @@ struct ProfileAccumulator {
         ps.reproj.push_back(tri.median_reproj_px);
         valid_joints.push_back(static_cast<double>(tri.valid_joints));
 
-        for (std::size_t child = 0; child < fitra::lift::kCocoParent.size(); ++child) {
-            int parent = fitra::lift::kCocoParent[child];
+        const auto& def = fitra::lift::active_skeleton_def();
+        for (std::size_t child = 0; child < def.parents.size(); ++child) {
+            int parent = def.parents[child];
             if (parent < 0) continue;
             const auto& a = skel.joints[static_cast<std::size_t>(parent)];
             const auto& b = skel.joints[child];
@@ -346,13 +355,14 @@ struct ProfileAccumulator {
     }
 
     fitra::lift::SubjectProfile build_profile() const {
-        fitra::lift::SubjectProfile profile;
+        fitra::lift::SubjectProfile profile = fitra::lift::make_default_subject_profile();
         profile.loaded = true;
         profile.subject_id = subject_id;
         profile.created_at = now_iso_like();
         profile.source_session = source_session;
         profile.subject_height_m = subject_height_m;
-        for (std::size_t child = 0; child < bone_samples.size(); ++child) {
+        const std::size_t kp_count = fitra::lift::active_kp_count();
+        for (std::size_t child = 0; child < kp_count; ++child) {
             profile.bone_lengths_m[child] = median(bone_samples[child]);
         }
         profile.shoulder_width_m = median(shoulder_samples);
@@ -364,9 +374,10 @@ struct ProfileAccumulator {
     }
 
     double major_coverage(const fitra::lift::SubjectProfile& profile) const {
+        const auto& def = fitra::lift::active_skeleton_def();
         int have = 0;
-        int total = static_cast<int>(fitra::lift::kMajorBoneChildren.size()) + 1;
-        for (int child : fitra::lift::kMajorBoneChildren) {
+        int total = static_cast<int>(def.major_bone_children.size()) + 1;
+        for (int child : def.major_bone_children) {
             if (profile.bone_lengths_m[static_cast<std::size_t>(child)] > 1.0e-6) ++have;
         }
         if (profile.shoulder_width_m > 1.0e-6) ++have;
@@ -374,8 +385,9 @@ struct ProfileAccumulator {
     }
 
     double profile_drift_pct(const fitra::lift::SubjectProfile& profile) const {
+        const auto& def = fitra::lift::active_skeleton_def();
         std::vector<double> vals;
-        for (int child : fitra::lift::kMajorBoneChildren) {
+        for (int child : def.major_bone_children) {
             double target = profile.bone_lengths_m[static_cast<std::size_t>(child)];
             if (target <= 1.0e-6) continue;
             for (double sample : bone_samples[static_cast<std::size_t>(child)]) {
@@ -467,12 +479,13 @@ std::vector<fitra::infer::Bbox> keep_largest_if_needed(
 
 void draw_2d(cv::Mat& frame, const std::vector<fitra::infer::Person>& persons) {
     const cv::Scalar color(0, 210, 0);
+    const auto& def = fitra::lift::active_skeleton_def();
     for (const auto& p : persons) {
         cv::rectangle(frame,
                       {static_cast<int>(p.bbox.x1), static_cast<int>(p.bbox.y1)},
                       {static_cast<int>(p.bbox.x2), static_cast<int>(p.bbox.y2)},
                       cv::Scalar(80, 80, 80), 1, cv::LINE_AA);
-        for (auto [a, b] : fitra::lift::kCocoEdges) {
+        for (auto [a, b] : def.edges) {
             const auto& ka = p.kpts[static_cast<std::size_t>(a)];
             const auto& kb = p.kpts[static_cast<std::size_t>(b)];
             if (ka.score < 0.3f || kb.score < 0.3f) continue;
@@ -488,16 +501,18 @@ void draw_reprojection(cv::Mat& frame,
                        int cam_index,
                        const fitra::infer::Skeleton3D& skel) {
     const cv::Scalar color(255, 0, 255);
-    std::array<cv::Point2f, fitra::infer::kNumKeypoints> pts{};
-    std::array<bool, fitra::infer::kNumKeypoints> ok{};
-    for (std::size_t k = 0; k < skel.joints.size(); ++k) {
+    const auto& def = fitra::lift::active_skeleton_def();
+    std::array<cv::Point2f, fitra::infer::kMaxKeypoints> pts{};
+    std::array<bool, fitra::infer::kMaxKeypoints> ok{};
+    const std::size_t kp_count = fitra::lift::active_kp_count();
+    for (std::size_t k = 0; k < kp_count; ++k) {
         ok[k] = triangulator.project(cam_index, skel.joints[k], pts[k]);
         if (ok[k]) {
             cv::circle(frame, {static_cast<int>(pts[k].x), static_cast<int>(pts[k].y)},
                        4, color, -1, cv::LINE_AA);
         }
     }
-    for (auto [a, b] : fitra::lift::kCocoEdges) {
+    for (auto [a, b] : def.edges) {
         if (!ok[static_cast<std::size_t>(a)] || !ok[static_cast<std::size_t>(b)]) continue;
         cv::line(frame,
                  {static_cast<int>(pts[static_cast<std::size_t>(a)].x),
@@ -518,7 +533,9 @@ void write_json_line(std::ofstream& out,
                      bool ik_locked) {
     out << "{\"frame\":" << frame << ",\"pose\":\"" << json_escape(pose)
         << "\",\"persons_3d\":[{\"id\":0,\"joints\":[";
-    for (std::size_t k = 0; k < skel.joints.size(); ++k) {
+    const std::size_t emit_n = std::min<std::size_t>(
+        skel.kp_count, skel.joints.size());
+    for (std::size_t k = 0; k < emit_n; ++k) {
         if (k) out << ",";
         const auto& j = skel.joints[k];
         out << "[" << fmt(j.x) << "," << fmt(j.y) << "," << fmt(j.z)
@@ -531,7 +548,7 @@ void write_json_line(std::ofstream& out,
     out << ",\"bone_len_drift_pct\":" << fmt(bone_drift_after);
     out << ",\"ik_locked\":" << (ik_locked ? "true" : "false");
     out << ",\"joint_view_counts\":[";
-    for (std::size_t k = 0; k < tri.view_count.size(); ++k) {
+    for (std::size_t k = 0; k < emit_n; ++k) {
         if (k) out << ",";
         out << tri.view_count[k];
     }
@@ -544,6 +561,16 @@ int main(int argc, char** argv) {
     Args args = parse_args(argc, argv);
 
     try {
+        {
+            fitra::lift::KeypointFormat fmt;
+            if (!fitra::lift::parse_keypoint_format(args.keypoint_format_str, fmt)) {
+                std::fprintf(stderr,
+                    "unknown --keypoint-format %s (use coco17 or halpe26)\n",
+                    args.keypoint_format_str.c_str());
+                return EXIT_FAILURE;
+            }
+            fitra::lift::set_active_keypoint_format(fmt);
+        }
         auto calib = fitra::lift::load_calibration(args.calib);
         fitra::lift::Triangulator::Options tri_opts;
         tri_opts.kp_conf_thresh = args.kp_conf_thresh;

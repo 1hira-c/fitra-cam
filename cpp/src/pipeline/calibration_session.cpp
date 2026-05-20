@@ -16,6 +16,7 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/videoio.hpp>
 
+#include "lift/keypoint_format.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::pipeline {
@@ -644,6 +645,11 @@ void CalibrationSession::analyzer_thread_main_() {
         << " --overlay-dir "  << shell_quote(overlay_dir_.string())
         << " --subject-profile-out " << shell_quote(subject_profile_yaml_.string())
         << " --quality-out "  << shell_quote(quality_json_path_.string());
+    // Phase 9: propagate the active topology to the analyzer subprocess.
+    // RtmPose validates the engine K against this flag, so omitting it here
+    // would fail every Halpe26 calibration with an engine-K mismatch.
+    cmd << " --keypoint-format "
+        << shell_quote(lift::keypoint_format_name(lift::active_keypoint_format()));
     if (pre_.subject_height_m > 0.0) {
         cmd << " --subject-height-m " << pre_.subject_height_m;
     }

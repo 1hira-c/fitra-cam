@@ -36,6 +36,43 @@ COCO_SKELETON = (
     (11, 13), (13, 15), (12, 14), (14, 16),
 )
 
+# Halpe26 = COCO17 ∪ {17 head_top, 18 neck, 19 hip_center,
+#                     20 l_big_toe, 21 r_big_toe, 22 l_small_toe,
+#                     23 r_small_toe, 24 l_heel, 25 r_heel}.
+HALPE26_KP_NAMES = COCO_KP_NAMES + (
+    "head_top", "neck", "hip_center",
+    "left_big_toe", "right_big_toe",
+    "left_small_toe", "right_small_toe",
+    "left_heel", "right_heel",
+)
+
+HALPE26_SKELETON = (
+    # Head
+    (17, 18), (0, 17), (0, 1), (0, 2), (1, 3), (2, 4),
+    # Torso
+    (18, 5), (18, 6), (18, 19), (11, 19), (12, 19), (5, 6), (11, 12),
+    # Arms
+    (5, 7), (7, 9), (6, 8), (8, 10),
+    # Legs
+    (11, 13), (13, 15), (12, 14), (14, 16),
+    # Feet (representative line per side; full toe triplet is rendered as dots)
+    (15, 24), (16, 25),
+)
+
+KEYPOINT_FORMAT_CHOICES = ("coco17", "halpe26")
+
+
+def keypoint_count(kp_format: str) -> int:
+    return 26 if kp_format == "halpe26" else 17
+
+
+def skeleton_for(kp_format: str):
+    return HALPE26_SKELETON if kp_format == "halpe26" else COCO_SKELETON
+
+
+def keypoint_names_for(kp_format: str):
+    return HALPE26_KP_NAMES if kp_format == "halpe26" else COCO_KP_NAMES
+
 CAM_COLORS = (
     (0, 220, 0),
     (0, 180, 255),
@@ -44,9 +81,20 @@ CAM_COLORS = (
 DEFAULT_DET_MODEL = str(
     Path.home() / ".cache/rtmlib/hub/checkpoints/yolox_tiny_8xb8-300e_humanart-6f3252f9.onnx"
 )
-DEFAULT_POSE_MODEL = str(
+# Phase 9: body8/halpe26 model lives next to the legacy body7 weight in
+# ~/.cache/rtmlib/hub/checkpoints/. Filename matches rtmlib's published
+# halpe26 release artifact.
+DEFAULT_POSE_MODEL_COCO17 = str(
     Path.home() / ".cache/rtmlib/hub/checkpoints/rtmpose-s_simcc-body7_pt-body7_420e-256x192-acd4a1ef_20230504.onnx"
 )
+DEFAULT_POSE_MODEL_HALPE26 = str(
+    Path.home() / ".cache/rtmlib/hub/checkpoints/rtmpose-m_simcc-body8_pt-body8-halpe26_700e-256x192.onnx"
+)
+DEFAULT_POSE_MODEL = DEFAULT_POSE_MODEL_COCO17
+
+
+def default_pose_model_for(kp_format: str) -> str:
+    return DEFAULT_POSE_MODEL_HALPE26 if kp_format == "halpe26" else DEFAULT_POSE_MODEL_COCO17
 
 DEFAULT_CAM0 = "/dev/v4l/by-path/platform-3610000.usb-usb-0:2.3:1.0-video-index0"
 DEFAULT_CAM1 = "/dev/v4l/by-path/platform-3610000.usb-usb-0:2.4:1.0-video-index0"
@@ -272,10 +320,20 @@ class RtmposeOnnx:
     """RTMPose SimCC.
 
     Input : (B, 3, 256, 192) float32, BGR, ImageNet-normalized
-    Output: simcc_x (B, K, 384), simcc_y (B, K, 512)  (K = 17 for body7)
+    Output: simcc_x (B, K, Wx), simcc_y (B, K, Wy)   K = 17 (COCO17 / body7)
+                                                   or 26 (Halpe26 / body8)
+    K is read from the ONNX output shape on construction; callers pass the
+    expected `--keypoint-format` so a mismatch raises immediately rather than
+    silently dropping the trailing 9 joints.
     """
 
-    def __init__(self, model_path: str, providers, simcc_split_ratio: float = 2.0):
+    def __init__(
+        self,
+        model_path: str,
+        providers,
+        simcc_split_ratio: float = 2.0,
+        kp_format: str = "coco17",
+    ):
         self.session = ort.InferenceSession(model_path, providers=providers)
         self.input_name = self.session.get_inputs()[0].name
         shape = self.session.get_inputs()[0].shape  # [batch, 3, H, W]
@@ -283,6 +341,16 @@ class RtmposeOnnx:
         self.input_w = int(shape[3])
         self.aspect = self.input_w / self.input_h
         self.simcc_split = simcc_split_ratio
+        out_shape = self.session.get_outputs()[0].shape  # [batch, K, Wx]
+        self.num_keypoints = int(out_shape[1])
+        expected_k = keypoint_count(kp_format)
+        if self.num_keypoints != expected_k:
+            raise RuntimeError(
+                f"RTMPose ONNX K={self.num_keypoints} does not match "
+                f"--keypoint-format={kp_format} (expected K={expected_k}); "
+                f"point --pose-model at the matching weight"
+            )
+        self.kp_format = kp_format
 
     def _preprocess_one(self, frame_bgr: np.ndarray, bbox: np.ndarray):
         center, scale = _bbox_to_cs(bbox, padding=1.25, aspect_w_over_h=self.aspect)
@@ -329,14 +397,16 @@ class RtmposeOnnx:
 # ---------- Drawer ----------
 
 class PoseDrawer:
-    def __init__(self, *, kp_thr: float = 0.3, line_thickness: int = 2):
+    def __init__(self, *, kp_thr: float = 0.3, line_thickness: int = 2,
+                 kp_format: str = "coco17"):
         self.kp_thr = kp_thr
         self.lt = line_thickness
+        self.skeleton = skeleton_for(kp_format)
 
     def draw(self, frame_bgr: np.ndarray, persons, color):
         out = frame_bgr  # in-place edits
         for kpts, scores in persons:
-            for a, b in COCO_SKELETON:
+            for a, b in self.skeleton:
                 if scores[a] >= self.kp_thr and scores[b] >= self.kp_thr:
                     p1 = (int(kpts[a, 0]), int(kpts[a, 1]))
                     p2 = (int(kpts[b, 0]), int(kpts[b, 1]))
@@ -454,9 +524,11 @@ def build_engines_for(camera_count: int, args) -> list[PoseEngine]:
     )
 
     engines: list[PoseEngine] = []
+    kp_format = getattr(args, "keypoint_format", "coco17")
+    pose_model = getattr(args, "pose_model", None) or default_pose_model_for(kp_format)
     for _ in range(camera_count):
         det = YoloxOnnx(args.det_model, det_providers, score_thr=args.det_score)
-        pose = RtmposeOnnx(args.pose_model, pose_providers)
+        pose = RtmposeOnnx(pose_model, pose_providers, kp_format=kp_format)
         warmup_session(det.session, getattr(args, "trt_warmup_frames", 0))
         warmup_session(pose.session, getattr(args, "trt_warmup_frames", 0))
         engines.append(
@@ -483,7 +555,15 @@ def add_common_args(parser) -> None:
         choices=["auto", "cpu", "cuda", "tensorrt"],
     )
     parser.add_argument("--det-model", default=DEFAULT_DET_MODEL)
-    parser.add_argument("--pose-model", default=DEFAULT_POSE_MODEL)
+    # When not provided, the default RTMPose ONNX is chosen by --keypoint-format
+    # via default_pose_model_for() in build_engines_for().
+    parser.add_argument("--pose-model", default=None)
+    parser.add_argument(
+        "--keypoint-format",
+        choices=list(KEYPOINT_FORMAT_CHOICES),
+        default="coco17",
+        help="pose topology (default: coco17). halpe26 needs a 26-kpt RTMPose ONNX.",
+    )
     parser.add_argument("--det-score", type=float, default=0.5)
     parser.add_argument("--det-frequency", type=int, default=10)
     parser.add_argument("--multi-person", action="store_true")

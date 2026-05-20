@@ -31,10 +31,11 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from pose_pipeline import (  # noqa: E402
     DEFAULT_DET_MODEL,
-    DEFAULT_POSE_MODEL,
+    KEYPOINT_FORMAT_CHOICES,
     PoseEngine,
     RtmposeOnnx,
     YoloxOnnx,
+    default_pose_model_for,
     select_providers,
 )
 
@@ -44,7 +45,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--video", required=True, help="input MP4")
     p.add_argument("--output", required=True, help="output JSONL path")
     p.add_argument("--det-model", default=DEFAULT_DET_MODEL)
-    p.add_argument("--pose-model", default=DEFAULT_POSE_MODEL)
+    p.add_argument("--pose-model", default=None,
+                   help="RTMPose ONNX (default: chosen by --keypoint-format)")
+    p.add_argument(
+        "--keypoint-format",
+        choices=list(KEYPOINT_FORMAT_CHOICES),
+        default="coco17",
+    )
     p.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
     p.add_argument("--det-score", type=float, default=0.5)
     p.add_argument("--det-frequency", type=int, default=1,
@@ -59,7 +66,8 @@ def main() -> int:
     args = parse_args()
     providers = select_providers(args.device)
     det = YoloxOnnx(args.det_model, providers, score_thr=args.det_score)
-    pose = RtmposeOnnx(args.pose_model, providers)
+    pose_model = args.pose_model or default_pose_model_for(args.keypoint_format)
+    pose = RtmposeOnnx(pose_model, providers, kp_format=args.keypoint_format)
     engine = PoseEngine(
         det,
         pose,

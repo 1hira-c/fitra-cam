@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "lift/keypoint_format.hpp"
+
 namespace fitra::lift {
 
 SkeletonKalman::SkeletonKalman() : SkeletonKalman(Options{}) {}
@@ -44,7 +46,9 @@ void SkeletonKalman::correct(JointState& s, const infer::Joint3D& z) const {
 
 infer::Skeleton3D SkeletonKalman::update(const infer::Skeleton3D& measurement, double dt_s) {
     infer::Skeleton3D out;
-    for (std::size_t i = 0; i < states_.size(); ++i) {
+    const std::size_t kp_count = active_kp_count();
+    out.kp_count = static_cast<std::uint8_t>(kp_count);
+    for (std::size_t i = 0; i < kp_count; ++i) {
         auto& s = states_[i];
         const auto& z = measurement.joints[i];
         if (!s.initialized) {
