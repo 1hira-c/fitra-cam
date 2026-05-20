@@ -298,6 +298,18 @@ int main(int argc, char** argv) {
             && subject_profile_path.empty() && subject_id.empty()) {
             subject_height_m = calib_subject_height_m;
         }
+        std::size_t requested_cam_count = 0;
+        for (const auto& path : cam_paths) {
+            if (!path.empty()) ++requested_cam_count;
+        }
+        const bool calib_frame_recording_possible =
+            enable_3d && requested_cam_count == 2;
+        // Shared "calibration is recording" flag. When true:
+        //   - FrameSource skips YOLOX + RTMPose pre-bake and retains BGR
+        //   - CalibrationSession collects raw frames into the per-pose buffer
+        // Wired from CalibrationSession::set_on_recording_active below.
+        auto calib_recording_flag =
+            std::make_shared<std::atomic<bool>>(false);
         std::signal(SIGINT, on_signal);
 
         TrtLogger tlog;
@@ -336,6 +348,13 @@ int main(int argc, char** argv) {
             src_opts.det_frequency = det_frequency;
             src_opts.single_person = !multi_person;
             src_opts.fake_bbox_if_empty = bench_fake_bbox;
+            // Phase 8 records raw per-camera clips through MultiCameraDriver's
+            // frame tap. The same flag pauses YOLOX + RTMPose pre-bake while
+            // recording so disk I/O has the CPU/GPU headroom and we don't burn
+            // cycles on a pose feed nobody is watching.
+            if (calib_frame_recording_possible) {
+                src_opts.calib_recording_flag = calib_recording_flag;
+            }
             // Have the per-camera worker pre-bake the RTMPose input so the
             // central inference thread only does memcpy + GPU + decode.
             const auto& rtmpose_opts = rtmpose.options();
@@ -442,6 +461,10 @@ int main(int argc, char** argv) {
                     FITRA_LOG_INFO("priming IK with calibration height: {} m",
                                    p.subject_height_m);
                     driver->ik().apply_subject_height(p.subject_height_m);
+                });
+            calib_session->set_on_recording_active(
+                [calib_recording_flag](bool active) {
+                    calib_recording_flag->store(active, std::memory_order_relaxed);
                 });
             calib_session->set_on_exit_requested([&]() {
                 g_stop.store(true);

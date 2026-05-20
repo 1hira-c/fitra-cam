@@ -50,9 +50,27 @@ async function refresh() {
   $("in_band").textContent = s.in_band ? "yes" : "no";
   $("failing").textContent = s.failing_axis || "-";
 
-  const hold = clamp01(s.hold_progress || 0);
-  $("hold_bar").style.width = pct(hold);
-  $("hold_pct").textContent = `${(hold * 100).toFixed(0)}%`;
+  // During recording, the live pose estimator is paused, so hold_progress
+  // would otherwise look stuck/zero. Repurpose the bar as a recording
+  // progress indicator (X / N frames -> approx seconds) instead.
+  if (s.state === "recording") {
+    const pidx2 = s.target_pose_idx ?? 0;
+    const tgt2 = (s.poses || [])[pidx2];
+    const cap2 = s.recording_frames_per_cam || 75;
+    const buf0 = tgt2?.buffered?.[0] ?? 0;
+    const buf1 = tgt2?.buffered?.[1] ?? 0;
+    const minBuf = Math.min(buf0, buf1);
+    const recProg = clamp01(minBuf / cap2);
+    $("hold_bar").style.width = pct(recProg);
+    $("hold_pct").textContent = `REC ${minBuf}/${cap2}`;
+  } else {
+    const hold = clamp01(s.hold_progress || 0);
+    $("hold_bar").style.width = pct(hold);
+    const holdSec = typeof s.hold_elapsed_sec === "number"
+      ? ` (${fmt(s.hold_elapsed_sec, 1)}/${fmt(s.required_hold_sec, 1)}s)`
+      : "";
+    $("hold_pct").textContent = `${(hold * 100).toFixed(0)}%${holdSec}`;
+  }
 
   const pidx = s.target_pose_idx ?? 0;
   const tgt = (s.poses || [])[pidx];
@@ -111,9 +129,18 @@ async function refresh() {
   badge.textContent = q || "-";
   badge.className = "badge " + (q === "pass" ? "pass" : q === "warn" ? "warn" : q === "fail" ? "fail" : "");
   $("analyze_exit").textContent = s.analyze_exit ?? "-";
-  $("quality_summary").textContent = q
-    ? `quality_status=${q}\nanalyze_log_tail (last 8KB):\n${s.analyze_log_tail || ""}`
-    : "(no analysis yet)";
+  if (q) {
+    $("quality_summary").textContent =
+      `quality_status=${q}\nanalyze_log_tail (last 8KB):\n${s.analyze_log_tail || ""}`;
+  } else if (s.last_error) {
+    $("quality_summary").textContent =
+      `state=${s.state}\nerror=${s.last_error}\nanalyze_log_tail (last 8KB):\n${s.analyze_log_tail || ""}`;
+  } else if (s.state === "finalizing" || s.state === "analyzing") {
+    $("quality_summary").textContent =
+      `state=${s.state}\nanalyze_log_tail (last 8KB):\n${s.analyze_log_tail || ""}`;
+  } else {
+    $("quality_summary").textContent = "(no analysis yet)";
+  }
   $("btn_approve").disabled = !(s.state === "review" && (q === "pass" || q === "warn"));
   $("log_tail").textContent = s.analyze_log_tail || "";
   $("session_dir").textContent = s.session_dir || "-";

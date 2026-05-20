@@ -72,6 +72,7 @@ public:
     using ExitFn = std::function<void()>;
     using LogFn = std::function<void(const std::string&)>;
     using PreflightFn = std::function<void(const CalibPreflight&)>;
+    using RecordingActiveFn = std::function<void(bool)>;
 
     CalibrationSession();
     ~CalibrationSession();
@@ -92,6 +93,9 @@ public:
     // main wires this up to IkSolver::apply_subject_height() so the IK is
     // primed for 3D angle recognition before recording begins.
     void set_on_preflight(PreflightFn fn) { on_preflight_ = std::move(fn); }
+    void set_on_recording_active(RecordingActiveFn fn) {
+        on_recording_active_ = std::move(fn);
+    }
     void set_on_exit_requested(ExitFn fn) { on_exit_requested_ = std::move(fn); }
     void set_log(LogFn fn) { log_fn_ = std::move(fn); }
     void set_auto_approve(bool yes) { auto_approve_.store(yes); }
@@ -111,6 +115,7 @@ public:
 private:
     void log_line(const std::string& s) const;
     void set_state_(CalibState s);
+    void set_recording_active_(bool yes);
     void advance_to_pose_(std::size_t idx);
     void begin_recording_();
     void on_pose_buffer_full_();
@@ -153,6 +158,15 @@ private:
     lift::PoseRecognizer        recognizer_;
     lift::PoseDetectionState    last_detection_{};
     double                      last_bone_drift_pct_ = 0.0;
+    std::chrono::steady_clock::time_point last_skeleton_time_{};
+    bool                        has_last_skeleton_time_ = false;
+    // Brace-yourself grace: once hold_progress hits 1.0 in kAwaitHold we mark
+    // this timestamp, then require kHoldGraceSec of continuous in-band frames
+    // before flipping to kRecording. Prevents the recording flag (and the
+    // inference pause that piggybacks on it) from firing on a momentary spike.
+    std::chrono::steady_clock::time_point hold_locked_at_{};
+    bool                        hold_locked_ = false;
+    static constexpr double     kHoldGraceSec = 0.2;
 
     std::thread finalize_thread_;
     std::thread analyzer_thread_;
@@ -164,11 +178,13 @@ private:
 
     ApprovedFn  on_approved_;
     PreflightFn on_preflight_;
+    RecordingActiveFn on_recording_active_;
     ExitFn      on_exit_requested_;
     LogFn       log_fn_;
     std::atomic<bool> auto_approve_{false};
     std::atomic<bool> auto_exit_{false};
     std::atomic<bool> approval_done_{false};
+    std::atomic<bool> recording_active_{false};
 
     std::string last_error_;
 };

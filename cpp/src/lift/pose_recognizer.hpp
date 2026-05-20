@@ -66,6 +66,8 @@ struct PoseDetectionState {
     bool angles_valid = false;
     int consecutive_ok = 0;
     int consecutive_required = 0;
+    double hold_elapsed_sec = 0.0;
+    double required_hold_sec = 0.0;
     double hold_progress = 0.0;
     double bone_drift_pct = 0.0;
     PoseAngles angles;
@@ -87,7 +89,8 @@ public:
 
     void reset();
     PoseDetectionState update(const infer::Skeleton3D& skel,
-                              double bone_drift_pct);
+                              double bone_drift_pct,
+                              double dt_sec = -1.0);
 
     static const PoseTemplate& templ_for(TargetPose pose);
 
@@ -96,6 +99,7 @@ private:
     double fps_hint_ = 30.0;
     double required_hold_sec_ = 1.5;
     int consecutive_ok_ = 0;
+    double hold_elapsed_sec_ = 0.0;
 };
 
 }  // namespace fitra::lift

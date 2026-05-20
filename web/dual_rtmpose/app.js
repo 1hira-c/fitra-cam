@@ -55,6 +55,7 @@ class ThreeDViewer {
     this.view = "front";
     this.sceneRadius = 1.2;
     this.hasData = false;
+    this.lastDataAtMs = 0;
     this.bounds = new THREE.Box3();
     this.boundsCenter = new THREE.Vector3(0, 0.9, 0);
     this.boundsSize = new THREE.Vector3();
@@ -154,11 +155,18 @@ class ThreeDViewer {
 
     const persons = Array.isArray(bundle.persons_3d) ? bundle.persons_3d : [];
     if (!persons.length) {
+      // Hold the last skeleton on screen across short data dropouts. 3.5s
+      // covers a Phase 8 calibration recording window (~3s) during which the
+      // live pose estimator is intentionally paused.
+      if (this.hasData && performance.now() - this.lastDataAtMs < 3500) {
+        return;
+      }
       this.setStatus("(no 3D person)");
       this.updatePeople([]);
       return;
     }
 
+    this.lastDataAtMs = performance.now();
     this.setStatus("");
     this.updatePeople(persons);
   }

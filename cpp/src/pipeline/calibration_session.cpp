@@ -137,6 +137,11 @@ void CalibrationSession::set_state_(CalibState s) {
     log_line(std::string{"state="} + calib_state_name(s));
 }
 
+void CalibrationSession::set_recording_active_(bool yes) {
+    bool prev = recording_active_.exchange(yes);
+    if (prev != yes && on_recording_active_) on_recording_active_(yes);
+}
+
 fs::path CalibrationSession::session_dir() const {
     std::lock_guard<std::mutex> g(mu_);
     return session_dir_;
@@ -210,6 +215,8 @@ bool CalibrationSession::preflight(const CalibPreflight& in, std::string& err) {
         }
         recognizer_.set_required_hold_sec(pre_.required_hold_sec);
         target_pose_idx_ = 0;
+        has_last_skeleton_time_ = false;
+        hold_locked_ = false;
         analyze_log_tail_.clear();
         analyze_exit_code_ = -1;
         quality_status_.clear();
@@ -219,6 +226,7 @@ bool CalibrationSession::preflight(const CalibPreflight& in, std::string& err) {
         last_error_.clear();
         applied = pre_;
     }
+    set_recording_active_(false);
     set_state_(CalibState::kReady);
     // Callback dispatched without mu_ so it can safely re-enter the session
     // (e.g., to read state_json). Used by main to prime IkSolver with the
@@ -239,10 +247,13 @@ bool CalibrationSession::start(std::string& err) {
 }
 
 void CalibrationSession::advance_to_pose_(std::size_t idx) {
+    set_recording_active_(false);
     std::lock_guard<std::mutex> g(mu_);
     target_pose_idx_ = idx;
     recognizer_.set_target(kSequence[idx]);
     recognizer_.reset();
+    has_last_skeleton_time_ = false;
+    hold_locked_ = false;
     set_state_(CalibState::kAwaitHold);
     log_line(std::string{"AWAIT "} + records_[idx].name);
 }
@@ -272,8 +283,11 @@ bool CalibrationSession::retake(const std::string& pose_name, std::string& err) 
 
 bool CalibrationSession::cancel(std::string& err) {
     err.clear();
+    set_recording_active_(false);
     set_state_(CalibState::kCanceled);
     std::lock_guard<std::mutex> g(mu_);
+    has_last_skeleton_time_ = false;
+    hold_locked_ = false;
     for (auto& p : buffers_) for (auto& b : p) b.clear();
     return true;
 }
@@ -358,6 +372,7 @@ void CalibrationSession::on_frame(std::size_t cam_idx, const cv::Mat& bgr, doubl
         // the pipeline tap.
         std::size_t idx = target_pose_idx_;
         log_line("buffer full for " + records_[idx].name);
+        set_recording_active_(false);
         if (idx + 1 < kPoseCount) {
             // Move to next pose AwaitHold immediately; finalize MP4 lazily
             // when all poses are buffered.
@@ -375,6 +390,7 @@ void CalibrationSession::on_frame(std::size_t cam_idx, const cv::Mat& bgr, doubl
 
 void CalibrationSession::on_skeleton3d(const infer::Skeleton3D& skel,
                                         double bone_drift_pct) {
+    auto now = std::chrono::steady_clock::now();
     last_bone_drift_pct_ = bone_drift_pct;
     auto s = state_.load();
     if (s != CalibState::kAwaitHold && s != CalibState::kRecording) return;
@@ -382,17 +398,35 @@ void CalibrationSession::on_skeleton3d(const infer::Skeleton3D& skel,
     lift::PoseDetectionState det;
     {
         std::lock_guard<std::mutex> g(mu_);
-        det = recognizer_.update(skel, bone_drift_pct);
+        double dt_sec = 0.0;
+        if (has_last_skeleton_time_) {
+            dt_sec = std::chrono::duration<double>(now - last_skeleton_time_).count();
+        }
+        last_skeleton_time_ = now;
+        has_last_skeleton_time_ = true;
+        det = recognizer_.update(skel, bone_drift_pct, dt_sec);
         last_detection_ = det;
     }
-    if (s == CalibState::kAwaitHold && det.in_band
-        && det.consecutive_ok >= det.consecutive_required) {
-        begin_recording_();
+    if (s == CalibState::kAwaitHold) {
+        if (det.in_band && det.hold_progress >= 1.0) {
+            if (!hold_locked_) {
+                hold_locked_ = true;
+                hold_locked_at_ = now;
+            } else if (std::chrono::duration<double>(now - hold_locked_at_).count()
+                       >= kHoldGraceSec) {
+                begin_recording_();
+            }
+        } else {
+            // Wobble out of band before the grace window expired -> reset.
+            hold_locked_ = false;
+        }
     }
 }
 
 void CalibrationSession::begin_recording_() {
     log_line(std::string{"RECORDING "} + records_[target_pose_idx_].name);
+    hold_locked_ = false;
+    set_recording_active_(true);
     set_state_(CalibState::kRecording);
 }
 
@@ -424,9 +458,17 @@ void CalibrationSession::finalize_thread_main_() {
         // want to block the WebUI poll.
         int width = 0, height = 0;
         for (std::size_t pi = 0; pi < kPoseCount; ++pi) {
+            std::array<int, 2> pose_frames{{0, 0}};
+            std::array<double, 2> pose_fps{{0.0, 0.0}};
+            std::vector<std::string> pose_clips;
+            pose_clips.reserve(2);
             for (std::size_t ci = 0; ci < 2; ++ci) {
                 auto& buf = local_buffers[pi][ci];
-                if (buf.empty()) continue;
+                if (buf.empty()) {
+                    throw std::runtime_error(
+                        "missing buffered frames for " + pose_names[pi]
+                        + "_cam" + std::to_string(ci));
+                }
                 if (width == 0) {
                     width = buf.front().bgr.cols;
                     height = buf.front().bgr.rows;
@@ -443,6 +485,7 @@ void CalibrationSession::finalize_thread_main_() {
                                 + std::to_string(ci) + ".mp4";
                 fs::path out_path = session_dir_ / rel;
                 int fourcc = cv::VideoWriter::fourcc('m','p','4','v');
+                log_line("writing " + rel + " frames=" + std::to_string(buf.size()));
                 cv::VideoWriter writer{out_path.string(), fourcc, fps,
                                        {buf.front().bgr.cols, buf.front().bgr.rows}};
                 if (!writer.isOpened()) {
@@ -450,30 +493,32 @@ void CalibrationSession::finalize_thread_main_() {
                 }
                 for (auto& it : buf) writer.write(it.bgr);
                 writer.release();
-
-                // Commit metadata under the lock so concurrent state_json()
-                // calls see a coherent record.
-                {
-                    std::lock_guard<std::mutex> g(mu_);
-                    records_[pi].clips.clear();
-                    records_[pi].clips.push_back(rel);
-                    records_[pi].frames[ci] = static_cast<int>(buf.size());
-                    records_[pi].fps[ci]    = fps;
-                    records_[pi].recorded   = true;
+                std::error_code size_ec;
+                auto bytes = fs::file_size(out_path, size_ec);
+                if (size_ec || bytes == 0) {
+                    throw std::runtime_error(
+                        "VideoWriter produced empty clip: " + out_path.string());
                 }
+                log_line("wrote " + rel);
+
+                pose_clips.push_back(rel);
+                pose_frames[ci] = static_cast<int>(buf.size());
+                pose_fps[ci] = fps;
                 buf.clear();  // free local memory immediately
             }
 
-            // Normalize clip ordering (cam0 then cam1) once both have written.
-            std::vector<std::string> clips;
-            for (std::size_t ci = 0; ci < 2; ++ci) {
-                std::string rel = std::string{"raw/"} + pose_names[pi] + "_cam"
-                                  + std::to_string(ci) + ".mp4";
-                if (fs::exists(session_dir_ / rel)) clips.push_back(rel);
+            if (pose_clips.size() != 2 || pose_frames[0] <= 0 || pose_frames[1] <= 0) {
+                throw std::runtime_error("incomplete clips for " + pose_names[pi]);
             }
+            // Commit a pose as recorded only after both camera clips are on
+            // disk. Otherwise the UI can show all four poses green while the
+            // final cam1 MP4 is still being written, making Review look stuck.
             {
                 std::lock_guard<std::mutex> g(mu_);
-                records_[pi].clips = std::move(clips);
+                records_[pi].clips = std::move(pose_clips);
+                records_[pi].frames = pose_frames;
+                records_[pi].fps = pose_fps;
+                records_[pi].recorded = true;
             }
         }
         if (width == 0) width = 640;
@@ -666,6 +711,9 @@ std::string CalibrationSession::state_json() const {
             ? json_escape(records_[target_pose_idx_].name) : "")
       << "\"";
     o << ",\"hold_progress\":" << last_detection_.hold_progress;
+    o << ",\"hold_elapsed_sec\":" << last_detection_.hold_elapsed_sec;
+    o << ",\"consecutive_ok\":" << last_detection_.consecutive_ok;
+    o << ",\"consecutive_required\":" << last_detection_.consecutive_required;
     o << ",\"in_band\":" << (last_detection_.in_band ? "true" : "false");
     o << ",\"angles_valid\":" << (last_detection_.angles_valid ? "true" : "false");
     o << ",\"failing_axis\":\"" << json_escape(last_detection_.failing_axis) << "\"";

@@ -152,6 +152,7 @@ PoseRecognizer::PoseRecognizer(double fps_hint) : fps_hint_(std::max(1.0, fps_hi
 void PoseRecognizer::set_target(TargetPose target) {
     target_ = target;
     consecutive_ok_ = 0;
+    hold_elapsed_sec_ = 0.0;
 }
 
 void PoseRecognizer::set_required_hold_sec(double sec) {
@@ -164,6 +165,7 @@ void PoseRecognizer::set_fps_hint(double fps) {
 
 void PoseRecognizer::reset() {
     consecutive_ok_ = 0;
+    hold_elapsed_sec_ = 0.0;
 }
 
 const PoseTemplate& PoseRecognizer::templ_for(TargetPose pose) {
@@ -173,12 +175,14 @@ const PoseTemplate& PoseRecognizer::templ_for(TargetPose pose) {
 }
 
 PoseDetectionState PoseRecognizer::update(const infer::Skeleton3D& skel,
-                                           double bone_drift_pct) {
+                                           double bone_drift_pct,
+                                           double dt_sec) {
     PoseDetectionState st;
     st.target = target_;
     st.angles = compute_pose_angles(skel);
     st.angles_valid = st.angles.valid;
     st.bone_drift_pct = bone_drift_pct;
+    st.required_hold_sec = required_hold_sec_;
     st.consecutive_required = std::max(
         1, static_cast<int>(std::lround(required_hold_sec_ * fps_hint_)));
 
@@ -205,16 +209,24 @@ PoseDetectionState PoseRecognizer::update(const infer::Skeleton3D& skel,
     }
 
     st.in_band = st.failing_axis.empty();
+    double step_sec = dt_sec > 0.0 ? dt_sec : (1.0 / fps_hint_);
+    if (!std::isfinite(step_sec) || step_sec < 0.0) step_sec = 0.0;
+    step_sec = std::min(step_sec, 0.5);
     if (st.in_band) {
         ++consecutive_ok_;
+        hold_elapsed_sec_ += step_sec;
     } else {
         consecutive_ok_ = 0;
+        // Decay 2x faster than fill so a sustained miss empties the gauge in
+        // ~half the hold window, but a 1-2 frame angle wobble barely moves it.
+        hold_elapsed_sec_ -= step_sec * 2.0;
+        if (hold_elapsed_sec_ < 0.0) hold_elapsed_sec_ = 0.0;
     }
     st.consecutive_ok = consecutive_ok_;
+    st.hold_elapsed_sec = hold_elapsed_sec_;
     st.hold_progress = std::min(
         1.0,
-        static_cast<double>(consecutive_ok_) /
-            static_cast<double>(std::max(1, st.consecutive_required)));
+        hold_elapsed_sec_ / std::max(0.001, required_hold_sec_));
     return st;
 }
 

@@ -21,3 +21,4 @@ compile_commands.json
 # Editor
 .vscode/
 .idea/
+.antigravitycli/
