@@ -14,6 +14,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `git log --oneline` を見れば既存コミット (`feat(phase8):` / `fix(phase9):` / `docs(phase11):` 等) が同パターンなので、それを真似ること。
 
+## Branching and commits
+
+**Phase レベルでブランチを切り、タスク (マイルストーン) レベルでコミットを刻む** のがこのリポジトリの基本運用。
+
+- **ブランチ命名**: `cpp-phaseN` (例: `cpp-phase8`, `cpp-phase9`, `cpp-phase11`)。Phase をスキップしてもブランチ番号は飛ばす (Phase 10 を飛ばしたら次は `cpp-phase11`)
+- **起点**: 直前 Phase の最終コミットから切る。Develop に merge される前でも、その Phase の作業が一段落していれば起点にしてよい
+- **コミット粒度**: `docs/phaseN-*.md` の milestone (M1, M2, ...) 単位。1 つの M で 1 コミットが基本。互いに密結合な M (publisher + CLI + stats など) は 1 コミットに束ねてもよい
+- **コミット prefix**: `feat(phaseN):` (機能追加) / `fix(phaseN):` (バグ修正) / `docs(phaseN):` (Phase 内ドキュメント更新) / `refactor:` / `chore:` 等。`docs:` 単独はリポジトリ横断のメモ用 (CLAUDE.md など)
+- **設計ドキュメント**: `docs/phaseN-*.md` に Phase の正本を置き、M1-M8 等のマイルストーンを切る。コミット本文から「詳細は `docs/phaseN-*.md` を参照」と指せる構造を維持する
+- **Phase 完了条件**: `docs/cpp-migration-plan.md` の「段階実装」「検証戦略」表に Phase 行を追加するまでが完了。設計ドキュメント単独で終わらせない
+
+例 (Phase 11):
+```
+cpp-phase11 (cpp-phase9 から派生、Phase 10 をスキップ)
+  ├─ M1: feat(phase11): add Skeleton3DBus::snapshot() ...
+  ├─ M2: feat(phase11): hand-rolled OSC 1.0 wire writer ...
+  ├─ M3: feat(phase11): VMC tracker extraction ...
+  ├─ M4+5+6: feat(phase11): VMC publisher thread + CLI ...
+  ├─ M7: feat(phase11): slimevr_loopback OSC dump tool
+  └─ docs: docs(phase11): execution notes ...
+```
+
 ## Scope and direction
 
 `fitra-cam` runs YOLOX person detection + RTMPose 17-keypoint 2D pose for **multiple USB cameras** on a Jetson Orin Nano Super. The project is **migrating from Python (ONNX Runtime) to C++ (TensorRT + Jetson Multimedia API)** to break past the Python parallel-pose ceiling (~18 fps × 2 in the old build). The migration plan and architecture are in `docs/cpp-migration-plan.md` — read it before non-trivial work.
