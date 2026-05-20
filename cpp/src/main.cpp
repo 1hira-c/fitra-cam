@@ -39,6 +39,7 @@
 #include "pipeline/calibration_session.hpp"
 #include "pipeline/multi_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
+#include "slimevr/vmc_publisher.hpp"
 #include "util/cuda_check.hpp"
 #include "util/logging.hpp"
 #include "web/crow_server.hpp"
@@ -99,6 +100,13 @@ void print_help() {
         "  --subject-profile PATH    direct subject profile YAML path for IK\n"
         "  --no-3d-kalman            disable 3D Kalman smoothing\n"
         "  --no-3d-ik                disable 3D IK projection\n"
+        "\n"
+        "Phase 11 — SlimeVR / VMC OSC output (requires --enable-3d + --keypoint-format=halpe26):\n"
+        "  --slimevr-out             enable the VMC publisher (UDP)\n"
+        "  --slimevr-host ADDR       receiver host (default 127.0.0.1)\n"
+        "  --slimevr-port N          UDP port (default 39539)\n"
+        "  --slimevr-rate-hz F       send rate (default 60.0)\n"
+        "  --slimevr-quat-smooth F   per-tracker slerp alpha 0..1 (default 0.5)\n"
         "\n"
         "Phase 8 — Subject calibration wizard (requires --enable-3d):\n"
         "  --calibrate                 auto-start calibration session at boot\n"
@@ -198,6 +206,13 @@ int main(int argc, char** argv) {
     bool ik_3d = true;
     bool  want_probe = false;
 
+    // Phase 11 — SlimeVR / VMC publisher.
+    bool        slimevr_out         = false;
+    std::string slimevr_host        = "127.0.0.1";
+    int         slimevr_port        = 39539;
+    double      slimevr_rate_hz     = 60.0;
+    double      slimevr_quat_smooth = 0.5;
+
     // Phase 8 — calibration wizard.
     bool calibrate_on_boot = false;
     std::string calib_subject_id;
@@ -250,6 +265,11 @@ int main(int argc, char** argv) {
         else if (a == "--subject-profile")    { subject_profile_path = need("--subject-profile"); }
         else if (a == "--no-3d-kalman")      { kalman_3d = false; }
         else if (a == "--no-3d-ik")          { ik_3d = false; }
+        else if (a == "--slimevr-out")       { slimevr_out = true; }
+        else if (a == "--slimevr-host")      { slimevr_host = need("--slimevr-host"); }
+        else if (a == "--slimevr-port")      { slimevr_port = std::atoi(need("--slimevr-port")); }
+        else if (a == "--slimevr-rate-hz")   { slimevr_rate_hz = std::stod(need("--slimevr-rate-hz")); }
+        else if (a == "--slimevr-quat-smooth"){ slimevr_quat_smooth = std::stod(need("--slimevr-quat-smooth")); }
         else if (a == "--calibrate")             { calibrate_on_boot = true; }
         else if (a == "--calib-subject-id")      { calib_subject_id = need("--calib-subject-id"); }
         else if (a == "--calib-subject-height-m"){ calib_subject_height_m = std::stod(need("--calib-subject-height-m")); }
@@ -298,6 +318,36 @@ int main(int argc, char** argv) {
         if (!enable_3d && (!subject_id.empty() || !subject_profile_path.empty())) {
             std::fprintf(stderr, "--subject-id/--subject-profile require --enable-3d\n");
             return EXIT_FAILURE;
+        }
+        // Phase 11 — SlimeVR / VMC publisher gating. Refuse early if the
+        // run is structurally incompatible (no 3D, wrong keypoint topology,
+        // or trying to publish during a calibration recording).
+        if (slimevr_out) {
+            if (!enable_3d) {
+                std::fprintf(stderr, "--slimevr-out requires --enable-3d\n");
+                return EXIT_FAILURE;
+            }
+            if (fitra::lift::active_keypoint_format()
+                != fitra::lift::KeypointFormat::Halpe26) {
+                std::fprintf(stderr, "--slimevr-out requires --keypoint-format=halpe26\n");
+                return EXIT_FAILURE;
+            }
+            if (calibrate_on_boot) {
+                std::fprintf(stderr, "--slimevr-out cannot be combined with --calibrate\n");
+                return EXIT_FAILURE;
+            }
+            if (slimevr_port <= 0 || slimevr_port > 65535) {
+                std::fprintf(stderr, "--slimevr-port must be in [1, 65535]\n");
+                return EXIT_FAILURE;
+            }
+            if (slimevr_rate_hz <= 0.0 || slimevr_rate_hz > 240.0) {
+                std::fprintf(stderr, "--slimevr-rate-hz must be in (0, 240]\n");
+                return EXIT_FAILURE;
+            }
+            if (slimevr_quat_smooth < 0.0 || slimevr_quat_smooth > 1.0) {
+                std::fprintf(stderr, "--slimevr-quat-smooth must be in [0, 1]\n");
+                return EXIT_FAILURE;
+            }
         }
         if (calibrate_on_boot && !enable_3d) {
             std::fprintf(stderr, "--calibrate requires --enable-3d\n");
@@ -522,6 +572,33 @@ int main(int argc, char** argv) {
                 });
         }
 
+        // Phase 11: spin up the VMC publisher BEFORE the Crow server so the
+        // server can hand out /stats3d with the slimevr block populated.
+        // bus3d is guaranteed non-null at this point (gated by enable_3d
+        // earlier).
+        std::unique_ptr<fitra::slimevr::VmcPublisher> vmc_pub;
+        if (slimevr_out) {
+            fitra::slimevr::VmcPublisherOptions vopts;
+            vopts.host         = slimevr_host;
+            vopts.port         = static_cast<std::uint16_t>(slimevr_port);
+            vopts.send_rate_hz = slimevr_rate_hz;
+            vopts.quat_smooth  = static_cast<float>(slimevr_quat_smooth);
+            vmc_pub = std::make_unique<fitra::slimevr::VmcPublisher>(*bus3d, vopts);
+            if (!vmc_pub->start()) {
+                // Socket setup failed; warn and continue without publisher
+                // (pose pipeline is unaffected).
+                vmc_pub.reset();
+            }
+        }
+
+        // Stop the publisher on any scope exit. Must outlive the server (so
+        // /stats3d never reads a dead pointer) and the driver (the publisher
+        // calls bus3d->snapshot() which the driver is feeding).
+        struct VmcStop {
+            fitra::slimevr::VmcPublisher* p;
+            ~VmcStop() { if (p) p->stop(); }
+        } vmc_stop{vmc_pub.get()};
+
         std::unique_ptr<fitra::web::CrowServer> server;
         if (!no_web) {
             fitra::web::ServerOptions sopts;
@@ -537,6 +614,9 @@ int main(int argc, char** argv) {
                 bus, enable_3d ? bus3d.get() : nullptr, sopts);
             if (calib_session) {
                 server->set_calibration_session(calib_session.get(), calib_defaults);
+            }
+            if (vmc_pub) {
+                server->set_vmc_publisher(vmc_pub.get());
             }
             server->start();
         }
@@ -583,6 +663,7 @@ int main(int argc, char** argv) {
         }
 
         if (server) server->stop();
+        if (vmc_pub) vmc_pub->stop();   // explicit stop; VmcStop guard is the fallback
         driver->stop();
         return EXIT_SUCCESS;
     } catch (const std::exception& e) {

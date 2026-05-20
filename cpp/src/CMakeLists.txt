@@ -83,6 +83,7 @@ target_link_libraries(fitra_pipeline PUBLIC
 add_library(fitra_slimevr STATIC
     slimevr/osc_writer.cpp
     slimevr/tracker_extract.cpp
+    slimevr/vmc_publisher.cpp
 )
 
 target_include_directories(fitra_slimevr PUBLIC
@@ -91,6 +92,7 @@ target_include_directories(fitra_slimevr PUBLIC
 
 target_link_libraries(fitra_slimevr PUBLIC
     fitra_lift          # active_keypoint_format() for Halpe26 assert + types
+    fitra_pipeline      # Skeleton3DBus::snapshot()
     opencv_core
 )
 
@@ -101,6 +103,7 @@ add_library(fitra_web STATIC
 
 target_link_libraries(fitra_web PUBLIC
     fitra_pipeline
+    fitra_slimevr    # /stats3d reads VmcPublisher::stats() when attached
     Crow::Crow
 )
 

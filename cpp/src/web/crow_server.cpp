@@ -9,6 +9,7 @@
 #define CROW_MAIN
 #include <crow.h>
 
+#include "slimevr/vmc_publisher.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::web {
@@ -65,6 +66,10 @@ void CrowServer::set_calibration_session(pipeline::CalibrationSession* session,
     calib_defaults_ = std::move(defaults);
 }
 
+void CrowServer::set_vmc_publisher(slimevr::VmcPublisher* publisher) {
+    vmc_publisher_ = publisher;
+}
+
 void CrowServer::start() {
     auto& app     = impl_->app;
     auto& clients2d = impl_->clients2d;
@@ -117,8 +122,25 @@ void CrowServer::start() {
 
     CROW_ROUTE(app, "/stats3d")
     ([this]() {
-        crow::response resp{bus3d_ ? bus3d_->make_bundle_json()
-                                   : pipeline::make_disabled_3d_json()};
+        std::string body = bus3d_ ? bus3d_->make_bundle_json()
+                                  : pipeline::make_disabled_3d_json();
+        // Phase 11: when the VMC publisher is wired up, splice its send
+        // counters into the bundle JSON. The bundle ends in `}}` (the inner
+        // `}` closes the stats object, the outer one closes the message).
+        // We rewrite the trailing closing brace into a comma + slimevr
+        // sub-object, then close again.
+        if (vmc_publisher_) {
+            auto vmc = vmc_publisher_->stats();
+            std::ostringstream extra;
+            extra << ",\"slimevr\":{\"sent_bundles\":" << vmc.sent_bundles
+                  << ",\"skipped_invalid\":" << vmc.skipped_invalid
+                  << ",\"last_send_ms\":" << vmc.last_send_ms << "}}";
+            if (!body.empty() && body.back() == '}') {
+                body.pop_back();
+                body += extra.str();
+            }
+        }
+        crow::response resp{std::move(body)};
         resp.set_header("Content-Type", "application/json; charset=utf-8");
         return resp;
     });
