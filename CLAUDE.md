@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Communication language
+
+**ユーザーへの応答・git コミットメッセージ・コミット本文・PR description は日本語で書く。** Conventional Commits 形式の prefix (`feat(phaseN):`, `fix:`, `docs:`, `refactor:`, `chore:` 等) は英語のまま残す。Co-Authored-By トレーラも英語のまま。
+
+- ユーザーへの最終回答・進捗報告・要約: 日本語
+- コミットメッセージの subject 行: `prefix(scope): 日本語サマリ` (prefix は英語、サマリは日本語)
+- コミットメッセージ本文: 日本語。技術用語 (CMake / ctest / 関数名 / ファイルパス) は英語のまま自然に混ぜてよい
+- コード中のコメント / 識別子 / 例外メッセージ: 既存の慣習に従う (このリポジトリは英語主体)
+- docs/ 配下のドキュメント: 既存の言語に合わせる (Phase 計画は日本語主体、build メモは英語主体)
+
+`git log --oneline` を見れば既存コミット (`feat(phase8):` / `fix(phase9):` / `docs(phase11):` 等) が同パターンなので、それを真似ること。
+
 ## Scope and direction
 
 `fitra-cam` runs YOLOX person detection + RTMPose 17-keypoint 2D pose for **multiple USB cameras** on a Jetson Orin Nano Super. The project is **migrating from Python (ONNX Runtime) to C++ (TensorRT + Jetson Multimedia API)** to break past the Python parallel-pose ceiling (~18 fps × 2 in the old build). The migration plan and architecture are in `docs/cpp-migration-plan.md` — read it before non-trivial work.
