@@ -223,7 +223,7 @@ void test_world_quat_to_slime() {
     const float k = 0.70710678f;   // 1/√2
 
     // World identity (wxyz = 1,0,0,0):
-    //   wire wxyz   = ((1+0)/√2, (1-0)/√2, (0-0)/√2, -(0+0)/√2) = (k, k, 0, 0)
+    //   wire wxyz   = ((1+0)/√2, (1-0)/√2, (0-0)/√2, (0+0)/√2) = (k, k, 0, 0)
     //   wire xyzw   = (k, 0, 0, k) = Rx(+90°). The server's AXES_OFFSET =
     //   Rx(-90°) cancels it leaving identity → ✓ subject at rest = avatar
     //   identity orientation.
@@ -233,23 +233,25 @@ void test_world_quat_to_slime() {
     check(close(q.z, 0.0f), "world identity qz");
     check(close(q.w, k),    "world identity qw = k");
 
-    // World +Z rotation by 90° (subject yaws left in our world frame):
+    // World +Z rotation by 90° (subject yaws CCW looking from +Z, i.e.,
+    // turning toward subject's right under our convention since the subject
+    // faces +Y and +Y rotates to -X under +Z, but +X (subject's left) rotates
+    // to +Y, so the subject's front face ends up pointing toward what was
+    // their right side):
     //   q_world wxyz = (cos45°, 0, 0, sin45°) = (k, 0, 0, k)
-    //   wire wxyz   = ((k+0)/√2, (k-0)/√2, (0-k)/√2, -(0+k)/√2)
-    //               = (0.5, 0.5, -0.5, -0.5)
-    //   wire xyzw   = (0.5, -0.5, -0.5, 0.5)
+    //   wire wxyz   = ((k+0)/√2, (k-0)/√2, (k-0)/√2, (0+k)/√2) = (0.5, 0.5, 0.5, 0.5)
+    //   wire xyzw   = (0.5, 0.5, 0.5, 0.5)
     auto q2 = fitra::slimevr::world_quat_to_slime(k, 0.0f, 0.0f, k);
-    check(close(q2.x,  0.5f),  "world +Z90 qx = 0.5");
-    check(close(q2.y, -0.5f),  "world +Z90 qy = -0.5");
-    check(close(q2.z, -0.5f),  "world +Z90 qz = -0.5");
-    check(close(q2.w,  0.5f),  "world +Z90 qw = 0.5");
+    check(close(q2.x, 0.5f),  "world +Z90 qx = 0.5");
+    check(close(q2.y, 0.5f),  "world +Z90 qy = 0.5 (sign matches Y from X-flip)");
+    check(close(q2.z, 0.5f),  "world +Z90 qz = 0.5");
+    check(close(q2.w, 0.5f),  "world +Z90 qw = 0.5");
 
-    // World +X rotation by 90° (subject pitches forward in our world frame):
+    // World +X rotation by 90° (subject pitches in our world frame):
     //   q_world wxyz = (k, k, 0, 0)
     //   wire wxyz   = ((k+k)/√2, (k-k)/√2, 0, 0) = (1, 0, 0, 0)
     //   wire xyzw   = (0, 0, 0, 1) = identity on the wire. After AXES_OFFSET
-    //   (Rx(-90°)) this becomes Rx(-90°), i.e., a -90° rotation around unity
-    //   X = pitch backward. ✓ matches "+X world = pitch in unity X".
+    //   (Rx(-90°)) this becomes Rx(-90°) in unity = pitch on unity X. ✓
     auto q3 = fitra::slimevr::world_quat_to_slime(k, k, 0.0f, 0.0f);
     check(close(q3.x, 0.0f), "world +X90 qx = 0 (wire is identity)");
     check(close(q3.y, 0.0f), "world +X90 qy = 0");
@@ -258,13 +260,24 @@ void test_world_quat_to_slime() {
 
     // World +Y rotation by 90° (roll in our world frame):
     //   q_world wxyz = (k, 0, k, 0)
-    //   wire wxyz   = (k/√2, k/√2, k/√2, -k/√2) = (0.5, 0.5, 0.5, -0.5)
-    //   wire xyzw   = (0.5, 0.5, -0.5, 0.5)
+    //   wire wxyz   = ((k+0)/√2, (k-0)/√2, (0-k)/√2, (k+0)/√2)
+    //               = (0.5, 0.5, -0.5, 0.5)
+    //   wire xyzw   = (0.5, -0.5, 0.5, 0.5)
     auto q4 = fitra::slimevr::world_quat_to_slime(k, 0.0f, k, 0.0f);
     check(close(q4.x,  0.5f),  "world +Y90 qx = 0.5");
-    check(close(q4.y,  0.5f),  "world +Y90 qy = 0.5");
-    check(close(q4.z, -0.5f),  "world +Y90 qz = -0.5");
+    check(close(q4.y, -0.5f),  "world +Y90 qy = -0.5");
+    check(close(q4.z,  0.5f),  "world +Y90 qz = 0.5");
     check(close(q4.w,  0.5f),  "world +Y90 qw = 0.5");
+
+    // Sanity: the X-flip makes (qw + qx) → (qw - qx) on the X component of
+    // wire (and same magnitude on W). A roll around +Y should leave the X
+    // axis fixed; check that the wire's net X-axis rotation is well-defined.
+    // After AXES_OFFSET, q_used = Rx(-90°) * q_wire for +Y90 case should
+    // yield a rotation around the unity Z axis (= roll), not Y or X.
+    //   q_used = Rx(-90°) * (0.5,0.5,-0.5,0.5)
+    //          = (k, -k, 0, 0) * (0.5, 0.5, -0.5, 0.5)
+    //          = (k, 0, 0, k)  ← +90° around unity +Z = roll ✓
+    // (This is a derivation check, not a separate assertion.)
 }
 
 void test_sequence_independence() {

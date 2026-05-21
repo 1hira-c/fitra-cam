@@ -262,24 +262,39 @@ MacBytes mac_from_hostname() {
 QuatXyzw world_quat_to_slime(float qw, float qx, float qy, float qz) {
     // World frame (Z-up RH, X-right, Y-forward) → SlimeVR Firmware UDP wire.
     //
-    // Composition of:
-    //   q_unity_wxyz = (qw, -qx, -qz, -qy)              // Y↔Z swap, RH→LH
-    //   q_wire       = Rx(+90°) * q_unity               // pre-cancel AXES_OFFSET
+    // The full basis change is `(x, y, z)_world → (-x, z, y)_unity`:
+    //   - Y↔Z swap (world Y-forward = unity Z-forward, world Z-up = unity Y-up)
+    //   - X flip so subject-left (+X world) maps to avatar-left (-X unity).
+    //     Without this flip, SlimeVR's IK applies subject's left-side motion
+    //     to the avatar's right side — observed in the field as "横方向の
+    //     動きが左右逆になる".
+    //
+    // The X-flip + Y/Z swap has det +1 (it's a 180° rotation around the world
+    // axis (0, 1, 1)/√2 — equivalently quaternion (0, 0, 1/√2, 1/√2)), so the
+    // conjugation works out cleanly in quaternion form.
+    //
+    // Composition:
+    //   P_wxyz       = (0, 0, k, k)                     where k = 1/√2
+    //   q_unity      = P * q_world * conj(P)
+    //                = (qw, -qx, qz, qy)                (wxyz)
+    //   q_wire       = Rx(+90°) * q_unity               // pre-cancel
+    //                                                   //  TrackersUDPServer's
+    //                                                   //  AXES_OFFSET = Rx(-90°)
     //
     // Algebraic expansion:
-    //   wire wxyz = ( (qw+qx)/√2, (qw-qx)/√2, (qy-qz)/√2, -(qy+qz)/√2 )
+    //   wire wxyz = ( (qw+qx)/√2, (qw-qx)/√2, (qz-qy)/√2, (qy+qz)/√2 )
     //
-    // After the server applies AXES_OFFSET = Rx(-90°), pure subject yaw lands
-    // on unity Y (correct yaw), pitch on unity X (correct pitch), and roll on
-    // unity Z (correct roll). The legacy VMC formula `(qx, qz, -qy, -qw)`
-    // mapped yaw onto the unity Z axis (= leg roll), producing the abduction
-    // symptom observed in the first Phase 11 deployment.
+    // After the server applies AXES_OFFSET = Rx(-90°), pitch lands on unity X,
+    // yaw on unity Y, roll on unity Z — and lateral motion on a left-handed
+    // limb maps to the same side on the avatar. The earlier fix (sign of
+    // qy/qz inverted) had yaw/roll correct in magnitude but mirrored
+    // direction, manifesting as "前方は OK / 横方向だけ左右逆".
     static constexpr float kInvSqrt2 = 0.70710678f;
     QuatXyzw q;
-    q.w =  kInvSqrt2 * (qw + qx);
-    q.x =  kInvSqrt2 * (qw - qx);
-    q.y =  kInvSqrt2 * (qy - qz);
-    q.z = -kInvSqrt2 * (qy + qz);
+    q.w = kInvSqrt2 * (qw + qx);
+    q.x = kInvSqrt2 * (qw - qx);
+    q.y = kInvSqrt2 * (qz - qy);
+    q.z = kInvSqrt2 * (qy + qz);
     return q;
 }
 

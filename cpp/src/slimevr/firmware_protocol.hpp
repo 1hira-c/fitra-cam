@@ -170,26 +170,32 @@ MacBytes mac_from_string(std::string_view name);
 // the SlimeVR Firmware UDP wire frame. Returns xyzw on the wire.
 //
 // Two transforms are composed:
-//   1. World (Z-up RH) → Unity (Y-up LH) basis change:
-//        q_unity_wxyz = ( qw, -qx, -qz, -qy )
-//      Y/Z axis swap with the sign pattern that preserves rotation semantics
-//      across the handedness flip. Verified: world X (pitch) → unity X
-//      rotation, world Y (roll) → unity Z rotation, world Z (yaw) → unity Y
-//      rotation.
+//   1. World (Z-up RH, X-right, Y-forward) → Unity (Y-up, Z-forward) basis
+//      change with X axis FLIPPED so subject's left (+X world) maps to the
+//      avatar's left (-X unity). Without the X-flip, lateral limb motion
+//      shows up on the opposite side of the avatar — observed in the field
+//      as "横方向の動きが左右逆になる".
+//      The basis-change quaternion (Hamilton form):
+//        P_wxyz   = (0, 0, 1/√2, 1/√2)        // 180° around (0,1,1)/√2
+//        q_unity  = P * q_world * conj(P) = (qw, -qx, qz, qy)
 //   2. Pre-cancel the server-side AXES_OFFSET = Rx(-90°):
-//        q_wire = Rx(+90°) * q_unity
+//        q_wire   = Rx(+90°) * q_unity
 //      `TrackersUDPServer.kt:415` left-multiplies every incoming rotation by
-//      AXES_OFFSET before passing it to the IK. Without this pre-cancel,
-//      pure subject yaw lands on the unity Z axis (= leg roll / abduction)
-//      and pitch lands on the wrong sign — exactly the symptoms observed
-//      while debugging Phase 11 against the real SlimeVR Server.
+//      AXES_OFFSET before passing it to the IK; without this pre-cancel,
+//      pure subject yaw lands on the unity Z axis (= leg roll / abduction).
 //
 // Composing the two collapses to:
-//   wire wxyz = ( (qw+qx)/√2, (qw-qx)/√2, (qy-qz)/√2, -(qy+qz)/√2 )
+//   wire wxyz = ( (qw+qx)/√2, (qw-qx)/√2, (qz-qy)/√2, (qy+qz)/√2 )
 //
-// After this transform plus the server's AXES_OFFSET, world yaw of θ around
-// world Z produces a unity quaternion of (cos(θ/2), 0, sin(θ/2), 0) — a clean
-// unity Y rotation, which the IK consumes as a yaw of the body part.
+// Verified by hand for all four cardinal cases:
+//   - identity      → wire = Rx(+90°)            (AXES_OFFSET cancels to identity)
+//   - world +X 90°  → wire = identity             (pitch on unity X after offset)
+//   - world +Y 90°  → wire = (0.5, -0.5, 0.5, 0.5)_xyzw   (roll on unity Z)
+//   - world +Z 90°  → wire = (0.5, 0.5, 0.5, 0.5)_xyzw    (yaw on unity Y)
+//
+// And against the left-leg abduction synthesised pose: delta from rest
+// becomes -45° around unity +Z (= avatar's left leg goes to avatar's left),
+// not +45° (which would be mirrored to the right side).
 QuatXyzw world_quat_to_slime(float qw, float qx, float qy, float qz);
 
 }  // namespace fitra::slimevr
