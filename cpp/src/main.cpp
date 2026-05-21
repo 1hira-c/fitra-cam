@@ -39,6 +39,7 @@
 #include "pipeline/calibration_session.hpp"
 #include "pipeline/multi_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
+#include "slimevr/native_publisher.hpp"
 #include "util/cuda_check.hpp"
 #include "util/logging.hpp"
 #include "web/crow_server.hpp"
@@ -101,7 +102,7 @@ void print_help() {
         "  --no-3d-ik                disable 3D IK projection\n"
         "\n"
         "Phase 11 — SlimeVR native Firmware UDP output (requires --enable-3d + --keypoint-format=halpe26):\n"
-        "  --slimevr-out             enable the native UDP publisher (WIP: M4 brings the publisher online)\n"
+        "  --slimevr-out             enable the native Firmware UDP publisher (10 trackers)\n"
         "  --slimevr-host ADDR       SlimeVR Server host (default 127.0.0.1; typically the Windows IP)\n"
         "  --slimevr-port N          UDP port (default 6969 — SlimeVR firmware port)\n"
         "  --slimevr-rate-hz F       RotationData send rate (default 60.0)\n"
@@ -573,19 +574,31 @@ int main(int argc, char** argv) {
                 });
         }
 
-        // Phase 11 M1: VMC publisher torn out. The native Firmware UDP
-        // publisher (slimevr::NativePublisher) lands in M4. Until then,
-        // `--slimevr-out` is accepted (and gated above) but no socket is
-        // opened. This keeps the CLI surface stable for downstream scripts
-        // during the migration.
+        // Phase 11: spin up the native SlimeVR Firmware UDP publisher BEFORE
+        // the Crow server so /stats3d can hand out the slimevr stats block.
+        // bus3d is guaranteed non-null at this point (gated by enable_3d).
+        std::unique_ptr<fitra::slimevr::NativePublisher> slime_pub;
         if (slimevr_out) {
-            FITRA_LOG_WARN(
-                "[slimevr] --slimevr-out is accepted but the native UDP "
-                "publisher is not yet wired (Phase 11 M4 will land it). "
-                "host={} port={} rate={}",
-                slimevr_host, slimevr_port, slimevr_rate_hz);
-            (void)slimevr_quat_smooth;
+            fitra::slimevr::NativePublisherOptions opts;
+            opts.host         = slimevr_host;
+            opts.port         = static_cast<std::uint16_t>(slimevr_port);
+            opts.send_rate_hz = slimevr_rate_hz;
+            opts.quat_smooth  = static_cast<float>(slimevr_quat_smooth);
+            slime_pub = std::make_unique<fitra::slimevr::NativePublisher>(*bus3d, opts);
+            if (!slime_pub->start()) {
+                // Socket setup or handshake failed; warn and continue without
+                // publisher (pose pipeline is unaffected).
+                slime_pub.reset();
+            }
         }
+
+        // Stop the publisher on any scope exit. Must outlive the server (so
+        // /stats3d never reads a dead pointer) and the driver (the publisher
+        // calls bus3d->snapshot() which the driver feeds).
+        struct SlimeStop {
+            fitra::slimevr::NativePublisher* p;
+            ~SlimeStop() { if (p) p->stop(); }
+        } slime_stop{slime_pub.get()};
 
         std::unique_ptr<fitra::web::CrowServer> server;
         if (!no_web) {
@@ -602,6 +615,9 @@ int main(int argc, char** argv) {
                 bus, enable_3d ? bus3d.get() : nullptr, sopts);
             if (calib_session) {
                 server->set_calibration_session(calib_session.get(), calib_defaults);
+            }
+            if (slime_pub) {
+                server->set_native_publisher(slime_pub.get());
             }
             server->start();
         }
@@ -648,6 +664,7 @@ int main(int argc, char** argv) {
         }
 
         if (server) server->stop();
+        if (slime_pub) slime_pub->stop();   // explicit stop; SlimeStop guard is the fallback
         driver->stop();
         return EXIT_SUCCESS;
     } catch (const std::exception& e) {

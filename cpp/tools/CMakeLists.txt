@@ -93,6 +93,24 @@ set_target_properties(fitra_test_triangulator PROPERTIES
 
 add_test(NAME test_triangulator COMMAND fitra_test_triangulator)
 
+# Phase 11: SlimeVR Firmware UDP wire-format byte-level golden test. Verifies
+# handshake / sensor_info / rotation_data / ping_reply layouts and the MAC
+# derivation. No SlimeVR server needed.
+add_executable(fitra_test_firmware_protocol
+    test_firmware_protocol.cpp
+)
+
+target_link_libraries(fitra_test_firmware_protocol PRIVATE
+    fitra_slimevr
+)
+
+set_target_properties(fitra_test_firmware_protocol PROPERTIES
+    OUTPUT_NAME "test_firmware_protocol"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_firmware_protocol COMMAND fitra_test_firmware_protocol)
+
 # Phase 11: Halpe26 → SlimeVR tracker extraction test. M3 rewrites the
 # layout to 10 trackers (upper arms / chest / waist / upper legs / lower
 # legs / feet); the test currently targets the legacy 8-tracker VMC layout

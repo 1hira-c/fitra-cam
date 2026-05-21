@@ -9,6 +9,7 @@
 #define CROW_MAIN
 #include <crow.h>
 
+#include "slimevr/native_publisher.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::web {
@@ -65,6 +66,10 @@ void CrowServer::set_calibration_session(pipeline::CalibrationSession* session,
     calib_defaults_ = std::move(defaults);
 }
 
+void CrowServer::set_native_publisher(slimevr::NativePublisher* publisher) {
+    native_publisher_ = publisher;
+}
+
 void CrowServer::start() {
     auto& app     = impl_->app;
     auto& clients2d = impl_->clients2d;
@@ -117,10 +122,28 @@ void CrowServer::start() {
 
     CROW_ROUTE(app, "/stats3d")
     ([this]() {
-        // Phase 11 M5 will splice the native UDP publisher stats into this
-        // payload here. For M1 (publisher torn out) the bundle is bare.
         std::string body = bus3d_ ? bus3d_->make_bundle_json()
                                   : pipeline::make_disabled_3d_json();
+        // Phase 11: when the native SlimeVR publisher is wired up, splice
+        // its send counters into the bundle JSON. The bundle ends in `}}`
+        // (the inner `}` closes the stats object, the outer one closes the
+        // message). Rewrite the trailing closing brace as `,"slimevr":{...}}`.
+        if (native_publisher_) {
+            auto s = native_publisher_->stats();
+            std::ostringstream extra;
+            extra << ",\"slimevr\":{\"sent_handshakes\":"  << s.sent_handshakes
+                  << ",\"sent_sensor_info\":"              << s.sent_sensor_info
+                  << ",\"sent_rotations\":"                << s.sent_rotations
+                  << ",\"sent_heartbeats\":"               << s.sent_heartbeats
+                  << ",\"skipped_invalid\":"               << s.skipped_invalid
+                  << ",\"ping_count\":"                    << s.ping_count
+                  << ",\"last_send_ms\":"                  << s.last_send_ms
+                  << "}}";
+            if (!body.empty() && body.back() == '}') {
+                body.pop_back();
+                body += extra.str();
+            }
+        }
         crow::response resp{std::move(body)};
         resp.set_header("Content-Type", "application/json; charset=utf-8");
         return resp;

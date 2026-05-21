@@ -85,6 +85,8 @@ target_link_libraries(fitra_pipeline PUBLIC
 # are added in M2/M4; tracker_extract is rewritten for the 10-tracker layout
 # in M3.
 add_library(fitra_slimevr STATIC
+    slimevr/firmware_protocol.cpp
+    slimevr/native_publisher.cpp
     slimevr/tracker_extract.cpp
 )
 
@@ -105,6 +107,7 @@ add_library(fitra_web STATIC
 
 target_link_libraries(fitra_web PUBLIC
     fitra_pipeline
+    fitra_slimevr     # /stats3d reads NativePublisher::stats() when attached
     Crow::Crow
 )
 
