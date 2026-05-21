@@ -1,5 +1,9 @@
 # Minimal 2-camera 2D live config for cpp/build/main.
 #
+# Copy this file to `configs/live_2cam.yaml` (gitignored) and edit the
+# device / engine paths for your machine, then run with
+# `--config configs/live_2cam.yaml`.
+#
 # Equivalent CLI:
 #   ./cpp/build/main \
 #       --cam0 /dev/v4l/by-path/usb-cam-A-video-index0 \

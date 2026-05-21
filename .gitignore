@@ -22,3 +22,7 @@ compile_commands.json
 .vscode/
 .idea/
 .antigravitycli/
+
+# Per-machine `cpp/build/main --config PATH` files. Samples are tracked as
+# `configs/*.yaml.example`; copy to `configs/*.yaml` and edit locally.
+configs/*.yaml

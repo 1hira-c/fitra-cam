@@ -139,6 +139,13 @@ slimevr:
 
 ## 利用例
 
+`configs/*.yaml` は `.gitignore` 済 (端末固有のデバイスパス・エンジンパスを含むため)。リポジトリには `configs/live_2cam.yaml.example` / `configs/live_2cam_3d.yaml.example` が手本として置いてあるので、コピーしてから編集する:
+
+```bash
+cp configs/live_2cam_3d.yaml.example configs/live_2cam_3d.yaml
+# vim configs/live_2cam_3d.yaml で device / engine パスを差し替え
+```
+
 2カメラ 3D ライブ起動:
 
 ```bash
