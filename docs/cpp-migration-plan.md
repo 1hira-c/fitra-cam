@@ -159,16 +159,19 @@ fitra-cam/
 - 完了条件 = halpe26 でフル機能 (検出→IK→Phase 8 calibration)
 - 詳細は [`phase9-halpe26-migration.md`](phase9-halpe26-migration.md)
 
-### Phase 11 — SlimeVR / VMC OSC 連携 (2026-05-20)
+### Phase 11 — SlimeVR ネイティブ Firmware UDP 連携 (2026-05-21 改訂)
 
 - Phase 10 (3 カメラ + C++ ライブキャリブ) はスキップ。Phase 9 完了の Halpe26 を前提に直接 Phase 11 に着手
-- `--slimevr-out` フラグで VMC over OSC publisher 起動。`--enable-3d` && `--keypoint-format=halpe26` && !`--calibrate` をハードゲート
-- 8 trackers (WAIST/CHEST/L/R KNEE/L/R ELBOW/L/R FOOT) を 60Hz (既定) で `/VMC/Ext/Tra/Pos` に送信。HEAD は HMD 前提で除外
-- 依存追加なし: `cpp/src/slimevr/` で OSC 1.0 wire writer / tracker extract / quat 合成 / UDP publisher を自前実装
-- `Skeleton3DBus::snapshot()` getter を追加 (M1)。publisher スレッドは値コピーのみで pose pipeline と非干渉
-- `/stats3d` に `"slimevr":{sent_bundles,skipped_invalid,last_send_ms}` を露出
-- 検証ツール: `cpp/build/tools/slimevr_loopback` で UDP ループバック dump、SlimeVR Server 不要で wire 確認
-- 完了条件 = 8 trackers が SlimeVR Server に "VMC receiver" として認識され、live skeleton で avatar が動くこと
+- 初版は **VMC over OSC** で 8 trackers を実装したが、SlimeVR Server 上で連番表示にしかならず body-part assign が非実用的だったため、**SlimeVR ネイティブ Firmware UDP プロトコル (port 6969) へ移行** (2026-05-21)
+- 10 trackers に拡張: `LEFT_UPPER_ARM` / `RIGHT_UPPER_ARM` / `CHEST` / `WAIST` / `LEFT_UPPER_LEG` / `RIGHT_UPPER_LEG` / `LEFT_LOWER_LEG` / `RIGHT_LOWER_LEG` / `LEFT_FOOT` / `RIGHT_FOOT` の SlimeVR `TrackerPosition` enum に完全一致
+- 起動シーケンス: Handshake (tag 3) → SensorInfo × 10 (tag 15、`trackerPosition` 指定で named display) → 60 Hz の RotationData (tag 17) + 1 Hz Heartbeat
+- recv ループで Ping (tag 10) を反射、SlimeVR 側の "disconnected" マークを回避
+- 位置は wire に乗らない (Firmware UDP は回転のみ)。位置は SlimeVR の IK が骨格 + HMD から再構築。カメラ由来の絶対位置を VR 側で活用したい場合は別途リレーが必要 → [`backlog-slimevr-bridge-relay.md`](backlog-slimevr-bridge-relay.md)
+- MAC は `gethostname()` → SHA-1 先頭 6 byte (locally-administered + unicast)。同じ Jetson 再起動後も同 MAC → SlimeVR 側の trackerPosition 設定が persistence される
+- 依存追加なし: `cpp/src/slimevr/firmware_protocol.{hpp,cpp}` で wire-format シリアライザを自前実装、`native_publisher.{hpp,cpp}` で UDP + threading を実装
+- `Skeleton3DBus::snapshot()` getter を流用 (M1)。publisher スレッドは値コピーのみで pose pipeline と非干渉
+- `/stats3d` に `"slimevr":{sent_handshakes,sent_sensor_info,sent_rotations,sent_heartbeats,skipped_invalid,ping_count,last_send_ms}` を露出
+- 完了条件 = 10 trackers が SlimeVR Server GUI に **名前付き** で自動表示 (連番ならない / 手動 assign 不要)、live skeleton で avatar が動くこと
 - 詳細は [`phase11-slimevr-integration.md`](phase11-slimevr-integration.md)
 
 ## 検証戦略
@@ -182,7 +185,7 @@ fitra-cam/
 | 4     | `./cpp/build/main --device tensorrt --fp16 --bench`           | aggregate pose ≥ 90 fps / GPU 利用率 80% 超                                |
 | 5     | `./cpp/build/record_overlay --seconds 30`                    | 5 本の mp4 出力、メタデータ fps が実測通り                                       |
 | 9     | `./cpp/build/main --keypoint-format=halpe26 --pose-engine <halpe26.engine> ...` | 起動ログに `kp_format=halpe26 (26 keypoints)` / `/ws` JSON に `kp_format` フィールド / `grep -rn kNumKeypoints cpp/` = 0 件 |
-| 11    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --slimevr-out ...` + `./cpp/build/tools/slimevr_loopback --port 39539 --seconds 5` | 8 trackers × 60Hz ≈ 480 msg/s 受信、`/stats3d` に `slimevr` フィールド、`ctest` で `test_osc_roundtrip` + `test_tracker_extract` pass |
+| 11    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --slimevr-out --slimevr-host=<windows-ip>` + Windows 側 SlimeVR Server GUI 目視 | 10 trackers (LeftUpperArm/RightUpperArm/Chest/Waist/LeftUpperLeg/RightUpperLeg/LeftLowerLeg/RightLowerLeg/LeftFoot/RightFoot) が GUI に **名前付き** で自動表示、live skeleton で avatar が破綻なく動く、`/stats3d` に `slimevr` フィールド (sent_rotations が 60×10≈600/s で増加 / ping_count > 0)、`ctest` で `test_firmware_protocol` + `test_tracker_extract` pass |
 
 ## リスク・未確定事項
 
