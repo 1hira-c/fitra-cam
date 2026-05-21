@@ -61,6 +61,23 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(Crow)
 
+# yaml-cpp — used by fitra_config to load main.cpp runtime YAML
+# (`--config PATH`). yaml-cpp ships a CMake target `yaml-cpp::yaml-cpp` since
+# 0.8.0; we disable its tests/tools/install side-effects to keep the FetchContent
+# subdirectory quiet.
+set(YAML_CPP_BUILD_TESTS   OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_TOOLS   OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_INSTALL       OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_FORMAT_SOURCE OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    yaml-cpp
+    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+    GIT_TAG        0.8.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(yaml-cpp)
+
 # -------- targets --------
 add_subdirectory(src)
 add_subdirectory(tools)

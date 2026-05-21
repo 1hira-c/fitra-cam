@@ -111,12 +111,27 @@ target_link_libraries(fitra_web PUBLIC
     Crow::Crow
 )
 
+# Runtime config loader for cpp/build/main (`--config PATH` YAML).
+# Independent of TensorRT/CUDA so its unit test stays light.
+add_library(fitra_config STATIC
+    config/main_config.cpp
+)
+
+target_include_directories(fitra_config PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(fitra_config PUBLIC
+    yaml-cpp::yaml-cpp
+)
+
 # Top-level driver: N cameras -> shared TRT -> Crow web.
 add_executable(fitra_cam_main
     main.cpp
 )
 
 target_link_libraries(fitra_cam_main PRIVATE
+    fitra_config
     fitra_pipeline
     fitra_web
 )

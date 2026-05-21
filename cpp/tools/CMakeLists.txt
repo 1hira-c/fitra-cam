@@ -129,3 +129,20 @@ set_target_properties(fitra_test_tracker_extract PROPERTIES
 )
 
 add_test(NAME test_tracker_extract COMMAND fitra_test_tracker_extract)
+
+# Backlog (`--config PATH`): MainOptions YAML loader, CLI overlay precedence,
+# and validate_options() — pure parser + checks, no TensorRT / CUDA / OpenCV.
+add_executable(fitra_test_main_config
+    test_main_config.cpp
+)
+
+target_link_libraries(fitra_test_main_config PRIVATE
+    fitra_config
+)
+
+set_target_properties(fitra_test_main_config PROPERTIES
+    OUTPUT_NAME "test_main_config"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_main_config COMMAND fitra_test_main_config)
