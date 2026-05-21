@@ -22,10 +22,6 @@
 #include "pipeline/calibration_session.hpp"
 #include "pipeline/snapshot.hpp"
 
-namespace fitra::slimevr {
-class VmcPublisher;  // fwd decl; full header included only in crow_server.cpp
-}
-
 namespace fitra::web {
 
 struct ServerOptions {
@@ -58,12 +54,6 @@ public:
     void set_calibration_session(pipeline::CalibrationSession* session,
                                  pipeline::CalibPreflight defaults);
 
-    // Phase 11: attach the VMC publisher so /stats includes its send counters.
-    // Caller retains ownership; the pointer must outlive the CrowServer or be
-    // cleared with set_vmc_publisher(nullptr) before VmcPublisher dies. The
-    // crow server only ever calls const observers (stats()), no other API.
-    void set_vmc_publisher(slimevr::VmcPublisher* publisher);
-
     // Start listening + broadcasting on a background thread. Returns when
     // the server is bound and ready (best-effort; Crow's run() blocks).
     void start();
@@ -82,7 +72,6 @@ private:
 
     pipeline::CalibrationSession* calib_session_ = nullptr;
     pipeline::CalibPreflight       calib_defaults_;
-    slimevr::VmcPublisher*         vmc_publisher_ = nullptr;
 
     struct Impl;
     std::unique_ptr<Impl>  impl_;

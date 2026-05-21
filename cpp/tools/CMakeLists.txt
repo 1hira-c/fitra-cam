@@ -93,23 +93,10 @@ set_target_properties(fitra_test_triangulator PROPERTIES
 
 add_test(NAME test_triangulator COMMAND fitra_test_triangulator)
 
-# Phase 11: OSC 1.0 wire-format byte-level round-trip test.
-add_executable(fitra_test_osc_roundtrip
-    test_osc_roundtrip.cpp
-)
-
-target_link_libraries(fitra_test_osc_roundtrip PRIVATE
-    fitra_slimevr
-)
-
-set_target_properties(fitra_test_osc_roundtrip PROPERTIES
-    OUTPUT_NAME "test_osc_roundtrip"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
-)
-
-add_test(NAME test_osc_roundtrip COMMAND fitra_test_osc_roundtrip)
-
-# Phase 11: Halpe26 → 8 VMC tracker extraction + coord transform test.
+# Phase 11: Halpe26 → SlimeVR tracker extraction test. M3 rewrites the
+# layout to 10 trackers (upper arms / chest / waist / upper legs / lower
+# legs / feet); the test currently targets the legacy 8-tracker VMC layout
+# until that milestone lands.
 add_executable(fitra_test_tracker_extract
     test_tracker_extract.cpp
 )
@@ -124,13 +111,3 @@ set_target_properties(fitra_test_tracker_extract PROPERTIES
 )
 
 add_test(NAME test_tracker_extract COMMAND fitra_test_tracker_extract)
-
-# Phase 11: standalone OSC dump tool for SlimeVR-Server-free smoke testing.
-add_executable(fitra_slimevr_loopback
-    slimevr_loopback.cpp
-)
-
-set_target_properties(fitra_slimevr_loopback PROPERTIES
-    OUTPUT_NAME "slimevr_loopback"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
-)

@@ -1,11 +1,18 @@
 # Phase 11 — SlimeVR (VMC/OSC) 姿勢情報連携
 
-> **実装メモ (2026-05-20)**: 本ドキュメントは設計時点の正本。実装時点で以下の差分が判明したので、行間で参照する際は注意:
+> **方向転換 (2026-05-21)**: VMC over OSC で 8 トラッカーを送る初版を実装したが、SlimeVR Server 上で **OSC 経由のトラッカーが連番表示にしかならず、画面上での body-part assign が極めて煩雑** であることが運用で判明。OSC は諦めて **SlimeVR Firmware UDP プロトコル (port 6969)** へ移行する。トラッカー構成も 8→10 (二の腕×2/胸/腰/腿×2/脛×2/足×2) に変更。本ドキュメントは旧 VMC 設計をそのまま残しているが、行間で参照する際は以下のレジームチェンジに注意 — 全面書き換えは Phase 11 移行作業 (cpp-phase11) の M7 で行う。
 >
-> 1. **Phase 10 はスキップ**。`--mode {pose,calib-*}` フラグは存在しないため、Phase 11 の launch gate は `--slimevr-out` && `--enable-3d` && `--keypoint-format=halpe26` && !`--calibrate` の 4 条件で判定 (main.cpp で early-fail)。
+> - **Bridge protocol は不採用**: 位置+回転を送れる SlimeVR の native IPC 経路 (Unix socket / Named pipe + Protobuf) は同一マシン専用で、SlimeVR Server が別 PC の Windows で動く我々の環境ではネットワーク越しに使えない。Windows 側にリレー常駐を置く案 (B 案) は `docs/backlog-slimevr-bridge-relay.md` (M7 で新規) に積む。
+> - **Firmware UDP は回転のみ**: 位置は SlimeVR の IK が骨格 + 回転 + HMD から再構築する。カメラ由来の絶対位置は wire に乗らない。
+> - **トラッカー命名は SensorInfo packet 15 で解決**: `TrackerPosition` enum に `LEFT_UPPER_ARM(15)/RIGHT_UPPER_ARM(16)/CHEST(4)/WAIST(5)/LEFT_UPPER_LEG(7)/RIGHT_UPPER_LEG(8)/LEFT_LOWER_LEG(9)/RIGHT_LOWER_LEG(10)/LEFT_FOOT(11)/RIGHT_FOOT(12)` の 10 個が完全に乗る。MAC は hostname ハッシュから決定論的に生成し再起動を跨いで同一にする (SlimeVR 側の trackerPosition 設定が persistence される)。
+> - **`--slimevr-port` のデフォルトは 6969** (旧 VMC の 39539 から変更)。
+>
+> 旧 VMC 設計時点のメモ (歴史的経緯として保存):
+>
+> 1. **Phase 10 はスキップ**。`--mode {pose,calib-*}` フラグは存在しないため、Phase 11 の launch gate は `--slimevr-out` && `--enable-3d` && `--keypoint-format=halpe26` && !`--calibrate` の 4 条件で判定 (main.cpp で early-fail)。**この gate 構造は Firmware UDP 版にもそのまま流用**。
 > 2. **`CrowServer::publisher_loop` の行範囲**は `cpp/src/web/crow_server.cpp:301-334` (本文中の 179-212 から drift)。pacing 構造の参照は実装ファイルで確認すること。
-> 3. **VMC OSC quaternion order は xyzw on wire** ([protocol.vmc.info](https://protocol.vmc.info/english.html))。`VmcTracker::quat_wxyz` で wxyz 格納、publisher は `quat_wxyz[1..3, 0]` で xyzw に並べ替えて送信。
-> 4. **`/stats3d` 露出方法**: 設計案は CrowServer の `/stats` に追加だったが、3D 関連 stats が `/stats3d` 側にまとまっているので publisher の stats も `/stats3d` JSON 末尾に `"slimevr":{...}` として spliceさせている。`/stats` は変更なし。
+> 3. **VMC OSC quaternion order は xyzw on wire** ([protocol.vmc.info](https://protocol.vmc.info/english.html))。**Firmware UDP も xyzw on wire (BE float×4)** だが、解釈は Y-up Unity 風で VMC と同じ座標変換 `(qx, qz, -qy, -qw)` を使う。
+> 4. **`/stats3d` 露出方法**: 設計案は CrowServer の `/stats` に追加だったが、3D 関連 stats が `/stats3d` 側にまとまっているので publisher の stats も `/stats3d` JSON 末尾に `"slimevr":{...}` として spliceさせている。`/stats` は変更なし。**Firmware UDP 版でもこの場所をそのまま使う**。
 
 ## Context
 

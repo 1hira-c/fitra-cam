@@ -76,14 +76,16 @@ target_link_libraries(fitra_pipeline PUBLIC
     opencv_videoio
 )
 
-# SlimeVR / VMC integration: OSC writer, tracker extraction, UDP publisher.
-# Phase 11. Header-only deps + std + opencv_core (Vec3f / Vec4f). No external
-# OSC library; we hand-roll the OSC 1.0 wire format to keep the dependency
-# footprint flat.
+# SlimeVR integration: tracker extraction (rotation synthesis) + native
+# Firmware UDP publisher. Phase 11.
+#
+# This phase is mid-migration: VMC over OSC is being replaced with SlimeVR's
+# native Firmware UDP protocol (port 6969). VMC source files were removed in
+# M1. The publisher (native_publisher) and protocol codec (firmware_protocol)
+# are added in M2/M4; tracker_extract is rewritten for the 10-tracker layout
+# in M3.
 add_library(fitra_slimevr STATIC
-    slimevr/osc_writer.cpp
     slimevr/tracker_extract.cpp
-    slimevr/vmc_publisher.cpp
 )
 
 target_include_directories(fitra_slimevr PUBLIC
@@ -103,7 +105,6 @@ add_library(fitra_web STATIC
 
 target_link_libraries(fitra_web PUBLIC
     fitra_pipeline
-    fitra_slimevr    # /stats3d reads VmcPublisher::stats() when attached
     Crow::Crow
 )
 
