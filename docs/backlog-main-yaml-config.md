@@ -97,6 +97,16 @@ calibration:
 
 logging:
   log_every_s: 2.0
+
+# Phase 11 — SlimeVR ネイティブ Firmware UDP publisher。`slimevr_out: true`
+# のとき `three_d.enable_3d` と `inference.keypoint_format: halpe26` が必須
+# (validate_options で同じチェックが走る)。
+slimevr:
+  slimevr_out: false
+  host: 127.0.0.1
+  port: 6969
+  rate_hz: 60.0
+  quat_smooth: 0.5
 ```
 
 ルール:
@@ -128,6 +138,13 @@ logging:
 `main_config` が YAML 解析、型変換、未知キー検出、エラーメッセージを持つ。`main.cpp` 側には `load_main_config(path, options)` 呼び出し以上の YAML node 操作を置かない。
 
 ## 利用例
+
+`configs/*.yaml` は `.gitignore` 済 (端末固有のデバイスパス・エンジンパスを含むため)。リポジトリには `configs/live_2cam.yaml.example` / `configs/live_2cam_3d.yaml.example` が手本として置いてあるので、コピーしてから編集する:
+
+```bash
+cp configs/live_2cam_3d.yaml.example configs/live_2cam_3d.yaml
+# vim configs/live_2cam_3d.yaml で device / engine パスを差し替え
+```
 
 2カメラ 3D ライブ起動:
 

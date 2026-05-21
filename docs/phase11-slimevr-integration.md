@@ -1,429 +1,281 @@
-# Phase 11 — SlimeVR (VMC/OSC) 姿勢情報連携
+# Phase 11 — SlimeVR ネイティブ Firmware UDP 連携
+
+> **方向転換 (2026-05-21)**: VMC over OSC で 8 トラッカーを送る初版を実装したが、SlimeVR Server 上で **OSC 経由のトラッカーが連番表示にしかならず、画面上での body-part assign が極めて煩雑** であることが運用で判明。OSC は諦めて **SlimeVR Firmware UDP プロトコル (port 6969)** へ移行。トラッカー構成も 8→10 (二の腕×2/胸/腰/腿×2/脛×2/足×2) に変更。
+>
+> - **Bridge protocol は不採用**: 位置+回転を送れる SlimeVR の native IPC 経路 (Unix socket / Named pipe + Protobuf) は同一マシン専用で、SlimeVR Server が別 PC の Windows で動く我々の環境ではネットワーク越しに使えない。Windows 側にリレー常駐を置く案 (B 案) は [`backlog-slimevr-bridge-relay.md`](backlog-slimevr-bridge-relay.md) に積み課題として残す。
+> - **Firmware UDP は回転のみ**: 位置は SlimeVR の IK が骨格 + 回転 + HMD から再構築する。カメラ由来の絶対位置は wire に乗らない。サーバ側 `UDPPacket27Position` は実装上存在するが UDP-created tracker は `hasPosition=false` で固定されており、送っても IK には反映されないことを確認済み (SlimeVR-Server 2026-05 時点)。
+> - **トラッカー命名は SensorInfo packet 15 で解決**: `TrackerPosition` enum に `LEFT_UPPER_ARM(15)/RIGHT_UPPER_ARM(16)/CHEST(4)/WAIST(5)/LEFT_UPPER_LEG(7)/RIGHT_UPPER_LEG(8)/LEFT_LOWER_LEG(9)/RIGHT_LOWER_LEG(10)/LEFT_FOOT(11)/RIGHT_FOOT(12)` の 10 個が完全に乗る。MAC は hostname ハッシュから決定論的に生成し再起動を跨いで同一にする (SlimeVR 側の trackerPosition 設定が persistence される)。
+> - **`--slimevr-port` のデフォルトは 6969** (旧 VMC の 39539 から変更)。
 
 ## Context
 
-Phase 7 で多視点三角測量 + Kalman + IK による 3D skeleton 出力が安定し、Phase 8 で被験者プロファイルによるボーン長固定、Phase 9 で Halpe26 移行、Phase 10 で 3 カメラ + 完全 C++ キャリブが揃った。Phase 11 のゴールは **この 3D skeleton を SlimeVR Server に流し込み、SteamVR / VRChat の Full-Body Tracking (FBT) 用 tracker として使えるようにする** こと。これにより、IMU ベースの SlimeVR/owoTrack を補完する「カメラ駆動 FBT ソース」が成立する。
+Phase 7 で多視点三角測量 + Kalman + IK による 3D skeleton 出力が安定し、Phase 8 で被験者プロファイルによるボーン長固定、Phase 9 で Halpe26 移行が揃った時点で、Phase 11 のゴールは **3D skeleton を SlimeVR Server に流し込み、SteamVR / VRChat の Full-Body Tracking (FBT) 用 tracker として使えるようにする** ことだった。これにより IMU ベースの SlimeVR トラッカーを補完する「カメラ駆動 FBT ソース」が成立する。
 
-調査で確定した方針:
+初版は **VMC over OSC** で 8 トラッカー (waist/chest/L/R knee/L/R elbow/L/R foot) を 60 Hz で送る実装をリリースしたが、SlimeVR Server の OSC 受信ハンドラは VMC trackers を匿名の連番デバイスとして扱うため、GUI 上で 8 つの "Tracker #1..#8" を被験者の体の部位 (左足 / 右足 / 腰 等) に手で割り当て直す必要があった。被験者を入れ替える / Jetson を再起動するたびにこれが要るので、運用上 NG。
 
-- **プロトコル: VMC over OSC** (SlimeVR-Server の `osc/VMCHandler.kt` が `/VMC/Ext/Tra/Pos` と `/VMC/Ext/Root/Pos` を ingest)。Native SlimeVR UDP (packet 17) は handshake / MAC / seq 管理が重く、実装コスト 2-3 日対 VMC 1 日。SlimeVR solver の挙動が悪ければ後で native へ昇格できる余地は残す。
-- **Tracker 構成: 8-point full** = WAIST, CHEST, LEFT_FOOT, RIGHT_FOOT, LEFT_KNEE, RIGHT_KNEE, LEFT_ELBOW, RIGHT_ELBOW (HEAD は HMD が出す前提で除外)。VRChat OSC trackers の上限 8 と SteamVR FBT のフル構成を満たす。
-- **前提: Phase 9 (Halpe26) 完了後に着手**。Halpe26 の neck(18) / hip_center(19) を直接 WAIST/CHEST 位置に使い、midpoint 補間誤差を回避する。heel(24/25) と big_toe(20/21) で **足の yaw を初めて出せる** ため、SlimeVR の foot tracker 品質が COCO17 時点と比較して大幅に上がる。
-- **依存追加なし**: OSC 1.0 wire format は trivial (32-bit length-prefixed buffer + `,fff...` typetag) なので、Phase 8/10 の「JSON は std::ostringstream で手書き」方針に合わせて **raw UDP socket + 手書き OSC シリアライザ** で実装。liblo / oscpp の apt/FetchContent 追加は不要。
-- **Coordinate system**: 我々の world frame (Z-up, X-right, meters, 床原点) → VMC = Unity 左手座標 (Y-up, Z-forward, meters)。位置: `(x, z, -y)`。Quaternion: `(qx, qz, -qy, -qw)` (左右系反転)。詳細は M3 の Quat 合成ルールに記載。
+調査で確定した方針 (2026-05-21):
+
+- **プロトコル: SlimeVR Firmware UDP (port 6969)**。SlimeVR-Tracker-ESP firmware と同じ wire format で `[4-byte tag][8-byte sequence][payload]` フレームを送る。Handshake + SensorInfo の `TrackerPosition` 指定により、SlimeVR GUI が起動と同時に **名前付きトラッカー** として認識 (連番にならない / 手動 assign 不要)。
+- **Tracker 構成: 10 本** (両二の腕 / 胸 / 腰 / 両腿 / 両脛 / 両足先)。SlimeVR の `TrackerPosition` enum に完全一致。腕は二の腕のみ (前腕はコントローラ前提)、脚は thigh / shin / foot の 3 段で詳細化することで FBT のレッグ品質を上げる。
+- **位置は捨てる**: Firmware UDP は回転のみ。SlimeVR の IK が HMD + 骨格 + 回転から位置を再構築する。カメラ由来の絶対位置が活かせない代償はあるが、ローカル PC で完結する Bridge protocol (Protobuf over Unix socket / Named pipe) は別 PC Windows 構成の我々には使えないため、現実解は Firmware UDP のみ。
+- **依存追加なし**: 既存方針 (JSON を `std::ostringstream` で手書き、OSC も自前で書く) に揃え、Firmware UDP の wire-format シリアライザも `cpp/src/slimevr/firmware_protocol.{hpp,cpp}` で自前実装 (~250 行)。FetchContent も apt も追加なし。
+- **MAC 決定論**: SlimeVR Server は MAC アドレスを device 識別キーとして persistence する。`gethostname()` → SHA-1 先頭 6 byte (locally-administered + unicast bit set) で派生させると、同じ Jetson が再起動しても同じ MAC を出すので、ユーザが GUI 上で承認した tracker 配置がそのまま残る。
+- **座標変換**: 我々の world frame (Z-up, X-right, Y-forward, meters) → SlimeVR (Y-up Unity LH)。Quaternion は `(qx, qz, -qy, -qw)` の入れ替え + 符号反転。位置は送らないので変換不要。
+- **Ping reply**: SlimeVR Server は ~500 ms 周期で `tag=10` の Ping を送り、応答が無い device を disconnected 扱いにする。recv ループで Ping をデコードし、同じ `ping_id` を載せて即返送。
 
 ## ゴール / 完了条件
 
-1. `--slimevr-out` フラグで VMC OSC publisher が立ち上がり、3D skeleton が利用可能な間 60 Hz で `/VMC/Ext/Tra/Pos` を 8 tracker 分送出。
-2. SlimeVR Server の OSC Receiver UI に 8 trackers が "VMC receiver" デバイスとして自動認識される。
-3. 各 tracker の position が世界座標 (床基準) で表示され、被験者の歩行・しゃがみ・腕の上げ下げに対応して動く。
-4. Quaternion 合成により、肘・膝・足首が SlimeVR avatar 上で破綻なく曲がる (静止 T ポーズで identity rotation の二乗誤差 < 5°)。
-5. `--enable-3d` が無効 / IK locked = false の間は publisher が静止する (異常な tracker 位置を送らない)。
-6. 既存 Phase 6b の 170 fps ベンチに対し、aggregate `recent_pose_fps` 低下 < 2% (sender は別スレッドで polling、データ生成パスに介入しない)。
+1. `--slimevr-out` フラグで native UDP publisher が立ち上がり、handshake + SensorInfo × 10 + RotationData 60 Hz + Heartbeat 1 Hz を `<slimevr-host>:6969` に送出。
+2. SlimeVR Server GUI で **10 個のトラッカー** が `Left Upper Arm` / `Right Upper Arm` / `Chest` / `Waist` / `Left Upper Leg` / `Right Upper Leg` / `Left Lower Leg` / `Right Lower Leg` / `Left Foot` / `Right Foot` の名前で **自動表示** される (連番ならない / 手動 assign 不要)。
+3. 各トラッカーの回転が、被験者の歩行 / しゃがみ / 腕の上げ下げに対応してアバター上で破綻なく追従する (静止 T ポーズで identity rotation 二乗誤差 < 5°)。
+4. `--enable-3d` が無効 / IK locked = false の間は RotationData の送出が止まり、Heartbeat のみ流れる。
+5. 既存 Phase 6b の 170 fps ベンチに対し、aggregate `recent_pose_fps` 低下 < 2% (publisher は別スレッドで polling、データ生成パスに介入しない)。
+6. Jetson 再起動後、SlimeVR 側で前回の trackerPosition 設定が引き継がれる (MAC 決定論)。
+7. Ping count が steady-state で > 0 (= 双方向通信成立)。
 
 ## アーキテクチャ
 
 ```
         ┌──── pipeline::Skeleton3DBus (既存) ────┐
-        │  ::update(Skeleton3DSnapshot)          │
-        │  ::make_bundle_json()                   │
-        └─────────────┬────────────────────┬──────┘
-                      │                    │
-                      ▼                    ▼
-              CrowServer publisher    SlimeVrPublisher (新規)
-              30 Hz → /ws3d           60 Hz → UDP/OSC → SlimeVR Server
+        │  ::snapshot() lock-protected getter    │
+        └─────────────────┬──────────────────────┘
+                          │
+                          ▼
+   slimevr::extract_trackers(snapshot) → std::array<SlimeTracker, 10>
+                          │  (world-frame pos + wxyz quat + valid)
+                          ▼
+   slimevr::NativePublisher (thread pair)
+     ├── start(): Handshake (tag 3) → 10× SensorInfo (tag 15)
+     ├── send_thread (60 Hz pacing):
+     │     ├─ bus_.snapshot() → extract_trackers → apply_quat_smoothing
+     │     ├─ world_quat_to_slime per tracker (Y-up Unity)
+     │     ├─ encode_rotation_data × N → sendto
+     │     └─ 1 Hz Heartbeat (tag 0)
+     └── recv_thread:
+           └─ recv → decode_ping → encode_ping_reply (mirror id)
 ```
 
-新しい publisher は `CrowServer::publisher_loop` (`cpp/src/web/crow_server.cpp:179-212`) の **構造をそのまま真似る**: 独立スレッドで `sleep_until` の periodic pacing、毎周期 `Skeleton3DBus` の最新スナップショットを lock 越しに取得 (今回は `make_bundle_json()` ではなく **新規 `Skeleton3DBus::snapshot()` getter** を生やして生の `Skeleton3DSnapshot` を取る)、変換、UDP `sendto`。
+`send_thread` は `CrowServer::publisher_loop` の pacing 構造を写経 (`steady_clock + sleep_until`)。データパスへの介入なし → スループット影響ゼロ。
 
-データパスへの介入なし → スループット影響ゼロ。
+## トラッカー定義 (10 本)
 
-## マイルストーン
+| # | TrackerRole | sensor_id | SlimeVR `TrackerPosition` (id) | Pos joint (世界フレーム) | Forward | Up |
+|---|---|---|---|---|---|---|
+| 0 | LeftUpperArm  | 0 | LEFT_UPPER_ARM (15)  | midpoint(l_shoulder, l_elbow) | elbow − shoulder | neck − shoulder |
+| 1 | RightUpperArm | 1 | RIGHT_UPPER_ARM (16) | midpoint(r_shoulder, r_elbow) | elbow − shoulder | neck − shoulder |
+| 2 | Chest         | 2 | CHEST (4)            | midpoint(neck, hip_center)    | ⊥(shoulder_axis × spine) | neck − hip_center |
+| 3 | Waist         | 3 | WAIST (5)            | hip_center                    | ⊥(hip_axis × spine)      | neck − hip_center |
+| 4 | LeftUpperLeg  | 4 | LEFT_UPPER_LEG (7)   | midpoint(l_hip, l_knee)       | knee − hip       | hip − hip_center |
+| 5 | RightUpperLeg | 5 | RIGHT_UPPER_LEG (8)  | midpoint(r_hip, r_knee)       | knee − hip       | hip − hip_center |
+| 6 | LeftLowerLeg  | 6 | LEFT_LOWER_LEG (9)   | midpoint(l_knee, l_ankle)     | ankle − knee     | hip − knee |
+| 7 | RightLowerLeg | 7 | RIGHT_LOWER_LEG (10) | midpoint(r_knee, r_ankle)     | ankle − knee     | hip − knee |
+| 8 | LeftFoot      | 8 | LEFT_FOOT (11)       | midpoint(l_heel, l_big_toe)   | toe − heel       | world Z-up |
+| 9 | RightFoot     | 9 | RIGHT_FOOT (12)      | midpoint(r_heel, r_big_toe)   | toe − heel       | world Z-up |
 
-### M1 — `Skeleton3DBus::snapshot()` 公開 (土台)
+Halpe26 必須。COCO17 では `neck(18)` / `hip_center(19)` / `heel(24,25)` / `big_toe(20,21)` が無いので extract が `runtime_error` を投げる。
 
-**修正ファイル**: `cpp/src/pipeline/snapshot.{hpp,cpp}`
+位置情報は wire に乗らないので "pos" 列はトラッカー識別とテスト検証用 (publisher は無視)。回転の forward/up は (right, up, forward) の右手系基底を Shoemake のトレースベースで wxyz quaternion に変換する。forward と up が並行 / forward が零ベクトル / 必要 joint が欠落 → `valid=false` で publisher がそのトラッカーをスキップ。
 
-`Skeleton3DBus` は現状 `make_bundle_json()` だけが出口で、生の `Skeleton3DSnapshot` を外部から取り出せない。VMC publisher は JSON ではなく **構造体のまま** quaternion 合成等を行うので、lock-protected な getter を追加する:
+## Firmware UDP プロトコル詳細
 
-```cpp
-// snapshot.hpp
-class Skeleton3DBus {
- public:
-    ...
-    Skeleton3DSnapshot snapshot() const;   // 新規。lock 内で値コピーして返す
-};
-```
+参考: `~/Documents/refs/slimevr/SlimeVR-Tracker-ESP/src/network/{connection.cpp,packets.h}` と `~/Documents/refs/slimevr/SlimeVR-Server/server/core/src/main/java/dev/slimevr/tracking/trackers/udp/{UDPProtocolParser,UDPPacket,FirmwareConstants}.kt`。
 
-```cpp
-// snapshot.cpp
-Skeleton3DSnapshot Skeleton3DBus::snapshot() const {
-    std::lock_guard<std::mutex> lk{mu_};
-    return snapshot_;   // value copy, ~17 Joint3D + stats ≈ 350 bytes
-}
-```
-
-`make_bundle_json()` は内部で `snapshot()` を呼ばずに従来通り直接 `snapshot_` を見る (lock 取得を 1 回に抑えるため)。
-
-**検証**: 既存 `/ws3d` 経路が回帰なし。新 getter は `dump_keypoints_3d` 等のオフラインツールから将来便利。
-
----
-
-### M2 — OSC 1.0 wire format シリアライザ
-
-**新規ファイル**: `cpp/src/slimevr/osc_writer.{hpp,cpp}`
-
-OSC 1.0 の wire format は単純なので 100 行で完結する:
-
-```cpp
-namespace fitra::slimevr {
-class OscWriter {
- public:
-    void clear();
-    void begin_message(std::string_view address);    // OSC string + typetag prep
-    void add_float(float v);                         // big-endian 32-bit
-    void add_int(int32_t v);
-    void add_string(std::string_view s);
-    void end_message();                              // pad addr/typetag to 4-byte
-    // OSC Bundle (#bundle + 64-bit ts + element-prefixed messages)
-    void begin_bundle(uint64_t osc_timetag_ntp);
-    void end_bundle();
-    std::span<const uint8_t> data() const;
- private:
-    std::vector<uint8_t> buf_;
-    std::vector<std::size_t> bundle_size_pos_;
-};
-}
-```
-
-仕様:
-- すべての要素は 4-byte 境界に zero-padded。
-- OSC string: `\0` terminator 必須、その後 4-byte 境界まで `\0` パディング。
-- Typetag は `,` で始まり、message body と同様にパディング。
-- Bundle 要素サイズは 32-bit big-endian で要素先頭に書く (end_bundle で back-patch)。
-
-**検証**:
-- `cpp/tools/test_osc_roundtrip.cpp` (新規) — hand-crafted バイト列との一致テスト。
-- `python3 -c "from pythonosc.dispatcher import Dispatcher; ..."` でローカルにダンプしたバイナリを読み戻して値一致を確認 (テスト用、Python 依存はテストだけ)。
-- 既知 OSC ライブラリのパケット (例: `osc_pkt::OutboundPacketStream` の出力) とバイト単位で一致。
-
-依存追加なし: `std::vector<uint8_t>` + `std::byteswap`(C++23 未使用なら手書き bswap)。
-
----
-
-### M3 — Tracker 抽出と quaternion 合成
-
-**新規ファイル**: `cpp/src/slimevr/tracker_extract.{hpp,cpp}`
-
-入力: `infer::Skeleton3D` (Halpe26 索引前提、`active_keypoint_format() == Halpe26` をアサート)。
-出力: `std::array<VmcTracker, 8>`、各 `VmcTracker { std::string role; cv::Vec3f pos; cv::Vec4f quat_wxyz; bool valid; }`。
-
-**Position の決定** (Halpe26):
-
-| Role | Position |
-|---|---|
-| WAIST | `joints[19]` (hip-center) |
-| CHEST | `joints[18]` (neck) |
-| LEFT_KNEE | `joints[13]` |
-| RIGHT_KNEE | `joints[14]` |
-| LEFT_ELBOW | `joints[7]` |
-| RIGHT_ELBOW | `joints[8]` |
-| LEFT_FOOT | `0.5 * (joints[24] + joints[20])` (heel + big_toe で足底中心) |
-| RIGHT_FOOT | `0.5 * (joints[25] + joints[21])` |
-
-(COCO17 fallback: 仕様外。Phase 9 完了前提。`assert(kp_format == Halpe26)` で起動時拒否。)
-
-**Quaternion 合成** (orthonormal frame → wxyz quaternion):
-
-各 tracker について「forward (z-axis)」「up (y-axis)」のヒントベクトルを定義し、`x = cross(up, forward)`、`y = cross(forward, x)` で正規直交基底を作って 3×3 行列を quaternion に変換 (`cv::Rodrigues` ではなく Shoemake's matrix-to-quat 直接実装)。
-
-| Role | Forward (z+) | Up (y+) |
-|---|---|---|
-| WAIST | `joints[18] - joints[19]` (hip→neck, spine 上向き) を **y** に、`joints[12] - joints[11]` (r_hip→l_hip 反転で **x**) → **z = x×y** | 上記 spine 方向 |
-| CHEST | `joints[18] - joints[19]` を **y**、肩線 `joints[5] - joints[6]` (l→r 反転) を **x** | spine |
-| LEFT_KNEE | `joints[15] - joints[13]` (knee→ankle, 下腿方向) | `joints[11] - joints[13]` (knee→hip, 大腿軸) を up に投影 |
-| RIGHT_KNEE | 同 (右側) | 同 |
-| LEFT_ELBOW | `joints[9] - joints[7]` (elbow→wrist) | `joints[5] - joints[7]` (elbow→shoulder) |
-| RIGHT_ELBOW | 同 (右側) | 同 |
-| LEFT_FOOT | `joints[20] - joints[24]` (heel→big_toe, つま先方向) | world up `(0,0,1)` (足は yaw のみ意味あり) |
-| RIGHT_FOOT | `joints[21] - joints[25]` | 同 |
-
-縮退時 (forward ≈ up 平行、または `valid=false` 関節を含む) は `quat = identity (1,0,0,0)` + `valid = false`。VMC publisher 側で valid=false の tracker はその周期スキップ (前回値保持を SlimeVR 側に任せる)。
-
-**Quaternion exponential smoothing**: 連続フレーム間で `slerp(prev, curr, alpha)` (alpha = 0.5 既定、`--slimevr-quat-smooth` で調整)。位置側は既に Kalman 済みなので追加平滑化しない。
-
-**Coordinate transform (world → Unity 左手 Y-up)**:
-
-我々の world は `(X=right, Y=forward, Z=up, meters, 床=Z0)`。VMC = Unity 左手 = `(X=right, Y=up, Z=forward)`。Quat も座標系反転。
+### 共通ヘッダ (全パケット)
 
 ```
-pos_vmc  = ( px, pz, -py )
-quat_vmc = ( qx_unity, qy_unity, qz_unity, qw_unity )
-         = ( qx, qz, -qy, -qw )    // Z/W flip 規約は VMCHandler.kt と一致
+[4 bytes BE u32]  packet tag
+[8 bytes BE u64]  sequence number
 ```
 
-`VMCHandler.kt` の "Z/W flip" 規約と完全一致させるテストを M5 に含める。
+シーケンスは publisher 内で単調増加 (handshake で 0 を override 送出してから 1 起算)。サーバ側は `connection.isNextPacket(seq)` で out-of-order を弾くが、ping は seq=0 で送り返しても受け付ける (実装確認済)。
 
-**検証**: `cpp/tools/test_tracker_extract.cpp` — 合成 Halpe26 skeleton (T ポーズ、A ポーズ、片足上げ) を入力し、出力 quat を Unity 慣性軸で 3×3 行列に戻して visual inspection (期待値テーブル付き unit test)。
+### Handshake (tag = 3)
 
----
-
-### M4 — VMC Publisher スレッド
-
-**新規ファイル**: `cpp/src/slimevr/vmc_publisher.{hpp,cpp}`
-
-```cpp
-namespace fitra::slimevr {
-
-struct VmcPublisherOptions {
-    std::string host           = "127.0.0.1";
-    uint16_t    port           = 39539;          // VMC default
-    double      send_rate_hz   = 60.0;
-    double      quat_smooth    = 0.5;
-    bool        send_root_pos  = true;           // /VMC/Ext/Root/Pos
-    bool        send_time      = true;           // /VMC/Ext/T (loop time)
-};
-
-class VmcPublisher {
- public:
-    VmcPublisher(pipeline::Skeleton3DBus& bus, VmcPublisherOptions opts);
-    ~VmcPublisher();
-    void start();
-    void stop();
-    struct Stats { uint64_t sent_bundles=0; uint64_t skipped_invalid=0;
-                   double last_send_ms=0; double last_rt_quat_max_dev_deg=0; };
-    Stats stats() const;
- private:
-    void loop();
-    pipeline::Skeleton3DBus& bus_;
-    VmcPublisherOptions opts_;
-    int                 sock_fd_ = -1;
-    std::thread         thread_;
-    std::atomic<bool>   stop_{false};
-    std::array<cv::Vec4f, 8> prev_quat_{};   // for smoothing
-    OscWriter           writer_;
-    mutable std::mutex  stats_mu_;
-    Stats               stats_;
-};
-
-}
-```
-
-**Loop の構造** (`CrowServer::publisher_loop` 完コピ + 修正):
-
-```cpp
-void VmcPublisher::loop() {
-    using clock = std::chrono::steady_clock;
-    auto period = std::chrono::duration<double>(1.0 / std::max(opts_.send_rate_hz, 1.0));
-    auto next = clock::now();
-    while (!stop_.load()) {
-        next += std::chrono::duration_cast<clock::duration>(period);
-        std::this_thread::sleep_until(next);
-        if (stop_.load()) break;
-
-        auto snap = bus_.snapshot();
-        if (!snap.stats.enabled || snap.persons.empty()) { ++stats_.skipped_invalid; continue; }
-        if (!snap.stats.ik_locked) { ++stats_.skipped_invalid; continue; }  // ボーン長未確定なら送らない
-
-        auto trackers = extract_vmc_trackers(snap.persons.front());
-        apply_quat_smoothing(trackers, prev_quat_, opts_.quat_smooth);
-
-        writer_.clear();
-        writer_.begin_bundle(/*ntp ts of now*/);
-        if (opts_.send_time)     { writer_.begin_message("/VMC/Ext/T"); writer_.add_float(loop_time_sec); writer_.end_message(); }
-        if (opts_.send_root_pos) { writer_.begin_message("/VMC/Ext/Root/Pos"); /* 0,0,0, identity quat */ writer_.end_message(); }
-        for (auto& t : trackers) {
-            if (!t.valid) continue;
-            writer_.begin_message("/VMC/Ext/Tra/Pos");
-            writer_.add_string(t.role);              // "waist", "leftFoot", ...
-            writer_.add_float(t.pos[0]); writer_.add_float(t.pos[1]); writer_.add_float(t.pos[2]);
-            writer_.add_float(t.quat[1]); writer_.add_float(t.quat[2]); writer_.add_float(t.quat[3]); writer_.add_float(t.quat[0]);  // qx qy qz qw order
-            writer_.end_message();
-        }
-        writer_.end_bundle();
-
-        ::sendto(sock_fd_, writer_.data().data(), writer_.data().size(), 0,
-                 (sockaddr*)&sa_, sizeof sa_);
-        ++stats_.sent_bundles;
-    }
-}
-```
-
-**Socket**: `socket(AF_INET, SOCK_DGRAM, 0)` + `sendto`。`SO_BROADCAST` 不要、`connect()` でデフォルト宛先固定オプションあり。`opts_.host` を `inet_pton` で `sa_in`、ctor で 1 回だけ。
-
-**起動失敗時**: socket() / inet_pton() が失敗したら publisher は起動しない (CLI で warn ログ + 続行)。pose pipeline は影響を受けない。
-
-**スレッド寿命**: `main.cpp` で `MultiCameraDriver` 起動の **後** に start、停止の **前** に stop。`CrowServer` と並列存在。
-
----
-
-### M5 — CLI 追加 + ライフタイム
-
-**修正ファイル**: `cpp/src/main.cpp`
-
-新規フラグ:
-- `--slimevr-out` (bool) — VMC publisher を起動 (既定 OFF)
-- `--slimevr-host <ip>` (既定 `127.0.0.1`)
-- `--slimevr-port <port>` (既定 `39539`)
-- `--slimevr-rate-hz <float>` (既定 `60.0`)
-- `--slimevr-quat-smooth <0..1>` (既定 `0.5`)
-
-主要結線:
-```cpp
-std::unique_ptr<slimevr::VmcPublisher> vmc_pub;
-if (args.slimevr_out) {
-    if (!args.enable_3d) FITRA_LOG_WARN("--slimevr-out requires --enable-3d, skipping");
-    else if (args.keypoint_format != KeypointFormat::Halpe26)
-        FITRA_LOG_FATAL("--slimevr-out requires --keypoint-format=halpe26");
-    else {
-        vmc_pub = std::make_unique<slimevr::VmcPublisher>(*bus3d, opts);
-        vmc_pub->start();
-    }
-}
-// ... driver/server.run() ...
-// stop order: server -> vmc_pub -> driver
-```
-
-`--slimevr-out` を `--mode pose` のときだけ有効化。`--mode calib-*` 時は CLI でエラー。
-
----
-
-### M6 — Stats / 診断
-
-**修正ファイル**: `cpp/src/pipeline/snapshot.{hpp,cpp}` (or 別ルート)
-
-Skeleton3D stats に **VMC 送信側の指標を直接書かない** (双方向結合になる)。代わりに `VmcPublisher::stats()` を `crow_server` の `/stats` JSON に **任意で** 露出する経路を作る:
-
-修正: `cpp/src/web/crow_server.{hpp,cpp}`
-- `CrowServer` に optional `slimevr::VmcPublisher* vmc_pub` ポインタを set できるようにする
-- `/stats` JSON 末尾に `"slimevr": {"sent_bundles":N, "skipped_invalid":M, "last_send_ms":F}` を追加 (publisher が nullptr なら省略)
-
-これにより `web/dual_rtmpose/app.js` 側で SlimeVR 送信状況を表示する余地が残る (本フェーズ範囲外、Phase 12 候補)。
-
-**ログ**: 5 秒ごとに `[slimevr] sent=NNN skipped=MMM rate=XX.XHz` を spdlog で吐く。
-
----
-
-### M7 — 検証ツール: ローカル OSC ループバック
-
-**新規ファイル**: `cpp/tools/slimevr_loopback.cpp`
-
-スタンドアロン CLI:
-- UDP `127.0.0.1:39539` を listen
-- 受信した OSC bundle をパースして `address, types, args` で stdout に dump
-- `--seconds 10` で自動終了
-
-これで SlimeVR Server を起動していない状態でも `vmc_publisher` の wire 出力を目視確認できる。期待出力例:
+起動時に 1 回。サーバ側は `if (buf.remaining() > 3) { ... }` で各フィールドを optional に読むので、MAC まで送れば十分:
 
 ```
-[bundle ts=...]
-  /VMC/Ext/T  ,f  3.412
-  /VMC/Ext/Root/Pos  ,sfffffff  Root 0 0 0 0 0 0 1
-  /VMC/Ext/Tra/Pos  ,sfffffff  waist     0.02 0.94 -0.10 0.01 0.03 -0.02 -0.999
-  /VMC/Ext/Tra/Pos  ,sfffffff  leftFoot  0.12 0.05  0.30 ...
-  ...
+[4 BE i32]   board_type     = 4 (BoardType.CUSTOM)
+[4 BE i32]   imu_type       = 0 (UNKNOWN)
+[4 BE i32]   mcu_type       = 0 (UNKNOWN)
+[4×3 BE i32] imu_info       = 0, 0, 0  (reserved)
+[4 BE i32]   protocol_ver   = 18  (現行)
+[1 u8]       fw_string_len
+[N u8]       firmware_string  ("fitra-cam 0.1" 等)
+[6 u8]       mac_bytes
 ```
 
----
+### SensorInfo (tag = 15)
 
-### M8 — 実機検証
+Handshake 直後にトラッカー 10 個分まとめて送る:
 
-1. **ループバック単体**:
-   ```bash
-   ./cpp/build/main --mode pose --keypoint-format halpe26 \
-     --cam0 ... --cam1 ... --cam2 ... --enable-3d --calib calibrations/.../cam_params.yaml \
-     --subject-id subj01 --slimevr-out --slimevr-port 39539 &
-   ./cpp/build/tools/slimevr_loopback --port 39539 --seconds 30
-   ```
-   → 8 trackers × 60 Hz ≈ 480 messages/sec が届くこと、位置値が動的に変動。
+```
+[1 u8]  sensor_id        = 0..9
+[1 u8]  sensor_status    = 1 (OK)
+[1 u8]  sensor_type      = 0 (IMUType.UNKNOWN)
+[2 BE u16] sensor_config = 0  (no magnetometer)
+[1 u8]  rest_calib_done  = 0
+[1 u8]  tracker_position = TrackerPosition value (4/5/7/8/9/10/11/12/15/16)
+[1 u8]  tracker_data_type= 0 (ROTATION)
+```
 
-2. **SlimeVR Server 連携** (Jetson 外 PC の SlimeVR Server を使用):
-   - SlimeVR Server の OSC Receiver 設定で port=39539, "VMC Protocol" を ON。
-   - Jetson 側で `--slimevr-host <pc-ip>` 起動。
-   - SlimeVR UI で 8 trackers が "VMC receiver" デバイスとして自動認識されること。
-   - T ポーズで Autobone → SteamVR で full-body avatar が動くこと (主観評価)。
+サーバ側は `tracker_position` を読んだ時点で GUI display name が決まる。後段の `tracker_data_type` は optional だが送っておく。
 
-3. **回帰 (パフォーマンス)**:
-   - `--slimevr-out` ON/OFF で aggregate `recent_pose_fps` 差 < 2%。
-   - `top -H -p <pid>` で `vmc_publisher` スレッドの CPU < 3%。
+### RotationData (tag = 17)
 
-4. **Quaternion 妥当性**:
-   - 静止 T ポーズ 5 秒の subject 録画で quat の標準偏差 < 1° (Kalman 後 + smoothing 後)。
-   - WAIST quat × CHEST quat^-1 が概ね identity (脊柱が回転していない)。
+毎周期 60 Hz × 10 sensor:
 
-5. **Correctness 回帰** (`outputs/recorded_rtmpose/20260515_064342/raw_cam{0,1}.mp4` 30 frames):
-   - Phase 1 / Phase 5 / Phase 9 と同様、`dump_keypoints` で kpt L2 < 1.5 px (Halpe26 で再測定)。Phase 11 は infer 層に触れないので不変。
+```
+[1 u8]  sensor_id
+[1 u8]  data_type = 1 (NORMAL)
+[4 BE f32] qx
+[4 BE f32] qy
+[4 BE f32] qz
+[4 BE f32] qw
+[1 u8]  accuracy_info = 0
+```
 
----
+Quaternion は xyzw on wire で、SlimeVR 内部 frame (Y-up Unity LH) で解釈される。world wxyz から `world_quat_to_slime()` で `(qx, qz, -qy, -qw)` に変換。
 
-## 既存資産の再利用
+### Heartbeat (tag = 0)
 
-- `cpp/src/web/crow_server.cpp:179-212` の `publisher_loop` 構造 — VMC publisher の periodic pacing をそのまま流用。
-- `cpp/src/pipeline/snapshot.cpp:107-111` の `Skeleton3DBus::update` lock パターン — M1 の `snapshot()` getter で同じ mutex を共有。
-- `cpp/src/lift/skeleton_def.hpp` の Halpe26 索引定数 (Phase 9 で配置済) — tracker extract で直接参照。
-- `cpp/src/infer/types.hpp::Joint3D{x,y,z,score,valid}` — 既存定義のまま消費。
-- `cpp/src/pipeline/calibration_session.cpp` の `tmp + rename` パターンは不要 (publisher はファイル書かない)。
-- OpenCV `cv::Vec3f` / `cv::Vec4f` — 既存依存内、quat 合成と matrix→quat 変換に利用。
+1 Hz でヘッダのみ送出。SlimeVR 側の per-device timeout (~500 ms) で disconnected 扱いにならないための保険。
 
-## 変更ファイル一覧
+### PingPong (tag = 10) — receive
 
-**新規**:
+SlimeVR Server が ~500 ms 周期で:
+
+```
+[4 BE u32] tag = 10
+[8 BE u64] seq = 0   (サーバ側 writer は常に 0)
+[4 BE u32] ping_id
+```
+
+を投げてくる。`recv_thread` が `decode_ping` で id を取り出し、`encode_ping_reply(ping_id)` で同じ id を載せ替えて返送 (こちらも seq=0)。
+
+## ファイル構成
 
 | ファイル | 役割 |
 |---|---|
-| `cpp/src/slimevr/osc_writer.{hpp,cpp}` | OSC 1.0 wire format 手書きシリアライザ |
-| `cpp/src/slimevr/tracker_extract.{hpp,cpp}` | Halpe26 → 8 VMC trackers (位置 + 合成 quaternion) |
-| `cpp/src/slimevr/vmc_publisher.{hpp,cpp}` | UDP 60Hz publisher スレッド |
-| `cpp/tools/slimevr_loopback.cpp` | ローカル受信ダンプ CLI (検証用) |
-| `cpp/tools/test_osc_roundtrip.cpp` | OSC wire format 単体テスト |
-| `cpp/tools/test_tracker_extract.cpp` | quat 合成 + 座標変換単体テスト |
+| `cpp/src/slimevr/firmware_protocol.{hpp,cpp}` | パケット enum / wire-format シリアライザ / 簡易 SHA-1 / MAC 派生 / 座標変換 |
+| `cpp/src/slimevr/tracker_extract.{hpp,cpp}`   | Halpe26 → 10 トラッカー (世界フレーム) + slerp smoothing |
+| `cpp/src/slimevr/native_publisher.{hpp,cpp}`  | UDP socket + send/recv 2 スレッド + handshake state + stats |
+| `cpp/tools/test_firmware_protocol.cpp`        | wire-format byte-level golden test (handshake / sensor_info / rotation_data / ping_reply / MAC / quat 変換) |
+| `cpp/tools/test_tracker_extract.cpp`          | T-pose / degeneracy / smoothing / TrackerPosition mapping |
 
-**修正**:
+CMake:
+- `fitra_slimevr` lib に 3 つの `.cpp` (firmware_protocol / native_publisher / tracker_extract) をまとめる
+- `fitra_web` は publisher の stats を `/stats3d` に splice するため `fitra_slimevr` に依存
 
-| ファイル | 変更 |
-|---|---|
-| `cpp/src/pipeline/snapshot.{hpp,cpp}` | `Skeleton3DBus::snapshot()` getter 追加 (M1) |
-| `cpp/src/main.cpp` | `--slimevr-*` フラグ群、`VmcPublisher` の起動・停止結線 (M5) |
-| `cpp/src/CMakeLists.txt` | 新規 `fitra_slimevr` ライブラリ追加 (OpenCV のみリンク)、`fitra_pipeline` に追加 |
-| `cpp/tools/CMakeLists.txt` | `slimevr_loopback`, `test_osc_roundtrip`, `test_tracker_extract` の add_executable |
-| `cpp/src/web/crow_server.{hpp,cpp}` | optional `VmcPublisher*` 受け取り、`/stats` JSON で stats 露出 (M6) |
-| `docs/cpp-migration-plan.md` | 「段階実装」に Phase 11 追記 (完了条件 = 8 trackers が SlimeVR で動く) |
-| `docs/phase11-slimevr-vmc-integration.md` (新規 docs) | Phase 11 設計の正本 (本プラン file から派生) |
+## CLI
 
-**不変** (依存追加なし):
-- `python/` 配下 — 参照実装としてのまま (SlimeVR 連携は C++ 専用)
-- `web/dual_rtmpose/` — frontend は無改修
-- `cpp/src/infer/*`, `cpp/src/lift/*` — infer / lift 層に介入しない
+```
+--slimevr-out             ネイティブ UDP publisher 起動 (bool, default off)
+--slimevr-host ADDR       SlimeVR Server host (default 127.0.0.1; 別 PC Windows なら IP を指定)
+--slimevr-port N          UDP port (default 6969 — SlimeVR firmware port)
+--slimevr-rate-hz F       RotationData 送出周期 (default 60.0、最大 240)
+--slimevr-quat-smooth F   per-tracker slerp alpha 0..1 (default 0.5)
+```
 
-## リスクと緩和
+Gating (main.cpp で early-fail):
 
-| ID | リスク | 緩和 |
+1. `--slimevr-out` ⇒ `--enable-3d` 必須
+2. `--slimevr-out` ⇒ `--keypoint-format=halpe26` 必須
+3. `--slimevr-out` ⇒ `--calibrate` と排他
+4. port ∈ [1, 65535], rate ∈ (0, 240], smooth ∈ [0, 1]
+
+## /stats3d スプライス
+
+`crow_server.cpp` の `/stats3d` ハンドラは publisher が attach されている時のみ、bundle JSON の末尾 `}` を `,"slimevr":{...}}` に書き換えて返す:
+
+```json
+"slimevr": {
+  "sent_handshakes":  1,
+  "sent_sensor_info": 10,
+  "sent_rotations":   12345,
+  "sent_heartbeats":  21,
+  "skipped_invalid":  3,
+  "ping_count":       42,
+  "last_send_ms":     1715310123456.789
+}
+```
+
+`/stats` (2D bundle) は変更なし。
+
+## マイルストーン
+
+| M | 内容 | 完了 |
 |---|---|---|
-| R1 | VMC Z/W flip 規約の解釈ミス | `VMCHandler.kt` の inverse 変換と完全一致する unit test を M3 に追加 |
-| R2 | 合成 quaternion が SlimeVR avatar 上で破綻 | M3 で smoothing alpha を可変、T/A/lunge ポーズの目視ベンチを M8 に明記。失敗時は native UDP packet 17 + identity rotation + 位置のみ送る fallback を Phase 11b で検討 |
-| R3 | UDP 60 Hz が SlimeVR Server に過負荷 | `--slimevr-rate-hz` で可変、既定 60。SlimeVR は 100-400 Hz の IMU を受け付けているので余裕がある |
-| R4 | Tracker role 文字列の SlimeVR ↔ VMC 命名差 | VMC は `"waist"/"leftFoot"/"rightFoot"/"chest"/"leftKnee"/"rightKnee"/"leftElbow"/"rightElbow"`。SlimeVR の `TrackerRole.kt` enum と OSC 文字列のマップを M3 で固定 |
-| R5 | Halpe26 未完了で機能不能 | M5 で起動時 fatal、CLI ヘルプに前提を明記 |
-| R6 | Quat 合成の縮退 (横方向ベクトルが zero) | M3 で `|cross| < ε` チェック、縮退時は identity + valid=false で当該フレーム送信スキップ |
-| R7 | Skeleton3DBus mutex 競合 | M1 の `snapshot()` は値コピー only (~350 B)、`make_bundle_json()` と排他しても 60 Hz 周期内に十分収まる |
-| R8 | foot tracker yaw 不安定 (heel/big_toe 検出失敗時) | M3 で `valid=false` → スキップ。SlimeVR 側で前回値保持 |
-| R9 | Halpe26 + VMC で hip-center が床にめり込む傾向 | キャリブの世界座標と SlimeVR の "Floor Y = 0" 規約の整合性を M8 の SlimeVR UI ステップで確認。必要なら `--slimevr-floor-offset-m` で z オフセット |
+| M1 | VMC/OSC ソース削除 + CMake/CLI クリーンアップ + Phase 11 doc preamble 修正。ビルド通過、test (triangulator + 旧 tracker_extract) pass | ✅ |
+| M2 | `firmware_protocol.{hpp,cpp}` + `test_firmware_protocol` (9 cases: header / handshake / sensor_info / rotation_data / ping reply / ping decode / MAC determinism / quat transform / encoder purity) | ✅ |
+| M3 | `tracker_extract.{hpp,cpp}` を 10 本構成へ書き換え + `test_tracker_extract` 更新 (T-pose で 10 全 valid, missing joint → invalid, role→position mapping, smoothing) | ✅ |
+| M4 | `native_publisher.{hpp,cpp}` — UDP socket + send thread + recv thread + handshake/SensorInfo 起動シーケンス + heartbeat + ping reply | ✅ |
+| M5 | `main.cpp` への CLI 配線 + `crow_server.{hpp,cpp}` の `/stats3d` splice | ✅ |
+| M6 | 実機 SlimeVR Server (別 PC Windows) との E2E 確認: 10 トラッカーが名前付きで表示 / avatar が破綻なく動く / fps regression < 2% | ⏳ ユーザ手動 |
+| M7 | `docs/phase11-slimevr-integration.md` 全面書き換え + `cpp-migration-plan.md` 更新 + `docs/backlog-slimevr-bridge-relay.md` 新規 | ✅ |
 
-## 段階実行順序 (依存順)
+## 検証
 
-1. **M1** — `Skeleton3DBus::snapshot()` getter (小、回帰なし)
-2. **M2** — OSC writer + roundtrip テスト (M3 以降の土台)
-3. **M3** — Tracker 抽出 + quat 合成 + 座標変換 + テスト
-4. **M4** — VMC Publisher スレッド (M1+M2+M3 結合)
-5. **M5** — CLI + ライフタイム結線
-6. **M7** — slimevr_loopback CLI (M4 と並行可、M8 で必須)
-7. **M6** — Stats 露出 (任意、Phase 12 候補に倒してもよい)
-8. **M8** — 実機検証 (loopback → SlimeVR Server → perf 回帰)
+### 単体 (実機不要)
 
-## Phase 12+ への含み (本フェーズ範囲外)
+```bash
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build cpp/build -j
+ctest --test-dir cpp/build --output-on-failure
+# → test_triangulator / test_firmware_protocol / test_tracker_extract が全 pass
+```
 
-- **Native SlimeVR UDP (packet 17)** への昇格 — VMC で solver の挙動が悪い場合のフォールバック実装。
-- **HEAD tracker / HMD anchoring** — SlimeVR HMD 不在環境で head_top(17) を HEAD として送る選択肢。
-- **多人数対応** — 現状 `persons.front()` のみ。複数人 SlimeVR は 1 SlimeVR Server / instance 制約があるので、複数被験者は別ポート/別 instance で送る設計が必要。
-- **Frontend 表示** — `/stats` の SlimeVR 状況を `web/dual_rtmpose/app.js` のヘッダに badge 表示。
-- **手首・指トラッキング** — VRChat OSC trackers / VMC は基本的に大関節のみ。Halpe26 でも手指は無いので別モデル必須。
+### 統合 (Jetson 単体、SlimeVR 機の代わりに netcat dump)
+
+```bash
+# Terminal A — fake SlimeVR Server (receive only, dump hex):
+nc -u -l 6969 | xxd
+
+# Terminal B — Jetson 実機:
+./cpp/build/main --enable-3d --keypoint-format=halpe26 \
+    --slimevr-out --slimevr-host=127.0.0.1 --slimevr-port=6969 \
+    --cam0 /dev/v4l/by-path/... --cam1 /dev/v4l/by-path/... \
+    --calib calibrations/<id>/calibration.yaml \
+    --det-engine engines/yolox.engine --pose-engine engines/rtmpose.engine
+```
+
+Terminal A 側で:
+- 起動直後の handshake (~50 byte) と sensor_info × 10 (各 18 byte)
+- 60 Hz の rotation_data ×~10 (各 23 byte)
+- 1 Hz の 12-byte heartbeat
+
+が観測できれば wire は OK (`nc` は ping を投げてこないので ping_count は 0 のまま)。
+
+### E2E (Windows SlimeVR 機が必要 — M6)
+
+1. Windows 機の IP を確認 (例 `192.168.1.50`)。SlimeVR Server を起動。
+2. Jetson 側:
+   ```bash
+   ./cpp/build/main --enable-3d --keypoint-format=halpe26 \
+       --slimevr-out --slimevr-host=192.168.1.50 \
+       --cam0 ... --cam1 ... --calib ... --det-engine ... --pose-engine ...
+   ```
+3. SlimeVR GUI で **10 個のトラッカーが Left Upper Arm / Right Upper Arm / Chest / Waist / Left Upper Leg / Right Upper Leg / Left Lower Leg / Right Lower Leg / Left Foot / Right Foot の名前で自動表示** されること (連番ならない、手動 assign 不要)。
+4. 被験者の腕上げ / しゃがみ / 歩行で各トラッカーの回転が破綻なく追従し、SteamVR Avatar の FBT が成立すること。
+5. `curl http://<jetson-ip>:8000/stats3d` の `"slimevr"` ブロックで:
+   - `sent_handshakes` = 1
+   - `sent_sensor_info` = 10
+   - `sent_rotations` が steady-state で 60×10 = 600/s 程度に増加
+   - `ping_count` > 0 (双方向通信成立)
+   - aggregate `recent_pose_fps` 低下 < 2%
+6. Jetson を再起動して再接続 → SlimeVR 側のトラッカー配置が前回のまま保持されることを確認 (MAC 決定論)。
+
+## リスク・残課題
+
+| ID | 内容 | 対応 |
+|---|---|---|
+| R1 | quat 合成の forward/up vector が短い / 並行に近い | `quat_from_forward_up` が `valid=false` + identity を返す → publisher がそのフレームをスキップ。前周期の smoothing バッファが残るので avatar はフリーズせず、最後の有効値を保持 |
+| R2 | SlimeVR 側 IK が回転だけでは想定外の体型に解いてしまう | M6 で実機目視。被験者の身長を SlimeVR 側でも合わせる (HMD 高さ調整) ことが前提 |
+| R3 | Server からの ping に応答しない / 遅延 | recv ループの SO_RCVTIMEO=250ms。stop 中は shutdown(SHUT_RDWR) でブロックを解除 |
+| R4 | Jetson 内で gethostname() が変わると MAC が変わって SlimeVR 設定が無効化 | hostname を固定して運用。Docker コンテナ起動時は `--hostname fitra-jetson` を渡す |
+| R5 | 位置情報を VR 側で活用したい用途 | Bridge protocol over network のリレー実装が必要。[`backlog-slimevr-bridge-relay.md`](backlog-slimevr-bridge-relay.md) に積み課題として記録 |
+
+## 関連ドキュメント
+
+- [`backlog-slimevr-bridge-relay.md`](backlog-slimevr-bridge-relay.md) — 位置を含めて送りたい場合の Bridge protocol relay 構想 (B 案)
+- [`cpp-migration-plan.md`](cpp-migration-plan.md) — 全体ロードマップと Phase 11 検証行
+- [`phase9-halpe26-migration.md`](phase9-halpe26-migration.md) — 前提となる Halpe26 移行

@@ -2,6 +2,40 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Communication language
+
+**Write user-facing replies, git commit subjects (after the prefix), commit bodies, and PR descriptions in Japanese.** Conventional Commits prefixes (`feat(phaseN):`, `fix:`, `docs:`, `refactor:`, `chore:`, ...) stay in English. The `Co-Authored-By` trailer also stays in English.
+
+- Final answers to the user, progress reports, summaries: Japanese.
+- Commit subject line: `prefix(scope): <Japanese summary>` — prefix in English, summary in Japanese.
+- Commit body: Japanese. Technical tokens (CMake, ctest, function names, file paths) stay in English, mixed inline.
+- Code comments / identifiers / exception strings: follow the existing convention of the file (this repo is English-majority).
+- `docs/` content: match the existing language of the file (phase plans are Japanese-majority, build notes are English-majority).
+
+`git log --oneline` shows the established pattern (`feat(phase8): ...`, `fix(phase9): ...`, `docs(phase11): ...`) — match it.
+
+## Branching and commits
+
+**One branch per phase, one commit per task (milestone)** is the established workflow.
+
+- **Branch name**: `cpp-phaseN` (e.g. `cpp-phase8`, `cpp-phase9`, `cpp-phase11`). Skipping a phase skips the branch number too (Phase 10 was skipped → next branch was `cpp-phase11`, not `cpp-phase10`).
+- **Branch base**: cut from the previous phase's tip. The previous phase does not need to be merged into Develop first; once its work has settled, it's a valid base.
+- **Commit granularity**: one commit per milestone (M1, M2, ...) in `docs/phaseN-*.md`. Tightly coupled milestones (e.g. publisher + CLI + stats integration in Phase 11) may be bundled into a single commit when separating them would produce un-buildable intermediate states.
+- **Commit prefix**: `feat(phaseN):` (new feature), `fix(phaseN):` (bug fix), `docs(phaseN):` (phase-scoped doc update), `refactor:`, `chore:`, etc. Bare `docs:` (no phase scope) is for repo-wide meta files like CLAUDE.md.
+- **Design doc**: `docs/phaseN-*.md` is the source of truth for the phase, with milestones (M1–M8 etc.) defined there. Commit bodies should be able to point at "see `docs/phaseN-*.md`" rather than restating the design.
+- **Phase completion**: not done until `docs/cpp-migration-plan.md` has a row for the phase in both the "段階実装" section and the "検証戦略" table. Shipping the design doc alone is not enough.
+
+Example (Phase 11):
+```
+cpp-phase11 (branched from cpp-phase9; Phase 10 was skipped)
+  ├─ M1:    feat(phase11): add Skeleton3DBus::snapshot() ...
+  ├─ M2:    feat(phase11): hand-rolled OSC 1.0 wire writer ...
+  ├─ M3:    feat(phase11): VMC tracker extraction ...
+  ├─ M4-6:  feat(phase11): VMC publisher thread + CLI ...
+  ├─ M7:    feat(phase11): slimevr_loopback OSC dump tool
+  └─ docs:  docs(phase11): execution notes ...
+```
+
 ## Scope and direction
 
 `fitra-cam` runs YOLOX person detection + RTMPose 17-keypoint 2D pose for **multiple USB cameras** on a Jetson Orin Nano Super. The project is **migrating from Python (ONNX Runtime) to C++ (TensorRT + Jetson Multimedia API)** to break past the Python parallel-pose ceiling (~18 fps × 2 in the old build). The migration plan and architecture are in `docs/cpp-migration-plan.md` — read it before non-trivial work.

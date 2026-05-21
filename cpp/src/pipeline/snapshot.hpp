@@ -86,6 +86,13 @@ public:
     void update(const Skeleton3DSnapshot& s);
     std::string make_bundle_json();
 
+    // Lock-protected value-copy of the latest snapshot. Used by external
+    // consumers that want the raw Skeleton3DSnapshot (Joint3D + stats) rather
+    // than the JSON wire form -- in particular the Phase 11 SlimeVR/VMC
+    // publisher, which needs to run its own quaternion compose and coordinate
+    // transform on the snapshot before serializing.
+    Skeleton3DSnapshot snapshot() const;
+
 private:
     mutable std::mutex mu_;
     Skeleton3DSnapshot snapshot_;

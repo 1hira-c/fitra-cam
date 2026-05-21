@@ -1,0 +1,48 @@
+# 2-camera 3D live config for cpp/build/main.
+#
+# Copy this file to `configs/live_2cam_3d.yaml` (gitignored) and edit the
+# device / engine paths for your machine, then run with
+# `--config configs/live_2cam_3d.yaml`.
+#
+# Equivalent CLI:
+#   ./cpp/build/main \
+#       --cam0 /dev/v4l/by-path/usb-cam-A-video-index0 \
+#       --cam1 /dev/v4l/by-path/usb-cam-B-video-index0 \
+#       --det-engine outputs/tensorrt_engines/yolox_tiny.fp16.engine \
+#       --pose-engine outputs/tensorrt_engines/rtmpose_m_halpe26.fp16.engine \
+#       --keypoint-format halpe26 \
+#       --enable-3d \
+#       --calib calibrations/measure_session/cam_params.yaml \
+#       --port 8000
+#
+# To run a previously calibrated subject's IK profile, fill in `subject.subject_id`.
+# To attach the SlimeVR Firmware UDP publisher, uncomment the slimevr block and
+# point `host` at your SlimeVR Server machine.
+
+schema: fitra_main_config_v1
+
+cameras:
+  cam0: /dev/v4l/by-path/usb-cam-A-video-index0
+  cam1: /dev/v4l/by-path/usb-cam-B-video-index0
+
+inference:
+  det_engine: outputs/tensorrt_engines/yolox_tiny.fp16.engine
+  pose_engine: outputs/tensorrt_engines/rtmpose_m_halpe26.fp16.engine
+  keypoint_format: halpe26
+
+three_d:
+  enable_3d: true
+  calib: calibrations/measure_session/cam_params.yaml
+
+subject:
+  subjects_dir: calibrations/subjects
+  # subject_id: subject01
+
+web:
+  port: 8000
+
+# slimevr:
+#   slimevr_out: true
+#   host: 192.168.1.100   # IP of your Windows SlimeVR Server
+#   port: 6969
+#   rate_hz: 60.0

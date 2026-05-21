@@ -1,0 +1,29 @@
+# Minimal 2-camera 2D live config for cpp/build/main.
+#
+# Copy this file to `configs/live_2cam.yaml` (gitignored) and edit the
+# device / engine paths for your machine, then run with
+# `--config configs/live_2cam.yaml`.
+#
+# Equivalent CLI:
+#   ./cpp/build/main \
+#       --cam0 /dev/v4l/by-path/usb-cam-A-video-index0 \
+#       --cam1 /dev/v4l/by-path/usb-cam-B-video-index0 \
+#       --det-engine outputs/tensorrt_engines/yolox_tiny.fp16.engine \
+#       --pose-engine outputs/tensorrt_engines/rtmpose_m.fp16.engine \
+#       --port 8000
+#
+# Adjust the device paths and engine paths to your machine. Precedence:
+# code defaults < this YAML < CLI flags on the same invocation.
+
+schema: fitra_main_config_v1
+
+cameras:
+  cam0: /dev/v4l/by-path/usb-cam-A-video-index0
+  cam1: /dev/v4l/by-path/usb-cam-B-video-index0
+
+inference:
+  det_engine: outputs/tensorrt_engines/yolox_tiny.fp16.engine
+  pose_engine: outputs/tensorrt_engines/rtmpose_m.fp16.engine
+
+web:
+  port: 8000

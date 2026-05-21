@@ -22,6 +22,10 @@
 #include "pipeline/calibration_session.hpp"
 #include "pipeline/snapshot.hpp"
 
+namespace fitra::slimevr {
+class NativePublisher;   // fwd decl; full header included only in crow_server.cpp
+}
+
 namespace fitra::web {
 
 struct ServerOptions {
@@ -54,6 +58,12 @@ public:
     void set_calibration_session(pipeline::CalibrationSession* session,
                                  pipeline::CalibPreflight defaults);
 
+    // Phase 11: attach the SlimeVR native publisher so /stats3d includes its
+    // send counters. Caller retains ownership; the pointer must outlive the
+    // CrowServer or be cleared with set_native_publisher(nullptr) before the
+    // publisher dies. The crow server only calls const observers (stats()).
+    void set_native_publisher(slimevr::NativePublisher* publisher);
+
     // Start listening + broadcasting on a background thread. Returns when
     // the server is bound and ready (best-effort; Crow's run() blocks).
     void start();
@@ -70,8 +80,9 @@ private:
     std::thread            publisher_thread_;
     std::atomic<bool>      stop_{false};
 
-    pipeline::CalibrationSession* calib_session_ = nullptr;
+    pipeline::CalibrationSession*  calib_session_   = nullptr;
     pipeline::CalibPreflight       calib_defaults_;
+    slimevr::NativePublisher*      native_publisher_ = nullptr;
 
     struct Impl;
     std::unique_ptr<Impl>  impl_;

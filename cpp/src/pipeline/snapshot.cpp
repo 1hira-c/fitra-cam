@@ -135,6 +135,11 @@ void Skeleton3DBus::update(const Skeleton3DSnapshot& s) {
     snapshot_.stats.enabled = true;
 }
 
+Skeleton3DSnapshot Skeleton3DBus::snapshot() const {
+    std::lock_guard<std::mutex> lk{mu_};
+    return snapshot_;
+}
+
 std::string Skeleton3DBus::make_bundle_json() {
     using clock = std::chrono::system_clock;
     auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(

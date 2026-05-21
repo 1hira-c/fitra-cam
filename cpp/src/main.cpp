@@ -29,6 +29,7 @@
 #include <NvInferVersion.h>
 
 #include "camera/v4l2_capture.hpp"
+#include "config/main_config.hpp"
 #include "infer/rtmpose.hpp"
 #include "infer/trt_engine.hpp"
 #include "infer/yolox.hpp"
@@ -39,6 +40,7 @@
 #include "pipeline/calibration_session.hpp"
 #include "pipeline/multi_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
+#include "slimevr/native_publisher.hpp"
 #include "util/cuda_check.hpp"
 #include "util/logging.hpp"
 #include "web/crow_server.hpp"
@@ -100,6 +102,13 @@ void print_help() {
         "  --no-3d-kalman            disable 3D Kalman smoothing\n"
         "  --no-3d-ik                disable 3D IK projection\n"
         "\n"
+        "Phase 11 — SlimeVR native Firmware UDP output (requires --enable-3d + --keypoint-format=halpe26):\n"
+        "  --slimevr-out             enable the native Firmware UDP publisher (10 trackers)\n"
+        "  --slimevr-host ADDR       SlimeVR Server host (default 127.0.0.1; typically the Windows IP)\n"
+        "  --slimevr-port N          UDP port (default 6969 — SlimeVR firmware port)\n"
+        "  --slimevr-rate-hz F       RotationData send rate (default 60.0)\n"
+        "  --slimevr-quat-smooth F   per-tracker slerp alpha 0..1 (default 0.5)\n"
+        "\n"
         "Phase 8 — Subject calibration wizard (requires --enable-3d):\n"
         "  --calibrate                 auto-start calibration session at boot\n"
         "  --calib-subject-id ID       required with --calibrate (subject identifier)\n"
@@ -111,6 +120,11 @@ void print_help() {
         "  --calib-static-dir DIR      override web/subject_calibration static path\n"
         "  --calib-dump-tool PATH      override dump_keypoints_3d path used by analysis\n"
         "  --subjects-dir DIR          subject profile root (also used by --calibrate)\n"
+        "\n"
+        "  --config PATH             runtime YAML config (see docs/backlog-main-yaml-config.md).\n"
+        "                            Precedence (low -> high): code defaults < --config < CLI flags.\n"
+        "                            CLI flags on the same invocation always override the YAML value.\n"
+        "                            If --probe is also passed, --probe wins and the config is not read.\n"
         "\n"
         "  --probe                   Phase 0 sanity check and exit\n"
         "  --help                    show this help\n");
@@ -169,113 +183,38 @@ void on_signal(int) { g_stop.store(true); }
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::vector<std::string> cam_paths;
-    cam_paths.resize(3);  // slots for cam0..cam2
-    std::string det_engine_path;
-    std::string pose_engine_path;
-    int   port = 8000;
-    std::string host = "0.0.0.0";
-    std::string static_dir;
-    bool  no_web = false;
-    int   width = 640, height = 480, fps = 30;
-    int   det_frequency = 10;
-    std::string keypoint_format_str = "coco17";
-    bool  multi_person = false;
-    bool  bench_fake_bbox = false;
-    float det_score = 0.5f;
-    double log_every_s = 2.0;
-    bool  enable_3d = false;
-    std::string calib_path;
-    float kp_conf_thresh = 0.3f;
-    float max_reproj_px = 6.0f;
-    double sync_window_ms = 15.0;
-    int bone_calib_frames = 150;
-    double subject_height_m = 0.0;
-    std::string subject_id;
-    std::string subjects_dir = "calibrations/subjects";
-    std::string subject_profile_path;
-    bool kalman_3d = true;
-    bool ik_3d = true;
-    bool  want_probe = false;
-
-    // Phase 8 — calibration wizard.
-    bool calibrate_on_boot = false;
-    std::string calib_subject_id;
-    double calib_subject_height_m = 0.0;
-    int calib_frames_per_cam = 75;
-    double calib_hold_sec = 1.5;
-    bool calib_auto_approve = false;
-    bool calib_auto_exit = false;
-    std::string calib_static_dir;
-    std::string calib_dump_tool;
-
-    for (int i = 1; i < argc; ++i) {
-        std::string_view a{argv[i]};
-        auto need = [&](const char* flag) -> const char* {
-            if (i + 1 >= argc) {
-                std::fprintf(stderr, "missing argument for %s\n", flag);
-                std::exit(EXIT_FAILURE);
-            }
-            return argv[++i];
-        };
-        if      (a == "--help" || a == "-h") { print_help(); return EXIT_SUCCESS; }
-        else if (a == "--probe")             { want_probe = true; }
-        else if (a == "--cam0")              { cam_paths[0] = need("--cam0"); }
-        else if (a == "--cam1")              { cam_paths[1] = need("--cam1"); }
-        else if (a == "--cam2")              { cam_paths[2] = need("--cam2"); }
-        else if (a == "--det-engine")        { det_engine_path  = need("--det-engine"); }
-        else if (a == "--pose-engine")       { pose_engine_path = need("--pose-engine"); }
-        else if (a == "--port")              { port = std::atoi(need("--port")); }
-        else if (a == "--host")              { host = need("--host"); }
-        else if (a == "--static")            { static_dir = need("--static"); }
-        else if (a == "--no-web")            { no_web = true; }
-        else if (a == "--width")             { width  = std::atoi(need("--width")); }
-        else if (a == "--height")            { height = std::atoi(need("--height")); }
-        else if (a == "--fps")               { fps    = std::atoi(need("--fps")); }
-        else if (a == "--det-frequency")     { det_frequency = std::atoi(need("--det-frequency")); }
-        else if (a == "--keypoint-format")   { keypoint_format_str = need("--keypoint-format"); }
-        else if (a == "--multi-person")      { multi_person  = true; }
-        else if (a == "--bench-fake-bbox")   { bench_fake_bbox = true; }
-        else if (a == "--det-score")         { det_score = std::stof(need("--det-score")); }
-        else if (a == "--log-every-s")       { log_every_s = std::stod(need("--log-every-s")); }
-        else if (a == "--enable-3d")         { enable_3d = true; }
-        else if (a == "--calib")             { calib_path = need("--calib"); }
-        else if (a == "--kp-conf-thresh")    { kp_conf_thresh = std::stof(need("--kp-conf-thresh")); }
-        else if (a == "--max-reproj-px")     { max_reproj_px = std::stof(need("--max-reproj-px")); }
-        else if (a == "--sync-window-ms")    { sync_window_ms = std::stod(need("--sync-window-ms")); }
-        else if (a == "--bone-calib-frames") { bone_calib_frames = std::atoi(need("--bone-calib-frames")); }
-        else if (a == "--subject-height-m")  { subject_height_m = std::stod(need("--subject-height-m")); }
-        else if (a == "--subject-id")         { subject_id = need("--subject-id"); }
-        else if (a == "--subjects-dir")       { subjects_dir = need("--subjects-dir"); }
-        else if (a == "--subject-profile")    { subject_profile_path = need("--subject-profile"); }
-        else if (a == "--no-3d-kalman")      { kalman_3d = false; }
-        else if (a == "--no-3d-ik")          { ik_3d = false; }
-        else if (a == "--calibrate")             { calibrate_on_boot = true; }
-        else if (a == "--calib-subject-id")      { calib_subject_id = need("--calib-subject-id"); }
-        else if (a == "--calib-subject-height-m"){ calib_subject_height_m = std::stod(need("--calib-subject-height-m")); }
-        else if (a == "--calib-frames-per-cam")  { calib_frames_per_cam = std::atoi(need("--calib-frames-per-cam")); }
-        else if (a == "--calib-hold-sec")        { calib_hold_sec = std::stod(need("--calib-hold-sec")); }
-        else if (a == "--calib-auto-approve")    { calib_auto_approve = true; }
-        else if (a == "--calib-auto-exit")       { calib_auto_exit = true; }
-        else if (a == "--calib-static-dir")      { calib_static_dir = need("--calib-static-dir"); }
-        else if (a == "--calib-dump-tool")       { calib_dump_tool = need("--calib-dump-tool"); }
-        else {
-            std::fprintf(stderr, "unknown arg: %s\n", argv[i]);
-            print_help();
-            return EXIT_FAILURE;
-        }
+    // --help / --probe / --config are pulled out of argv first so the YAML
+    // loader doesn't need to know about meta-flags and so --probe can exit
+    // without ever touching the config file (docs/backlog-main-yaml-config.md).
+    fitra::config::EarlyArgs early;
+    try {
+        early = fitra::config::scan_early_args(argc - 1, argv + 1);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "%s\n", e.what());
+        return EXIT_FAILURE;
     }
+    if (early.want_help) { print_help(); return EXIT_SUCCESS; }
+
+    fitra::config::MainOptions opts;
 
     try {
-        if (want_probe) return probe();
+        // --probe wins over --config; a Phase 0 sanity run shouldn't depend
+        // on a runtime YAML being valid.
+        if (early.want_probe) return probe();
+
+        if (!early.config_path.empty()) {
+            fitra::config::load_main_config(early.config_path, opts);
+        }
+        fitra::config::apply_cli_overrides(opts, argc - 1, argv + 1);
+
         // Lock the process-wide keypoint topology before any pipeline thread
         // starts. RTMPose validates --pose-engine K against this format.
         {
             fitra::lift::KeypointFormat fmt;
-            if (!fitra::lift::parse_keypoint_format(keypoint_format_str, fmt)) {
+            if (!fitra::lift::parse_keypoint_format(opts.keypoint_format, fmt)) {
                 std::fprintf(stderr,
                     "unknown --keypoint-format %s (use coco17 or halpe26)\n",
-                    keypoint_format_str.c_str());
+                    opts.keypoint_format.c_str());
                 return EXIT_FAILURE;
             }
             fitra::lift::set_active_keypoint_format(fmt);
@@ -283,32 +222,67 @@ int main(int argc, char** argv) {
                            fitra::lift::keypoint_format_name(fmt),
                            static_cast<int>(fitra::lift::active_kp_count()));
         }
-        if (cam_paths[0].empty() || det_engine_path.empty() || pose_engine_path.empty()) {
-            print_help();
+
+        try {
+            fitra::config::validate_options(opts);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "%s\n", e.what());
+            // Mirror the historical behavior of printing help on the
+            // "required flags missing" path so a bare `./main` still shows
+            // usage. Other failures (range checks etc.) come with a clear
+            // message above and don't need the full help dump.
+            if (opts.cam_paths[0].empty()
+                || opts.det_engine.empty()
+                || opts.pose_engine.empty()) {
+                print_help();
+            }
             return EXIT_FAILURE;
         }
-        if (enable_3d && calib_path.empty()) {
-            std::fprintf(stderr, "--enable-3d requires --calib PATH\n");
-            return EXIT_FAILURE;
-        }
-        if (subject_height_m < 0.0 || subject_height_m > 2.5) {
-            std::fprintf(stderr, "--subject-height-m must be 0 or a plausible meter value <= 2.5\n");
-            return EXIT_FAILURE;
-        }
-        if (!enable_3d && (!subject_id.empty() || !subject_profile_path.empty())) {
-            std::fprintf(stderr, "--subject-id/--subject-profile require --enable-3d\n");
-            return EXIT_FAILURE;
-        }
-        if (calibrate_on_boot && !enable_3d) {
-            std::fprintf(stderr, "--calibrate requires --enable-3d\n");
-            return EXIT_FAILURE;
-        }
-        if (calibrate_on_boot
-            && (calib_subject_id.empty() || calib_subject_height_m <= 0.0)) {
-            std::fprintf(stderr,
-                "--calibrate requires --calib-subject-id and --calib-subject-height-m\n");
-            return EXIT_FAILURE;
-        }
+
+        // Binding aliases keep the downstream runtime-construction code
+        // (originally written against ~40 local variables) unchanged. The
+        // compiler folds these references away.
+        auto& cam_paths              = opts.cam_paths;
+        auto& det_engine_path        = opts.det_engine;
+        auto& pose_engine_path       = opts.pose_engine;
+        auto& port                   = opts.port;
+        auto& host                   = opts.host;
+        auto& static_dir             = opts.static_dir;
+        auto& no_web                 = opts.no_web;
+        auto& width                  = opts.width;
+        auto& height                 = opts.height;
+        auto& fps                    = opts.fps;
+        auto& det_frequency          = opts.det_frequency;
+        auto& multi_person           = opts.multi_person;
+        auto& bench_fake_bbox        = opts.bench_fake_bbox;
+        auto& det_score              = opts.det_score;
+        auto& log_every_s            = opts.log_every_s;
+        auto& enable_3d              = opts.enable_3d;
+        auto& calib_path             = opts.calib;
+        auto& kp_conf_thresh         = opts.kp_conf_thresh;
+        auto& max_reproj_px          = opts.max_reproj_px;
+        auto& sync_window_ms         = opts.sync_window_ms;
+        auto& bone_calib_frames      = opts.bone_calib_frames;
+        auto& subject_height_m       = opts.subject_height_m;
+        auto& subject_id             = opts.subject_id;
+        auto& subjects_dir           = opts.subjects_dir;
+        auto& subject_profile_path   = opts.subject_profile;
+        auto& kalman_3d              = opts.kalman_3d;
+        auto& ik_3d                  = opts.ik_3d;
+        auto& slimevr_out            = opts.slimevr_out;
+        auto& slimevr_host           = opts.slimevr_host;
+        auto& slimevr_port           = opts.slimevr_port;
+        auto& slimevr_rate_hz        = opts.slimevr_rate_hz;
+        auto& slimevr_quat_smooth    = opts.slimevr_quat_smooth;
+        auto& calibrate_on_boot      = opts.calibrate;
+        auto& calib_subject_id       = opts.calib_subject_id;
+        auto& calib_subject_height_m = opts.calib_subject_height_m;
+        auto& calib_frames_per_cam   = opts.calib_frames_per_cam;
+        auto& calib_hold_sec         = opts.calib_hold_sec;
+        auto& calib_auto_approve     = opts.calib_auto_approve;
+        auto& calib_auto_exit        = opts.calib_auto_exit;
+        auto& calib_static_dir       = opts.calib_static_dir;
+        auto& calib_dump_tool        = opts.calib_dump_tool;
         // For the headless --calibrate path, prime the live IkSolver with the
         // calibration height up-front. Without this, the IK is unlocked at
         // boot and the 3D angle recognizer would have to wait for ~150 frames
@@ -522,6 +496,32 @@ int main(int argc, char** argv) {
                 });
         }
 
+        // Phase 11: spin up the native SlimeVR Firmware UDP publisher BEFORE
+        // the Crow server so /stats3d can hand out the slimevr stats block.
+        // bus3d is guaranteed non-null at this point (gated by enable_3d).
+        std::unique_ptr<fitra::slimevr::NativePublisher> slime_pub;
+        if (slimevr_out) {
+            fitra::slimevr::NativePublisherOptions opts;
+            opts.host         = slimevr_host;
+            opts.port         = static_cast<std::uint16_t>(slimevr_port);
+            opts.send_rate_hz = slimevr_rate_hz;
+            opts.quat_smooth  = static_cast<float>(slimevr_quat_smooth);
+            slime_pub = std::make_unique<fitra::slimevr::NativePublisher>(*bus3d, opts);
+            if (!slime_pub->start()) {
+                // Socket setup or handshake failed; warn and continue without
+                // publisher (pose pipeline is unaffected).
+                slime_pub.reset();
+            }
+        }
+
+        // Stop the publisher on any scope exit. Must outlive the server (so
+        // /stats3d never reads a dead pointer) and the driver (the publisher
+        // calls bus3d->snapshot() which the driver feeds).
+        struct SlimeStop {
+            fitra::slimevr::NativePublisher* p;
+            ~SlimeStop() { if (p) p->stop(); }
+        } slime_stop{slime_pub.get()};
+
         std::unique_ptr<fitra::web::CrowServer> server;
         if (!no_web) {
             fitra::web::ServerOptions sopts;
@@ -537,6 +537,9 @@ int main(int argc, char** argv) {
                 bus, enable_3d ? bus3d.get() : nullptr, sopts);
             if (calib_session) {
                 server->set_calibration_session(calib_session.get(), calib_defaults);
+            }
+            if (slime_pub) {
+                server->set_native_publisher(slime_pub.get());
             }
             server->start();
         }
@@ -583,6 +586,7 @@ int main(int argc, char** argv) {
         }
 
         if (server) server->stop();
+        if (slime_pub) slime_pub->stop();   // explicit stop; SlimeStop guard is the fallback
         driver->stop();
         return EXIT_SUCCESS;
     } catch (const std::exception& e) {

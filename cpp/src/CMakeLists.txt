@@ -76,6 +76,30 @@ target_link_libraries(fitra_pipeline PUBLIC
     opencv_videoio
 )
 
+# SlimeVR integration: tracker extraction (rotation synthesis) + native
+# Firmware UDP publisher. Phase 11.
+#
+# This phase is mid-migration: VMC over OSC is being replaced with SlimeVR's
+# native Firmware UDP protocol (port 6969). VMC source files were removed in
+# M1. The publisher (native_publisher) and protocol codec (firmware_protocol)
+# are added in M2/M4; tracker_extract is rewritten for the 10-tracker layout
+# in M3.
+add_library(fitra_slimevr STATIC
+    slimevr/firmware_protocol.cpp
+    slimevr/native_publisher.cpp
+    slimevr/tracker_extract.cpp
+)
+
+target_include_directories(fitra_slimevr PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(fitra_slimevr PUBLIC
+    fitra_lift          # active_keypoint_format() for Halpe26 assert + types
+    fitra_pipeline      # Skeleton3DBus::snapshot()
+    opencv_core
+)
+
 # Crow HTTP+WebSocket server.
 add_library(fitra_web STATIC
     web/crow_server.cpp
@@ -83,7 +107,22 @@ add_library(fitra_web STATIC
 
 target_link_libraries(fitra_web PUBLIC
     fitra_pipeline
+    fitra_slimevr     # /stats3d reads NativePublisher::stats() when attached
     Crow::Crow
+)
+
+# Runtime config loader for cpp/build/main (`--config PATH` YAML).
+# Independent of TensorRT/CUDA so its unit test stays light.
+add_library(fitra_config STATIC
+    config/main_config.cpp
+)
+
+target_include_directories(fitra_config PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(fitra_config PUBLIC
+    yaml-cpp::yaml-cpp
 )
 
 # Top-level driver: N cameras -> shared TRT -> Crow web.
@@ -92,6 +131,7 @@ add_executable(fitra_cam_main
 )
 
 target_link_libraries(fitra_cam_main PRIVATE
+    fitra_config
     fitra_pipeline
     fitra_web
 )
