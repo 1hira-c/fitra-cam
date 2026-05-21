@@ -3,6 +3,7 @@
 // layout (big-endian, sequence header, packet tag dispatch). No socket I/O.
 
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -217,23 +218,53 @@ void test_mac_derivation_deterministic() {
 }
 
 void test_world_quat_to_slime() {
-    // World identity (wxyz = 1,0,0,0) → wire xyzw should be (0,0,0,-1).
-    // The trailing minus on w is intentional: the SlimeVR server applies
-    // AXES_OFFSET which re-flips signs in its own internal frame.
-    auto q = fitra::slimevr::world_quat_to_slime(1.0f, 0.0f, 0.0f, 0.0f);
-    check(q.x == 0.0f, "world identity qx");
-    check(q.y == 0.0f, "world identity qy");
-    check(q.z == 0.0f, "world identity qz");
-    check(q.w == -1.0f, "world identity qw should be negated to -1");
+    constexpr float kEps = 1.0e-6f;
+    auto close = [](float a, float b) { return std::fabs(a - b) < kEps; };
+    const float k = 0.70710678f;   // 1/√2
 
-    // A 90° rotation about world Z (wxyz = (cos45, 0, 0, sin45)) maps to
-    // (qx, qz, -qy, -qw) = (0, sin45, 0, -cos45). Test the components.
-    const float c = 0.70710678f;
-    auto q2 = fitra::slimevr::world_quat_to_slime(c, 0.0f, 0.0f, c);
-    check(q2.x == 0.0f,  "world Z-rot qx");
-    check(q2.y == c,     "world Z-rot qy (was qz)");
-    check(q2.z == 0.0f,  "world Z-rot qz (-qy)");
-    check(q2.w == -c,    "world Z-rot qw (-qw)");
+    // World identity (wxyz = 1,0,0,0):
+    //   wire wxyz   = ((1+0)/√2, (1-0)/√2, (0-0)/√2, -(0+0)/√2) = (k, k, 0, 0)
+    //   wire xyzw   = (k, 0, 0, k) = Rx(+90°). The server's AXES_OFFSET =
+    //   Rx(-90°) cancels it leaving identity → ✓ subject at rest = avatar
+    //   identity orientation.
+    auto q = fitra::slimevr::world_quat_to_slime(1.0f, 0.0f, 0.0f, 0.0f);
+    check(close(q.x, k),    "world identity qx = k (wire is Rx(+90°))");
+    check(close(q.y, 0.0f), "world identity qy");
+    check(close(q.z, 0.0f), "world identity qz");
+    check(close(q.w, k),    "world identity qw = k");
+
+    // World +Z rotation by 90° (subject yaws left in our world frame):
+    //   q_world wxyz = (cos45°, 0, 0, sin45°) = (k, 0, 0, k)
+    //   wire wxyz   = ((k+0)/√2, (k-0)/√2, (0-k)/√2, -(0+k)/√2)
+    //               = (0.5, 0.5, -0.5, -0.5)
+    //   wire xyzw   = (0.5, -0.5, -0.5, 0.5)
+    auto q2 = fitra::slimevr::world_quat_to_slime(k, 0.0f, 0.0f, k);
+    check(close(q2.x,  0.5f),  "world +Z90 qx = 0.5");
+    check(close(q2.y, -0.5f),  "world +Z90 qy = -0.5");
+    check(close(q2.z, -0.5f),  "world +Z90 qz = -0.5");
+    check(close(q2.w,  0.5f),  "world +Z90 qw = 0.5");
+
+    // World +X rotation by 90° (subject pitches forward in our world frame):
+    //   q_world wxyz = (k, k, 0, 0)
+    //   wire wxyz   = ((k+k)/√2, (k-k)/√2, 0, 0) = (1, 0, 0, 0)
+    //   wire xyzw   = (0, 0, 0, 1) = identity on the wire. After AXES_OFFSET
+    //   (Rx(-90°)) this becomes Rx(-90°), i.e., a -90° rotation around unity
+    //   X = pitch backward. ✓ matches "+X world = pitch in unity X".
+    auto q3 = fitra::slimevr::world_quat_to_slime(k, k, 0.0f, 0.0f);
+    check(close(q3.x, 0.0f), "world +X90 qx = 0 (wire is identity)");
+    check(close(q3.y, 0.0f), "world +X90 qy = 0");
+    check(close(q3.z, 0.0f), "world +X90 qz = 0");
+    check(close(q3.w, 1.0f), "world +X90 qw = 1");
+
+    // World +Y rotation by 90° (roll in our world frame):
+    //   q_world wxyz = (k, 0, k, 0)
+    //   wire wxyz   = (k/√2, k/√2, k/√2, -k/√2) = (0.5, 0.5, 0.5, -0.5)
+    //   wire xyzw   = (0.5, 0.5, -0.5, 0.5)
+    auto q4 = fitra::slimevr::world_quat_to_slime(k, 0.0f, k, 0.0f);
+    check(close(q4.x,  0.5f),  "world +Y90 qx = 0.5");
+    check(close(q4.y,  0.5f),  "world +Y90 qy = 0.5");
+    check(close(q4.z, -0.5f),  "world +Y90 qz = -0.5");
+    check(close(q4.w,  0.5f),  "world +Y90 qw = 0.5");
 }
 
 void test_sequence_independence() {

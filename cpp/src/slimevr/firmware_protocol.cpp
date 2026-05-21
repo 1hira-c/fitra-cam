@@ -260,14 +260,26 @@ MacBytes mac_from_hostname() {
 }
 
 QuatXyzw world_quat_to_slime(float qw, float qx, float qy, float qz) {
-    // World frame (Z-up, X-right, Y-forward) → SlimeVR Y-up (Unity LH).
-    // Matches the conjugation used previously for VMC output:
-    //   q_slime_xyzw = ( qx, qz, -qy, -qw )
+    // World frame (Z-up RH, X-right, Y-forward) → SlimeVR Firmware UDP wire.
+    //
+    // Composition of:
+    //   q_unity_wxyz = (qw, -qx, -qz, -qy)              // Y↔Z swap, RH→LH
+    //   q_wire       = Rx(+90°) * q_unity               // pre-cancel AXES_OFFSET
+    //
+    // Algebraic expansion:
+    //   wire wxyz = ( (qw+qx)/√2, (qw-qx)/√2, (qy-qz)/√2, -(qy+qz)/√2 )
+    //
+    // After the server applies AXES_OFFSET = Rx(-90°), pure subject yaw lands
+    // on unity Y (correct yaw), pitch on unity X (correct pitch), and roll on
+    // unity Z (correct roll). The legacy VMC formula `(qx, qz, -qy, -qw)`
+    // mapped yaw onto the unity Z axis (= leg roll), producing the abduction
+    // symptom observed in the first Phase 11 deployment.
+    static constexpr float kInvSqrt2 = 0.70710678f;
     QuatXyzw q;
-    q.x =  qx;
-    q.y =  qz;
-    q.z = -qy;
-    q.w = -qw;
+    q.w =  kInvSqrt2 * (qw + qx);
+    q.x =  kInvSqrt2 * (qw - qx);
+    q.y =  kInvSqrt2 * (qy - qz);
+    q.z = -kInvSqrt2 * (qy + qz);
     return q;
 }
 

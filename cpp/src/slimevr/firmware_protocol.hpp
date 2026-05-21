@@ -167,8 +167,29 @@ MacBytes mac_from_hostname();
 MacBytes mac_from_string(std::string_view name);
 
 // Convert our world-frame quaternion (right-handed Z-up, wxyz storage) into
-// the SlimeVR Y-up wire frame. Returns xyzw on the wire.
-//   q_slime_xyzw = ( qx, qz, -qy, -qw )
+// the SlimeVR Firmware UDP wire frame. Returns xyzw on the wire.
+//
+// Two transforms are composed:
+//   1. World (Z-up RH) → Unity (Y-up LH) basis change:
+//        q_unity_wxyz = ( qw, -qx, -qz, -qy )
+//      Y/Z axis swap with the sign pattern that preserves rotation semantics
+//      across the handedness flip. Verified: world X (pitch) → unity X
+//      rotation, world Y (roll) → unity Z rotation, world Z (yaw) → unity Y
+//      rotation.
+//   2. Pre-cancel the server-side AXES_OFFSET = Rx(-90°):
+//        q_wire = Rx(+90°) * q_unity
+//      `TrackersUDPServer.kt:415` left-multiplies every incoming rotation by
+//      AXES_OFFSET before passing it to the IK. Without this pre-cancel,
+//      pure subject yaw lands on the unity Z axis (= leg roll / abduction)
+//      and pitch lands on the wrong sign — exactly the symptoms observed
+//      while debugging Phase 11 against the real SlimeVR Server.
+//
+// Composing the two collapses to:
+//   wire wxyz = ( (qw+qx)/√2, (qw-qx)/√2, (qy-qz)/√2, -(qy+qz)/√2 )
+//
+// After this transform plus the server's AXES_OFFSET, world yaw of θ around
+// world Z produces a unity quaternion of (cos(θ/2), 0, sin(θ/2), 0) — a clean
+// unity Y rotation, which the IK consumes as a yaw of the body part.
 QuatXyzw world_quat_to_slime(float qw, float qx, float qy, float qz);
 
 }  // namespace fitra::slimevr
