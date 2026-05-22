@@ -249,15 +249,25 @@ void test_smoothing_double_cover() {
     check(std::abs(r[3]) < 1.0e-3f, "smoothed quat z ≠ 0");
 }
 
-void test_smoothing_invalid_resets_prev() {
+// Behavior change (was test_smoothing_invalid_resets_prev): on invalid input,
+// prev_quat must be HELD (not overwritten with the raw curr quat), and curr's
+// quat is replaced by prev so the publisher can keep the last good orientation.
+// This avoids the identity-snap that the previous reset logic caused whenever
+// a tracker briefly dropped visibility.
+void test_smoothing_invalid_holds_prev() {
     std::array<fitra::slimevr::SlimeTracker, fitra::slimevr::kTrackerCount> curr{};
     std::array<cv::Vec4f, fitra::slimevr::kTrackerCount> prev{};
     curr[0].valid = false;
-    curr[0].quat_wxyz = cv::Vec4f{1, 0, 0, 0};
-    prev[0] = cv::Vec4f{0, 1, 0, 0};
+    curr[0].quat_wxyz = cv::Vec4f{1, 0, 0, 0};   // raw extract output on invalid
+    prev[0] = cv::Vec4f{0, 1, 0, 0};             // last known good
     fitra::slimevr::apply_quat_smoothing(curr, prev, 0.5f);
+    // prev is unchanged.
     check_vec3_close(cv::Vec3f{prev[0][0], prev[0][1], prev[0][2]},
-                     cv::Vec3f{1, 0, 0}, "invalid tracker resets prev to curr");
+                     cv::Vec3f{0, 1, 0}, "invalid: prev_quat unchanged");
+    check(std::abs(prev[0][3]) < kEps, "invalid: prev_quat[3] unchanged");
+    // curr is replaced by prev.
+    check_vec3_close(cv::Vec3f{curr[0].quat_wxyz[0], curr[0].quat_wxyz[1], curr[0].quat_wxyz[2]},
+                     cv::Vec3f{0, 1, 0}, "invalid: curr follows prev for publisher continuity");
 }
 
 // Verify the tracker's local +Z axis (the bone forward) matches the expected
@@ -524,6 +534,107 @@ void test_thigh_external_rotation_unobservable() {
     }
 }
 
+// === Confidence A: 90° elbow bend → primary up perpendicular to fwd → confidence ≈ 1 ===
+void test_upper_arm_confidence_full_at_90deg_bend() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        set_joint(s, 5, 0.18f, 0.0f, 1.42f);    // l_shoulder
+        set_joint(s, 7, 0.18f, 0.0f, 1.85f);    // l_elbow directly above
+        set_joint(s, 9, 0.42f, 0.0f, 1.85f);    // l_wrist lateral (90° flex)
+    });
+    auto trackers = fitra::slimevr::extract_trackers(skel);
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+    auto& t = trackers[idx(R::LeftUpperArm)];
+    check(t.valid, "90° elbow tracker must be valid");
+    if (t.roll_confidence < 0.99f) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf),
+            "confidence at 90° bend got=%.4f want >= 0.99", t.roll_confidence);
+        throw std::runtime_error(buf);
+    }
+}
+
+// === Confidence B: every up parallel to fwd → confidence = 0 (frozen update) ===
+void test_upper_arm_confidence_zero_all_degenerate() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        // Shoulder directly below neck; arm fully extended straight up so wrist,
+        // elbow, shoulder and neck are all colinear along Z.
+        set_joint(s, 18, 0.0f, 0.0f, 1.55f);    // neck
+        set_joint(s,  5, 0.0f, 0.0f, 1.50f);    // l_shoulder colinear
+        set_joint(s,  7, 0.0f, 0.0f, 1.85f);    // l_elbow
+        set_joint(s,  9, 0.0f, 0.0f, 2.10f);    // l_wrist
+    });
+    auto trackers = fitra::slimevr::extract_trackers(skel);
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+    auto& t = trackers[idx(R::LeftUpperArm)];
+    // All three up candidates ∥ fwd → quat_from_forward_up rejects → valid=false.
+    check(!t.valid, "fully colinear arm must be invalid");
+    if (t.roll_confidence > 1.0e-3f) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf),
+            "confidence with all-degenerate ups got=%.4f want 0", t.roll_confidence);
+        throw std::runtime_error(buf);
+    }
+}
+
+// === Confidence C: sin θ = 0.125 (midrange) → smoothstep maps to ≈ 0.5 ===
+void test_upper_arm_confidence_smoothstep_midrange() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    // Pose: arm overhead (fwd ≈ +Z), wrist offset from elbow at θ such that
+    // sin θ = 0.125. With forearm length 0.25 m and elbow at (0, 0, 1.85),
+    // wrist = elbow + (sin θ · 0.25, 0, cos θ · 0.25) ≈ (0.03134, 0, 2.0980).
+    auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        set_joint(s,  5, 0.0f,     0.0f, 1.42f);   // l_shoulder
+        set_joint(s,  7, 0.0f,     0.0f, 1.85f);   // l_elbow
+        set_joint(s,  9, 0.03134f, 0.0f, 2.0980f); // l_wrist 7.18° off-axis
+        set_joint(s, 18, 0.0f,     0.0f, 1.55f);   // neck colinear → secondary degenerate
+    });
+    auto trackers = fitra::slimevr::extract_trackers(skel);
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+    auto& t = trackers[idx(R::LeftUpperArm)];
+    check(t.valid, "midrange-sin tracker must be valid");
+    // smoothstep((0.125-0.05)/(0.20-0.05)) = smoothstep(0.5) = 0.5
+    float c = t.roll_confidence;
+    if (std::abs(c - 0.5f) > 0.05f) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+            "midrange confidence got=%.4f want ≈ 0.5 (smoothstep(0.5))", c);
+        throw std::runtime_error(buf);
+    }
+}
+
+// === Confidence D: low confidence freezes smoothing across frames ===
+// Set up a tracker with roll_confidence=0; SLERP must be a no-op and the curr
+// quat should track the prev across many frames regardless of curr's raw quat.
+void test_smoothing_freezes_under_low_confidence() {
+    std::array<fitra::slimevr::SlimeTracker, fitra::slimevr::kTrackerCount> curr{};
+    std::array<cv::Vec4f, fitra::slimevr::kTrackerCount> prev{};
+    // Tracker 0: valid but zero confidence; raw quat is wildly different from prev.
+    curr[0].valid = true;
+    curr[0].roll_confidence = 0.0f;
+    curr[0].quat_wxyz = cv::Vec4f{0, 1, 0, 0};   // 180° about +X
+    prev[0] = cv::Vec4f{1, 0, 0, 0};             // identity, last known good
+    for (int i = 0; i < 5; ++i) {
+        fitra::slimevr::apply_quat_smoothing(curr, prev, 0.5f);
+        // prev unchanged.
+        check(std::abs(prev[0][0] - 1.0f) < kEps,
+              "freeze: prev[0] held over multiple frames");
+        check(std::abs(prev[0][1]) < kEps && std::abs(prev[0][2]) < kEps
+              && std::abs(prev[0][3]) < kEps,
+              "freeze: prev other components held");
+        // curr replaced by prev so publisher sees stable orientation.
+        check(std::abs(curr[0].quat_wxyz[0] - 1.0f) < kEps,
+              "freeze: curr follows prev");
+        // Reset curr to the noisy raw quat for the next iteration (simulating a
+        // frame where the deterministic pick swung the raw measurement).
+        curr[0].quat_wxyz = cv::Vec4f{0, 1, 0, 0};
+    }
+}
+
 void test_keypoint_format_assert() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Coco17);
     auto skel = make_t_pose();
@@ -546,7 +657,11 @@ int main() {
         test_role_to_position_mapping();          std::printf("[ok] role → TrackerPosition / sensor_id\n");
         test_missing_joints_yield_invalid();      std::printf("[ok] missing joints → invalid trackers\n");
         test_smoothing_double_cover();            std::printf("[ok] slerp double-cover handling\n");
-        test_smoothing_invalid_resets_prev();     std::printf("[ok] invalid tracker resets smoothing state\n");
+        test_smoothing_invalid_holds_prev();      std::printf("[ok] invalid tracker holds previous orientation\n");
+        test_upper_arm_confidence_full_at_90deg_bend(); std::printf("[ok] confidence: 90° elbow bend → 1.0\n");
+        test_upper_arm_confidence_zero_all_degenerate(); std::printf("[ok] confidence: all-degenerate → 0\n");
+        test_upper_arm_confidence_smoothstep_midrange(); std::printf("[ok] confidence: smoothstep midrange ≈ 0.5\n");
+        test_smoothing_freezes_under_low_confidence();   std::printf("[ok] smoothing: low confidence freezes update\n");
         test_upper_arm_forward_raised();          std::printf("[ok] upper arm: forward-raised (前方挙上)\n");
         test_upper_arm_overhead_bent_elbow();     std::printf("[ok] upper arm: overhead + bent elbow (頭上挙上)\n");
         test_foot_toe_stance();                   std::printf("[ok] foot: toe stance (つま先立ち)\n");

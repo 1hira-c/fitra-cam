@@ -44,10 +44,13 @@ constexpr std::size_t kHipCenter = 19;
 constexpr std::size_t kLBigToe   = 20, kRBigToe   = 21;
 constexpr std::size_t kLHeel     = 24, kRHeel     = 25;
 
-// Below this sin(angle(up, fwd)) the up hint is treated as degenerate and the
-// fallback up is used. 0.2 ≈ sin(11.5°); see docs/phase12-slimevr-bridge-relay.md.
-constexpr float kUpperArmRollSwitch = 0.2f;
-constexpr float kThighRollSwitch    = 0.2f;
+// Confidence smoothstep bounds on sin(angle(up, fwd)) for upper arm / thigh
+// roll. Below kRollSinLow the chosen up is treated as degenerate (confidence 0,
+// previous roll held). Above kRollSinHigh the measurement is fully trusted
+// (confidence 1). Between, smoothstep gradually opens the gate so the update
+// rate scales with measurement reliability. See docs/phase12-slimevr-bridge-relay.md.
+constexpr float kRollSinLow  = 0.05f;  // sin 2.9°: near-degenerate floor
+constexpr float kRollSinHigh = 0.20f;  // sin 11.5°: full-confidence ceiling
 
 bool joints_valid(const infer::Skeleton3D& s, std::initializer_list<std::size_t> idxs) {
     for (auto i : idxs) {
@@ -56,30 +59,47 @@ bool joints_valid(const infer::Skeleton3D& s, std::initializer_list<std::size_t>
     return true;
 }
 
-// Pick the first up hint whose perpendicular component to fwd has magnitude
-// > threshold * |up|. Zero-vector ups (from invalid joints) skip immediately.
-// `forward` is assumed non-zero (caller checks); ups are inspected in primary,
-// secondary, tertiary order. Returns the chosen up; sets `which` to 0/1/2 for
-// the stage that won, or 2 if all degenerated (in which case the tertiary is
-// returned even though it may also fail downstream).
+// Hermite smoothstep: 0 at x ≤ low, 1 at x ≥ high, C¹-continuous in between.
+inline float smoothstep01(float x, float low, float high) {
+    if (x <= low)  return 0.0f;
+    if (x >= high) return 1.0f;
+    float t = (x - low) / (high - low);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// Pick the first up hint whose sin θ to forward is above kRollSinLow (i.e. not
+// near-degenerate); compute confidence as smoothstep(sin θ, kRollSinLow,
+// kRollSinHigh). Zero-vector ups (from invalid joints) skip immediately. The
+// returned up vector still needs orthogonalization by quat_from_forward_up.
+// `which` is 0/1/2 for the stage that won (primary/secondary/tertiary).
+// If all sources are degenerate, tertiary is returned with confidence 0.
 cv::Vec3f pick_up_multistage(const cv::Vec3f& fwd,
                               const cv::Vec3f& up_primary,
                               const cv::Vec3f& up_secondary,
                               const cv::Vec3f& up_tertiary,
-                              float threshold,
+                              float& out_confidence,
                               int& which) {
     float f_n = norm(fwd);
+    if (f_n < 1.0e-6f) {
+        out_confidence = 0.0f;
+        which = 2;
+        return up_tertiary;
+    }
     const cv::Vec3f* candidates[3] = {&up_primary, &up_secondary, &up_tertiary};
     for (int i = 0; i < 3; ++i) {
         const cv::Vec3f& u = *candidates[i];
         float u_n = norm(u);
         if (u_n < 1.0e-6f) continue;  // zero vector → invalid joint, skip
-        // sin θ = |u × fwd| / (|u| |fwd|). Tertiary always accepted.
-        if (i == 2 || norm(cross(u, fwd)) / (u_n * f_n) >= threshold) {
+        float sin_theta = norm(cross(u, fwd)) / (u_n * f_n);
+        // Tertiary (world Z) is always accepted as last resort but its
+        // confidence is still computed from its own sin θ (0 when fwd ∥ Z).
+        if (i == 2 || sin_theta >= kRollSinLow) {
+            out_confidence = smoothstep01(sin_theta, kRollSinLow, kRollSinHigh);
             which = i;
             return u;
         }
     }
+    out_confidence = 0.0f;
     which = 2;
     return up_tertiary;
 }
@@ -167,13 +187,17 @@ namespace {
 
 // Try to build a SlimeTracker for one role from a position joint, a forward
 // hint and an up hint. Updates `out` in place; valid=false on degeneracy.
+// `roll_confidence` defaults to 1.0 for rigid-pin bones (chest/waist/shin/foot);
+// upper arm / thigh pass their smoothstep-derived value.
 bool build_tracker(TrackerRole role,
                    const cv::Vec3f& world_pos,
                    const cv::Vec3f& forward,
                    const cv::Vec3f& up,
-                   SlimeTracker& out) {
+                   SlimeTracker& out,
+                   float roll_confidence = 1.0f) {
     out.role = role;
     out.pos  = world_pos;
+    out.roll_confidence = roll_confidence;
     cv::Vec4f q_wxyz;
     bool ok = detail::quat_from_forward_up(forward, up, q_wxyz);
     out.quat_wxyz = q_wxyz;
@@ -212,10 +236,11 @@ extract_trackers(const infer::Skeleton3D& skel) {
                                 : cv::Vec3f{0, 0, 0};
         cv::Vec3f up_secondary = np - sp;
         cv::Vec3f up_tertiary  = cv::Vec3f{0, 0, 1};
+        float confidence = 0.0f;
         int which = -1;
         cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_secondary, up_tertiary,
-                                           kUpperArmRollSwitch, which);
-        build_tracker(role, pos, fwd, up, out[out_idx]);
+                                           confidence, which);
+        build_tracker(role, pos, fwd, up, out[out_idx], confidence);
     };
     upper_arm(TrackerRole::LeftUpperArm,  kLShoulder, kLElbow, kLWrist, 0);
     upper_arm(TrackerRole::RightUpperArm, kRShoulder, kRElbow, kRWrist, 1);
@@ -261,10 +286,11 @@ extract_trackers(const infer::Skeleton3D& skel) {
                                 : cv::Vec3f{0, 0, 0};
         cv::Vec3f up_secondary = hp - hc;
         cv::Vec3f up_tertiary  = cv::Vec3f{0, 0, 1};
+        float confidence = 0.0f;
         int which = -1;
         cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_secondary, up_tertiary,
-                                           kThighRollSwitch, which);
-        build_tracker(role, pos, fwd, up, out[out_idx]);
+                                           confidence, which);
+        build_tracker(role, pos, fwd, up, out[out_idx], confidence);
     };
     upper_leg(TrackerRole::LeftUpperLeg,  kLHip, kLKnee, kLAnkle, 4);
     upper_leg(TrackerRole::RightUpperLeg, kRHip, kRKnee, kRAnkle, 5);
@@ -312,11 +338,21 @@ extract_trackers(const infer::Skeleton3D& skel) {
 
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
-                          float alpha) {
-    alpha = std::clamp(alpha, 0.0f, 1.0f);
+                          float base_alpha) {
+    base_alpha = std::clamp(base_alpha, 0.0f, 1.0f);
     for (std::size_t i = 0; i < kTrackerCount; ++i) {
         if (!curr[i].valid) {
-            prev_quat[i] = curr[i].quat_wxyz;
+            // Hold previous orientation: publisher will see prev via curr, and
+            // prev_quat itself is left untouched so a tracker can recover from
+            // a dropped frame without snapping back through identity.
+            curr[i].quat_wxyz = prev_quat[i];
+            continue;
+        }
+        float effective_alpha = std::clamp(
+            base_alpha * curr[i].roll_confidence, 0.0f, 1.0f);
+        if (effective_alpha <= 0.0f) {
+            // Fully frozen: keep prev. Don't touch prev_quat.
+            curr[i].quat_wxyz = prev_quat[i];
             continue;
         }
         const cv::Vec4f& p = prev_quat[i];
@@ -327,15 +363,15 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
         cv::Vec4f r;
         if (d > 0.9995f) {
             // nlerp fallback for small angles.
-            r = cv::Vec4f{p[0] + alpha * (q[0] - p[0]),
-                          p[1] + alpha * (q[1] - p[1]),
-                          p[2] + alpha * (q[2] - p[2]),
-                          p[3] + alpha * (q[3] - p[3])};
+            r = cv::Vec4f{p[0] + effective_alpha * (q[0] - p[0]),
+                          p[1] + effective_alpha * (q[1] - p[1]),
+                          p[2] + effective_alpha * (q[2] - p[2]),
+                          p[3] + effective_alpha * (q[3] - p[3])};
         } else {
             float theta = std::acos(std::clamp(d, -1.0f, 1.0f));
             float sin_t = std::sin(theta);
-            float wa = std::sin((1.0f - alpha) * theta) / sin_t;
-            float wb = std::sin(alpha * theta) / sin_t;
+            float wa = std::sin((1.0f - effective_alpha) * theta) / sin_t;
+            float wb = std::sin(effective_alpha * theta) / sin_t;
             r = cv::Vec4f{wa * p[0] + wb * q[0],
                           wa * p[1] + wb * q[1],
                           wa * p[2] + wb * q[2],

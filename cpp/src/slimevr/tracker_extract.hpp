@@ -64,6 +64,12 @@ struct SlimeTracker {
     // wxyz storage; the publisher converts to SlimeVR's xyzw Y-up wire frame.
     cv::Vec4f   quat_wxyz = {1.0f, 0.0f, 0.0f, 0.0f};
     bool        valid = false;
+    // [0, 1] confidence that the chosen up vector resolves roll reliably. Bones
+    // with rigid anatomical pins (chest, waist, shin) and the foot stay at 1.0.
+    // Upper arm / thigh compute this via smoothstep on the up-vector's sin θ to
+    // forward: full at sin θ ≥ kRollSinHigh, zero at sin θ ≤ kRollSinLow. Used
+    // by apply_quat_smoothing to throttle SLERP near singular extension.
+    float       roll_confidence = 1.0f;
 };
 
 // Extract 10 trackers from a Halpe26 3D skeleton. Degenerate joints (invalid
@@ -75,14 +81,16 @@ std::array<SlimeTracker, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel);
 
 // Per-tracker quaternion exponential smoothing via slerp.
-//   curr_i ← slerp(prev_i, curr_i, alpha)
-// alpha ∈ [0, 1]. 0 = use prev, 1 = use curr. Updates `prev_quat` in place
-// with the smoothed values. Invalid trackers reset their prev slot to the
-// raw quat so a tracker recovering visibility starts clean rather than
-// blending against a stale orientation.
+//   effective_alpha_i = base_alpha · curr_i.roll_confidence
+//   curr_i ← slerp(prev_i, curr_i, effective_alpha_i)
+// base_alpha ∈ [0, 1]. 0 = use prev, 1 = use curr. Confidence < 1 throttles the
+// update, so a low-confidence roll measurement decays toward the previous
+// orientation instead of injecting noise. Invalid trackers keep prev unchanged
+// (curr is replaced by prev so the publisher can still see a stable quat).
+// Updates `prev_quat` in place with the smoothed values.
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
-                          float alpha);
+                          float base_alpha);
 
 namespace detail {
 // Build a (right, up, forward) → wxyz quaternion via Shoemake's matrix-to-quat.

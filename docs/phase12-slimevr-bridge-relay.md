@@ -94,13 +94,26 @@ Phase 11 で SlimeVR Firmware UDP 経由の 10 本トラッカー (quaternion �
 
 **Upper Leg (大腿)** — `upper_leg` ラムダの up を以下の多段で決定:
 
-1. `up1 = (ankle − knee)` を `forward = (knee − hip)` の直交成分に projection した残差。膝 hinge により脛は thigh 軸と直交し続けるため、大腿 roll の物理的手掛かり (上腕の `wrist − elbow` と同型)。`kThighRollSwitch = 0.2` 未満で degenerate 判定。
-2. degenerate 時 `up2 = (hip − hip_center)` (= Phase 11 現状の lateral pin)。
+1. `up1 = (ankle − knee)`。膝 hinge により脛は thigh 軸と直交し続けるため、大腿 roll の物理的手掛かり (上腕の `wrist − elbow` と同型)。
+2. `up1` が degenerate (sin θ < `kRollSinLow`) なら `up2 = (hip − hip_center)` (= Phase 11 現状の lateral pin)。
 3. `up2` も degenerate なら `up3 = world Z`。
 
 大腿の改修は **Phase 11 Firmware UDP 経路の 10 本構成** (LEFT/RIGHT_UPPER_LEG を送る) で効く。Phase 12 Bridge 経路の 8 本構成は thigh を送らない設計 (上記 R2 参照) のため無関係だが、Phase 11 経路を残す方針のため M1 に含める。
 
 立位 (膝完全伸展) では primary が degenerate なので secondary に落ちる = 現状と同等。歩行 / 着座 / しゃがみで primary が活きて femur 軸回転を捉える。立位での hip 外旋 (toes-out 動作) は 3D KP だけでは観測不能という原理的限界が `test_tracker_extract` の golden に明示的に書かれている。
+
+### M1 の追加レイヤ: Confidence-modulated smoothing
+
+ハード閾値 (`kUpperArmRollSwitch` / `kThighRollSwitch` = 0.2) によるソース切替は、閾値跨ぎで roll の discrete jump、浅角度でのノイズ増幅、固定 alpha smoothing で隠せない振動という 3 つの不安定性を残す (`a28f03c` 後のユーザー指摘)。これを **角度に応じた重み付け** で解消する:
+
+- **ソース選択は緩い floor で**: `sin θ ≥ kRollSinLow = 0.05` (≈ sin 2.9°、ほぼ degenerate 検出だけ) を満たす最初のソースを採用する。primary が浅角度でも採用され続け (物理的に最も情報量が多い)、完全に死んだ時のみ secondary に降りる。
+- **採用ソースの sin θ から信頼度を導出**: `roll_confidence = smoothstep(sin θ, kRollSinLow, kRollSinHigh)` で `[0, 1]` に写像。`kRollSinHigh = 0.20 (≈ sin 11.5°)` 以上は完全信頼 = 1.0。
+- **smoothing alpha を per-tracker に**: `apply_quat_smoothing` 内で `effective_alpha = base_alpha · roll_confidence`。`confidence = 0` のとき前周期 quat をホールド、中間値では遅れて反映、`confidence = 1` で現状 (Phase 11 / M1 hard) と同速。
+- **副次修正**: 旧 `apply_quat_smoothing` は `!valid` で `prev_quat` を identity にリセットしていた (一瞬の検出落ちで avatar が identity に snap する原因)。新版は `prev_quat` を保持し、`curr.quat_wxyz` を `prev_quat` に置き換えて publisher にも継続性を見せる。
+
+胸 / 腰 / 脛 / 足 (= rigid pin or 常時非 degenerate) は `roll_confidence = 1.0` 固定 = 現状と同挙動。上腕 / 大腿のみ動的に減衰。
+
+期待効果: 腕を T-pose で水平静止すると `sin θ ≈ 0.03` (KP ノイズ範囲) → confidence = 0 → 前周期保持で twist 振動消失。腕を 12° 屈曲以上 → confidence = 1 → 通常追従。中間屈曲では緩やかな反映で離散ジャンプなし。
 
 ## Bridge wire format (Jetson ↔ Windows relay)
 
@@ -222,7 +235,7 @@ Gating (`main.cpp` で early-fail):
 
 | M | 内容 | 完了基準 |
 |---|---|---|
-| M1 | `tracker_extract.cpp` の upper_arm / upper_leg / foot up を多段選択に書き換え + `test_tracker_extract.cpp` に 9 ケース golden 追加 (前方挙上 / 頭上挙上 / つま先立ち / かかと立ち / 横傾き / 着座 / 歩行片足 / 立位 / つま先外向き) | ctest pass, Phase 11 Firmware UDP 経路で実機評価して二の腕ひねり症状が肉眼で改善、歩行 / 着座で大腿 roll が SlimeVR GUI 上で追従 |
+| M1 | `tracker_extract.cpp` の upper_arm / upper_leg / foot up を多段選択 + confidence-modulated smoothing に書き換え + `test_tracker_extract.cpp` に 9 ケース pose golden + 4 ケース confidence (confidence@90° / 全 degenerate / smoothstep midrange / 凍結 freeze) + 1 ケース挙動変更 (invalid 時の prev 保持) | ctest pass, Phase 11 Firmware UDP 経路で実機評価して 二の腕ひねり症状の解消 + 歩行 / 着座で大腿 roll が SlimeVR GUI 上で追従 + **腕完全伸展時の roll twist 振動がゼロに収束** |
 | M2 | `docs/phase12-slimevr-bridge-relay.md` 新規 + `docs/backlog-slimevr-bridge-relay.md` に「Phase 12 で実装中、こちらを参照」のリダイレクト注記 + `docs/cpp-migration-plan.md` の段階実装 / 検証戦略行追加 | docs review |
 | M3 | `firmware_protocol::world_pos_to_slime()` 追加 + `extract_trackers_bridge()` (8 本版) 追加 + `bridge_publisher.{hpp,cpp}` 新規 + `test_bridge_publisher` で wire format golden 通過 + `main.cpp` CLI 配線 + 二重登録ガード + `/stats3d` splice | ctest pass, `tools/dump_bridge_frames.py` で Jetson loopback frame 60Hz pacing 誤差 < 5ms / 抜け率 < 0.1% |
 | M4 | `windows/slimevr-bridge-relay/` 新規 (C# .NET 8): TCP recv + Protobuf 変換 + Named pipe write + reconnect ループ + `--no-pipe` dry-run mode | Windows 機で relay 単体起動 → SlimeVR GUI に 8 本表示 (Jetson 接続せずダミー frame 送信で確認) |
@@ -301,7 +314,7 @@ slimevr-bridge-relay.exe --port 6970
 
 | ID | 内容 | 対応 |
 |---|---|---|
-| R1 | M1 の up1/up2 切替閾値 (初期 0.2 = sin 11.5°) が実機で妥当か | M6 で実機 1 週間運用後に確定。`tracker_extract.cpp` 内 named constant `kUpperArmRollSwitch` / `kThighRollSwitch` として宣言してチューニング容易化 (大腿は別定数だが初期値は同じ 0.2) |
+| R1 | M1 の confidence smoothstep 範囲 (`kRollSinLow = 0.05`, `kRollSinHigh = 0.20`) が実機で妥当か | M6 で実機 1 週間運用後に確定。両定数は `tracker_extract.cpp` 内 named constant として宣言済みでチューニング容易。Low を上げすぎると追従が鈍くなる; High を下げすぎると伸展付近で update が早すぎて振動が戻る |
 | R2 | LEFT_KNEE に shin を入れる選択が SlimeVR IK で逆効果になるケース | thigh 版に切替できるよう `tracker_extract.cpp` で role→joints マップを変数化。M6 評価時に shin vs thigh を比較 |
 | R3 | Bridge `TrackerRole.NONE(0)` で 10 本送る案 (案 Y) が必要になった場合 | `~/Documents/refs/slimevr/SlimeVR-Server` の `ProtobufBridge.kt` を読んで NONE role の表示挙動を確認。GUI 上で連番表示に戻るなら不採用 |
 | R4 | TCP 接続切断時の挙動 | `bridge_publisher` 側は exponential backoff (100ms → 5s) で reconnect。relay 側は pipe 切断時も Jetson TCP を維持。`tcp_state` を stats で監視可能に |
