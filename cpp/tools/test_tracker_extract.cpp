@@ -54,6 +54,21 @@ void set_joint(fitra::infer::Skeleton3D& s, std::size_t i,
     s.joints[i].valid = valid;
 }
 
+cv::Vec3f vec_normalize(const cv::Vec3f& v) {
+    float n = std::sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+    if (n < 1.0e-9f) return cv::Vec3f{0, 0, 0};
+    return cv::Vec3f{v[0]/n, v[1]/n, v[2]/n};
+}
+
+// Reconstruct the rotation-matrix columns from a wxyz unit quaternion, matching
+// the column convention used in detail::quat_from_forward_up (R = [right|up|fwd]).
+void quat_to_basis(const cv::Vec4f& q, cv::Vec3f& right, cv::Vec3f& up, cv::Vec3f& fwd) {
+    float w = q[0], x = q[1], y = q[2], z = q[3];
+    right = cv::Vec3f{1 - 2*(y*y + z*z), 2*(x*y + w*z),     2*(x*z - w*y)};
+    up    = cv::Vec3f{2*(x*y - w*z),     1 - 2*(x*x + z*z), 2*(y*z + w*x)};
+    fwd   = cv::Vec3f{2*(x*z + w*y),     2*(y*z - w*x),     1 - 2*(x*x + y*y)};
+}
+
 // Synthetic Halpe26 T-pose: subject standing at origin facing +Y, arms
 // outstretched, knees slightly forward (so the up/forward hints on knee /
 // elbow trackers are linearly independent — a perfectly straight limb makes
@@ -245,6 +260,270 @@ void test_smoothing_invalid_resets_prev() {
                      cv::Vec3f{1, 0, 0}, "invalid tracker resets prev to curr");
 }
 
+// Verify the tracker's local +Z axis (the bone forward) matches the expected
+// world-frame bone direction within `eps`. Uses dot product to be sign-aware.
+void check_tracker_forward(const fitra::slimevr::SlimeTracker& t,
+                            const cv::Vec3f& expected_fwd_unit,
+                            const std::string& label,
+                            float eps = 1e-3f) {
+    cv::Vec3f right, up, fwd;
+    quat_to_basis(t.quat_wxyz, right, up, fwd);
+    float dot = fwd[0]*expected_fwd_unit[0] + fwd[1]*expected_fwd_unit[1]
+              + fwd[2]*expected_fwd_unit[2];
+    if (std::abs(dot - 1.0f) > eps) {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+            "%s: forward axis dot=%.6f (want 1.0); fwd=(%.4f,%.4f,%.4f) expected=(%.4f,%.4f,%.4f)",
+            label.c_str(), dot, fwd[0], fwd[1], fwd[2],
+            expected_fwd_unit[0], expected_fwd_unit[1], expected_fwd_unit[2]);
+        throw std::runtime_error(buf);
+    }
+}
+
+// Verify the tracker's local +Y axis (the up hint after orthogonalization) lies
+// in the half-space pointed to by `expected_up_dir`. We don't require exact
+// equality because the up is projected onto fwd⊥ — but its sign and dominant
+// component must match expectation for the chosen up source.
+void check_tracker_up_direction(const fitra::slimevr::SlimeTracker& t,
+                                 const cv::Vec3f& expected_up_dir,
+                                 const std::string& label,
+                                 float min_dot = 0.3f) {
+    cv::Vec3f right, up, fwd;
+    quat_to_basis(t.quat_wxyz, right, up, fwd);
+    cv::Vec3f dir = vec_normalize(expected_up_dir);
+    float dot = up[0]*dir[0] + up[1]*dir[1] + up[2]*dir[2];
+    if (dot < min_dot) {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+            "%s: up axis dot=%.6f < %.4f; up=(%.4f,%.4f,%.4f) expected_dir=(%.4f,%.4f,%.4f)",
+            label.c_str(), dot, min_dot, up[0], up[1], up[2], dir[0], dir[1], dir[2]);
+        throw std::runtime_error(buf);
+    }
+}
+
+// Build a minimal pose-specific skeleton starting from the T-pose and applying
+// the caller's mutations. Useful when only a few joints differ from rest.
+fitra::infer::Skeleton3D make_modified_t_pose(
+    void (*mutate)(fitra::infer::Skeleton3D&)) {
+    auto s = make_t_pose();
+    mutate(s);
+    return s;
+}
+
+// === Upper arm: arm raised straight forward (前方挙上), elbow slightly bent ===
+// The forearm bends downward, so wrist - elbow has a strong vertical component
+// orthogonal to the (horizontal) upper-arm axis. Primary up should be used and
+// the tracker's local up should point upward (positive Z component).
+void test_upper_arm_forward_raised() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        // Raise left arm forward to +Y, elbow ~150° (30° flex), wrist drops slightly.
+        set_joint(s, 5, 0.18f, 0.00f, 1.42f);   // l_shoulder
+        set_joint(s, 7, 0.18f, 0.30f, 1.42f);   // l_elbow (~30cm forward, same height)
+        set_joint(s, 9, 0.18f, 0.55f, 1.35f);   // l_wrist (forward + slightly down)
+    });
+    auto trackers = fitra::slimevr::extract_trackers(skel);
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+    auto& t = trackers[idx(R::LeftUpperArm)];
+    check(t.valid, "forward-raised upper arm must be valid");
+    check_tracker_forward(t, cv::Vec3f{0, 1, 0}, "LUA forward raise: fwd axis", 1e-3f);
+    // Wrist drops below the elbow → primary up has +Z component (orth to fwd).
+    check_tracker_up_direction(t, cv::Vec3f{0, 0, -1},
+                                "LUA forward raise: up tilts toward wrist drop");
+}
+
+// === Upper arm: arm raised overhead with elbow bent (頭上挙上) ===
+// fwd ≈ +Z; wrist - elbow ≈ +X (elbow bent forward/laterally). The wrist primary
+// should activate and the tracker's local up should reflect the wrist direction.
+void test_upper_arm_overhead_bent_elbow() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        set_joint(s, 5, 0.18f, 0.0f, 1.42f);    // l_shoulder
+        set_joint(s, 7, 0.18f, 0.0f, 1.85f);    // l_elbow directly above shoulder
+        set_joint(s, 9, 0.42f, 0.0f, 1.85f);    // l_wrist lateral 24cm (elbow flexed)
+    });
+    auto trackers = fitra::slimevr::extract_trackers(skel);
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+    auto& t = trackers[idx(R::LeftUpperArm)];
+    check(t.valid, "overhead-bent upper arm must be valid");
+    check_tracker_forward(t, cv::Vec3f{0, 0, 1}, "LUA overhead: fwd axis");
+    // wrist is to +X of elbow → tracker up should point toward +X.
+    check_tracker_up_direction(t, cv::Vec3f{1, 0, 0},
+                                "LUA overhead: up follows wrist direction");
+}
+
+// === Foot: toe stance (つま先立ち) — heel raised, toes on ground ===
+// heel above the toe; ankle remains above the foot midpoint but pitched forward.
+// The tracker's local fwd should still align with the heel→toe direction; up
+// should retain its +Z dominance (ankle above mid).
+void test_foot_toe_stance() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        // Left foot tilted to toe-stance: toe stays at ground, heel raised 8cm.
+        set_joint(s, 24, 0.1f,  0.02f, 0.08f);  // l_heel
+        set_joint(s, 20, 0.1f,  0.17f, 0.0f);   // l_big_toe
+        set_joint(s, 15, 0.1f,  0.07f, 0.18f);  // l_ankle raised and forward of heel
+    });
+    auto trackers = fitra::slimevr::extract_trackers(skel);
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+    auto& t = trackers[idx(R::LeftFoot)];
+    check(t.valid, "toe-stance foot must be valid");
+    // fwd = (toe - heel) normalized = (0, 0.15, -0.08) / |.| ≈ (0, 0.88, -0.47).
+    cv::Vec3f expected_fwd = vec_normalize(cv::Vec3f{0, 0.15f, -0.08f});
+    check_tracker_forward(t, expected_fwd, "Foot toe-stance: fwd axis");
+    // ankle is above foot_mid by (0, -0.025, 0.14) → up still mostly +Z.
+    check_tracker_up_direction(t, cv::Vec3f{0, 0, 1}, "Foot toe-stance: up still +Z");
+}
+
+// === Foot: heel stance (かかと立ち) — toes raised, heel on ground ===
+void test_foot_heel_stance() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        set_joint(s, 24, 0.1f,  0.02f, 0.0f);   // l_heel on ground
+        set_joint(s, 20, 0.1f,  0.17f, 0.08f);  // l_big_toe raised
+        set_joint(s, 15, 0.1f,  0.04f, 0.15f);  // l_ankle above heel
+    });
+    auto trackers = fitra::slimevr::extract_trackers(skel);
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+    auto& t = trackers[idx(R::LeftFoot)];
+    check(t.valid, "heel-stance foot must be valid");
+    cv::Vec3f expected_fwd = vec_normalize(cv::Vec3f{0, 0.15f, 0.08f});
+    check_tracker_forward(t, expected_fwd, "Foot heel-stance: fwd axis");
+    check_tracker_up_direction(t, cv::Vec3f{0, 0, 1}, "Foot heel-stance: up still +Z");
+}
+
+// === Foot: lateral tilt (足内反 inversion) — sole tilted inward, ankle lateral ===
+// The ankle shifts to +X (lateral) relative to the foot midpoint. The tracker's
+// up should pick up an X component (roll), distinguishing it from world-Z up.
+void test_foot_inversion() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        set_joint(s, 24, 0.1f,  0.02f, 0.0f);   // l_heel on ground
+        set_joint(s, 20, 0.1f,  0.17f, 0.0f);   // l_big_toe on ground (flat in Y)
+        // ankle shifted +X 8cm relative to foot_mid=(0.1,0.095,0)
+        set_joint(s, 15, 0.18f, 0.04f, 0.10f);
+    });
+    auto trackers = fitra::slimevr::extract_trackers(skel);
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+    auto& t = trackers[idx(R::LeftFoot)];
+    check(t.valid, "inverted foot must be valid");
+    // Expected up direction: ankle - foot_mid = (0.08, -0.055, 0.10).
+    cv::Vec3f expected_up = vec_normalize(cv::Vec3f{0.08f, -0.055f, 0.10f});
+    check_tracker_up_direction(t, expected_up, "Foot inversion: up tilts laterally", 0.7f);
+}
+
+// === Thigh: knee bent 90° (seated, knee toward camera) ===
+// fwd = knee - hip (forward, ~horizontal). ankle below knee → ankle - knee ≈ -Z.
+// Primary up activates; tracker up should be dominantly -Z (since ankle hangs).
+void test_thigh_seated_knee_bent() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        set_joint(s, 11, 0.1f,  0.0f,  0.5f);   // l_hip (seated, lower)
+        set_joint(s, 13, 0.1f,  0.45f, 0.5f);   // l_knee 45cm forward
+        set_joint(s, 15, 0.1f,  0.45f, 0.05f);  // l_ankle directly below knee
+    });
+    auto trackers = fitra::slimevr::extract_trackers(skel);
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+    auto& t = trackers[idx(R::LeftUpperLeg)];
+    check(t.valid, "seated thigh must be valid");
+    check_tracker_forward(t, cv::Vec3f{0, 1, 0}, "Thigh seated: fwd axis");
+    // ankle - knee = (0, 0, -0.45); orth to fwd=+Y is itself. up should be -Z.
+    check_tracker_up_direction(t, cv::Vec3f{0, 0, -1},
+                                "Thigh seated: up follows ankle-knee (down)");
+}
+
+// === Thigh: walking single-leg lift (knee bent 30°) — primary up still active ===
+void test_thigh_walking_knee_30() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        // hip standard; knee lifted forward & up; ankle drops back ~30° from knee axis.
+        set_joint(s, 11, 0.1f,  0.0f,  0.9f);   // l_hip
+        set_joint(s, 13, 0.1f,  0.15f, 0.55f);  // l_knee
+        // Thigh axis = (0, 0.15, -0.35) ≈ pointing forward-down. Shin should hang
+        // ~30° behind that axis: ankle = knee + R(-30° around X) * (0, 0, -0.45).
+        // ≈ knee + (0, 0.45*sin30°, -0.45*cos30°) = (0.1, 0.15+0.225, 0.55-0.389)
+        set_joint(s, 15, 0.1f,  0.375f, 0.16f);
+    });
+    auto trackers = fitra::slimevr::extract_trackers(skel);
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+    auto& t = trackers[idx(R::LeftUpperLeg)];
+    check(t.valid, "walking-knee-30 thigh must be valid");
+    cv::Vec3f expected_fwd = vec_normalize(cv::Vec3f{0, 0.15f, -0.35f});
+    check_tracker_forward(t, expected_fwd, "Thigh walk30: fwd axis");
+}
+
+// === Thigh: standing (knee straight) — primary degenerate → secondary used ===
+// Verify behavior matches the Phase 11 lateral-pin design when the knee is
+// effectively extended. The tracker should still be valid and its forward axis
+// correct.
+void test_thigh_standing_knee_straight() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        // hip and knee vertically aligned, ankle continues vertically.
+        set_joint(s, 11, 0.1f, 0.0f, 0.9f);     // l_hip
+        set_joint(s, 13, 0.1f, 0.0f, 0.45f);    // l_knee
+        set_joint(s, 15, 0.1f, 0.0f, 0.05f);    // l_ankle (perfectly straight)
+        set_joint(s, 19, 0.0f, 0.0f, 0.9f);     // hip_center
+    });
+    auto trackers = fitra::slimevr::extract_trackers(skel);
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+    auto& t = trackers[idx(R::LeftUpperLeg)];
+    check(t.valid, "standing-straight thigh must be valid (secondary fallback)");
+    check_tracker_forward(t, cv::Vec3f{0, 0, -1}, "Thigh straight: fwd is -Z");
+    // Secondary up = hip - hip_center = (0.1, 0, 0). After orthogonalization vs
+    // fwd=-Z it stays in the +X direction.
+    check_tracker_up_direction(t, cv::Vec3f{1, 0, 0},
+                                "Thigh straight: up via lateral pin (+X)");
+}
+
+// === Thigh: standing with hip external rotation (toes outward) ===
+// Knee straight, ankle laterally rotated relative to the femur axis. Because
+// ankle - knee is still parallel to knee - hip (both vertical, just the foot
+// turns outward at the ankle), the primary still degenerates and the lateral
+// pin (hip - hip_center) is unchanged. This is the documented limitation: 3D
+// keypoints alone cannot observe pure femur axial rotation when the knee is
+// extended — same behavior as Phase 11.
+void test_thigh_external_rotation_unobservable() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel_straight = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        set_joint(s, 11, 0.1f, 0.0f, 0.9f);
+        set_joint(s, 13, 0.1f, 0.0f, 0.45f);
+        set_joint(s, 15, 0.1f, 0.0f, 0.05f);
+        set_joint(s, 19, 0.0f, 0.0f, 0.9f);
+    });
+    auto skel_toes_out = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        set_joint(s, 11, 0.1f,  0.0f,  0.9f);
+        set_joint(s, 13, 0.1f,  0.0f,  0.45f);
+        // ankle rotated outward to lateral side, still at same height as before.
+        // The femur axis (knee-hip) is unchanged; the foot+ankle have rotated
+        // around the long axis but the ankle KP itself sits laterally.
+        set_joint(s, 15, 0.15f, 0.0f, 0.05f);
+        set_joint(s, 19, 0.0f,  0.0f, 0.9f);
+    });
+    auto trackers_a = fitra::slimevr::extract_trackers(skel_straight);
+    auto trackers_b = fitra::slimevr::extract_trackers(skel_toes_out);
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+    auto& ta = trackers_a[idx(R::LeftUpperLeg)];
+    auto& tb = trackers_b[idx(R::LeftUpperLeg)];
+    check(ta.valid && tb.valid, "both standing variants must be valid");
+    // The thigh quaternions should be identical — femur axial rotation is not
+    // observable from these KPs alone when the knee is extended.
+    for (int i = 0; i < 4; ++i) {
+        float d = std::abs(ta.quat_wxyz[i] - tb.quat_wxyz[i]);
+        check(d < 1e-3f,
+              "thigh quat must be identical between straight and toes-out (limitation)");
+    }
+}
+
 void test_keypoint_format_assert() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Coco17);
     auto skel = make_t_pose();
@@ -268,6 +547,15 @@ int main() {
         test_missing_joints_yield_invalid();      std::printf("[ok] missing joints → invalid trackers\n");
         test_smoothing_double_cover();            std::printf("[ok] slerp double-cover handling\n");
         test_smoothing_invalid_resets_prev();     std::printf("[ok] invalid tracker resets smoothing state\n");
+        test_upper_arm_forward_raised();          std::printf("[ok] upper arm: forward-raised (前方挙上)\n");
+        test_upper_arm_overhead_bent_elbow();     std::printf("[ok] upper arm: overhead + bent elbow (頭上挙上)\n");
+        test_foot_toe_stance();                   std::printf("[ok] foot: toe stance (つま先立ち)\n");
+        test_foot_heel_stance();                  std::printf("[ok] foot: heel stance (かかと立ち)\n");
+        test_foot_inversion();                    std::printf("[ok] foot: inversion (横傾き)\n");
+        test_thigh_seated_knee_bent();            std::printf("[ok] thigh: seated knee bent 90° (着座)\n");
+        test_thigh_walking_knee_30();             std::printf("[ok] thigh: walking knee bent ~30° (歩行片足)\n");
+        test_thigh_standing_knee_straight();      std::printf("[ok] thigh: standing knee straight (立位)\n");
+        test_thigh_external_rotation_unobservable(); std::printf("[ok] thigh: external rotation limitation (つま先外向き)\n");
         test_keypoint_format_assert();            std::printf("[ok] Halpe26 keypoint-format assertion\n");
         std::puts("test_tracker_extract ok");
         return 0;

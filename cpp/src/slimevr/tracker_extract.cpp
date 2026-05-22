@@ -35,6 +35,7 @@ inline cv::Vec3f normalize_or_zero(const cv::Vec3f& v) {
 // Halpe26 index symbols used by all role builders.
 constexpr std::size_t kLShoulder = 5,  kRShoulder = 6;
 constexpr std::size_t kLElbow    = 7,  kRElbow    = 8;
+constexpr std::size_t kLWrist    = 9,  kRWrist    = 10;
 constexpr std::size_t kLHip      = 11, kRHip      = 12;
 constexpr std::size_t kLKnee     = 13, kRKnee     = 14;
 constexpr std::size_t kLAnkle    = 15, kRAnkle    = 16;
@@ -43,11 +44,44 @@ constexpr std::size_t kHipCenter = 19;
 constexpr std::size_t kLBigToe   = 20, kRBigToe   = 21;
 constexpr std::size_t kLHeel     = 24, kRHeel     = 25;
 
+// Below this sin(angle(up, fwd)) the up hint is treated as degenerate and the
+// fallback up is used. 0.2 ≈ sin(11.5°); see docs/phase12-slimevr-bridge-relay.md.
+constexpr float kUpperArmRollSwitch = 0.2f;
+constexpr float kThighRollSwitch    = 0.2f;
+
 bool joints_valid(const infer::Skeleton3D& s, std::initializer_list<std::size_t> idxs) {
     for (auto i : idxs) {
         if (!s.joints[i].valid) return false;
     }
     return true;
+}
+
+// Pick the first up hint whose perpendicular component to fwd has magnitude
+// > threshold * |up|. Zero-vector ups (from invalid joints) skip immediately.
+// `forward` is assumed non-zero (caller checks); ups are inspected in primary,
+// secondary, tertiary order. Returns the chosen up; sets `which` to 0/1/2 for
+// the stage that won, or 2 if all degenerated (in which case the tertiary is
+// returned even though it may also fail downstream).
+cv::Vec3f pick_up_multistage(const cv::Vec3f& fwd,
+                              const cv::Vec3f& up_primary,
+                              const cv::Vec3f& up_secondary,
+                              const cv::Vec3f& up_tertiary,
+                              float threshold,
+                              int& which) {
+    float f_n = norm(fwd);
+    const cv::Vec3f* candidates[3] = {&up_primary, &up_secondary, &up_tertiary};
+    for (int i = 0; i < 3; ++i) {
+        const cv::Vec3f& u = *candidates[i];
+        float u_n = norm(u);
+        if (u_n < 1.0e-6f) continue;  // zero vector → invalid joint, skip
+        // sin θ = |u × fwd| / (|u| |fwd|). Tertiary always accepted.
+        if (i == 2 || norm(cross(u, fwd)) / (u_n * f_n) >= threshold) {
+            which = i;
+            return u;
+        }
+    }
+    which = 2;
+    return up_tertiary;
 }
 
 }  // namespace
@@ -161,21 +195,30 @@ extract_trackers(const infer::Skeleton3D& skel) {
     }
 
     // ---- Upper arms (shoulder → elbow) ------------------------------------
-    // pos = midpoint(shoulder, elbow); forward = elbow - shoulder (along arm);
-    // up   = neck - shoulder (toward the head, pinning roll).
+    // forward = elbow - shoulder. Roll is pinned by a three-stage up choice:
+    //   1. wrist - elbow      (elbow hinge gives strongest physical handle)
+    //   2. neck  - shoulder   (lateral pin; degenerate when arm raised)
+    //   3. world Z            (last resort)
     auto upper_arm = [&](TrackerRole role, std::size_t shoulder, std::size_t elbow,
-                          std::size_t out_idx) {
+                          std::size_t wrist, std::size_t out_idx) {
         if (!joints_valid(skel, {kNeck, shoulder, elbow})) return;
         cv::Vec3f sp = to_vec3f(skel.joints[shoulder]);
         cv::Vec3f ep = to_vec3f(skel.joints[elbow]);
         cv::Vec3f np = to_vec3f(skel.joints[kNeck]);
         cv::Vec3f pos = (sp + ep) * 0.5f;
         cv::Vec3f fwd = ep - sp;
-        cv::Vec3f up  = np - sp;
+        cv::Vec3f up_primary = skel.joints[wrist].valid
+                                ? (to_vec3f(skel.joints[wrist]) - ep)
+                                : cv::Vec3f{0, 0, 0};
+        cv::Vec3f up_secondary = np - sp;
+        cv::Vec3f up_tertiary  = cv::Vec3f{0, 0, 1};
+        int which = -1;
+        cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_secondary, up_tertiary,
+                                           kUpperArmRollSwitch, which);
         build_tracker(role, pos, fwd, up, out[out_idx]);
     };
-    upper_arm(TrackerRole::LeftUpperArm,  kLShoulder, kLElbow, 0);
-    upper_arm(TrackerRole::RightUpperArm, kRShoulder, kRElbow, 1);
+    upper_arm(TrackerRole::LeftUpperArm,  kLShoulder, kLElbow, kLWrist, 0);
+    upper_arm(TrackerRole::RightUpperArm, kRShoulder, kRElbow, kRWrist, 1);
 
     // ---- Chest (mid-torso) ------------------------------------------------
     // pos = midpoint(neck, hip_center); up = neck - hip_center (spine);
@@ -201,21 +244,30 @@ extract_trackers(const infer::Skeleton3D& skel) {
     }
 
     // ---- Upper legs (thigh: hip → knee) -----------------------------------
-    // pos = midpoint(hip, knee); forward = knee - hip; up = hip - hip_center
-    // (lateral pin so the tracker can resolve thigh roll).
+    // forward = knee - hip. Three-stage up choice mirroring the upper arm:
+    //   1. ankle - knee       (knee hinge fixes femur roll when bent)
+    //   2. hip   - hip_center (lateral pin; ok in standing pose)
+    //   3. world Z
     auto upper_leg = [&](TrackerRole role, std::size_t hip, std::size_t knee,
-                         std::size_t out_idx) {
+                         std::size_t ankle, std::size_t out_idx) {
         if (!joints_valid(skel, {kHipCenter, hip, knee})) return;
         cv::Vec3f hp = to_vec3f(skel.joints[hip]);
         cv::Vec3f kp = to_vec3f(skel.joints[knee]);
         cv::Vec3f hc = to_vec3f(skel.joints[kHipCenter]);
         cv::Vec3f pos = (hp + kp) * 0.5f;
         cv::Vec3f fwd = kp - hp;
-        cv::Vec3f up  = hp - hc;
+        cv::Vec3f up_primary = skel.joints[ankle].valid
+                                ? (to_vec3f(skel.joints[ankle]) - kp)
+                                : cv::Vec3f{0, 0, 0};
+        cv::Vec3f up_secondary = hp - hc;
+        cv::Vec3f up_tertiary  = cv::Vec3f{0, 0, 1};
+        int which = -1;
+        cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_secondary, up_tertiary,
+                                           kThighRollSwitch, which);
         build_tracker(role, pos, fwd, up, out[out_idx]);
     };
-    upper_leg(TrackerRole::LeftUpperLeg,  kLHip, kLKnee, 4);
-    upper_leg(TrackerRole::RightUpperLeg, kRHip, kRKnee, 5);
+    upper_leg(TrackerRole::LeftUpperLeg,  kLHip, kLKnee, kLAnkle, 4);
+    upper_leg(TrackerRole::RightUpperLeg, kRHip, kRKnee, kRAnkle, 5);
 
     // ---- Lower legs (shin: knee → ankle) ----------------------------------
     // pos = midpoint(knee, ankle); forward = ankle - knee; up = hip - knee
@@ -235,21 +287,25 @@ extract_trackers(const infer::Skeleton3D& skel) {
     lower_leg(TrackerRole::RightLowerLeg, kRHip, kRKnee, kRAnkle, 7);
 
     // ---- Feet -------------------------------------------------------------
-    // pos = midpoint(heel, big_toe); forward = big_toe - heel; up = world Z
-    // (yaw-only — the foot is essentially flat on the ground in our use case
-    // and SlimeVR cares about heel-toe direction for foot facing).
+    // forward = big_toe - heel. Up = ankle - foot_mid: this is the foot-plane
+    // normal (ankle sits above the heel-toe midpoint), so toe-up / heel-up /
+    // inversion all tilt this vector and produce the correct foot roll/pitch.
+    // World Z fallback only if ankle is missing.
     auto foot_tracker = [&](TrackerRole role, std::size_t heel, std::size_t toe,
-                            std::size_t out_idx) {
+                            std::size_t ankle, std::size_t out_idx) {
         if (!joints_valid(skel, {heel, toe})) return;
         cv::Vec3f heel_p = to_vec3f(skel.joints[heel]);
         cv::Vec3f toe_p  = to_vec3f(skel.joints[toe]);
-        cv::Vec3f pos = (heel_p + toe_p) * 0.5f;
+        cv::Vec3f foot_mid = (heel_p + toe_p) * 0.5f;
+        cv::Vec3f pos = foot_mid;
         cv::Vec3f fwd = toe_p - heel_p;
-        cv::Vec3f up{0.0f, 0.0f, 1.0f};
+        cv::Vec3f up = skel.joints[ankle].valid
+                        ? (to_vec3f(skel.joints[ankle]) - foot_mid)
+                        : cv::Vec3f{0, 0, 1};
         build_tracker(role, pos, fwd, up, out[out_idx]);
     };
-    foot_tracker(TrackerRole::LeftFoot,  kLHeel, kLBigToe, 8);
-    foot_tracker(TrackerRole::RightFoot, kRHeel, kRBigToe, 9);
+    foot_tracker(TrackerRole::LeftFoot,  kLHeel, kLBigToe, kLAnkle, 8);
+    foot_tracker(TrackerRole::RightFoot, kRHeel, kRBigToe, kRAnkle, 9);
 
     return out;
 }
