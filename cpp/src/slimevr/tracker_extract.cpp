@@ -48,8 +48,21 @@ constexpr std::size_t kLBigToe   = 20, kRBigToe   = 21;
 // previous roll held). Above kRollSinHigh the measurement is fully trusted
 // (confidence 1). Between, smoothstep gradually opens the gate so the update
 // rate scales with measurement reliability. See docs/phase12-slimevr-bridge-relay.md.
-constexpr float kRollSinLow  = 0.05f;  // sin 2.9°: near-degenerate floor
-constexpr float kRollSinHigh = 0.20f;  // sin 11.5°: full-confidence ceiling
+//
+// Phase 13 (2026-05-25): raised from 0.05 / 0.20 → 0.15 / 0.30 after the
+// 直立で脚を伸ばし切ったときに大腿が一気に 90° roll する現象の実機ログ
+// (ang vel p95 = 1.8 rad/s, conf_avg = 0.16, leakage_pct = 100% on the
+// thigh during slow extension) で smoothstep leakage 仮説が確定したため。
+// 新しきい:
+//   * sin 0.15 ≈ 8.6° bend: degenerate gate。歩行 (>30°) / しゃがみ (>60°)
+//     /着座 (~90°) は確実に超え、立位伸展 (0-5°) は確実に下回る
+//   * sin 0.30 ≈ 17.5° bend: full-confidence ceiling。中間域 (8.6°..17.5°)
+//     だけが smoothstep の漸進更新ゾーンになり、実用ポーズ域からは離れる
+// `quat_from_forward_up` の degeneracy 判定も同じ kRollSinLow を sin θ
+// gate として使うので、pick_up_multistage を経由しない rigid tracker
+// (shin / foot / chest / waist) も同等に守られる。
+constexpr float kRollSinLow  = 0.15f;  // sin 8.6°: degenerate gate
+constexpr float kRollSinHigh = 0.30f;  // sin 17.5°: full-confidence ceiling
 
 // Smoothing throttle for foot trackers. The foot is treated as a rigid
 // extension of the shin (up = tibia axis; see foot_tracker below) because
@@ -156,7 +169,18 @@ bool quat_from_forward_up(const cv::Vec3f& forward_raw,
         return false;
     }
     cv::Vec3f right_raw = cross(up_raw, fwd);
-    if (norm(right_raw) < 1.0e-6f) {  // up is parallel to forward
+    // Phase 13: sin θ-based degeneracy gate so rigid trackers (shin, foot,
+    // chest, waist) that don't go through pick_up_multistage still get the
+    // same near-parallel protection as the thigh / upper-arm path.
+    //   sin θ = |cross(up, fwd)| / (|up| · |fwd|)
+    // fwd is already unit-normalized above (norm > 0.5 + normalize_or_zero
+    // gave it length ~1.0). So we just need |up|.
+    float up_norm    = norm(up_raw);
+    float right_norm = norm(right_raw);
+    if (up_norm < 1.0e-6f || right_norm < kRollSinLow * up_norm) {
+        // Zero up_raw (invalid joint / sentinel) OR up is within
+        // sin⁻¹(kRollSinLow) of fwd: declare degenerate and let the caller
+        // (apply_quat_smoothing) hold the previous quat.
         out_wxyz = cv::Vec4f{1, 0, 0, 0};
         return false;
     }
@@ -239,26 +263,41 @@ extract_trackers(const infer::Skeleton3D& skel) {
     }
 
     // ---- Upper arms (shoulder → elbow) ------------------------------------
-    // forward = elbow - shoulder. Roll is pinned by a three-stage up choice:
-    //   1. wrist - elbow      (elbow hinge gives strongest physical handle)
-    //   2. neck  - shoulder   (lateral pin; degenerate when arm raised)
-    //   3. world Z            (last resort)
+    // forward = elbow - shoulder. Single physical roll handle (no fallback):
+    //   1. wrist - elbow      (elbow hinge fixes humerus roll when bent — only
+    //                          physically valid handle from 3D KP alone)
+    //
+    // Tertiary is intentionally a zero vector. World Z is NOT usable as a
+    // fallback for upper-arm roll: at a horizontal arm (fwd ⊥ Z), world Z is
+    // assigned confidence ~1 by pick_up_multistage and writes "elbow points
+    // toward the ceiling" as an arbitrary roll. Secondary `(neck - shoulder)`
+    // is the chest's lateral axis; when primary degenerates with the arm
+    // straight, secondary rigidly couples upper-arm roll to torso yaw — the
+    // same "rigid pelvis pin" anti-pattern we removed from upper_leg in
+    // Phase 12 M1. With both fallbacks zeroed, pick_up_multistage hits its
+    // confidence=0 sentinel and quat_from_forward_up returns valid=false →
+    // apply_quat_smoothing holds the previous humerus quat.
+    //
+    // Active regime: knee/elbow-style hinge with wrist offset > sin 0.15 from
+    // the upper-arm axis (≈ 8.6° elbow flexion). Below that, freeze — twist
+    // is unobservable from 3D KP alone in that configuration.
     auto upper_arm = [&](TrackerRole role, std::size_t shoulder, std::size_t elbow,
                           std::size_t wrist, std::size_t out_idx) {
-        if (!joints_valid(skel, {kNeck, shoulder, elbow})) return;
+        if (!joints_valid(skel, {shoulder, elbow})) return;
         cv::Vec3f sp = to_vec3f(skel.joints[shoulder]);
         cv::Vec3f ep = to_vec3f(skel.joints[elbow]);
-        cv::Vec3f np = to_vec3f(skel.joints[kNeck]);
         cv::Vec3f pos = (sp + ep) * 0.5f;
         cv::Vec3f fwd = ep - sp;
         cv::Vec3f up_primary = skel.joints[wrist].valid
                                 ? (to_vec3f(skel.joints[wrist]) - ep)
                                 : cv::Vec3f{0, 0, 0};
-        cv::Vec3f up_secondary = np - sp;
-        cv::Vec3f up_tertiary  = cv::Vec3f{0, 0, 1};
+        cv::Vec3f up_tertiary = cv::Vec3f{0, 0, 0};
         float confidence = 0.0f;
         int which = -1;
-        cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_secondary, up_tertiary,
+        // 1-stage selection (same shape as upper_leg): primary slot holds
+        // (wrist - elbow); secondary duplicates primary so secondary's
+        // degeneracy test collapses; tertiary is the zero sentinel.
+        cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_primary, up_tertiary,
                                            confidence, which);
         build_tracker(role, pos, fwd, up, out[out_idx], confidence);
     };

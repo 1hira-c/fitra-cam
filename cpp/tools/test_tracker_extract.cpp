@@ -84,11 +84,27 @@ fitra::infer::Skeleton3D make_t_pose() {
     set_joint(s,  5, 0.18f,0,     1.42f);  // l_shoulder
     set_joint(s,  6, -0.18f,0,    1.42f);  // r_shoulder
     set_joint(s,  7, 0.45f, 0.02f, 1.42f); // l_elbow (~3 cm forward)
-    set_joint(s,  9, 0.72f, 0.05f, 1.42f); // l_wrist
+    // Phase 13: wrists dropped 15 cm in Z (forearm hangs slightly below the
+    // upper-arm axis). The previous strictly-horizontal arm had
+    // wrist - elbow ∥ elbow - shoulder (both pointing +X with only ~3 cm Y
+    // offset), so primary up was sin θ ≈ 0.01 from fwd → falls into the
+    // degeneracy gate (kRollSinLow = 0.15). With wrist dropped, primary up
+    // gains a substantial -Z component → sin θ ≈ 0.48 → full confidence,
+    // upper-arm trackers stay valid in the T-pose. Anatomically: arms
+    // extended laterally with forearms relaxed downward 12°.
+    set_joint(s,  9, 0.72f, 0.05f, 1.27f); // l_wrist
     set_joint(s,  8, -0.45f,0.02f, 1.42f); // r_elbow
-    set_joint(s, 10, -0.72f,0.05f, 1.42f); // r_wrist
-    set_joint(s, 13, 0.1f,  0.01f, 0.45f); // l_knee
-    set_joint(s, 14, -0.1f, 0.01f, 0.45f); // r_knee
+    set_joint(s, 10, -0.72f,0.05f, 1.27f); // r_wrist
+    // Phase 13: T-pose has anatomically realistic mild knee flexion (knee 10 cm
+    // forward of the hip-ankle line ≈ 12°). The previous 1 cm offset was a
+    // visually-T-shaped figure but anatomically degenerate — both thigh fwd
+    // (knee-hip) and shin up (hip-knee) became near-parallel to the leg axis,
+    // and the new sin θ-based degeneracy gate in quat_from_forward_up rejects
+    // any quat built from such inputs (rightly: roll is unobservable). With
+    // the 10 cm knee bend, sin θ ≈ 0.34 for both shin and thigh, comfortably
+    // above kRollSinHigh, so all 10 trackers stay valid in the T-pose.
+    set_joint(s, 13, 0.1f,  0.10f, 0.45f); // l_knee
+    set_joint(s, 14, -0.1f, 0.10f, 0.45f); // r_knee
     set_joint(s, 15, 0.1f,  0.05f, 0.05f); // l_ankle
     set_joint(s, 16, -0.1f, 0.05f, 0.05f); // r_ankle
     set_joint(s, 24, 0.1f,  0.02f, 0.0f);  // l_heel
@@ -146,15 +162,15 @@ void test_t_pose_extracts_all_ten() {
     check_vec3_close(trackers[idx(R::Waist)].pos,
                      cv::Vec3f{0, 0, 0.9f},
                      "Waist pos (world)");
-    // LeftUpperLeg pos = midpoint(l_hip(0.1,0,0.9), l_knee(0.1,0.01,0.45))
-    //                  = (0.1, 0.005, 0.675)
+    // LeftUpperLeg pos = midpoint(l_hip(0.1,0,0.9), l_knee(0.1,0.10,0.45))
+    //                  = (0.1, 0.05, 0.675)
     check_vec3_close(trackers[idx(R::LeftUpperLeg)].pos,
-                     cv::Vec3f{0.1f, 0.005f, 0.675f},
+                     cv::Vec3f{0.1f, 0.05f, 0.675f},
                      "LeftUpperLeg pos (world)");
-    // LeftLowerLeg pos = midpoint(l_knee(0.1,0.01,0.45), l_ankle(0.1,0.05,0.05))
-    //                  = (0.1, 0.03, 0.25)
+    // LeftLowerLeg pos = midpoint(l_knee(0.1,0.10,0.45), l_ankle(0.1,0.05,0.05))
+    //                  = (0.1, 0.075, 0.25)
     check_vec3_close(trackers[idx(R::LeftLowerLeg)].pos,
-                     cv::Vec3f{0.1f, 0.03f, 0.25f},
+                     cv::Vec3f{0.1f, 0.075f, 0.25f},
                      "LeftLowerLeg pos (world)");
     // LeftFoot pos = midpoint(l_ankle(0.1,0.05,0.05), l_big_toe(0.1,0.17,0))
     //              = (0.1, 0.11, 0.025). Foot no longer uses heel — heel KP is
@@ -510,25 +526,31 @@ void test_thigh_seated_knee_bent() {
                                 "Thigh seated: up follows ankle-knee (down)");
 }
 
-// === Thigh: walking single-leg lift (knee bent 30°) — primary up still active ===
-void test_thigh_walking_knee_30() {
+// === Thigh: walking single-leg lift (knee bent ~60°) — primary up active ===
+void test_thigh_walking_knee_60() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
-        // hip standard; knee lifted forward & up; ankle drops back ~30° from knee axis.
-        set_joint(s, 11, 0.1f,  0.0f,  0.9f);   // l_hip
-        set_joint(s, 13, 0.1f,  0.15f, 0.55f);  // l_knee
-        // Thigh axis = (0, 0.15, -0.35) ≈ pointing forward-down. Shin should hang
-        // ~30° behind that axis: ankle = knee + R(-30° around X) * (0, 0, -0.45).
-        // ≈ knee + (0, 0.45*sin30°, -0.45*cos30°) = (0.1, 0.15+0.225, 0.55-0.389)
-        set_joint(s, 15, 0.1f,  0.375f, 0.16f);
+        // hip standard; knee lifted forward & up; shin swings forward by 60°
+        // (mid-swing phase of walking gait — anatomically ~60-70° knee flexion).
+        // Phase 13 raised the degeneracy gate to sin 0.15, so the old 30°-bent
+        // geometry (sin ≈ 0.12 for thigh primary) just barely failed; 60° gives
+        // sin ≈ 0.60, comfortably above the full-confidence ceiling (0.30).
+        set_joint(s, 11, 0.1f,  0.0f,  0.9f);    // l_hip
+        set_joint(s, 13, 0.1f,  0.15f, 0.55f);   // l_knee
+        // Thigh axis = (0, 0.15, -0.35) ≈ forward-down. Shin pivots 60° forward
+        // from the thigh axis (= shin direction is 60° behind world -Z):
+        //   ankle = knee + R(-60° around X) * (0, 0, -0.45)
+        //         = knee + (0, 0.45*sin60°, -0.45*cos60°)
+        //         = (0.1, 0.15+0.390, 0.55-0.225) = (0.1, 0.54, 0.325)
+        set_joint(s, 15, 0.1f,  0.54f, 0.325f);
     });
     auto trackers = fitra::slimevr::extract_trackers(skel);
     using R = fitra::slimevr::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperLeg)];
-    check(t.valid, "walking-knee-30 thigh must be valid");
+    check(t.valid, "walking-knee-60 thigh must be valid");
     cv::Vec3f expected_fwd = vec_normalize(cv::Vec3f{0, 0.15f, -0.35f});
-    check_tracker_forward(t, expected_fwd, "Thigh walk30: fwd axis");
+    check_tracker_forward(t, expected_fwd, "Thigh walk60: fwd axis");
 }
 
 // === Thigh: standing (knee straight) — primary degenerate, lateral pin removed ===
@@ -571,11 +593,15 @@ void test_thigh_standing_knee_straight() {
 void test_thigh_lateral_ankle_uses_primary() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     auto skel_lateral = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
-        set_joint(s, 11, 0.1f,  0.0f, 0.9f);   // l_hip
-        set_joint(s, 13, 0.1f,  0.0f, 0.45f);  // l_knee (femur vertical)
-        // ankle laterally offset (5 cm outboard of knee). primary up
-        // (ankle - knee) gains an X component perpendicular to fwd = -Z.
-        set_joint(s, 15, 0.15f, 0.0f, 0.05f);
+        set_joint(s, 11, 0.1f,  0.0f, 0.9f);    // l_hip
+        set_joint(s, 13, 0.1f,  0.0f, 0.45f);   // l_knee (femur vertical)
+        // ankle laterally offset 15 cm outboard of knee. primary up
+        // (ankle - knee) = (0.15, 0, -0.40), |up|=0.427, sin θ = 0.15/0.427 ≈
+        // 0.351 → > kRollSinHigh (0.30) → full confidence. Phase 13 raised
+        // the degeneracy gate from sin 0.05 → 0.15, so the previous 5 cm
+        // offset (sin ≈ 0.12) now falls into the freeze regime; 15 cm puts
+        // the lateral cue safely above the new gate.
+        set_joint(s, 15, 0.25f, 0.0f, 0.05f);
     });
     auto trackers = fitra::slimevr::extract_trackers(skel_lateral);
     using R = fitra::slimevr::TrackerRole;
@@ -583,7 +609,7 @@ void test_thigh_lateral_ankle_uses_primary() {
     auto& t = trackers[idx(R::LeftUpperLeg)];
     check(t.valid, "lateral-ankle thigh must be valid (primary active)");
     check_tracker_forward(t, cv::Vec3f{0, 0, -1}, "Thigh lat-ankle: fwd is -Z");
-    // primary up = (0.05, 0, -0.4); after orthogonalization vs fwd=-Z the up
+    // primary up = (0.15, 0, -0.40); after orthogonalization vs fwd=-Z the up
     // component is dominantly +X. Crucially this does NOT match the previous
     // lateral pin (which would also have been +X but rigidly tied to the
     // pelvis); here it follows the ankle, fully independent of hip_center.
@@ -693,12 +719,13 @@ void test_upper_arm_confidence_zero_all_degenerate() {
 void test_upper_arm_confidence_smoothstep_midrange() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     // Pose: arm overhead (fwd ≈ +Z), wrist offset from elbow at θ such that
-    // sin θ = 0.125. With forearm length 0.25 m and elbow at (0, 0, 1.85),
-    // wrist = elbow + (sin θ · 0.25, 0, cos θ · 0.25) ≈ (0.03134, 0, 2.0980).
+    // sin θ = 0.225 (= midpoint of the Phase 13 smoothstep band [0.15, 0.30]).
+    // With forearm length 0.25 m and elbow at (0, 0, 1.85),
+    // wrist = elbow + (sin θ · 0.25, 0, cos θ · 0.25) ≈ (0.05625, 0, 2.0936).
     auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
         set_joint(s,  5, 0.0f,     0.0f, 1.42f);   // l_shoulder
         set_joint(s,  7, 0.0f,     0.0f, 1.85f);   // l_elbow
-        set_joint(s,  9, 0.03134f, 0.0f, 2.0980f); // l_wrist 7.18° off-axis
+        set_joint(s,  9, 0.05625f, 0.0f, 2.0936f); // l_wrist 13.0° off-axis
         set_joint(s, 18, 0.0f,     0.0f, 1.55f);   // neck colinear → secondary degenerate
     });
     auto trackers = fitra::slimevr::extract_trackers(skel);
@@ -706,7 +733,7 @@ void test_upper_arm_confidence_smoothstep_midrange() {
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperArm)];
     check(t.valid, "midrange-sin tracker must be valid");
-    // smoothstep((0.125-0.05)/(0.20-0.05)) = smoothstep(0.5) = 0.5
+    // smoothstep((0.225-0.15)/(0.30-0.15)) = smoothstep(0.5) = 0.5
     float c = t.roll_confidence;
     if (std::abs(c - 0.5f) > 0.05f) {
         char buf[160];
@@ -777,7 +804,7 @@ int main() {
         test_foot_heel_stance();                  std::printf("[ok] foot: heel stance (かかと立ち)\n");
         test_foot_inversion_unobservable();       std::printf("[ok] foot: lateral ankle, roll unobservable (横ずれ)\n");
         test_thigh_seated_knee_bent();            std::printf("[ok] thigh: seated knee bent 90° (着座)\n");
-        test_thigh_walking_knee_30();             std::printf("[ok] thigh: walking knee bent ~30° (歩行片足)\n");
+        test_thigh_walking_knee_60();             std::printf("[ok] thigh: walking knee bent ~60° (歩行片足)\n");
         test_thigh_standing_knee_straight();      std::printf("[ok] thigh: standing knee straight (立位)\n");
         test_thigh_lateral_ankle_uses_primary();  std::printf("[ok] thigh: lateral ankle activates primary (足首横ずれ)\n");
         test_thigh_seated_extended_straight_knee(); std::printf("[ok] thigh: 直座り — primary degenerate freezes (no world-Z rescue)\n");

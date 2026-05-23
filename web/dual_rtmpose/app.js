@@ -29,6 +29,28 @@ const SKELETON_HALPE26 = [
 ];
 const KP_COUNT_BY_FORMAT = { coco17: 17, halpe26: 26 };
 
+// Phase 13 M1: SlimeVR tracker visualization.
+// 10 trackers in role order (sensor_id 0..9) — matches the wire ordering in
+// the C++ TrackerRole enum (cpp/src/slimevr/tracker_extract.hpp).
+const TRACKER_ROLES = [
+  "LeftUpperArm", "RightUpperArm",
+  "Chest", "Waist",
+  "LeftUpperLeg", "RightUpperLeg",
+  "LeftLowerLeg", "RightLowerLeg",
+  "LeftFoot", "RightFoot",
+];
+const TRACKER_COUNT = TRACKER_ROLES.length;
+// Default axis length (meters) in WORLD frame, scales to (0.3 + 0.7*conf) × this.
+const TRACKER_AXIS_BASE_LEN = 0.15;
+// World (Z-up, X-right, Y-forward) → Three.js (Y-up, X-right, Z-back)
+// basis change quaternion = Rx(-90°). In xyzw: (sin(-45°), 0, 0, cos(-45°)).
+// We pre-build this constant once for the per-frame quaternion sandwich.
+const WORLD_TO_THREE_QUAT = (() => {
+  const k = 0.7071067811865475;  // 1/√2
+  return new THREE.Quaternion(-k, 0, 0, k);
+})();
+const WORLD_TO_THREE_QUAT_INV = WORLD_TO_THREE_QUAT.clone().invert();
+
 function skeletonFor(format) {
   return format === "halpe26" ? SKELETON_HALPE26 : SKELETON_COCO17;
 }
@@ -121,6 +143,43 @@ class ThreeDViewer {
     this.peopleRoot = new THREE.Group();
     this.scene.add(this.peopleRoot);
 
+    // Phase 13 M1: per-tracker AxesHelper. 10 groups (one per SlimeVR
+    // tracker role); each group's quaternion expresses the tracker's
+    // orientation in Three.js Y-up frame. Group's scale encodes confidence,
+    // material opacity encodes valid. Toggleable via the show-trackers
+    // checkbox.
+    this.trackersRoot = new THREE.Group();
+    this.trackersVisible = true;
+    this.scene.add(this.trackersRoot);
+    this.trackerViews = [];
+    for (let i = 0; i < TRACKER_COUNT; i += 1) {
+      const group = new THREE.Group();
+      const axes = new THREE.AxesHelper(TRACKER_AXIS_BASE_LEN);
+      // AxesHelper uses a LineBasicMaterial that supports transparency.
+      axes.material.transparent = true;
+      axes.material.opacity = 1.0;
+      // The AxesHelper line draws each axis as 2 vertices, but vertex colors
+      // are set on construction. We don't need to recolor per tracker — the
+      // red/green/blue per-axis convention is more readable than per-tracker
+      // colors here.
+      group.add(axes);
+      group.visible = false;          // hidden until first valid update
+      group.frustumCulled = false;
+      this.trackersRoot.add(group);
+      // Phase 13 (post-review): cache the last position/scale we got from a
+      // valid frame so brief sync misses (= bundle says tracker is invalid
+      // and ships pos=(0,0,0) per the Codex P2 fix) don't snap the
+      // AxesHelper to the world origin. Quaternion held quat is already
+      // produced by apply_quat_smoothing on the C++ side, so we use the
+      // bundle's quat as-is even during held frames.
+      const lastGood = {
+        position: new THREE.Vector3(),
+        scale: 1.0,
+        hasData: false,
+      };
+      this.trackerViews.push({ group, axes, lastGood });
+    }
+
     const grid = new THREE.GridHelper(4, 20, 0x335577, 0x2b2f36);
     grid.material.opacity = 0.75;
     grid.material.transparent = true;
@@ -191,25 +250,103 @@ class ThreeDViewer {
     if (!bundle || bundle.enabled === false) {
       this.setStatus(bundle && bundle.enabled === false ? "3D disabled" : "(no 3D data)");
       this.updatePeople([]);
+      this.updateTrackers([]);
       return;
     }
 
     const persons = Array.isArray(bundle.persons_3d) ? bundle.persons_3d : [];
+    const trackers = Array.isArray(bundle.trackers) ? bundle.trackers : [];
     if (!persons.length) {
       // Hold the last skeleton on screen across short data dropouts. 3.5s
       // covers a Phase 8 calibration recording window (~3s) during which the
       // live pose estimator is intentionally paused.
       if (this.hasData && performance.now() - this.lastDataAtMs < 3500) {
+        // Still refresh trackers — they may be frozen with the held pose.
+        this.updateTrackers(trackers);
         return;
       }
       this.setStatus("(no 3D person)");
       this.updatePeople([]);
+      this.updateTrackers(trackers);
       return;
     }
 
     this.lastDataAtMs = performance.now();
     this.setStatus("");
     this.updatePeople(persons);
+    this.updateTrackers(trackers);
+  }
+
+  setTrackersVisible(visible) {
+    this.trackersVisible = !!visible;
+    if (this.trackersRoot) this.trackersRoot.visible = this.trackersVisible;
+  }
+
+  updateTrackers(trackers) {
+    if (!this.trackersRoot) return;
+    this.trackersRoot.visible = this.trackersVisible;
+
+    // Bundle may carry fewer than TRACKER_COUNT entries (e.g. extractor
+    // hasn't produced its first snapshot yet) — hide the rest. The wire
+    // payload always emits exactly 10 in role order, so the index IS the
+    // role's sensor_id.
+    for (let i = 0; i < TRACKER_COUNT; i += 1) {
+      const view = this.trackerViews[i];
+      const t = trackers[i];
+      if (!t || !Array.isArray(t.pos) || !Array.isArray(t.quat_wxyz)) {
+        view.group.visible = false;
+        continue;
+      }
+
+      // Quaternion: backend sends wxyz in world frame. Three.js uses xyzw and
+      // Y-up frame. Apply the basis change Rx(-90°) on both sides:
+      //   q_three = B · q_world · B⁻¹
+      // where B is the world→three rotation expressed as a quaternion.
+      // (Even on held frames the quat is the smoothed prev_quat — usable
+      // as-is.)
+      const qw = Number(t.quat_wxyz[0]);
+      const qx = Number(t.quat_wxyz[1]);
+      const qy = Number(t.quat_wxyz[2]);
+      const qz = Number(t.quat_wxyz[3]);
+      const qWorld = new THREE.Quaternion(qx, qy, qz, qw);
+      const qThree = WORLD_TO_THREE_QUAT.clone().multiply(qWorld).multiply(WORLD_TO_THREE_QUAT_INV);
+      view.group.quaternion.copy(qThree);
+
+      // Phase 13 (post-review): position/scale use last-good caching to
+      // avoid snapping to the world origin during the 1-3 frame sync
+      // misses that the Codex P2 fix now reports as valid=false. The
+      // cache is only updated on confirmed valid frames; held trackers
+      // freeze visually in place until they recover.
+      const st = t.stats || {};
+      const freezeMs = Number(st.freeze_current_ms ?? 0);
+      const conf = Number.isFinite(t.roll_confidence) ? Number(t.roll_confidence) : 1.0;
+      const scaleFromConf = 0.3 + 0.7 * Math.max(0, Math.min(1, conf));
+
+      if (t.valid) {
+        view.group.position.set(
+          Number(t.pos[0]), Number(t.pos[2]), -Number(t.pos[1])
+        );
+        view.group.scale.setScalar(scaleFromConf);
+        view.lastGood.position.copy(view.group.position);
+        view.lastGood.scale = scaleFromConf;
+        view.lastGood.hasData = true;
+      } else if (view.lastGood.hasData) {
+        // Held: keep last-good position/scale so the axes hover where
+        // they last were, with the smoothed quat continuing to track.
+        view.group.position.copy(view.lastGood.position);
+        view.group.scale.setScalar(view.lastGood.scale);
+      } else {
+        // Never had data — hide rather than draw at origin.
+        view.group.visible = false;
+        continue;
+      }
+
+      // Opacity uses the same 200ms sustained threshold as the state-label
+      // debounce in updateTrackerTable, so the row state column and the
+      // 3D axes fade together (or not at all for sync-miss transients).
+      view.axes.material.opacity = (freezeMs >= 200) ? 0.3 : 1.0;
+      view.group.visible = true;
+    }
   }
 
   updatePeople(persons) {
@@ -561,10 +698,12 @@ function update3DStats() {
   const bundle = state.bundle3d;
   if (!bundle) {
     stats3d.textContent = "waiting…";
+    updateTrackerTable(null);
     return;
   }
   if (bundle.enabled === false) {
     stats3d.textContent = "enabled         false";
+    updateTrackerTable(null);
     return;
   }
   const s = bundle.stats || {};
@@ -583,6 +722,93 @@ function update3DStats() {
     `sync_miss      ${s.sync_miss ?? 0}\n` +
     `ik_locked      ${s.ik_locked ? "true" : "false"}\n` +
     `bundle_seq     ${state.server3dSeq}`;
+  updateTrackerTable(bundle);
+}
+
+const trackerTbody = document.getElementById("trackers-tbody");
+
+// Phase 13 M2: live per-tracker stats table. Built once (lazy on first
+// bundle), then cells are updated in place to avoid DOM churn at 30Hz.
+function ensureTrackerTableRows() {
+  if (!trackerTbody) return false;
+  if (trackerTbody.dataset.built === "1") return true;
+  trackerTbody.replaceChildren();
+  for (let i = 0; i < TRACKER_COUNT; i += 1) {
+    const tr = document.createElement("tr");
+    tr.dataset.role = TRACKER_ROLES[i];
+    // 9 columns: role / state / ang_vel_p50 / p95 / conf_avg / leakage_pct /
+    // freeze_pct / freeze_max_ms / dropouts.
+    for (let c = 0; c < 9; c += 1) {
+      tr.appendChild(document.createElement("td"));
+    }
+    tr.firstChild.textContent = TRACKER_ROLES[i];
+    trackerTbody.appendChild(tr);
+  }
+  trackerTbody.dataset.built = "1";
+  return true;
+}
+
+function fmtPct(v) { return `${(Math.max(0, Math.min(1, v ?? 0)) * 100).toFixed(0)}%`; }
+function fmtRad(v) { return (Number.isFinite(v) ? v : 0).toFixed(2); }
+
+function updateTrackerTable(bundle) {
+  if (!ensureTrackerTableRows()) return;
+  const trackers = (bundle && Array.isArray(bundle.trackers)) ? bundle.trackers : [];
+  for (let i = 0; i < TRACKER_COUNT; i += 1) {
+    const tr = trackerTbody.children[i];
+    if (!tr) continue;
+    const t = trackers[i];
+    const cells = tr.children;
+    if (!t) {
+      tr.classList.remove("state-frozen", "state-leakage", "state-active");
+      // Phase 13 (Copilot): also clear the per-cell warn/bad classes on
+      // the leakage/freeze columns, otherwise a row that was orange/red
+      // before a disconnect keeps that text color after the row resets
+      // to "-".
+      cells[5].classList.remove("warn", "bad");
+      cells[6].classList.remove("warn", "bad");
+      for (let c = 1; c < cells.length; c += 1) cells[c].textContent = "-";
+      continue;
+    }
+    const st = t.stats || {};
+    const leak = Number(st.leakage_pct ?? 0);
+    const frz  = Number(st.freeze_pct ?? 0);
+
+    // State color: red if mostly frozen, yellow if mostly in leakage zone,
+    // else neutral. Thresholds picked so a single transient drop doesn't
+    // light up red — the test is "majority of recent frames".
+    tr.classList.toggle("state-frozen",  frz  >= 0.5);
+    tr.classList.toggle("state-leakage", frz  <  0.5 && leak >= 0.5);
+    tr.classList.toggle("state-active",  frz  <  0.5 && leak <  0.5);
+
+    // Phase 13 (post-review): held label requires a sustained invalid run,
+    // not a single-frame drop. Aligns with the "majority of rolling window"
+    // threshold used by frozen/leakage above. Without this, every
+    // 1-3 frame sync miss in the 3D pipeline (= 10 trackers go invalid
+    // simultaneously per the Codex P2 fix) made the state column flicker
+    // through "held" on every tracker. 200 ms ≈ 12 frames at 60 Hz is the
+    // shortest "intentional pause" a human perceives, below which we treat
+    // the gap as a transient that doesn't deserve a label change.
+    const freezeMs = Number(st.freeze_current_ms ?? 0);
+    let stateLabel;
+    if (frz  >= 0.5) stateLabel = "frozen";
+    else if (leak >= 0.5) stateLabel = "leakage";
+    else if (freezeMs >= 200) stateLabel = "held";
+    else stateLabel = "active";
+
+    cells[1].textContent = stateLabel;
+    cells[2].textContent = fmtRad(st.ang_vel_p50);
+    cells[3].textContent = fmtRad(st.ang_vel_p95);
+    cells[4].textContent = (Number(st.conf_avg ?? 0)).toFixed(2);
+    cells[5].textContent = fmtPct(leak);
+    cells[5].classList.toggle("warn", leak >= 0.3 && leak < 0.5);
+    cells[5].classList.toggle("bad",  leak >= 0.5);
+    cells[6].textContent = fmtPct(frz);
+    cells[6].classList.toggle("warn", frz >= 0.3 && frz < 0.5);
+    cells[6].classList.toggle("bad",  frz >= 0.5);
+    cells[7].textContent = String(st.freeze_max_ms ?? 0);
+    cells[8].textContent = String(st.dropouts ?? 0);
+  }
 }
 
 function renderTick() {
@@ -608,6 +834,13 @@ for (const btn of document.querySelectorAll(".view3d-tabs button")) {
     for (const other of document.querySelectorAll(".view3d-tabs button")) {
       other.classList.toggle("active", other === btn);
     }
+  });
+}
+
+const trackerToggle = document.getElementById("toggle-trackers");
+if (trackerToggle) {
+  trackerToggle.addEventListener("change", () => {
+    viewer3d?.setTrackersVisible(trackerToggle.checked);
   });
 }
 

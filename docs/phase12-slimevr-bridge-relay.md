@@ -79,13 +79,18 @@ Phase 11 で SlimeVR Firmware UDP 経由の 10 本トラッカー (quaternion �
 
 ### M1: up ベクトル多段選択
 
-**Upper Arm (二の腕)** — `upper_arm` ラムダの up を以下の多段で決定:
+**Upper Arm (二の腕)** — `upper_arm` ラムダの up は **1 段 (primary 単独、fallback なし)**:
 
 1. `up1 = (wrist − elbow)` を `forward = (elbow − shoulder)` の直交成分に projection した残差。Halpe26 の手首 (`kLWrist = 9, kRWrist = 10`) を `tracker_extract.cpp:36` 付近の symbol テーブルに追加。前腕は肘 hinge により肩-肘軸と直交し続けるため、上腕 roll の最強の物理的手掛かり。
-2. `|up1 ⊥ fwd| / |up1| < 閾値 (初期 0.2)` または手首 invalid のとき `up2 = (neck − shoulder)` (= Phase 11 現状) にフォールバック。
-3. `up2` も degenerate なら `up3 = world Z`。
+2. `sin θ < kRollSinLow` で primary degenerate なら **fallback なしで freeze**。`upper_arm` 内では `pick_up_multistage` の secondary/tertiary 引数に **零ベクトル `Vec3f{0,0,0}` を渡す** ことで関数末尾の `confidence = 0; return zero` 経路に落とし、`quat_from_forward_up` の sin θ-based degeneracy gate で `valid = false` を返させ、`apply_quat_smoothing` が前周期 quat を保持する経路に倒す。
 
-既存の `detail::quat_from_forward_up()` は無変更。`valid=false` 経路と `apply_quat_smoothing()` の前周期保持挙動は維持。
+**なぜ secondary / tertiary fallback を使わないか (Phase 13 修正 / 2026-05-25)**: 当初実装 (M1 単独 commit `a28f03c` 時点) は secondary に `(neck − shoulder)` (chest lateral pin)、tertiary に `world Z` を渡していたが、これは大腿で撤去した lateral pin 問題と同型の anti-pattern:
+
+- **secondary (neck - shoulder)** は胸郭の lateral 軸そのもの。primary (wrist - elbow) が degenerate (= 腕を伸展して肘がほぼ伸びた瞬間) になると secondary が full confidence で支配し、**上腕 roll が胸郭 yaw に rigid 共有**される (体を捻ると腕も一緒に回って見える)。水平に伸ばした腕で symptomatic。
+- **tertiary (world Z)** は水平腕 (`fwd ⊥ Z`) では `sin(worldZ, fwd) = 1` で confidence = 1.0 が割り当てられ、「肘が天井向き」の捏造 roll が確信度満点で書き込まれる。`world Z` は上腕 roll に対しては物理的に意味のある handle を持たない。
+- primary 不在時の正しい挙動は **freeze (前周期保持)**、これは `upper_leg` で Phase 12 M1 / 2026-05-23 修正に確立済の方針。`upper_arm` も同じパターンに揃える。
+
+既存の `detail::quat_from_forward_up()` は Phase 13 で sin θ-based degeneracy gate に拡張済 (旧 `norm(cross) < 1e-6` 絶対しきい → `sin θ < kRollSinLow` 相対しきい)。`apply_quat_smoothing()` の前周期保持挙動は維持。
 
 **Foot (足)** — `foot_tracker` ラムダの up を:
 

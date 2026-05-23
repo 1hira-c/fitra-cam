@@ -41,6 +41,8 @@
 #include "pipeline/multi_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
 #include "slimevr/native_publisher.hpp"
+#include "slimevr/slime_tracker_bus.hpp"
+#include "slimevr/tracker_extractor.hpp"
 #include "util/cuda_check.hpp"
 #include "util/logging.hpp"
 #include "web/crow_server.hpp"
@@ -363,6 +365,11 @@ int main(int argc, char** argv) {
 
         std::unique_ptr<fitra::lift::Triangulator> triangulator;
         std::unique_ptr<fitra::pipeline::Skeleton3DBus> bus3d;
+        // Phase 13 M1: SlimeVR tracker snapshot bus + extractor thread.
+        // Always alive when enable_3d so the WebUI orientation viz works
+        // without requiring --slimevr-out.
+        std::unique_ptr<fitra::slimevr::SlimeTrackerBus>   slime_tracker_bus;
+        std::unique_ptr<fitra::slimevr::TrackerExtractor>  tracker_extractor;
         fitra::lift::SubjectProfile subject_profile;
         bool has_subject_profile = false;
         if (enable_3d) {
@@ -374,6 +381,7 @@ int main(int argc, char** argv) {
             triangulator = std::make_unique<fitra::lift::Triangulator>(calib, tri_opts);
             triangulator->require_camera_ids(expected_camera_ids(n_cams));
             bus3d = std::make_unique<fitra::pipeline::Skeleton3DBus>();
+            slime_tracker_bus = std::make_unique<fitra::slimevr::SlimeTrackerBus>();
             FITRA_LOG_INFO("3D lifting enabled ({} calibrated cameras, sync_window={}ms)",
                            triangulator->camera_count(), sync_window_ms);
             if (subject_height_m > 0.0) {
@@ -496,9 +504,24 @@ int main(int argc, char** argv) {
                 });
         }
 
+        // Phase 13 M1: start the TrackerExtractor before any consumer (so the
+        // SlimeVR Firmware UDP publisher and the WebUI both see the same
+        // smoothed tracker stream). Always running when enable_3d, regardless
+        // of --slimevr-out — the WebUI orientation viz needs trackers even
+        // when the Firmware UDP path is off.
+        if (bus3d && slime_tracker_bus) {
+            fitra::slimevr::TrackerExtractorOptions tex_opts;
+            tex_opts.extract_rate_hz = slimevr_rate_hz;
+            tex_opts.quat_smooth     = static_cast<float>(slimevr_quat_smooth);
+            tracker_extractor = std::make_unique<fitra::slimevr::TrackerExtractor>(
+                *bus3d, *slime_tracker_bus, tex_opts);
+            tracker_extractor->start();
+        }
+
         // Phase 11: spin up the native SlimeVR Firmware UDP publisher BEFORE
         // the Crow server so /stats3d can hand out the slimevr stats block.
-        // bus3d is guaranteed non-null at this point (gated by enable_3d).
+        // bus3d / slime_tracker_bus are guaranteed non-null at this point
+        // (gated by enable_3d).
         std::unique_ptr<fitra::slimevr::NativePublisher> slime_pub;
         if (slimevr_out) {
             fitra::slimevr::NativePublisherOptions opts;
@@ -506,7 +529,8 @@ int main(int argc, char** argv) {
             opts.port         = static_cast<std::uint16_t>(slimevr_port);
             opts.send_rate_hz = slimevr_rate_hz;
             opts.quat_smooth  = static_cast<float>(slimevr_quat_smooth);
-            slime_pub = std::make_unique<fitra::slimevr::NativePublisher>(*bus3d, opts);
+            slime_pub = std::make_unique<fitra::slimevr::NativePublisher>(
+                *bus3d, *slime_tracker_bus, opts);
             if (!slime_pub->start()) {
                 // Socket setup or handshake failed; warn and continue without
                 // publisher (pose pipeline is unaffected).
@@ -514,13 +538,18 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Stop the publisher on any scope exit. Must outlive the server (so
-        // /stats3d never reads a dead pointer) and the driver (the publisher
-        // calls bus3d->snapshot() which the driver feeds).
+        // Stop the publisher + tracker extractor on any scope exit. Must
+        // outlive the server (so /stats3d never reads a dead pointer / a
+        // dead bus) and the driver (the publisher and extractor both read
+        // buses the driver feeds).
         struct SlimeStop {
-            fitra::slimevr::NativePublisher* p;
-            ~SlimeStop() { if (p) p->stop(); }
-        } slime_stop{slime_pub.get()};
+            fitra::slimevr::NativePublisher*  pub;
+            fitra::slimevr::TrackerExtractor* tex;
+            ~SlimeStop() {
+                if (pub) pub->stop();
+                if (tex) tex->stop();
+            }
+        } slime_stop{slime_pub.get(), tracker_extractor.get()};
 
         std::unique_ptr<fitra::web::CrowServer> server;
         if (!no_web) {
@@ -540,6 +569,9 @@ int main(int argc, char** argv) {
             }
             if (slime_pub) {
                 server->set_native_publisher(slime_pub.get());
+            }
+            if (slime_tracker_bus) {
+                server->set_tracker_bus(slime_tracker_bus.get());
             }
             server->start();
         }

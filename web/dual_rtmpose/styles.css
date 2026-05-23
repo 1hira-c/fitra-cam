@@ -106,6 +106,18 @@ canvas {
   border-color: var(--accent);
   color: var(--fg);
 }
+.view3d-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #ccc;
+  cursor: pointer;
+  user-select: none;
+}
+.view3d-toggle input[type="checkbox"] {
+  margin: 0;
+}
 .canvas3d-wrap {
   position: relative;
 }
@@ -118,6 +130,39 @@ canvas {
   pointer-events: none;
   user-select: none;
 }
+.trackers-table {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #ccc;
+}
+.trackers-table th,
+.trackers-table td {
+  border-bottom: 1px solid #2b2f36;
+  padding: 3px 6px;
+  text-align: right;
+  white-space: nowrap;
+}
+.trackers-table th:first-child,
+.trackers-table td:first-child {
+  text-align: left;
+  color: #ddd;
+}
+.trackers-table thead th {
+  position: sticky;
+  top: 0;
+  background: #1a1a1a;
+  color: #888;
+  font-weight: 500;
+}
+.trackers-table tr.state-frozen { background: rgba(255, 80, 80, 0.08); }
+.trackers-table tr.state-leakage { background: rgba(255, 200, 80, 0.08); }
+.trackers-table tr.state-active  { background: transparent; }
+.trackers-table td.warn { color: #ff9966; }
+.trackers-table td.bad  { color: #ff6666; }
+
 @media (max-width: 900px) {
   main { grid-template-columns: 1fr; }
   .conn-group { flex-direction: column; align-items: flex-end; gap: 2px; }
