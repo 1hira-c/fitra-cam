@@ -35,19 +35,90 @@ inline cv::Vec3f normalize_or_zero(const cv::Vec3f& v) {
 // Halpe26 index symbols used by all role builders.
 constexpr std::size_t kLShoulder = 5,  kRShoulder = 6;
 constexpr std::size_t kLElbow    = 7,  kRElbow    = 8;
+constexpr std::size_t kLWrist    = 9,  kRWrist    = 10;
 constexpr std::size_t kLHip      = 11, kRHip      = 12;
 constexpr std::size_t kLKnee     = 13, kRKnee     = 14;
 constexpr std::size_t kLAnkle    = 15, kRAnkle    = 16;
 constexpr std::size_t kNeck      = 18;
 constexpr std::size_t kHipCenter = 19;
 constexpr std::size_t kLBigToe   = 20, kRBigToe   = 21;
-constexpr std::size_t kLHeel     = 24, kRHeel     = 25;
+
+// Confidence smoothstep bounds on sin(angle(up, fwd)) for upper arm / thigh
+// roll. Below kRollSinLow the chosen up is treated as degenerate (confidence 0,
+// previous roll held). Above kRollSinHigh the measurement is fully trusted
+// (confidence 1). Between, smoothstep gradually opens the gate so the update
+// rate scales with measurement reliability. See docs/phase12-slimevr-bridge-relay.md.
+constexpr float kRollSinLow  = 0.05f;  // sin 2.9°: near-degenerate floor
+constexpr float kRollSinHigh = 0.20f;  // sin 11.5°: full-confidence ceiling
+
+// Smoothing throttle for foot trackers. The foot is treated as a rigid
+// extension of the shin (up = tibia axis; see foot_tracker below) because
+// the heel KP is too noisy in our 2D→3D pipeline. Even after dropping heel
+// the ankle/toe pair retains residual jitter, so the per-tracker smoothing
+// weight is set low to act as a strong low-pass via apply_quat_smoothing's
+// effective_alpha = base_alpha · roll_confidence.
+//   base_alpha 0.5 × 0.3 = 0.15 → τ ≈ 6 frames at 60 Hz
+constexpr float kFootSmoothingWeight = 0.3f;
 
 bool joints_valid(const infer::Skeleton3D& s, std::initializer_list<std::size_t> idxs) {
     for (auto i : idxs) {
         if (!s.joints[i].valid) return false;
     }
     return true;
+}
+
+// Hermite smoothstep: 0 at x ≤ low, 1 at x ≥ high, C¹-continuous in between.
+inline float smoothstep01(float x, float low, float high) {
+    if (x <= low)  return 0.0f;
+    if (x >= high) return 1.0f;
+    float t = (x - low) / (high - low);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// Pick the first up hint whose sin θ to forward is above kRollSinLow (i.e. not
+// near-degenerate); compute confidence as smoothstep(sin θ, kRollSinLow,
+// kRollSinHigh). Zero-vector ups (from invalid joints, or a deliberately
+// passed sentinel) skip immediately. The returned up vector still needs
+// orthogonalization by quat_from_forward_up.
+// `which` is 0/1/2 for the stage that won (primary/secondary/tertiary).
+//
+// Tertiary semantics: when reached as a fallthrough with a non-zero vector,
+// it is ACCEPTED unconditionally (no kRollSinLow gate) and confidence comes
+// from its own sin θ. This works well for upper_arm where world Z is a sane
+// best-effort up. For trackers where world Z would write a physically wrong
+// roll at high confidence (e.g. thigh — see upper_leg), callers must pass
+// the zero vector as tertiary: the for-loop skips it and the function falls
+// through to the bottom, returning a zero up with out_confidence=0, which
+// drives quat_from_forward_up to valid=false and freezes smoothing.
+cv::Vec3f pick_up_multistage(const cv::Vec3f& fwd,
+                              const cv::Vec3f& up_primary,
+                              const cv::Vec3f& up_secondary,
+                              const cv::Vec3f& up_tertiary,
+                              float& out_confidence,
+                              int& which) {
+    float f_n = norm(fwd);
+    if (f_n < 1.0e-6f) {
+        out_confidence = 0.0f;
+        which = 2;
+        return up_tertiary;
+    }
+    const cv::Vec3f* candidates[3] = {&up_primary, &up_secondary, &up_tertiary};
+    for (int i = 0; i < 3; ++i) {
+        const cv::Vec3f& u = *candidates[i];
+        float u_n = norm(u);
+        if (u_n < 1.0e-6f) continue;  // zero vector → invalid joint, skip
+        float sin_theta = norm(cross(u, fwd)) / (u_n * f_n);
+        // Tertiary (world Z) is always accepted as last resort but its
+        // confidence is still computed from its own sin θ (0 when fwd ∥ Z).
+        if (i == 2 || sin_theta >= kRollSinLow) {
+            out_confidence = smoothstep01(sin_theta, kRollSinLow, kRollSinHigh);
+            which = i;
+            return u;
+        }
+    }
+    out_confidence = 0.0f;
+    which = 2;
+    return up_tertiary;
 }
 
 }  // namespace
@@ -57,7 +128,10 @@ TrackerPosition position_for(TrackerRole role) {
         case TrackerRole::LeftUpperArm:  return TrackerPosition::LeftUpperArm;
         case TrackerRole::RightUpperArm: return TrackerPosition::RightUpperArm;
         case TrackerRole::Chest:         return TrackerPosition::Chest;
-        case TrackerRole::Waist:         return TrackerPosition::Waist;
+        // The pelvis tracker (pos = hip_center) is anatomically a Hip, not a
+        // Waist. SlimeVR Server auto-assigns it correctly only as Hip in the
+        // 10-tracker firmware UDP configuration.
+        case TrackerRole::Waist:         return TrackerPosition::Hip;
         case TrackerRole::LeftUpperLeg:  return TrackerPosition::LeftUpperLeg;
         case TrackerRole::RightUpperLeg: return TrackerPosition::RightUpperLeg;
         case TrackerRole::LeftLowerLeg:  return TrackerPosition::LeftLowerLeg;
@@ -133,13 +207,17 @@ namespace {
 
 // Try to build a SlimeTracker for one role from a position joint, a forward
 // hint and an up hint. Updates `out` in place; valid=false on degeneracy.
+// `roll_confidence` defaults to 1.0 for rigid-pin bones (chest/waist/shin/foot);
+// upper arm / thigh pass their smoothstep-derived value.
 bool build_tracker(TrackerRole role,
                    const cv::Vec3f& world_pos,
                    const cv::Vec3f& forward,
                    const cv::Vec3f& up,
-                   SlimeTracker& out) {
+                   SlimeTracker& out,
+                   float roll_confidence = 1.0f) {
     out.role = role;
     out.pos  = world_pos;
+    out.roll_confidence = roll_confidence;
     cv::Vec4f q_wxyz;
     bool ok = detail::quat_from_forward_up(forward, up, q_wxyz);
     out.quat_wxyz = q_wxyz;
@@ -161,21 +239,31 @@ extract_trackers(const infer::Skeleton3D& skel) {
     }
 
     // ---- Upper arms (shoulder → elbow) ------------------------------------
-    // pos = midpoint(shoulder, elbow); forward = elbow - shoulder (along arm);
-    // up   = neck - shoulder (toward the head, pinning roll).
+    // forward = elbow - shoulder. Roll is pinned by a three-stage up choice:
+    //   1. wrist - elbow      (elbow hinge gives strongest physical handle)
+    //   2. neck  - shoulder   (lateral pin; degenerate when arm raised)
+    //   3. world Z            (last resort)
     auto upper_arm = [&](TrackerRole role, std::size_t shoulder, std::size_t elbow,
-                          std::size_t out_idx) {
+                          std::size_t wrist, std::size_t out_idx) {
         if (!joints_valid(skel, {kNeck, shoulder, elbow})) return;
         cv::Vec3f sp = to_vec3f(skel.joints[shoulder]);
         cv::Vec3f ep = to_vec3f(skel.joints[elbow]);
         cv::Vec3f np = to_vec3f(skel.joints[kNeck]);
         cv::Vec3f pos = (sp + ep) * 0.5f;
         cv::Vec3f fwd = ep - sp;
-        cv::Vec3f up  = np - sp;
-        build_tracker(role, pos, fwd, up, out[out_idx]);
+        cv::Vec3f up_primary = skel.joints[wrist].valid
+                                ? (to_vec3f(skel.joints[wrist]) - ep)
+                                : cv::Vec3f{0, 0, 0};
+        cv::Vec3f up_secondary = np - sp;
+        cv::Vec3f up_tertiary  = cv::Vec3f{0, 0, 1};
+        float confidence = 0.0f;
+        int which = -1;
+        cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_secondary, up_tertiary,
+                                           confidence, which);
+        build_tracker(role, pos, fwd, up, out[out_idx], confidence);
     };
-    upper_arm(TrackerRole::LeftUpperArm,  kLShoulder, kLElbow, 0);
-    upper_arm(TrackerRole::RightUpperArm, kRShoulder, kRElbow, 1);
+    upper_arm(TrackerRole::LeftUpperArm,  kLShoulder, kLElbow, kLWrist, 0);
+    upper_arm(TrackerRole::RightUpperArm, kRShoulder, kRElbow, kRWrist, 1);
 
     // ---- Chest (mid-torso) ------------------------------------------------
     // pos = midpoint(neck, hip_center); up = neck - hip_center (spine);
@@ -201,21 +289,51 @@ extract_trackers(const infer::Skeleton3D& skel) {
     }
 
     // ---- Upper legs (thigh: hip → knee) -----------------------------------
-    // pos = midpoint(hip, knee); forward = knee - hip; up = hip - hip_center
-    // (lateral pin so the tracker can resolve thigh roll).
+    // forward = knee - hip. Single physical roll handle (no world-Z fallback):
+    //   1. ankle - knee       (knee hinge fixes femur roll when bent — only
+    //                          physically valid handle from 3D KP alone)
+    //
+    // Tertiary is intentionally a zero vector. World Z is NOT usable as a
+    // fallback for thigh roll: it pins "knee faces ceiling" which is
+    // geometrically valid but physically arbitrary, and pick_up_multistage's
+    // sin θ-based confidence assigns it 1.0 whenever the thigh is non-vertical
+    // (sin(worldZ, fwd) ≈ 1 for horizontal thighs). That writes a fabricated
+    // roll with full confidence in routine poses where the primary is
+    // degenerate — e.g. 直座り / 長座 / あぐら-からの-脚伸ばし (a very common
+    // indoor sitting style in Japan: legs extended forward on the floor with
+    // knees fully straight, so (ankle - knee) is colinear with the thigh
+    // axis). With the zero tertiary, pick_up_multistage hits its
+    // confidence=0 sentinel and quat_from_forward_up returns valid=false →
+    // apply_quat_smoothing holds the previous thigh quat.
+    //
+    // The earlier lateral pin (hip - hip_center) was removed for a different
+    // reason: it equals the pelvis lateral axis, which rigidly couples thigh
+    // roll to waist yaw and makes them visually inseparable during walking /
+    // shallow bends when primary's sin θ briefly dips below kRollSinLow.
     auto upper_leg = [&](TrackerRole role, std::size_t hip, std::size_t knee,
-                         std::size_t out_idx) {
-        if (!joints_valid(skel, {kHipCenter, hip, knee})) return;
+                         std::size_t ankle, std::size_t out_idx) {
+        if (!joints_valid(skel, {hip, knee})) return;
         cv::Vec3f hp = to_vec3f(skel.joints[hip]);
         cv::Vec3f kp = to_vec3f(skel.joints[knee]);
-        cv::Vec3f hc = to_vec3f(skel.joints[kHipCenter]);
         cv::Vec3f pos = (hp + kp) * 0.5f;
         cv::Vec3f fwd = kp - hp;
-        cv::Vec3f up  = hp - hc;
-        build_tracker(role, pos, fwd, up, out[out_idx]);
+        cv::Vec3f up_primary = skel.joints[ankle].valid
+                                ? (to_vec3f(skel.joints[ankle]) - kp)
+                                : cv::Vec3f{0, 0, 0};
+        cv::Vec3f up_tertiary = cv::Vec3f{0, 0, 0};
+        float confidence = 0.0f;
+        int which = -1;
+        // 1-stage selection: primary slot holds (ankle - knee); secondary
+        // duplicates primary so the secondary degeneracy test collapses;
+        // tertiary is the zero sentinel above (forces confidence=0 freeze).
+        // Signature is shared with upper_arm which uses a real 3-stage chain
+        // ending in world Z.
+        cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_primary, up_tertiary,
+                                           confidence, which);
+        build_tracker(role, pos, fwd, up, out[out_idx], confidence);
     };
-    upper_leg(TrackerRole::LeftUpperLeg,  kLHip, kLKnee, 4);
-    upper_leg(TrackerRole::RightUpperLeg, kRHip, kRKnee, 5);
+    upper_leg(TrackerRole::LeftUpperLeg,  kLHip, kLKnee, kLAnkle, 4);
+    upper_leg(TrackerRole::RightUpperLeg, kRHip, kRKnee, kRAnkle, 5);
 
     // ---- Lower legs (shin: knee → ankle) ----------------------------------
     // pos = midpoint(knee, ankle); forward = ankle - knee; up = hip - knee
@@ -234,33 +352,48 @@ extract_trackers(const infer::Skeleton3D& skel) {
     lower_leg(TrackerRole::LeftLowerLeg,  kLHip, kLKnee, kLAnkle, 6);
     lower_leg(TrackerRole::RightLowerLeg, kRHip, kRKnee, kRAnkle, 7);
 
-    // ---- Feet -------------------------------------------------------------
-    // pos = midpoint(heel, big_toe); forward = big_toe - heel; up = world Z
-    // (yaw-only — the foot is essentially flat on the ground in our use case
-    // and SlimeVR cares about heel-toe direction for foot facing).
-    auto foot_tracker = [&](TrackerRole role, std::size_t heel, std::size_t toe,
-                            std::size_t out_idx) {
-        if (!joints_valid(skel, {heel, toe})) return;
-        cv::Vec3f heel_p = to_vec3f(skel.joints[heel]);
-        cv::Vec3f toe_p  = to_vec3f(skel.joints[toe]);
-        cv::Vec3f pos = (heel_p + toe_p) * 0.5f;
-        cv::Vec3f fwd = toe_p - heel_p;
-        cv::Vec3f up{0.0f, 0.0f, 1.0f};
-        build_tracker(role, pos, fwd, up, out[out_idx]);
+    // ---- Feet (yaw only; tibia-aligned up) --------------------------------
+    // heel KP precision is poor in the 2D→3D pipeline, so the foot is treated
+    // as a rigid extension of the shin: up follows the tibia (knee → ankle)
+    // and fwd is ankle → toe. This forfeits foot roll (inversion/eversion)
+    // and isolates pitch (toe/heel stance) into the fwd tilt, but yaw — the
+    // only quantity needed for in-place foot direction in SlimeVR IK — stays
+    // free of heel noise. A strong smoothing throttle (kFootSmoothingWeight)
+    // further damps residual ankle/toe jitter via apply_quat_smoothing.
+    auto foot_tracker = [&](TrackerRole role, std::size_t knee, std::size_t ankle,
+                            std::size_t toe, std::size_t out_idx) {
+        if (!joints_valid(skel, {knee, ankle, toe})) return;
+        cv::Vec3f kp = to_vec3f(skel.joints[knee]);
+        cv::Vec3f ap = to_vec3f(skel.joints[ankle]);
+        cv::Vec3f tp = to_vec3f(skel.joints[toe]);
+        cv::Vec3f pos = (ap + tp) * 0.5f;
+        cv::Vec3f fwd = tp - ap;
+        cv::Vec3f up  = kp - ap;            // tibia axis (ankle → knee)
+        build_tracker(role, pos, fwd, up, out[out_idx], kFootSmoothingWeight);
     };
-    foot_tracker(TrackerRole::LeftFoot,  kLHeel, kLBigToe, 8);
-    foot_tracker(TrackerRole::RightFoot, kRHeel, kRBigToe, 9);
+    foot_tracker(TrackerRole::LeftFoot,  kLKnee, kLAnkle, kLBigToe, 8);
+    foot_tracker(TrackerRole::RightFoot, kRKnee, kRAnkle, kRBigToe, 9);
 
     return out;
 }
 
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
-                          float alpha) {
-    alpha = std::clamp(alpha, 0.0f, 1.0f);
+                          float base_alpha) {
+    base_alpha = std::clamp(base_alpha, 0.0f, 1.0f);
     for (std::size_t i = 0; i < kTrackerCount; ++i) {
         if (!curr[i].valid) {
-            prev_quat[i] = curr[i].quat_wxyz;
+            // Hold previous orientation: publisher will see prev via curr, and
+            // prev_quat itself is left untouched so a tracker can recover from
+            // a dropped frame without snapping back through identity.
+            curr[i].quat_wxyz = prev_quat[i];
+            continue;
+        }
+        float effective_alpha = std::clamp(
+            base_alpha * curr[i].roll_confidence, 0.0f, 1.0f);
+        if (effective_alpha <= 0.0f) {
+            // Fully frozen: keep prev. Don't touch prev_quat.
+            curr[i].quat_wxyz = prev_quat[i];
             continue;
         }
         const cv::Vec4f& p = prev_quat[i];
@@ -271,15 +404,15 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
         cv::Vec4f r;
         if (d > 0.9995f) {
             // nlerp fallback for small angles.
-            r = cv::Vec4f{p[0] + alpha * (q[0] - p[0]),
-                          p[1] + alpha * (q[1] - p[1]),
-                          p[2] + alpha * (q[2] - p[2]),
-                          p[3] + alpha * (q[3] - p[3])};
+            r = cv::Vec4f{p[0] + effective_alpha * (q[0] - p[0]),
+                          p[1] + effective_alpha * (q[1] - p[1]),
+                          p[2] + effective_alpha * (q[2] - p[2]),
+                          p[3] + effective_alpha * (q[3] - p[3])};
         } else {
             float theta = std::acos(std::clamp(d, -1.0f, 1.0f));
             float sin_t = std::sin(theta);
-            float wa = std::sin((1.0f - alpha) * theta) / sin_t;
-            float wb = std::sin(alpha * theta) / sin_t;
+            float wa = std::sin((1.0f - effective_alpha) * theta) / sin_t;
+            float wb = std::sin(effective_alpha * theta) / sin_t;
             r = cv::Vec4f{wa * p[0] + wb * q[0],
                           wa * p[1] + wb * q[1],
                           wa * p[2] + wb * q[2],

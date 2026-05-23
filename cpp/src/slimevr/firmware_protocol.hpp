@@ -75,11 +75,16 @@ enum class RotationDataType : std::uint8_t {
 };
 
 // SensorPosition values that map to TrackerPosition on the server side.
-// Source: SlimeVR-Server `TrackerPosition.kt`. Only the ten roles we need.
+// Source: SlimeVR-Server `TrackerPosition.kt`. Only the roles we need.
+// Waist (5) is the upper-abdomen / navel position; Hip (6) is the pelvis
+// center. The pelvis tracker we build from `hip_center` is anatomically a
+// Hip — Waist did not auto-assign in the SlimeVR Server UI for the 10-tracker
+// configuration, while Hip does.
 enum class TrackerPosition : std::uint8_t {
     None          = 0,
     Chest         = 4,
     Waist         = 5,
+    Hip           = 6,
     LeftUpperLeg  = 7,
     RightUpperLeg = 8,
     LeftLowerLeg  = 9,
