@@ -163,7 +163,7 @@ fitra-cam/
 
 - Phase 10 (3 カメラ + C++ ライブキャリブ) はスキップ。Phase 9 完了の Halpe26 を前提に直接 Phase 11 に着手
 - 初版は **VMC over OSC** で 8 trackers を実装したが、SlimeVR Server 上で連番表示にしかならず body-part assign が非実用的だったため、**SlimeVR ネイティブ Firmware UDP プロトコル (port 6969) へ移行** (2026-05-21)
-- 10 trackers に拡張: `LEFT_UPPER_ARM` / `RIGHT_UPPER_ARM` / `CHEST` / `WAIST` / `LEFT_UPPER_LEG` / `RIGHT_UPPER_LEG` / `LEFT_LOWER_LEG` / `RIGHT_LOWER_LEG` / `LEFT_FOOT` / `RIGHT_FOOT` の SlimeVR `TrackerPosition` enum に完全一致
+- 10 trackers に拡張: `LEFT_UPPER_ARM` / `RIGHT_UPPER_ARM` / `CHEST` / `HIP` / `LEFT_UPPER_LEG` / `RIGHT_UPPER_LEG` / `LEFT_LOWER_LEG` / `RIGHT_LOWER_LEG` / `LEFT_FOOT` / `RIGHT_FOOT` の SlimeVR `TrackerPosition` enum に完全一致 (骨盤は当初 `WAIST(5)` を指定していたが Server で auto-assign が走らなかったため `HIP(6)` に変更)
 - 起動シーケンス: Handshake (tag 3) → SensorInfo × 10 (tag 15、`trackerPosition` 指定で named display) → 60 Hz の RotationData (tag 17) + 1 Hz Heartbeat
 - recv ループで Ping (tag 10) を反射、SlimeVR 側の "disconnected" マークを回避
 - 位置は wire に乗らない (Firmware UDP は回転のみ)。位置は SlimeVR の IK が骨格 + HMD から再構築。カメラ由来の絶対位置を VR 側で活用したい場合は別途リレーが必要 → [`backlog-slimevr-bridge-relay.md`](backlog-slimevr-bridge-relay.md)
@@ -185,7 +185,7 @@ fitra-cam/
 | 4     | `./cpp/build/main --device tensorrt --fp16 --bench`           | aggregate pose ≥ 90 fps / GPU 利用率 80% 超                                |
 | 5     | `./cpp/build/record_overlay --seconds 30`                    | 5 本の mp4 出力、メタデータ fps が実測通り                                       |
 | 9     | `./cpp/build/main --keypoint-format=halpe26 --pose-engine <halpe26.engine> ...` | 起動ログに `kp_format=halpe26 (26 keypoints)` / `/ws` JSON に `kp_format` フィールド / `grep -rn kNumKeypoints cpp/` = 0 件 |
-| 11    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --slimevr-out --slimevr-host=<windows-ip>` + Windows 側 SlimeVR Server GUI 目視 | 10 trackers (LeftUpperArm/RightUpperArm/Chest/Waist/LeftUpperLeg/RightUpperLeg/LeftLowerLeg/RightLowerLeg/LeftFoot/RightFoot) が GUI に **名前付き** で自動表示、live skeleton で avatar が破綻なく動く、`/stats3d` に `slimevr` フィールド (sent_rotations が 60×10≈600/s で増加 / ping_count > 0)、`ctest` で `test_firmware_protocol` + `test_tracker_extract` pass |
+| 11    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --slimevr-out --slimevr-host=<windows-ip>` + Windows 側 SlimeVR Server GUI 目視 | 10 trackers (LeftUpperArm/RightUpperArm/Chest/Hip/LeftUpperLeg/RightUpperLeg/LeftLowerLeg/RightLowerLeg/LeftFoot/RightFoot) が GUI に **名前付き** で自動表示、live skeleton で avatar が破綻なく動く、`/stats3d` に `slimevr` フィールド (sent_rotations が 60×10≈600/s で増加 / ping_count > 0)、`ctest` で `test_firmware_protocol` + `test_tracker_extract` pass |
 
 ## リスク・未確定事項
 

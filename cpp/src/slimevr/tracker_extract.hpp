@@ -64,11 +64,17 @@ struct SlimeTracker {
     // wxyz storage; the publisher converts to SlimeVR's xyzw Y-up wire frame.
     cv::Vec4f   quat_wxyz = {1.0f, 0.0f, 0.0f, 0.0f};
     bool        valid = false;
-    // [0, 1] confidence that the chosen up vector resolves roll reliably. Bones
-    // with rigid anatomical pins (chest, waist, shin) and the foot stay at 1.0.
-    // Upper arm / thigh compute this via smoothstep on the up-vector's sin θ to
-    // forward: full at sin θ ≥ kRollSinHigh, zero at sin θ ≤ kRollSinLow. Used
-    // by apply_quat_smoothing to throttle SLERP near singular extension.
+    // [0, 1] per-tracker smoothing weight used by apply_quat_smoothing as
+    // effective_alpha = base_alpha · roll_confidence.
+    //   * chest / waist / shin: rigid anatomical pin, stays at 1.0.
+    //   * upper arm / thigh: dynamic via smoothstep on the up-vector's sin θ
+    //     to forward — full at sin θ ≥ kRollSinHigh, zero at sin θ ≤
+    //     kRollSinLow (so a degenerate roll measurement holds the previous
+    //     quat instead of injecting noise).
+    //   * foot: fixed low value kFootSmoothingWeight, not because roll is
+    //     uncertain (foot has no roll observation by design — tibia-aligned
+    //     up only resolves yaw) but as a strong low-pass against ankle/toe
+    //     KP jitter.
     float       roll_confidence = 1.0f;
 };
 

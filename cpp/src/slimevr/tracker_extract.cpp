@@ -42,7 +42,6 @@ constexpr std::size_t kLAnkle    = 15, kRAnkle    = 16;
 constexpr std::size_t kNeck      = 18;
 constexpr std::size_t kHipCenter = 19;
 constexpr std::size_t kLBigToe   = 20, kRBigToe   = 21;
-constexpr std::size_t kLHeel     = 24, kRHeel     = 25;
 
 // Confidence smoothstep bounds on sin(angle(up, fwd)) for upper arm / thigh
 // roll. Below kRollSinLow the chosen up is treated as degenerate (confidence 0,
@@ -51,6 +50,15 @@ constexpr std::size_t kLHeel     = 24, kRHeel     = 25;
 // rate scales with measurement reliability. See docs/phase12-slimevr-bridge-relay.md.
 constexpr float kRollSinLow  = 0.05f;  // sin 2.9°: near-degenerate floor
 constexpr float kRollSinHigh = 0.20f;  // sin 11.5°: full-confidence ceiling
+
+// Smoothing throttle for foot trackers. The foot is treated as a rigid
+// extension of the shin (up = tibia axis; see foot_tracker below) because
+// the heel KP is too noisy in our 2D→3D pipeline. Even after dropping heel
+// the ankle/toe pair retains residual jitter, so the per-tracker smoothing
+// weight is set low to act as a strong low-pass via apply_quat_smoothing's
+// effective_alpha = base_alpha · roll_confidence.
+//   base_alpha 0.5 × 0.3 = 0.15 → τ ≈ 6 frames at 60 Hz
+constexpr float kFootSmoothingWeight = 0.3f;
 
 bool joints_valid(const infer::Skeleton3D& s, std::initializer_list<std::size_t> idxs) {
     for (auto i : idxs) {
@@ -111,7 +119,10 @@ TrackerPosition position_for(TrackerRole role) {
         case TrackerRole::LeftUpperArm:  return TrackerPosition::LeftUpperArm;
         case TrackerRole::RightUpperArm: return TrackerPosition::RightUpperArm;
         case TrackerRole::Chest:         return TrackerPosition::Chest;
-        case TrackerRole::Waist:         return TrackerPosition::Waist;
+        // The pelvis tracker (pos = hip_center) is anatomically a Hip, not a
+        // Waist. SlimeVR Server auto-assigns it correctly only as Hip in the
+        // 10-tracker firmware UDP configuration.
+        case TrackerRole::Waist:         return TrackerPosition::Hip;
         case TrackerRole::LeftUpperLeg:  return TrackerPosition::LeftUpperLeg;
         case TrackerRole::RightUpperLeg: return TrackerPosition::RightUpperLeg;
         case TrackerRole::LeftLowerLeg:  return TrackerPosition::LeftLowerLeg;
@@ -269,26 +280,37 @@ extract_trackers(const infer::Skeleton3D& skel) {
     }
 
     // ---- Upper legs (thigh: hip → knee) -----------------------------------
-    // forward = knee - hip. Three-stage up choice mirroring the upper arm:
-    //   1. ankle - knee       (knee hinge fixes femur roll when bent)
-    //   2. hip   - hip_center (lateral pin; ok in standing pose)
-    //   3. world Z
+    // forward = knee - hip. Two-stage up choice (primary + world-Z fallback):
+    //   1. ankle - knee       (knee hinge fixes femur roll when bent — only
+    //                          physically valid handle from 3D KP alone)
+    //   2. world Z            (last resort; confidence=0 → smoothing holds prev)
+    //
+    // The earlier lateral pin (hip - hip_center) was removed: it equals the
+    // pelvis lateral axis, which rigidly couples thigh roll to waist yaw and
+    // makes them visually inseparable during walking / shallow bends when
+    // primary's sin θ briefly dips below kRollSinLow. With the lateral pin
+    // gone, primary-degenerate frames fall straight to tertiary with
+    // confidence=0, and apply_quat_smoothing holds the previous thigh quat
+    // — the femur axial rotation becomes independent of the pelvis.
     auto upper_leg = [&](TrackerRole role, std::size_t hip, std::size_t knee,
                          std::size_t ankle, std::size_t out_idx) {
-        if (!joints_valid(skel, {kHipCenter, hip, knee})) return;
+        if (!joints_valid(skel, {hip, knee})) return;
         cv::Vec3f hp = to_vec3f(skel.joints[hip]);
         cv::Vec3f kp = to_vec3f(skel.joints[knee]);
-        cv::Vec3f hc = to_vec3f(skel.joints[kHipCenter]);
         cv::Vec3f pos = (hp + kp) * 0.5f;
         cv::Vec3f fwd = kp - hp;
         cv::Vec3f up_primary = skel.joints[ankle].valid
                                 ? (to_vec3f(skel.joints[ankle]) - kp)
                                 : cv::Vec3f{0, 0, 0};
-        cv::Vec3f up_secondary = hp - hc;
         cv::Vec3f up_tertiary  = cv::Vec3f{0, 0, 1};
         float confidence = 0.0f;
         int which = -1;
-        cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_secondary, up_tertiary,
+        // 2-stage selection: passing primary as the secondary arg makes the
+        // secondary slot collapse to the same degeneracy test as primary, so
+        // pick_up_multistage falls through to tertiary with confidence 0 when
+        // primary is degenerate. Signature is shared with upper_arm which
+        // still uses a real 3-stage selection.
+        cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_primary, up_tertiary,
                                            confidence, which);
         build_tracker(role, pos, fwd, up, out[out_idx], confidence);
     };
@@ -312,26 +334,27 @@ extract_trackers(const infer::Skeleton3D& skel) {
     lower_leg(TrackerRole::LeftLowerLeg,  kLHip, kLKnee, kLAnkle, 6);
     lower_leg(TrackerRole::RightLowerLeg, kRHip, kRKnee, kRAnkle, 7);
 
-    // ---- Feet -------------------------------------------------------------
-    // forward = big_toe - heel. Up = ankle - foot_mid: this is the foot-plane
-    // normal (ankle sits above the heel-toe midpoint), so toe-up / heel-up /
-    // inversion all tilt this vector and produce the correct foot roll/pitch.
-    // World Z fallback only if ankle is missing.
-    auto foot_tracker = [&](TrackerRole role, std::size_t heel, std::size_t toe,
-                            std::size_t ankle, std::size_t out_idx) {
-        if (!joints_valid(skel, {heel, toe})) return;
-        cv::Vec3f heel_p = to_vec3f(skel.joints[heel]);
-        cv::Vec3f toe_p  = to_vec3f(skel.joints[toe]);
-        cv::Vec3f foot_mid = (heel_p + toe_p) * 0.5f;
-        cv::Vec3f pos = foot_mid;
-        cv::Vec3f fwd = toe_p - heel_p;
-        cv::Vec3f up = skel.joints[ankle].valid
-                        ? (to_vec3f(skel.joints[ankle]) - foot_mid)
-                        : cv::Vec3f{0, 0, 1};
-        build_tracker(role, pos, fwd, up, out[out_idx]);
+    // ---- Feet (yaw only; tibia-aligned up) --------------------------------
+    // heel KP precision is poor in the 2D→3D pipeline, so the foot is treated
+    // as a rigid extension of the shin: up follows the tibia (knee → ankle)
+    // and fwd is ankle → toe. This forfeits foot roll (inversion/eversion)
+    // and isolates pitch (toe/heel stance) into the fwd tilt, but yaw — the
+    // only quantity needed for in-place foot direction in SlimeVR IK — stays
+    // free of heel noise. A strong smoothing throttle (kFootSmoothingWeight)
+    // further damps residual ankle/toe jitter via apply_quat_smoothing.
+    auto foot_tracker = [&](TrackerRole role, std::size_t knee, std::size_t ankle,
+                            std::size_t toe, std::size_t out_idx) {
+        if (!joints_valid(skel, {knee, ankle, toe})) return;
+        cv::Vec3f kp = to_vec3f(skel.joints[knee]);
+        cv::Vec3f ap = to_vec3f(skel.joints[ankle]);
+        cv::Vec3f tp = to_vec3f(skel.joints[toe]);
+        cv::Vec3f pos = (ap + tp) * 0.5f;
+        cv::Vec3f fwd = tp - ap;
+        cv::Vec3f up  = kp - ap;            // tibia axis (ankle → knee)
+        build_tracker(role, pos, fwd, up, out[out_idx], kFootSmoothingWeight);
     };
-    foot_tracker(TrackerRole::LeftFoot,  kLHeel, kLBigToe, kLAnkle, 8);
-    foot_tracker(TrackerRole::RightFoot, kRHeel, kRBigToe, kRAnkle, 9);
+    foot_tracker(TrackerRole::LeftFoot,  kLKnee, kLAnkle, kLBigToe, 8);
+    foot_tracker(TrackerRole::RightFoot, kRKnee, kRAnkle, kRBigToe, 9);
 
     return out;
 }

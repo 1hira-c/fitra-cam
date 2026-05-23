@@ -4,7 +4,7 @@
 >
 > - **Bridge protocol は不採用**: 位置+回転を送れる SlimeVR の native IPC 経路 (Unix socket / Named pipe + Protobuf) は同一マシン専用で、SlimeVR Server が別 PC の Windows で動く我々の環境ではネットワーク越しに使えない。Windows 側にリレー常駐を置く案 (B 案) は [`backlog-slimevr-bridge-relay.md`](backlog-slimevr-bridge-relay.md) に積み課題として残す。
 > - **Firmware UDP は回転のみ**: 位置は SlimeVR の IK が骨格 + 回転 + HMD から再構築する。カメラ由来の絶対位置は wire に乗らない。サーバ側 `UDPPacket27Position` は実装上存在するが UDP-created tracker は `hasPosition=false` で固定されており、送っても IK には反映されないことを確認済み (SlimeVR-Server 2026-05 時点)。
-> - **トラッカー命名は SensorInfo packet 15 で解決**: `TrackerPosition` enum に `LEFT_UPPER_ARM(15)/RIGHT_UPPER_ARM(16)/CHEST(4)/WAIST(5)/LEFT_UPPER_LEG(7)/RIGHT_UPPER_LEG(8)/LEFT_LOWER_LEG(9)/RIGHT_LOWER_LEG(10)/LEFT_FOOT(11)/RIGHT_FOOT(12)` の 10 個が完全に乗る。MAC は hostname ハッシュから決定論的に生成し再起動を跨いで同一にする (SlimeVR 側の trackerPosition 設定が persistence される)。
+> - **トラッカー命名は SensorInfo packet 15 で解決**: `TrackerPosition` enum に `LEFT_UPPER_ARM(15)/RIGHT_UPPER_ARM(16)/CHEST(4)/HIP(6)/LEFT_UPPER_LEG(7)/RIGHT_UPPER_LEG(8)/LEFT_LOWER_LEG(9)/RIGHT_LOWER_LEG(10)/LEFT_FOOT(11)/RIGHT_FOOT(12)` の 10 個が完全に乗る (骨盤は当初 WAIST(5) を指定していたが SlimeVR Server で auto-assign が走らず手動割り当てが必要だったため HIP(6) に変更。`pos = hip_center` から作っているので Hip の方が解剖学的にも整合)。MAC は hostname ハッシュから決定論的に生成し再起動を跨いで同一にする (SlimeVR 側の trackerPosition 設定が persistence される)。
 > - **`--slimevr-port` のデフォルトは 6969** (旧 VMC の 39539 から変更)。
 
 ## Context
@@ -26,7 +26,7 @@ Phase 7 で多視点三角測量 + Kalman + IK による 3D skeleton 出力が�
 ## ゴール / 完了条件
 
 1. `--slimevr-out` フラグで native UDP publisher が立ち上がり、handshake + SensorInfo × 10 + RotationData 60 Hz + Heartbeat 1 Hz を `<slimevr-host>:6969` に送出。
-2. SlimeVR Server GUI で **10 個のトラッカー** が `Left Upper Arm` / `Right Upper Arm` / `Chest` / `Waist` / `Left Upper Leg` / `Right Upper Leg` / `Left Lower Leg` / `Right Lower Leg` / `Left Foot` / `Right Foot` の名前で **自動表示** される (連番ならない / 手動 assign 不要)。
+2. SlimeVR Server GUI で **10 個のトラッカー** が `Left Upper Arm` / `Right Upper Arm` / `Chest` / `Hip` / `Left Upper Leg` / `Right Upper Leg` / `Left Lower Leg` / `Right Lower Leg` / `Left Foot` / `Right Foot` の名前で **自動表示** される (連番ならない / 手動 assign 不要)。
 3. 各トラッカーの回転が、被験者の歩行 / しゃがみ / 腕の上げ下げに対応してアバター上で破綻なく追従する (静止 T ポーズで identity rotation 二乗誤差 < 5°)。
 4. `--enable-3d` が無効 / IK locked = false の間は RotationData の送出が止まり、Heartbeat のみ流れる。
 5. 既存 Phase 6b の 170 fps ベンチに対し、aggregate `recent_pose_fps` 低下 < 2% (publisher は別スレッドで polling、データ生成パスに介入しない)。
@@ -64,7 +64,7 @@ Phase 7 で多視点三角測量 + Kalman + IK による 3D skeleton 出力が�
 | 0 | LeftUpperArm  | 0 | LEFT_UPPER_ARM (15)  | midpoint(l_shoulder, l_elbow) | elbow − shoulder | neck − shoulder |
 | 1 | RightUpperArm | 1 | RIGHT_UPPER_ARM (16) | midpoint(r_shoulder, r_elbow) | elbow − shoulder | neck − shoulder |
 | 2 | Chest         | 2 | CHEST (4)            | midpoint(neck, hip_center)    | ⊥(shoulder_axis × spine) | neck − hip_center |
-| 3 | Waist         | 3 | WAIST (5)            | hip_center                    | ⊥(hip_axis × spine)      | neck − hip_center |
+| 3 | Waist         | 3 | HIP (6)              | hip_center                    | ⊥(hip_axis × spine)      | neck − hip_center |
 | 4 | LeftUpperLeg  | 4 | LEFT_UPPER_LEG (7)   | midpoint(l_hip, l_knee)       | knee − hip       | hip − hip_center |
 | 5 | RightUpperLeg | 5 | RIGHT_UPPER_LEG (8)  | midpoint(r_hip, r_knee)       | knee − hip       | hip − hip_center |
 | 6 | LeftLowerLeg  | 6 | LEFT_LOWER_LEG (9)   | midpoint(l_knee, l_ankle)     | ankle − knee     | hip − knee |
@@ -114,7 +114,7 @@ Handshake 直後にトラッカー 10 個分まとめて送る:
 [1 u8]  sensor_type      = 0 (IMUType.UNKNOWN)
 [2 BE u16] sensor_config = 0  (no magnetometer)
 [1 u8]  rest_calib_done  = 0
-[1 u8]  tracker_position = TrackerPosition value (4/5/7/8/9/10/11/12/15/16)
+[1 u8]  tracker_position = TrackerPosition value (4/6/7/8/9/10/11/12/15/16)
 [1 u8]  tracker_data_type= 0 (ROTATION)
 ```
 
@@ -254,7 +254,7 @@ Terminal A 側で:
        --slimevr-out --slimevr-host=192.168.1.50 \
        --cam0 ... --cam1 ... --calib ... --det-engine ... --pose-engine ...
    ```
-3. SlimeVR GUI で **10 個のトラッカーが Left Upper Arm / Right Upper Arm / Chest / Waist / Left Upper Leg / Right Upper Leg / Left Lower Leg / Right Lower Leg / Left Foot / Right Foot の名前で自動表示** されること (連番ならない、手動 assign 不要)。
+3. SlimeVR GUI で **10 個のトラッカーが Left Upper Arm / Right Upper Arm / Chest / Hip / Left Upper Leg / Right Upper Leg / Left Lower Leg / Right Lower Leg / Left Foot / Right Foot の名前で自動表示** されること (連番ならない、手動 assign 不要)。
 4. 被験者の腕上げ / しゃがみ / 歩行で各トラッカーの回転が破綻なく追従し、SteamVR Avatar の FBT が成立すること。
 5. `curl http://<jetson-ip>:8000/stats3d` の `"slimevr"` ブロックで:
    - `sent_handshakes` = 1
