@@ -65,15 +65,21 @@ Yolox::Yolox(TrtEngine& engine) : Yolox(engine, Options{}) {}
 
 Yolox::Yolox(TrtEngine& engine, Options opts)
     : engine_{engine}, opts_{std::move(opts)} {
-    // Sanity: input shape should be (1, 3, input_size, input_size).
+    // Sanity + auto-pick input_size from the engine binding. The mmdeploy
+    // YOLOX humanart family ships at 416 (tiny) or 640 (S/M/X); we accept
+    // anything as long as it is square and rank-4 BGR.
     const auto& bin = engine_.binding(opts_.input_name);
     if (bin.dims.nbDims != 4
         || bin.dims.d[0] != 1
         || bin.dims.d[1] != 3
-        || bin.dims.d[2] != opts_.input_size
-        || bin.dims.d[3] != opts_.input_size) {
+        || bin.dims.d[2] <= 0
+        || bin.dims.d[2] != bin.dims.d[3]) {
         FITRA_LOG_WARN("YOLOX input '{}' shape unexpected; engine declares dims with nbDims={}",
                        opts_.input_name, bin.dims.nbDims);
+    } else if (bin.dims.d[2] != opts_.input_size) {
+        FITRA_LOG_INFO("YOLOX input_size auto-set from engine: {} (was {})",
+                       bin.dims.d[2], opts_.input_size);
+        opts_.input_size = bin.dims.d[2];
     }
 }
 

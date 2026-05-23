@@ -93,16 +93,20 @@ docker compose build
 ONNX を engine に変換する。`outputs/tensorrt_engines/` に書き出され、ホスト bind mount 経由で永続化される。
 
 ```bash
-docker compose --profile tools run --rm build-engines-yolox
+docker compose --profile tools run --rm build-engines-yolox          # yolox-s humanart (既定)
 docker compose --profile tools run --rm build-engines-rtmpose-halpe26
+# 旧 yolox-tiny も並存ビルド可:
+# docker compose --profile tools run --rm build-engines-yolox-tiny
 ```
 
-生成物:
+生成物 (既定):
 
 ```text
-outputs/tensorrt_engines/yolox_tiny.fp16.engine
+outputs/tensorrt_engines/yolox_s.fp16.engine          # 既定 (Issue #9 番外編で yolox-tiny humanart から差し替え)
 outputs/tensorrt_engines/rtmpose_m_halpe26.fp16.engine
 ```
+
+yolox-s への切替経緯と latency ベンチは [`research/yolox-detector-eval-result.md`](research/yolox-detector-eval-result.md) を参照。`build-engines-yolox` は `outputs/onnx/yolox_s_8xb8-300e_humanart-3ef259a7.topk3000.onnx` を入力にする (mmdeploy 配布の K=5000 のままだと TRT 10.3 の TopK 上限超過で fail)。`.topk3000.onnx` の生成手順は同レポートに記載。
 
 これらは GPU/TRT バージョン依存。別 Jetson に持って行く場合は再生成。
 

@@ -1,8 +1,10 @@
 # 番外編積みタスク — YOLOX 検出器のモデルサイズ × 量子化精度の再評価
 
-> **状態**: 未着手。
+> **状態**: 2026-05-24 に latency 予算ベースで部分着地。視覚再評価 (失敗フレーム計測 / 横向き・遮蔽録画) と INT8 PTQ は引き続き backlog。
 >
-> **着手条件**: 「横向き / 部分遮蔽で YOLOX-tiny が人物を見落とす / bbox が崩れる」が再現する代表シーンを `outputs/recorded_rtmpose/` 配下に 1〜2 個追加でき、Python ORT 参照で同様の失敗が観測できる段階に到達したとき。
+> **着手条件 (当初)**: 「横向き / 部分遮蔽で YOLOX-tiny が人物を見落とす / bbox が崩れる」が再現する代表シーンを `outputs/recorded_rtmpose/` 配下に 1〜2 個追加でき、Python ORT 参照で同様の失敗が観測できる段階に到達したとき。
+>
+> **2026-05-24 着地**: 視覚再評価の前に、yolox-tiny FP32 を予算上限とする latency ベンチで運用既定モデルを決め、engine 切替経路と `Yolox` の input_size 自動検出を整備。結論は [`research/yolox-detector-eval-result.md`](research/yolox-detector-eval-result.md)。視覚評価本体は backlog のまま継続。
 
 ## 背景
 
@@ -102,3 +104,18 @@ ground truth の方針:
 - 既存 backlog [pose-backend-abstraction](backlog-pose-backend-abstraction.md) — 将来 RTMPose 以外の pose model を載せる際に、本 backlog で導入する `int8_calibrator` を pose backend 側でも共有する設計の余地がある。
 - 既存研究ノート `docs/research/rtmpose-int8-eval-plan.md` — RTMPose の INT8 PTQ。本 backlog で配線する INT8 calibrator はそちらにも転用可能。
 - 既存 phase doc `docs/cpp-migration-plan.md` Phase 4 (FP16/INT8/pinned-memory, aggregate ≥ 90 fps) — 速度予算の参照元。
+- 着地レポート (本 backlog の latency ベース部分): [`research/yolox-detector-eval-result.md`](research/yolox-detector-eval-result.md)
+
+## 2026-05-24 着地メモ (latency 予算ベースで yolox-s FP16 採用)
+
+実装は別ブランチ `cpp-yolox-upgrade` (`feat(backlog-issue9): ...`) でまとめる。視覚再評価は本 backlog に積み残し。
+
+- **採用モデル**: `yolox_s.fp16.engine` (640 入力 / FP16, mmdeploy humanart pretrained)
+- **latency**: yolox-s FP16 = 23.9 ms median (predetailed budget = yolox-tiny FP32 22.3 ms に対し +7%)
+- **engine ビルド**: mmdeploy 配布 ONNX は TopK K=5000 で TRT 10.3 ITopKLayer 上限 (3840) 超過 → `outputs/onnx/<slug>.topk3000.onnx` 経由で build
+- **コード差分**:
+  - `cpp/src/infer/yolox.{hpp,cpp}` — `Options::input_size` を engine binding 由来で自動上書き
+  - `cpp/tools/det_bench.cpp` (新規) — engine 単体 latency ベンチ
+  - `docker-compose.yml` — runtime / build job の既定を yolox-s に切替、tiny は `build-engines-yolox-tiny` で並存
+- **背景判断**: 視覚再評価で代表シーンを録り直す前に、運用既定切替の経路 (engine ビルド / 入力サイズ可変 / Docker 既定) と latency 予算を確定させた方が、本番運用で「とりあえず S に上げる」の検証ループが回しやすい。失敗フレーム数 / bbox 不安定 / RTMPose drift の定量比較は引き続き本 backlog に残置。
+- **INT8 配線**: 見送り。yolox-s FP16 単体で予算内のため INT8 化の動機が薄い。RTMPose 側 INT8 計画 (`docs/research/rtmpose-int8-eval-plan.md`) と合流する別タスクで `IInt8EntropyCalibrator2` を実装する想定 — 本 backlog の signature 共有方針は維持。
