@@ -743,11 +743,20 @@ function updateTrackerTable(bundle) {
     tr.classList.toggle("state-leakage", frz  <  0.5 && leak >= 0.5);
     tr.classList.toggle("state-active",  frz  <  0.5 && leak <  0.5);
 
+    // Phase 13 (post-review): held label requires a sustained invalid run,
+    // not a single-frame drop. Aligns with the "majority of rolling window"
+    // threshold used by frozen/leakage above. Without this, every
+    // 1-3 frame sync miss in the 3D pipeline (= 10 trackers go invalid
+    // simultaneously per the Codex P2 fix) made the state column flicker
+    // through "held" on every tracker. 200 ms ≈ 12 frames at 60 Hz is the
+    // shortest "intentional pause" a human perceives, below which we treat
+    // the gap as a transient that doesn't deserve a label change.
+    const freezeMs = Number(st.freeze_current_ms ?? 0);
     let stateLabel;
     if (frz  >= 0.5) stateLabel = "frozen";
     else if (leak >= 0.5) stateLabel = "leakage";
-    else if (t.valid) stateLabel = "active";
-    else stateLabel = "held";
+    else if (freezeMs >= 200) stateLabel = "held";
+    else stateLabel = "active";
 
     cells[1].textContent = stateLabel;
     cells[2].textContent = fmtRad(st.ang_vel_p50);
