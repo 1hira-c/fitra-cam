@@ -29,6 +29,28 @@ const SKELETON_HALPE26 = [
 ];
 const KP_COUNT_BY_FORMAT = { coco17: 17, halpe26: 26 };
 
+// Phase 13 M1: SlimeVR tracker visualization.
+// 10 trackers in role order (sensor_id 0..9) — matches the wire ordering in
+// the C++ TrackerRole enum (cpp/src/slimevr/tracker_extract.hpp).
+const TRACKER_ROLES = [
+  "LeftUpperArm", "RightUpperArm",
+  "Chest", "Waist",
+  "LeftUpperLeg", "RightUpperLeg",
+  "LeftLowerLeg", "RightLowerLeg",
+  "LeftFoot", "RightFoot",
+];
+const TRACKER_COUNT = TRACKER_ROLES.length;
+// Default axis length (meters) in WORLD frame, scales to (0.3 + 0.7*conf) × this.
+const TRACKER_AXIS_BASE_LEN = 0.15;
+// World (Z-up, X-right, Y-forward) → Three.js (Y-up, X-right, Z-back)
+// basis change quaternion = Rx(-90°). In xyzw: (sin(-45°), 0, 0, cos(-45°)).
+// We pre-build this constant once for the per-frame quaternion sandwich.
+const WORLD_TO_THREE_QUAT = (() => {
+  const k = 0.7071067811865475;  // 1/√2
+  return new THREE.Quaternion(-k, 0, 0, k);
+})();
+const WORLD_TO_THREE_QUAT_INV = WORLD_TO_THREE_QUAT.clone().invert();
+
 function skeletonFor(format) {
   return format === "halpe26" ? SKELETON_HALPE26 : SKELETON_COCO17;
 }
@@ -121,6 +143,32 @@ class ThreeDViewer {
     this.peopleRoot = new THREE.Group();
     this.scene.add(this.peopleRoot);
 
+    // Phase 13 M1: per-tracker AxesHelper. 10 groups (one per SlimeVR
+    // tracker role); each group's quaternion expresses the tracker's
+    // orientation in Three.js Y-up frame. Group's scale encodes confidence,
+    // material opacity encodes valid. Toggleable via the show-trackers
+    // checkbox.
+    this.trackersRoot = new THREE.Group();
+    this.trackersVisible = true;
+    this.scene.add(this.trackersRoot);
+    this.trackerViews = [];
+    for (let i = 0; i < TRACKER_COUNT; i += 1) {
+      const group = new THREE.Group();
+      const axes = new THREE.AxesHelper(TRACKER_AXIS_BASE_LEN);
+      // AxesHelper uses a LineBasicMaterial that supports transparency.
+      axes.material.transparent = true;
+      axes.material.opacity = 1.0;
+      // The AxesHelper line draws each axis as 2 vertices, but vertex colors
+      // are set on construction. We don't need to recolor per tracker — the
+      // red/green/blue per-axis convention is more readable than per-tracker
+      // colors here.
+      group.add(axes);
+      group.visible = false;          // hidden until first valid update
+      group.frustumCulled = false;
+      this.trackersRoot.add(group);
+      this.trackerViews.push({ group, axes });
+    }
+
     const grid = new THREE.GridHelper(4, 20, 0x335577, 0x2b2f36);
     grid.material.opacity = 0.75;
     grid.material.transparent = true;
@@ -191,25 +239,76 @@ class ThreeDViewer {
     if (!bundle || bundle.enabled === false) {
       this.setStatus(bundle && bundle.enabled === false ? "3D disabled" : "(no 3D data)");
       this.updatePeople([]);
+      this.updateTrackers([]);
       return;
     }
 
     const persons = Array.isArray(bundle.persons_3d) ? bundle.persons_3d : [];
+    const trackers = Array.isArray(bundle.trackers) ? bundle.trackers : [];
     if (!persons.length) {
       // Hold the last skeleton on screen across short data dropouts. 3.5s
       // covers a Phase 8 calibration recording window (~3s) during which the
       // live pose estimator is intentionally paused.
       if (this.hasData && performance.now() - this.lastDataAtMs < 3500) {
+        // Still refresh trackers — they may be frozen with the held pose.
+        this.updateTrackers(trackers);
         return;
       }
       this.setStatus("(no 3D person)");
       this.updatePeople([]);
+      this.updateTrackers(trackers);
       return;
     }
 
     this.lastDataAtMs = performance.now();
     this.setStatus("");
     this.updatePeople(persons);
+    this.updateTrackers(trackers);
+  }
+
+  setTrackersVisible(visible) {
+    this.trackersVisible = !!visible;
+    if (this.trackersRoot) this.trackersRoot.visible = this.trackersVisible;
+  }
+
+  updateTrackers(trackers) {
+    if (!this.trackersRoot) return;
+    this.trackersRoot.visible = this.trackersVisible;
+
+    // Bundle may carry fewer than TRACKER_COUNT entries (e.g. extractor
+    // hasn't produced its first snapshot yet) — hide the rest. The wire
+    // payload always emits exactly 10 in role order, so the index IS the
+    // role's sensor_id.
+    for (let i = 0; i < TRACKER_COUNT; i += 1) {
+      const view = this.trackerViews[i];
+      const t = trackers[i];
+      if (!t || !Array.isArray(t.pos) || !Array.isArray(t.quat_wxyz)) {
+        view.group.visible = false;
+        continue;
+      }
+      // Position: world (Z-up, X-right, Y-forward) → Three.js (Y-up).
+      view.group.position.set(Number(t.pos[0]), Number(t.pos[2]), -Number(t.pos[1]));
+
+      // Quaternion: backend sends wxyz in world frame. Three.js uses xyzw and
+      // Y-up frame. Apply the basis change Rx(-90°) on both sides:
+      //   q_three = B · q_world · B⁻¹
+      // where B is the world→three rotation expressed as a quaternion.
+      const qw = Number(t.quat_wxyz[0]);
+      const qx = Number(t.quat_wxyz[1]);
+      const qy = Number(t.quat_wxyz[2]);
+      const qz = Number(t.quat_wxyz[3]);
+      const qWorld = new THREE.Quaternion(qx, qy, qz, qw);
+      const qThree = WORLD_TO_THREE_QUAT.clone().multiply(qWorld).multiply(WORLD_TO_THREE_QUAT_INV);
+      view.group.quaternion.copy(qThree);
+
+      // Confidence drives axis length (0.3 base so even confidence=0 stays
+      // visible enough to read its position) and opacity drives valid.
+      const conf = Number.isFinite(t.roll_confidence) ? Number(t.roll_confidence) : 1.0;
+      const scale = 0.3 + 0.7 * Math.max(0, Math.min(1, conf));
+      view.group.scale.setScalar(scale);
+      view.axes.material.opacity = t.valid ? 1.0 : 0.3;
+      view.group.visible = true;
+    }
   }
 
   updatePeople(persons) {
@@ -608,6 +707,13 @@ for (const btn of document.querySelectorAll(".view3d-tabs button")) {
     for (const other of document.querySelectorAll(".view3d-tabs button")) {
       other.classList.toggle("active", other === btn);
     }
+  });
+}
+
+const trackerToggle = document.getElementById("toggle-trackers");
+if (trackerToggle) {
+  trackerToggle.addEventListener("change", () => {
+    viewer3d?.setTrackersVisible(trackerToggle.checked);
   });
 }
 

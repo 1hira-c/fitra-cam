@@ -18,13 +18,6 @@ namespace fitra::slimevr {
 
 namespace {
 
-// Pick the largest-area person in the snapshot for tracker extraction. Empty
-// snapshot → nullptr.
-const infer::Skeleton3D* pick_skeleton(const pipeline::Skeleton3DSnapshot& s) {
-    if (s.persons.empty()) return nullptr;
-    return &s.persons.front();   // upstream IK already picks the dominant subject
-}
-
 bool sendto_buf(int fd, const std::vector<std::uint8_t>& buf) {
     ssize_t n = ::send(fd, buf.data(), buf.size(), MSG_NOSIGNAL);
     if (n < 0) {
@@ -36,13 +29,12 @@ bool sendto_buf(int fd, const std::vector<std::uint8_t>& buf) {
 
 }  // namespace
 
-NativePublisher::NativePublisher(pipeline::Skeleton3DBus& bus,
-                                 NativePublisherOptions opts)
-    : bus_{bus}, opts_{std::move(opts)} {
-    // Initialize prev_quat to identity so the first frame doesn't slerp
-    // against a degenerate zero vector.
-    for (auto& q : prev_quat_) q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
-}
+NativePublisher::NativePublisher(pipeline::Skeleton3DBus& skel_bus,
+                                 SlimeTrackerBus&         tracker_bus,
+                                 NativePublisherOptions   opts)
+    : skel_bus_{skel_bus},
+      tracker_bus_{tracker_bus},
+      opts_{std::move(opts)} {}
 
 NativePublisher::~NativePublisher() {
     try { stop(); } catch (...) {}
@@ -136,15 +128,11 @@ bool NativePublisher::send_introduction() {
     return true;
 }
 
-bool NativePublisher::send_rotation_burst(const pipeline::Skeleton3DSnapshot& snap) {
-    const infer::Skeleton3D* sk = pick_skeleton(snap);
-    if (!sk) return false;
-
-    auto trackers = extract_trackers(*sk);
-    apply_quat_smoothing(trackers, prev_quat_, opts_.quat_smooth);
+bool NativePublisher::send_rotation_burst(const SlimeTrackerSnapshot& tracker_snap) {
+    if (!tracker_snap.has_data) return false;
 
     std::uint64_t sent_this_burst = 0;
-    for (const auto& t : trackers) {
+    for (const auto& t : tracker_snap.trackers) {
         if (!t.valid) continue;
         // World wxyz → SlimeVR xyzw (Y-up, Unity LH).
         QuatXyzw qs = world_quat_to_slime(t.quat_wxyz[0], t.quat_wxyz[1],
@@ -179,12 +167,13 @@ void NativePublisher::send_loop() {
         std::this_thread::sleep_until(next);
         next += period_d;
 
-        auto snap = bus_.snapshot();
-        if (!snap.stats.enabled || !snap.stats.ik_locked) {
+        auto skel_snap = skel_bus_.snapshot();
+        if (!skel_snap.stats.enabled || !skel_snap.stats.ik_locked) {
             std::lock_guard<std::mutex> lk{stats_mu_};
             ++stats_.skipped_invalid;
         } else {
-            if (!send_rotation_burst(snap)) {
+            auto tracker_snap = tracker_bus_.snapshot();
+            if (!send_rotation_burst(tracker_snap)) {
                 std::lock_guard<std::mutex> lk{stats_mu_};
                 ++stats_.skipped_invalid;
             }

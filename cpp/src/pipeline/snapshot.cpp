@@ -140,7 +140,7 @@ Skeleton3DSnapshot Skeleton3DBus::snapshot() const {
     return snapshot_;
 }
 
-std::string Skeleton3DBus::make_bundle_json() {
+std::string Skeleton3DBus::make_bundle_json(const std::string& extra_fields_json) {
     using clock = std::chrono::system_clock;
     auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                       clock::now().time_since_epoch()).count();
@@ -196,7 +196,12 @@ std::string Skeleton3DBus::make_bundle_json() {
     out += ",\"processed\":"; out += std::to_string(static_cast<long long>(s.stats.processed));
     out += ",\"sync_miss\":"; out += std::to_string(static_cast<long long>(s.stats.sync_miss));
     out += ",\"ik_locked\":"; out += (s.stats.ik_locked ? "true" : "false");
-    out += "}}";
+    out += "}";   // close stats
+    if (!extra_fields_json.empty()) {
+        out += ",";
+        out += extra_fields_json;
+    }
+    out += "}";   // close outer
     return out;
 }
 

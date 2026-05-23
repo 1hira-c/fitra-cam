@@ -20,10 +20,9 @@
 #include <string>
 #include <thread>
 
-#include <opencv2/core.hpp>
-
 #include "pipeline/snapshot.hpp"
 #include "slimevr/firmware_protocol.hpp"
+#include "slimevr/slime_tracker_bus.hpp"
 #include "slimevr/tracker_extract.hpp"
 
 namespace fitra::slimevr {
@@ -49,7 +48,18 @@ struct NativePublisherStats {
 
 class NativePublisher {
 public:
-    NativePublisher(pipeline::Skeleton3DBus& bus, NativePublisherOptions opts);
+    // Phase 13 M1: NativePublisher now consumes pre-smoothed tracker snapshots
+    // from the SlimeTrackerBus (produced by TrackerExtractor). It no longer
+    // owns prev_quat smoothing state — that lives in TrackerExtractor so the
+    // WebUI viz and the UDP send path see one shared smoothed history.
+    //
+    // `skel_bus` is still passed in only to read the ik_locked / enabled flag
+    // from Skeleton3DStats so the publisher gates RotationData bursts the same
+    // way as Phase 11 (skip when 3D inference is paused). The body of the
+    // tracker data comes from `tracker_bus`.
+    NativePublisher(pipeline::Skeleton3DBus& skel_bus,
+                    SlimeTrackerBus&         tracker_bus,
+                    NativePublisherOptions   opts);
     ~NativePublisher();
 
     NativePublisher(const NativePublisher&) = delete;
@@ -70,15 +80,15 @@ private:
     void send_loop();
     void recv_loop();
 
-    // Build and dispatch one RotationData burst for `snap`. Updates
-    // `prev_quat_` (in-place smoothing) and the rotation stats. Returns true
-    // if at least one tracker was sent.
-    bool send_rotation_burst(const pipeline::Skeleton3DSnapshot& snap);
+    // Serialize one RotationData burst from `trackers`. Returns true if at
+    // least one tracker was sent.
+    bool send_rotation_burst(const SlimeTrackerSnapshot& tracker_snap);
 
     // One-shot handshake + 10× SensorInfo on startup.
     bool send_introduction();
 
-    pipeline::Skeleton3DBus&        bus_;
+    pipeline::Skeleton3DBus&        skel_bus_;     // ik_locked gating only
+    SlimeTrackerBus&                tracker_bus_;  // smoothed tracker source
     NativePublisherOptions          opts_;
     int                             sock_fd_ = -1;
 
@@ -87,7 +97,6 @@ private:
     std::atomic<bool>               stop_{false};
 
     std::uint64_t                   sequence_ = 1;   // Handshake uses 0, then we increment
-    std::array<cv::Vec4f, kTrackerCount> prev_quat_{};
 
     mutable std::mutex              stats_mu_;
     NativePublisherStats            stats_;

@@ -10,6 +10,7 @@
 #include <crow.h>
 
 #include "slimevr/native_publisher.hpp"
+#include "slimevr/slime_tracker_bus.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::web {
@@ -70,6 +71,10 @@ void CrowServer::set_native_publisher(slimevr::NativePublisher* publisher) {
     native_publisher_ = publisher;
 }
 
+void CrowServer::set_tracker_bus(slimevr::SlimeTrackerBus* tracker_bus) {
+    tracker_bus_ = tracker_bus;
+}
+
 void CrowServer::start() {
     auto& app     = impl_->app;
     auto& clients2d = impl_->clients2d;
@@ -122,7 +127,14 @@ void CrowServer::start() {
 
     CROW_ROUTE(app, "/stats3d")
     ([this]() {
-        std::string body = bus3d_ ? bus3d_->make_bundle_json()
+        // Phase 13 M1: when a tracker bus is attached, embed the smoothed
+        // SlimeVR tracker snapshot (role/pos/quat/valid/roll_confidence) as
+        // a top-level field of the bundle so the WebUI can render axes.
+        std::string trackers_fragment;
+        if (tracker_bus_) {
+            trackers_fragment = slimevr::make_tracker_bundle_fragment(*tracker_bus_);
+        }
+        std::string body = bus3d_ ? bus3d_->make_bundle_json(trackers_fragment)
                                   : pipeline::make_disabled_3d_json();
         // Phase 11: when the native SlimeVR publisher is wired up, splice
         // its send counters into the bundle JSON. The bundle ends in `}}`
@@ -334,7 +346,13 @@ void CrowServer::publisher_loop() {
         if (stop_.load()) break;
 
         auto msg = bus_.make_bundle_json();
-        auto msg3d = bus3d_ ? bus3d_->make_bundle_json()
+        // Phase 13 M1: include trackers fragment in the WS broadcast so the
+        // 3D viewer can keep AxesHelpers per tracker in sync at publish_hz.
+        std::string trackers_fragment;
+        if (tracker_bus_) {
+            trackers_fragment = slimevr::make_tracker_bundle_fragment(*tracker_bus_);
+        }
+        auto msg3d = bus3d_ ? bus3d_->make_bundle_json(trackers_fragment)
                             : pipeline::make_disabled_3d_json();
         {
             std::lock_guard<std::mutex> lk{impl_->clients2d.mu};

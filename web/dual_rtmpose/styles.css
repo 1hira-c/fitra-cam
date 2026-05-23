@@ -106,6 +106,18 @@ canvas {
   border-color: var(--accent);
   color: var(--fg);
 }
+.view3d-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #ccc;
+  cursor: pointer;
+  user-select: none;
+}
+.view3d-toggle input[type="checkbox"] {
+  margin: 0;
+}
 .canvas3d-wrap {
   position: relative;
 }

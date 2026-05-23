@@ -24,6 +24,7 @@
 
 namespace fitra::slimevr {
 class NativePublisher;   // fwd decl; full header included only in crow_server.cpp
+class SlimeTrackerBus;   // Phase 13 M1: tracker snapshot bus for /ws3d viz
 }
 
 namespace fitra::web {
@@ -64,6 +65,12 @@ public:
     // publisher dies. The crow server only calls const observers (stats()).
     void set_native_publisher(slimevr::NativePublisher* publisher);
 
+    // Phase 13 M1: attach the SlimeVR tracker bus so /ws3d's bundle includes
+    // a `trackers` field with each tracker's role / pos / quat / valid /
+    // roll_confidence. Caller retains ownership. Set to nullptr to disable
+    // (then the bundle has no `trackers` field).
+    void set_tracker_bus(slimevr::SlimeTrackerBus* tracker_bus);
+
     // Start listening + broadcasting on a background thread. Returns when
     // the server is bound and ready (best-effort; Crow's run() blocks).
     void start();
@@ -83,6 +90,7 @@ private:
     pipeline::CalibrationSession*  calib_session_   = nullptr;
     pipeline::CalibPreflight       calib_defaults_;
     slimevr::NativePublisher*      native_publisher_ = nullptr;
+    slimevr::SlimeTrackerBus*      tracker_bus_     = nullptr;
 
     struct Impl;
     std::unique_ptr<Impl>  impl_;
