@@ -263,26 +263,41 @@ extract_trackers(const infer::Skeleton3D& skel) {
     }
 
     // ---- Upper arms (shoulder → elbow) ------------------------------------
-    // forward = elbow - shoulder. Roll is pinned by a three-stage up choice:
-    //   1. wrist - elbow      (elbow hinge gives strongest physical handle)
-    //   2. neck  - shoulder   (lateral pin; degenerate when arm raised)
-    //   3. world Z            (last resort)
+    // forward = elbow - shoulder. Single physical roll handle (no fallback):
+    //   1. wrist - elbow      (elbow hinge fixes humerus roll when bent — only
+    //                          physically valid handle from 3D KP alone)
+    //
+    // Tertiary is intentionally a zero vector. World Z is NOT usable as a
+    // fallback for upper-arm roll: at a horizontal arm (fwd ⊥ Z), world Z is
+    // assigned confidence ~1 by pick_up_multistage and writes "elbow points
+    // toward the ceiling" as an arbitrary roll. Secondary `(neck - shoulder)`
+    // is the chest's lateral axis; when primary degenerates with the arm
+    // straight, secondary rigidly couples upper-arm roll to torso yaw — the
+    // same "rigid pelvis pin" anti-pattern we removed from upper_leg in
+    // Phase 12 M1. With both fallbacks zeroed, pick_up_multistage hits its
+    // confidence=0 sentinel and quat_from_forward_up returns valid=false →
+    // apply_quat_smoothing holds the previous humerus quat.
+    //
+    // Active regime: knee/elbow-style hinge with wrist offset > sin 0.15 from
+    // the upper-arm axis (≈ 8.6° elbow flexion). Below that, freeze — twist
+    // is unobservable from 3D KP alone in that configuration.
     auto upper_arm = [&](TrackerRole role, std::size_t shoulder, std::size_t elbow,
                           std::size_t wrist, std::size_t out_idx) {
-        if (!joints_valid(skel, {kNeck, shoulder, elbow})) return;
+        if (!joints_valid(skel, {shoulder, elbow})) return;
         cv::Vec3f sp = to_vec3f(skel.joints[shoulder]);
         cv::Vec3f ep = to_vec3f(skel.joints[elbow]);
-        cv::Vec3f np = to_vec3f(skel.joints[kNeck]);
         cv::Vec3f pos = (sp + ep) * 0.5f;
         cv::Vec3f fwd = ep - sp;
         cv::Vec3f up_primary = skel.joints[wrist].valid
                                 ? (to_vec3f(skel.joints[wrist]) - ep)
                                 : cv::Vec3f{0, 0, 0};
-        cv::Vec3f up_secondary = np - sp;
-        cv::Vec3f up_tertiary  = cv::Vec3f{0, 0, 1};
+        cv::Vec3f up_tertiary = cv::Vec3f{0, 0, 0};
         float confidence = 0.0f;
         int which = -1;
-        cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_secondary, up_tertiary,
+        // 1-stage selection (same shape as upper_leg): primary slot holds
+        // (wrist - elbow); secondary duplicates primary so secondary's
+        // degeneracy test collapses; tertiary is the zero sentinel.
+        cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_primary, up_tertiary,
                                            confidence, which);
         build_tracker(role, pos, fwd, up, out[out_idx], confidence);
     };

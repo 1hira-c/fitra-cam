@@ -84,9 +84,17 @@ fitra::infer::Skeleton3D make_t_pose() {
     set_joint(s,  5, 0.18f,0,     1.42f);  // l_shoulder
     set_joint(s,  6, -0.18f,0,    1.42f);  // r_shoulder
     set_joint(s,  7, 0.45f, 0.02f, 1.42f); // l_elbow (~3 cm forward)
-    set_joint(s,  9, 0.72f, 0.05f, 1.42f); // l_wrist
+    // Phase 13: wrists dropped 15 cm in Z (forearm hangs slightly below the
+    // upper-arm axis). The previous strictly-horizontal arm had
+    // wrist - elbow ∥ elbow - shoulder (both pointing +X with only ~3 cm Y
+    // offset), so primary up was sin θ ≈ 0.01 from fwd → falls into the
+    // degeneracy gate (kRollSinLow = 0.15). With wrist dropped, primary up
+    // gains a substantial -Z component → sin θ ≈ 0.48 → full confidence,
+    // upper-arm trackers stay valid in the T-pose. Anatomically: arms
+    // extended laterally with forearms relaxed downward 12°.
+    set_joint(s,  9, 0.72f, 0.05f, 1.27f); // l_wrist
     set_joint(s,  8, -0.45f,0.02f, 1.42f); // r_elbow
-    set_joint(s, 10, -0.72f,0.05f, 1.42f); // r_wrist
+    set_joint(s, 10, -0.72f,0.05f, 1.27f); // r_wrist
     // Phase 13: T-pose has anatomically realistic mild knee flexion (knee 10 cm
     // forward of the hip-ankle line ≈ 12°). The previous 1 cm offset was a
     // visually-T-shaped figure but anatomically degenerate — both thigh fwd
