@@ -166,7 +166,18 @@ class ThreeDViewer {
       group.visible = false;          // hidden until first valid update
       group.frustumCulled = false;
       this.trackersRoot.add(group);
-      this.trackerViews.push({ group, axes });
+      // Phase 13 (post-review): cache the last position/scale we got from a
+      // valid frame so brief sync misses (= bundle says tracker is invalid
+      // and ships pos=(0,0,0) per the Codex P2 fix) don't snap the
+      // AxesHelper to the world origin. Quaternion held quat is already
+      // produced by apply_quat_smoothing on the C++ side, so we use the
+      // bundle's quat as-is even during held frames.
+      const lastGood = {
+        position: new THREE.Vector3(),
+        scale: 1.0,
+        hasData: false,
+      };
+      this.trackerViews.push({ group, axes, lastGood });
     }
 
     const grid = new THREE.GridHelper(4, 20, 0x335577, 0x2b2f36);
@@ -286,13 +297,13 @@ class ThreeDViewer {
         view.group.visible = false;
         continue;
       }
-      // Position: world (Z-up, X-right, Y-forward) → Three.js (Y-up).
-      view.group.position.set(Number(t.pos[0]), Number(t.pos[2]), -Number(t.pos[1]));
 
       // Quaternion: backend sends wxyz in world frame. Three.js uses xyzw and
       // Y-up frame. Apply the basis change Rx(-90°) on both sides:
       //   q_three = B · q_world · B⁻¹
       // where B is the world→three rotation expressed as a quaternion.
+      // (Even on held frames the quat is the smoothed prev_quat — usable
+      // as-is.)
       const qw = Number(t.quat_wxyz[0]);
       const qx = Number(t.quat_wxyz[1]);
       const qy = Number(t.quat_wxyz[2]);
@@ -301,12 +312,39 @@ class ThreeDViewer {
       const qThree = WORLD_TO_THREE_QUAT.clone().multiply(qWorld).multiply(WORLD_TO_THREE_QUAT_INV);
       view.group.quaternion.copy(qThree);
 
-      // Confidence drives axis length (0.3 base so even confidence=0 stays
-      // visible enough to read its position) and opacity drives valid.
+      // Phase 13 (post-review): position/scale use last-good caching to
+      // avoid snapping to the world origin during the 1-3 frame sync
+      // misses that the Codex P2 fix now reports as valid=false. The
+      // cache is only updated on confirmed valid frames; held trackers
+      // freeze visually in place until they recover.
+      const st = t.stats || {};
+      const freezeMs = Number(st.freeze_current_ms ?? 0);
       const conf = Number.isFinite(t.roll_confidence) ? Number(t.roll_confidence) : 1.0;
-      const scale = 0.3 + 0.7 * Math.max(0, Math.min(1, conf));
-      view.group.scale.setScalar(scale);
-      view.axes.material.opacity = t.valid ? 1.0 : 0.3;
+      const scaleFromConf = 0.3 + 0.7 * Math.max(0, Math.min(1, conf));
+
+      if (t.valid) {
+        view.group.position.set(
+          Number(t.pos[0]), Number(t.pos[2]), -Number(t.pos[1])
+        );
+        view.group.scale.setScalar(scaleFromConf);
+        view.lastGood.position.copy(view.group.position);
+        view.lastGood.scale = scaleFromConf;
+        view.lastGood.hasData = true;
+      } else if (view.lastGood.hasData) {
+        // Held: keep last-good position/scale so the axes hover where
+        // they last were, with the smoothed quat continuing to track.
+        view.group.position.copy(view.lastGood.position);
+        view.group.scale.setScalar(view.lastGood.scale);
+      } else {
+        // Never had data — hide rather than draw at origin.
+        view.group.visible = false;
+        continue;
+      }
+
+      // Opacity uses the same 200ms sustained threshold as the state-label
+      // debounce in updateTrackerTable, so the row state column and the
+      // 3D axes fade together (or not at all for sync-miss transients).
+      view.axes.material.opacity = (freezeMs >= 200) ? 0.3 : 1.0;
       view.group.visible = true;
     }
   }
