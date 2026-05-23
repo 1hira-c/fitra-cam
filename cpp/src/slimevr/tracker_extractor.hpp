@@ -90,11 +90,19 @@ private:
         std::vector<std::uint8_t> freeze_ring;    // 1 if tracker was held (input invalid)
         std::size_t        head = 0;           // next write index
         std::size_t        fill = 0;           // count of valid samples [0..ring.size()]
+        // Reused scratch buffer for nth_element percentile computation. Sized
+        // to stats_window in the ctor so the publish loop's assign()+nth_element
+        // sequence never allocates.
+        std::vector<float> percentile_scratch;
 
-        bool               prev_was_valid = true;   // for dropout edge counting
-        int                freeze_current_ms = 0;
-        int                freeze_max_ms     = 0;
-        std::uint64_t      dropout_count     = 0;
+        // Dropout / freeze edge tracking. `prev_was_valid_seen` starts false
+        // so the very first sample never registers as a valid→invalid edge
+        // (avoids inflating dropout_count for trackers that start invalid).
+        bool               prev_was_valid_seen = false;
+        bool               prev_was_valid      = false;
+        int                freeze_current_ms   = 0;
+        int                freeze_max_ms       = 0;
+        std::uint64_t      dropout_count       = 0;
     };
     std::array<PerTrackerStats, kTrackerCount> stats_{};
 

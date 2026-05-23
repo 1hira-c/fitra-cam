@@ -137,9 +137,11 @@ void CrowServer::start() {
         std::string body = bus3d_ ? bus3d_->make_bundle_json(trackers_fragment)
                                   : pipeline::make_disabled_3d_json();
         // Phase 11: when the native SlimeVR publisher is wired up, splice
-        // its send counters into the bundle JSON. The bundle ends in `}}`
-        // (the inner `}` closes the stats object, the outer one closes the
-        // message). Rewrite the trailing closing brace as `,"slimevr":{...}}`.
+        // its send counters into the bundle JSON. The bundle always ends
+        // in a single `}` (the outer message close); Phase 13 weakened
+        // the previous "ends in `}}`" invariant since `extra_fields_json`
+        // can inject e.g. `]` (trackers array close) right before it. The
+        // splice only relies on `body.back() == '}'`, so it stays correct.
         if (native_publisher_) {
             auto s = native_publisher_->stats();
             std::ostringstream extra;

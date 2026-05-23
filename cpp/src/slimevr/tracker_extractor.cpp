@@ -44,13 +44,15 @@ TrackerExtractor::TrackerExtractor(pipeline::Skeleton3DBus& skeleton_bus,
     for (auto& q : prev_quat_) q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
     for (auto& q : last_emitted_quat_) q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
 
-    // Pre-allocate ring buffers so the run loop is allocation-free.
+    // Pre-allocate ring buffers + percentile scratch so the run loop is
+    // allocation-free in steady state.
     const int win = std::max(1, opts_.stats_window);
     for (auto& s : stats_) {
         s.ang_vel_ring.assign(static_cast<std::size_t>(win), 0.0f);
         s.conf_ring.assign(static_cast<std::size_t>(win), 0.0f);
         s.leakage_ring.assign(static_cast<std::size_t>(win), 0);
         s.freeze_ring.assign(static_cast<std::size_t>(win), 0);
+        s.percentile_scratch.reserve(static_cast<std::size_t>(win));
         s.head = 0;
         s.fill = 0;
     }
@@ -88,16 +90,32 @@ void TrackerExtractor::run_loop() {
         next += period_d;
 
         auto snap = skel_bus_.snapshot();
-        if (!snap.stats.enabled) continue;
-        const infer::Skeleton3D* sk = pick_skeleton(snap);
-        if (!sk) continue;
-        if (fitra::lift::active_keypoint_format() != fitra::lift::KeypointFormat::Halpe26) {
-            // extract_trackers asserts Halpe26 internally; skip silently if the
-            // pipeline is in COCO17 mode so we don't crash the extractor thread.
-            continue;
-        }
+        const infer::Skeleton3D* sk =
+            snap.stats.enabled ? pick_skeleton(snap) : nullptr;
+        const bool halpe = fitra::lift::active_keypoint_format() ==
+                           fitra::lift::KeypointFormat::Halpe26;
 
-        auto raw_trackers = extract_trackers(*sk);
+        // Phase 13 (Codex P2): publish on EVERY tick — even when the
+        // skeleton snapshot is empty / disabled / in the wrong KP format —
+        // so the bus does not retain stale `has_data=true` trackers from a
+        // previous successful frame. Without this, /ws3d would keep
+        // rendering old AxesHelpers and NativePublisher would keep sending
+        // last-known rotations while the actual subject is out of view
+        // (regression vs. the pre-refactor publisher's pick_skeleton skip).
+        //
+        // The "no data" case is signalled by marking every tracker
+        // valid=false: apply_quat_smoothing replaces each curr.quat with
+        // its prev_quat (so smoothing continuity is preserved for when the
+        // subject reappears), the publisher skips them all (no rotations
+        // on the wire), and the WebUI fades the axes via the existing
+        // valid→opacity mapping.
+        std::array<SlimeTracker, kTrackerCount> raw_trackers{};
+        for (std::size_t i = 0; i < kTrackerCount; ++i) {
+            raw_trackers[i].role = static_cast<TrackerRole>(i);
+        }
+        if (sk != nullptr && halpe) {
+            raw_trackers = extract_trackers(*sk);
+        }
 
         // Save validity from the RAW extraction (apply_quat_smoothing will
         // mask invalid trackers with the held quat but valid=false stays).
@@ -128,20 +146,32 @@ void TrackerExtractor::run_loop() {
             std::uint8_t leakage_flag = (conf > 1e-3f && conf < 0.999f) ? 1 : 0;
 
             // 3. Freeze / dropout edges.
+            //
+            // Phase 13 (Codex P3 / Copilot): `prev_was_valid_seen` makes the
+            // very first sample exempt from dropout counting — a tracker
+            // that's invalid on the first frame is "born invalid", not a
+            // valid→invalid transition. Also: freeze_max_ms is now updated
+            // on EVERY invalid frame including the first valid→invalid edge
+            // (previously the first invalid frame set freeze_current_ms but
+            // skipped the max update, so a 1-frame freeze reported max=0).
             bool was_valid = raw_valid[i];
             std::uint8_t freeze_flag = was_valid ? 0 : 1;
-            if (st.prev_was_valid && !was_valid) {
-                st.dropout_count += 1;
-                st.freeze_current_ms = dt_ms;
-            } else if (!was_valid) {
-                st.freeze_current_ms += dt_ms;
+            if (was_valid) {
+                st.freeze_current_ms = 0;
+            } else {
+                bool dropout_edge = st.prev_was_valid_seen && st.prev_was_valid;
+                if (dropout_edge) {
+                    st.dropout_count += 1;
+                    st.freeze_current_ms = dt_ms;
+                } else {
+                    st.freeze_current_ms += dt_ms;
+                }
                 if (st.freeze_current_ms > st.freeze_max_ms) {
                     st.freeze_max_ms = st.freeze_current_ms;
                 }
-            } else {
-                st.freeze_current_ms = 0;
             }
-            st.prev_was_valid = was_valid;
+            st.prev_was_valid      = was_valid;
+            st.prev_was_valid_seen = true;
 
             // 4. Push into ring buffers.
             st.ang_vel_ring[st.head] = dv;
@@ -167,12 +197,18 @@ void TrackerExtractor::run_loop() {
                 stats_out.leakage_pct[i]         = static_cast<float>(leak_count) / n;
                 stats_out.freeze_pct[i]          = static_cast<float>(frozen_count) / n;
 
-                // Percentiles via nth_element on a scratch copy (small N).
-                std::vector<float> scratch(st.ang_vel_ring.begin(),
-                                           st.ang_vel_ring.begin() + st.fill);
-                stats_out.angular_velocity_rad_s_p50[i] = percentile_inplace(scratch, 0.50f);
-                // nth_element rearranged scratch; re-sort partially for p95.
-                stats_out.angular_velocity_rad_s_p95[i] = percentile_inplace(scratch, 0.95f);
+                // Percentiles via nth_element on the per-tracker scratch
+                // buffer (pre-reserved to stats_window in the ctor, so
+                // assign() reuses storage without allocation). Each
+                // percentile_inplace call runs nth_element independently;
+                // the second call accepts the partially-reordered scratch
+                // left by the first as a valid (unsorted) input.
+                st.percentile_scratch.assign(st.ang_vel_ring.begin(),
+                                              st.ang_vel_ring.begin() + st.fill);
+                stats_out.angular_velocity_rad_s_p50[i] =
+                    percentile_inplace(st.percentile_scratch, 0.50f);
+                stats_out.angular_velocity_rad_s_p95[i] =
+                    percentile_inplace(st.percentile_scratch, 0.95f);
             }
             stats_out.freeze_current_ms[i] = st.freeze_current_ms;
             stats_out.freeze_max_ms[i]     = st.freeze_max_ms;

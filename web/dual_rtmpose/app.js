@@ -723,6 +723,12 @@ function updateTrackerTable(bundle) {
     const cells = tr.children;
     if (!t) {
       tr.classList.remove("state-frozen", "state-leakage", "state-active");
+      // Phase 13 (Copilot): also clear the per-cell warn/bad classes on
+      // the leakage/freeze columns, otherwise a row that was orange/red
+      // before a disconnect keeps that text color after the row resets
+      // to "-".
+      cells[5].classList.remove("warn", "bad");
+      cells[6].classList.remove("warn", "bad");
       for (let c = 1; c < cells.length; c += 1) cells[c].textContent = "-";
       continue;
     }

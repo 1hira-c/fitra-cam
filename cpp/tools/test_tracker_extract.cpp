@@ -527,7 +527,7 @@ void test_thigh_seated_knee_bent() {
 }
 
 // === Thigh: walking single-leg lift (knee bent ~60°) — primary up active ===
-void test_thigh_walking_knee_30() {
+void test_thigh_walking_knee_60() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
         // hip standard; knee lifted forward & up; shin swings forward by 60°
@@ -548,9 +548,9 @@ void test_thigh_walking_knee_30() {
     using R = fitra::slimevr::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperLeg)];
-    check(t.valid, "walking-knee-30 thigh must be valid");
+    check(t.valid, "walking-knee-60 thigh must be valid");
     cv::Vec3f expected_fwd = vec_normalize(cv::Vec3f{0, 0.15f, -0.35f});
-    check_tracker_forward(t, expected_fwd, "Thigh walk30: fwd axis");
+    check_tracker_forward(t, expected_fwd, "Thigh walk60: fwd axis");
 }
 
 // === Thigh: standing (knee straight) — primary degenerate, lateral pin removed ===
@@ -804,7 +804,7 @@ int main() {
         test_foot_heel_stance();                  std::printf("[ok] foot: heel stance (かかと立ち)\n");
         test_foot_inversion_unobservable();       std::printf("[ok] foot: lateral ankle, roll unobservable (横ずれ)\n");
         test_thigh_seated_knee_bent();            std::printf("[ok] thigh: seated knee bent 90° (着座)\n");
-        test_thigh_walking_knee_30();             std::printf("[ok] thigh: walking knee bent ~30° (歩行片足)\n");
+        test_thigh_walking_knee_60();             std::printf("[ok] thigh: walking knee bent ~60° (歩行片足)\n");
         test_thigh_standing_knee_straight();      std::printf("[ok] thigh: standing knee straight (立位)\n");
         test_thigh_lateral_ankle_uses_primary();  std::printf("[ok] thigh: lateral ankle activates primary (足首横ずれ)\n");
         test_thigh_seated_extended_straight_knee(); std::printf("[ok] thigh: 直座り — primary degenerate freezes (no world-Z rescue)\n");
