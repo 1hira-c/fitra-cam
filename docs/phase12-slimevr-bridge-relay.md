@@ -92,16 +92,20 @@ Phase 11 で SlimeVR Firmware UDP 経由の 10 本トラッカー (quaternion �
 - `up_raw = ankle − ((heel + big_toe) * 0.5)`。足甲方向 (足底平面の上向き法線寄り) になり、つま先立ち時は前傾、かかと立ち時は後傾、平らな時はほぼ world Z になる物理的に正しい up。
 - `ankle` invalid のときのみ `world Z` にフォールバック。
 
-**Upper Leg (大腿)** — `upper_leg` ラムダの up を以下の **2 段** で決定:
+**Upper Leg (大腿)** — `upper_leg` ラムダの up は **1 段 (primary 単独、world-Z fallback なし)**:
 
 1. `up1 = (ankle − knee)`。膝 hinge により脛は thigh 軸と直交し続けるため、大腿 roll の物理的手掛かり (上腕の `wrist − elbow` と同型)。
-2. `up1` が degenerate (sin θ < `kRollSinLow`) なら `up3 = world Z` に直行。このとき `world Z ∥ fwd (= -Z)` となって `quat_from_forward_up` が basis を作れず `valid = false` を返し、`apply_quat_smoothing` が前周期 quat を保持する経路に落ちる。
+2. `up1` が degenerate (sin θ < `kRollSinLow`) なら **fallback なしで freeze**。`upper_leg` 内では `pick_up_multistage` の tertiary 引数に **零ベクトル `Vec3f{0,0,0}` を渡す** ことで、関数末尾の `confidence = 0; return zero` 経路に落とし、`quat_from_forward_up` の `cross(zero, fwd) = zero` で `valid = false` を返させ、`apply_quat_smoothing` が前周期 quat を保持する経路に倒す。
 
-**設計改訂 (Phase 12 修正)**: 当初は中間段に `up2 = (hip − hip_center)` (= Phase 11 現状の lateral pin) を置いていたが、これは骨盤フレームの lateral 軸そのものであり、primary が浅角度域 (sin θ がノイズで `kRollSinLow` 付近を行き来する状況) で degenerate 扱いになるたびに大腿 up が骨盤の lateral 軸へ rigid に張り付き、大腿 roll が骨盤 yaw に追従して両者が一緒に動いて見える現象が実機 (歩行 / 軽い屈伸) で発生した。secondary lateral pin を撤去し、primary が活きる間だけ大腿 roll を更新、活きない間は前周期保持に倒すことで骨盤との rigid 共有を断ち切った。`upper_leg` 内では `kHipCenter` を必須ジョイントから外し、`pick_up_multistage` 呼び出しは secondary 引数に primary を再渡しすることで 2 段選択を表現する (`pick_up_multistage` シグネチャは upper_arm 側のために 3 段のまま維持)。
+**なぜ world Z fallback を使わないか (2026-05-25 修正)**: 当初実装 (M1 単独 commit `d6d2632` 時点) は tertiary に `world Z` を渡していたが、`pick_up_multistage` の tertiary 採用ロジックは「`i == 2` なら無条件採用 + confidence = smoothstep(sin θ, low, high)」であり、立位完全伸展 (`fwd ∥ worldZ`) では sin θ = 0 → confidence = 0 で freeze が偶然成立する一方、**非垂直な thigh で primary が degenerate になった瞬間に confidence = 1.0 で world-Z 由来の "knee が天井向き" な thigh roll が確信度満点で書き込まれる**バグになっていた (Codex review 2026-05-23 指摘)。
+
+特に **日本式の直座り / 長座 / あぐらからの脚伸ばし** (床に座って脚を前方に伸ばし、膝を完全伸展させる) は屋内ポーズ計測では超頻出。このとき thigh fwd ≈ +Y / shin もほぼ +Y で primary が thigh 軸に並行 → degenerate、しかも fwd が world Z と直交 (`sin(worldZ, fwd) = 1`) なので confidence 1.0。avatar の thigh が "膝裏が床向き" の捏造 roll に張り付く症状を生む。`world Z` は thigh roll に対しては物理的に意味のある handle を持たない (= "knee が天井向き" の幾何的に valid だが任意の姿勢を返すだけ) ので、fallback として使ってはならない。
+
+**設計改訂 (Phase 12 修正 — lateral pin 撤去)**: 当初は中間段に `up2 = (hip − hip_center)` (= Phase 11 現状の lateral pin) を置いていたが、これは骨盤フレームの lateral 軸そのものであり、primary が浅角度域 (sin θ がノイズで `kRollSinLow` 付近を行き来する状況) で degenerate 扱いになるたびに大腿 up が骨盤の lateral 軸へ rigid に張り付き、大腿 roll が骨盤 yaw に追従して両者が一緒に動いて見える現象が実機 (歩行 / 軽い屈伸) で発生した。secondary lateral pin を撤去し、primary が活きる間だけ大腿 roll を更新、活きない間は前周期保持に倒すことで骨盤との rigid 共有を断ち切った。`upper_leg` 内では `kHipCenter` を必須ジョイントから外し、`pick_up_multistage` 呼び出しは secondary 引数に primary を再渡しすることで 2 段選択 (実質 1 段) を表現する (`pick_up_multistage` シグネチャは upper_arm 側のために 3 段のまま維持)。
 
 大腿の改修は **Phase 11 Firmware UDP 経路の 10 本構成** (LEFT/RIGHT_UPPER_LEG を送る) で効く。Phase 12 Bridge 経路の 8 本構成は thigh を送らない設計 (上記 R2 参照) のため無関係だが、Phase 11 経路を残す方針のため M1 に含める。
 
-歩行 / 着座 / しゃがみで primary が活きて femur 軸回転を捉える。立位完全伸展では primary が degenerate するため confidence = 0 で前周期保持。立位での hip 外旋 (toes-out 動作) は 3D KP だけでは観測不能という原理的限界はそのままだが、その不可観測性は「骨盤に rigid に張り付く」形ではなく「最後に観測した roll を持続する」形で表現されるようになる (`test_tracker_extract` の `test_thigh_external_rotation_unobservable` / `test_thigh_standing_knee_straight` が `valid=false` + `roll_confidence=0` を期待するよう更新済)。
+歩行 / 着座 (膝屈曲) / しゃがみで primary が活きて femur 軸回転を捉える。立位完全伸展、直座り、長座など primary が thigh 軸並行になるケースでは primary が degenerate するため confidence = 0 で前周期保持。立位での hip 外旋 (toes-out 動作) は 3D KP だけでは観測不能という原理的限界はそのままだが、その不可観測性は「骨盤に rigid に張り付く」形でも「world Z に張り付く」形でもなく「最後に観測した roll を持続する」形で表現される (`test_tracker_extract` の `test_thigh_standing_knee_straight` / `test_thigh_seated_extended_straight_knee` が `valid=false` + `roll_confidence=0` を期待する)。
 
 ### M1 の追加レイヤ: Confidence-modulated smoothing
 

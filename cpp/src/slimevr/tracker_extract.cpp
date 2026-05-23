@@ -77,10 +77,19 @@ inline float smoothstep01(float x, float low, float high) {
 
 // Pick the first up hint whose sin θ to forward is above kRollSinLow (i.e. not
 // near-degenerate); compute confidence as smoothstep(sin θ, kRollSinLow,
-// kRollSinHigh). Zero-vector ups (from invalid joints) skip immediately. The
-// returned up vector still needs orthogonalization by quat_from_forward_up.
+// kRollSinHigh). Zero-vector ups (from invalid joints, or a deliberately
+// passed sentinel) skip immediately. The returned up vector still needs
+// orthogonalization by quat_from_forward_up.
 // `which` is 0/1/2 for the stage that won (primary/secondary/tertiary).
-// If all sources are degenerate, tertiary is returned with confidence 0.
+//
+// Tertiary semantics: when reached as a fallthrough with a non-zero vector,
+// it is ACCEPTED unconditionally (no kRollSinLow gate) and confidence comes
+// from its own sin θ. This works well for upper_arm where world Z is a sane
+// best-effort up. For trackers where world Z would write a physically wrong
+// roll at high confidence (e.g. thigh — see upper_leg), callers must pass
+// the zero vector as tertiary: the for-loop skips it and the function falls
+// through to the bottom, returning a zero up with out_confidence=0, which
+// drives quat_from_forward_up to valid=false and freezes smoothing.
 cv::Vec3f pick_up_multistage(const cv::Vec3f& fwd,
                               const cv::Vec3f& up_primary,
                               const cv::Vec3f& up_secondary,
@@ -280,18 +289,27 @@ extract_trackers(const infer::Skeleton3D& skel) {
     }
 
     // ---- Upper legs (thigh: hip → knee) -----------------------------------
-    // forward = knee - hip. Two-stage up choice (primary + world-Z fallback):
+    // forward = knee - hip. Single physical roll handle (no world-Z fallback):
     //   1. ankle - knee       (knee hinge fixes femur roll when bent — only
     //                          physically valid handle from 3D KP alone)
-    //   2. world Z            (last resort; confidence=0 → smoothing holds prev)
     //
-    // The earlier lateral pin (hip - hip_center) was removed: it equals the
-    // pelvis lateral axis, which rigidly couples thigh roll to waist yaw and
-    // makes them visually inseparable during walking / shallow bends when
-    // primary's sin θ briefly dips below kRollSinLow. With the lateral pin
-    // gone, primary-degenerate frames fall straight to tertiary with
-    // confidence=0, and apply_quat_smoothing holds the previous thigh quat
-    // — the femur axial rotation becomes independent of the pelvis.
+    // Tertiary is intentionally a zero vector. World Z is NOT usable as a
+    // fallback for thigh roll: it pins "knee faces ceiling" which is
+    // geometrically valid but physically arbitrary, and pick_up_multistage's
+    // sin θ-based confidence assigns it 1.0 whenever the thigh is non-vertical
+    // (sin(worldZ, fwd) ≈ 1 for horizontal thighs). That writes a fabricated
+    // roll with full confidence in routine poses where the primary is
+    // degenerate — e.g. 直座り / 長座 / あぐら-からの-脚伸ばし (a very common
+    // indoor sitting style in Japan: legs extended forward on the floor with
+    // knees fully straight, so (ankle - knee) is colinear with the thigh
+    // axis). With the zero tertiary, pick_up_multistage hits its
+    // confidence=0 sentinel and quat_from_forward_up returns valid=false →
+    // apply_quat_smoothing holds the previous thigh quat.
+    //
+    // The earlier lateral pin (hip - hip_center) was removed for a different
+    // reason: it equals the pelvis lateral axis, which rigidly couples thigh
+    // roll to waist yaw and makes them visually inseparable during walking /
+    // shallow bends when primary's sin θ briefly dips below kRollSinLow.
     auto upper_leg = [&](TrackerRole role, std::size_t hip, std::size_t knee,
                          std::size_t ankle, std::size_t out_idx) {
         if (!joints_valid(skel, {hip, knee})) return;
@@ -302,14 +320,14 @@ extract_trackers(const infer::Skeleton3D& skel) {
         cv::Vec3f up_primary = skel.joints[ankle].valid
                                 ? (to_vec3f(skel.joints[ankle]) - kp)
                                 : cv::Vec3f{0, 0, 0};
-        cv::Vec3f up_tertiary  = cv::Vec3f{0, 0, 1};
+        cv::Vec3f up_tertiary = cv::Vec3f{0, 0, 0};
         float confidence = 0.0f;
         int which = -1;
-        // 2-stage selection: passing primary as the secondary arg makes the
-        // secondary slot collapse to the same degeneracy test as primary, so
-        // pick_up_multistage falls through to tertiary with confidence 0 when
-        // primary is degenerate. Signature is shared with upper_arm which
-        // still uses a real 3-stage selection.
+        // 1-stage selection: primary slot holds (ankle - knee); secondary
+        // duplicates primary so the secondary degeneracy test collapses;
+        // tertiary is the zero sentinel above (forces confidence=0 freeze).
+        // Signature is shared with upper_arm which uses a real 3-stage chain
+        // ending in world Z.
         cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_primary, up_tertiary,
                                            confidence, which);
         build_tracker(role, pos, fwd, up, out[out_idx], confidence);

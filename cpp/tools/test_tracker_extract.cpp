@@ -598,6 +598,51 @@ void test_thigh_lateral_ankle_uses_primary() {
     }
 }
 
+// === Thigh: 直座り (seated, legs extended forward, knee straight) — primary
+//             degenerate, MUST freeze instead of falling to world Z ============
+// Subject is sitting on the floor with the leg extended straight forward
+// (a very common indoor sitting style in Japan: 直座り / 長座 / あぐらからの
+// 脚伸ばし). Thigh axis is horizontal (+Y), and with the knee fully straight
+// the shin axis is also horizontal (+Y), so (ankle - knee) is colinear with
+// the thigh axis → primary is degenerate.
+//
+// Pre-fix behavior (bug): tertiary was world Z, and pick_up_multistage
+// accepted world Z unconditionally at i==2 with confidence = sin(worldZ, fwd)
+// = sin 90° = 1.0. That writes a fabricated "knee faces ceiling" thigh roll
+// with full confidence — the avatar's thigh would lock to a world-Z-aligned
+// roll for the entire duration of the seated pose.
+//
+// Post-fix behavior: tertiary is the zero sentinel → pick_up_multistage
+// returns confidence=0 and zero up → quat_from_forward_up valid=false →
+// apply_quat_smoothing holds the previous thigh quat. Same freeze semantics
+// as test_thigh_standing_knee_straight (which has fwd ∥ worldZ; the freeze
+// there was incidentally correct because cross(worldZ, fwd) = 0). This test
+// covers the non-vertical-thigh case the standing test couldn't.
+void test_thigh_seated_extended_straight_knee() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
+        // Sitting on the floor, hip ~10 cm above the ground, leg extended
+        // forward (+Y) with thigh and shin both horizontal and colinear.
+        set_joint(s, 11, 0.1f, 0.0f, 0.1f);   // l_hip   (floor-level)
+        set_joint(s, 13, 0.1f, 0.4f, 0.1f);   // l_knee  (40 cm forward, same z)
+        set_joint(s, 15, 0.1f, 0.8f, 0.1f);   // l_ankle (40 cm further, same z)
+        set_joint(s, 19, 0.0f, 0.0f, 0.1f);   // hip_center
+    });
+    auto trackers = fitra::slimevr::extract_trackers(skel);
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+    auto& t = trackers[idx(R::LeftUpperLeg)];
+    check(!t.valid,
+          "直座り thigh must be invalid (primary degenerate, world-Z must not rescue)");
+    if (t.roll_confidence > 1.0e-3f) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+            "直座り confidence got=%.4f want 0 (world-Z fallback must not fire)",
+            t.roll_confidence);
+        throw std::runtime_error(buf);
+    }
+}
+
 // === Confidence A: 90° elbow bend → primary up perpendicular to fwd → confidence ≈ 1 ===
 void test_upper_arm_confidence_full_at_90deg_bend() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
@@ -735,6 +780,7 @@ int main() {
         test_thigh_walking_knee_30();             std::printf("[ok] thigh: walking knee bent ~30° (歩行片足)\n");
         test_thigh_standing_knee_straight();      std::printf("[ok] thigh: standing knee straight (立位)\n");
         test_thigh_lateral_ankle_uses_primary();  std::printf("[ok] thigh: lateral ankle activates primary (足首横ずれ)\n");
+        test_thigh_seated_extended_straight_knee(); std::printf("[ok] thigh: 直座り — primary degenerate freezes (no world-Z rescue)\n");
         test_keypoint_format_assert();            std::printf("[ok] Halpe26 keypoint-format assertion\n");
         std::puts("test_tracker_extract ok");
         return 0;
