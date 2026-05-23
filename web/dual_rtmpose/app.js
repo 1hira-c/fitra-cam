@@ -660,10 +660,12 @@ function update3DStats() {
   const bundle = state.bundle3d;
   if (!bundle) {
     stats3d.textContent = "waiting…";
+    updateTrackerTable(null);
     return;
   }
   if (bundle.enabled === false) {
     stats3d.textContent = "enabled         false";
+    updateTrackerTable(null);
     return;
   }
   const s = bundle.stats || {};
@@ -682,6 +684,78 @@ function update3DStats() {
     `sync_miss      ${s.sync_miss ?? 0}\n` +
     `ik_locked      ${s.ik_locked ? "true" : "false"}\n` +
     `bundle_seq     ${state.server3dSeq}`;
+  updateTrackerTable(bundle);
+}
+
+const trackerTbody = document.getElementById("trackers-tbody");
+
+// Phase 13 M2: live per-tracker stats table. Built once (lazy on first
+// bundle), then cells are updated in place to avoid DOM churn at 30Hz.
+function ensureTrackerTableRows() {
+  if (!trackerTbody) return false;
+  if (trackerTbody.dataset.built === "1") return true;
+  trackerTbody.replaceChildren();
+  for (let i = 0; i < TRACKER_COUNT; i += 1) {
+    const tr = document.createElement("tr");
+    tr.dataset.role = TRACKER_ROLES[i];
+    // 9 columns: role / state / ang_vel_p50 / p95 / conf_avg / leakage_pct /
+    // freeze_pct / freeze_max_ms / dropouts.
+    for (let c = 0; c < 9; c += 1) {
+      tr.appendChild(document.createElement("td"));
+    }
+    tr.firstChild.textContent = TRACKER_ROLES[i];
+    trackerTbody.appendChild(tr);
+  }
+  trackerTbody.dataset.built = "1";
+  return true;
+}
+
+function fmtPct(v) { return `${(Math.max(0, Math.min(1, v ?? 0)) * 100).toFixed(0)}%`; }
+function fmtRad(v) { return (Number.isFinite(v) ? v : 0).toFixed(2); }
+
+function updateTrackerTable(bundle) {
+  if (!ensureTrackerTableRows()) return;
+  const trackers = (bundle && Array.isArray(bundle.trackers)) ? bundle.trackers : [];
+  for (let i = 0; i < TRACKER_COUNT; i += 1) {
+    const tr = trackerTbody.children[i];
+    if (!tr) continue;
+    const t = trackers[i];
+    const cells = tr.children;
+    if (!t) {
+      tr.classList.remove("state-frozen", "state-leakage", "state-active");
+      for (let c = 1; c < cells.length; c += 1) cells[c].textContent = "-";
+      continue;
+    }
+    const st = t.stats || {};
+    const leak = Number(st.leakage_pct ?? 0);
+    const frz  = Number(st.freeze_pct ?? 0);
+
+    // State color: red if mostly frozen, yellow if mostly in leakage zone,
+    // else neutral. Thresholds picked so a single transient drop doesn't
+    // light up red — the test is "majority of recent frames".
+    tr.classList.toggle("state-frozen",  frz  >= 0.5);
+    tr.classList.toggle("state-leakage", frz  <  0.5 && leak >= 0.5);
+    tr.classList.toggle("state-active",  frz  <  0.5 && leak <  0.5);
+
+    let stateLabel;
+    if (frz  >= 0.5) stateLabel = "frozen";
+    else if (leak >= 0.5) stateLabel = "leakage";
+    else if (t.valid) stateLabel = "active";
+    else stateLabel = "held";
+
+    cells[1].textContent = stateLabel;
+    cells[2].textContent = fmtRad(st.ang_vel_p50);
+    cells[3].textContent = fmtRad(st.ang_vel_p95);
+    cells[4].textContent = (Number(st.conf_avg ?? 0)).toFixed(2);
+    cells[5].textContent = fmtPct(leak);
+    cells[5].classList.toggle("warn", leak >= 0.3 && leak < 0.5);
+    cells[5].classList.toggle("bad",  leak >= 0.5);
+    cells[6].textContent = fmtPct(frz);
+    cells[6].classList.toggle("warn", frz >= 0.3 && frz < 0.5);
+    cells[6].classList.toggle("bad",  frz >= 0.5);
+    cells[7].textContent = String(st.freeze_max_ms ?? 0);
+    cells[8].textContent = String(st.dropouts ?? 0);
+  }
 }
 
 function renderTick() {

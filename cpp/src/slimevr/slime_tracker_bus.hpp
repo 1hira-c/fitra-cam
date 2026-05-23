@@ -21,10 +21,50 @@
 
 namespace fitra::slimevr {
 
+// Phase 13 M2: per-tracker rolling stats published alongside the smoothed
+// trackers themselves. Computed by TrackerExtractor over a fixed window
+// (default 2 s of frames at the extractor's tick rate, e.g. 120 frames at
+// 60 Hz). Exposed to the WebUI so the user can see which tracker is the
+// noise source when something jitters or snaps.
+//
+// Indices match SlimeTracker indices in `trackers[]` (= TrackerRole enum
+// order = sensor_id).
+struct SlimeTrackerStats {
+    // Quaternion angular velocity in rad/s, percentiles over the window.
+    // delta_rad = 2 * acos(|dot(prev_smoothed, curr_smoothed)|), then /dt.
+    std::array<float, kTrackerCount> angular_velocity_rad_s_p50{};
+    std::array<float, kTrackerCount> angular_velocity_rad_s_p95{};
+
+    // Mean roll_confidence over the window (after smoothing weight modulation).
+    std::array<float, kTrackerCount> roll_confidence_avg{};
+
+    // Fraction of frames (0..1) in the smoothstep leakage zone
+    // (0 < roll_confidence < 1). This is the regime where unstable up-vector
+    // measurements pull the quat with low weight — known to accumulate drift
+    // over many frames. High values flag the tracker as a drift candidate.
+    std::array<float, kTrackerCount> leakage_pct{};
+
+    // Fraction of frames (0..1) the tracker was held (= invalid input, prev
+    // quat reused). Distinct from leakage: freeze is a hard hold; leakage is
+    // a weak update.
+    std::array<float, kTrackerCount> freeze_pct{};
+
+    // Current consecutive freeze run length in ms, and max observed since
+    // process start. dropout_count counts valid→invalid transitions.
+    std::array<int, kTrackerCount>   freeze_current_ms{};
+    std::array<int, kTrackerCount>   freeze_max_ms{};
+    std::array<std::uint64_t, kTrackerCount> dropout_count{};
+
+    // Window size (in frames) used for the rolling percentiles + averages.
+    // Reported so the WebUI can label the stats meaningfully.
+    int window_frames = 0;
+};
+
 struct SlimeTrackerSnapshot {
     std::uint64_t                              seq = 0;
     std::chrono::system_clock::time_point      ts{};
     std::array<SlimeTracker, kTrackerCount>    trackers{};
+    SlimeTrackerStats                          stats{};
     bool                                       has_data = false;
 };
 
@@ -32,7 +72,8 @@ class SlimeTrackerBus {
 public:
     SlimeTrackerBus() = default;
 
-    void publish(const std::array<SlimeTracker, kTrackerCount>& trackers);
+    void publish(const std::array<SlimeTracker, kTrackerCount>& trackers,
+                 const SlimeTrackerStats&                       stats);
 
     SlimeTrackerSnapshot snapshot() const;
 

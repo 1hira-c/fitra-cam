@@ -19,6 +19,7 @@
 #include <array>
 #include <atomic>
 #include <thread>
+#include <vector>
 
 #include <opencv2/core.hpp>
 
@@ -29,8 +30,12 @@
 namespace fitra::slimevr {
 
 struct TrackerExtractorOptions {
-    double extract_rate_hz = 60.0;   // produce snapshots at this cadence
-    float  quat_smooth     = 0.5f;   // apply_quat_smoothing base alpha
+    double extract_rate_hz   = 60.0;   // produce snapshots at this cadence
+    float  quat_smooth       = 0.5f;   // apply_quat_smoothing base alpha
+    // Phase 13 M2: rolling window (in frames) used for percentile stats.
+    // 120 frames ≈ 2 s at 60 Hz — long enough to catch a sustained drift but
+    // short enough to react to scene changes.
+    int    stats_window      = 120;
 };
 
 class TrackerExtractor {
@@ -63,6 +68,42 @@ private:
     // raw (unsmoothed) extractions and so the prev_quat history is preserved
     // across consumers (no double history).
     std::array<cv::Vec4f, kTrackerCount> prev_quat_{};
+
+    // Phase 13 M2: per-tracker rolling stats state.
+    //
+    // We keep:
+    //   * ring buffer of angular velocity samples (rad/s) for p50/p95
+    //   * running sums for the windowed means (confidence, leakage frac,
+    //     freeze frac) — implemented as `samples_seen` cum sum + window
+    //     subtraction is overkill, so we recompute the mean from the same
+    //     ring buffers per publish (small N keeps this cheap)
+    //   * freeze run counter + max + dropout edge counter (lifetime, not
+    //     windowed)
+    //
+    // Each per-tracker ring uses a single vector sized to `stats_window`,
+    // with an index that wraps. We accept the std::vector heap allocation
+    // up-front so the publish loop is allocation-free.
+    struct PerTrackerStats {
+        std::vector<float> ang_vel_ring;       // rad/s
+        std::vector<float> conf_ring;          // smoothing weight in [0,1]
+        std::vector<std::uint8_t> leakage_ring;   // 1 if 0 < conf < 1
+        std::vector<std::uint8_t> freeze_ring;    // 1 if tracker was held (input invalid)
+        std::size_t        head = 0;           // next write index
+        std::size_t        fill = 0;           // count of valid samples [0..ring.size()]
+
+        bool               prev_was_valid = true;   // for dropout edge counting
+        int                freeze_current_ms = 0;
+        int                freeze_max_ms     = 0;
+        std::uint64_t      dropout_count     = 0;
+    };
+    std::array<PerTrackerStats, kTrackerCount> stats_{};
+
+    // Per-tracker quaternion from the PREVIOUS publish (post-smoothing), used
+    // to compute the next angular velocity sample. Distinct from prev_quat_
+    // which is the apply_quat_smoothing internal history (also post-smoothing
+    // but updated before stats see the new frame).
+    std::array<cv::Vec4f, kTrackerCount> last_emitted_quat_{};
+    bool                                  have_last_emitted_ = false;
 };
 
 }  // namespace fitra::slimevr

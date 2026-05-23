@@ -35,6 +35,22 @@
       <div id="status3d" class="canvas-status">(no 3D data)</div>
     </div>
     <pre id="stats3d" class="stats">waiting…</pre>
+    <table id="trackers-table" class="trackers-table" aria-label="tracker stats">
+      <thead>
+        <tr>
+          <th>tracker</th>
+          <th>state</th>
+          <th>ang vel p50 (rad/s)</th>
+          <th>ang vel p95</th>
+          <th>conf avg</th>
+          <th>leakage</th>
+          <th>freeze</th>
+          <th>freeze max (ms)</th>
+          <th>dropouts</th>
+        </tr>
+      </thead>
+      <tbody id="trackers-tbody"></tbody>
+    </table>
   </section>
   <script type="importmap">
     {
