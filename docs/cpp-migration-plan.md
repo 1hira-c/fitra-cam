@@ -174,6 +174,27 @@ fitra-cam/
 - 完了条件 = 10 trackers が SlimeVR Server GUI に **名前付き** で自動表示 (連番ならない / 手動 assign 不要)、live skeleton で avatar が動くこと
 - 詳細は [`phase11-slimevr-integration.md`](phase11-slimevr-integration.md)
 
+### Phase 12 — roll 品質改善 (M1 のみ完了) + Bridge relay 経路は没 (2026-05-22 起票 / 2026-05-23 縮退)
+
+- **M1 完了** (PR #12 で Develop マージ済): `tracker_extract.cpp` の 二の腕 / 大腿 / 足の up を多段選択 + confidence-modulated smoothing に書き換え。Phase 11 Firmware UDP 経路 (10 本構成) で即時有効。実機評価で二の腕ひねり症状の解消 + 腕完全伸展時の roll twist 振動収束を確認
+- **Bridge relay 経路 (M2-M7) は没**: Jetson `bridge_publisher` → Windows `slimevr-bridge-relay.exe` → Named pipe → SlimeVR Server の構成は採用しない。理由:
+  - **座標系の問題**: `world_pos_to_slime` と `world_quat_to_bridge_slime` を同一 Rx(-90°) basis change に揃えた後も、SlimeVR avatar 上で位置と回転の整合が運用上安定しない
+  - **SteamVR と Named Pipe の排他**: SteamVR 起動中は `\\.\pipe\SlimeVRInput` が排他占有され、relay の接続要求が受け付けられない (少なくとも 2026-05-23 時点の SlimeVR Server 実装)。FBT 運用は SteamVR + SlimeVR 同時起動前提なので不可
+- 凍結保存: Bridge 関連実装一式 (Jetson 側 + Windows .NET 8 relay) は `archive/botsu-phase12-bridge-relay` に Y 字 merge で残置
+- **位置情報を VR に流す経路は Phase 13 以降に持ち越し**
+- 詳細は [`phase12-slimevr-bridge-relay.md`](phase12-slimevr-bridge-relay.md) 冒頭の 没 セクション
+
+### Phase 13 — roll 品質詰め + WebUI tracker 可視化 + per-tracker stats (2026-05-24 着手 / 2026-05-25 締め)
+
+- Phase 12 M1 の confidence-modulated smoothing でも残っていた「立位で脚を伸ばし切ると大腿 / 脛 / 上腕が一気に 90° roll する」症状を、**観察基盤を先に作って** → **データで仮説確定** → **構造修正** の順で解消
+- **M1** (`ba9ec2c`): `SlimeTrackerBus` + `TrackerExtractor` 新規。`NativePublisher` は smoothed tracker snapshot を bus から consume するだけに refactor し、`prev_quat_` の所有を移譲。WebUI viz と Firmware UDP 送信が同じ smoothing 履歴を共有。WebUI に per-tracker `THREE.AxesHelper` × 10 を常設、`/ws3d` bundle JSON に `trackers[]` フィールド embed、`show trackers` toggle 追加
+- **M2** (`71899c8`): per-tracker rolling stats (`SlimeTrackerStats`) を TrackerExtractor 内で計算。120 frame ring buffer で `angular_velocity_rad_s` p50/p95、`roll_confidence_avg`、`leakage_pct` (smoothstep 中間域フレーム比)、`freeze_pct` / `freeze_current_ms` / `freeze_max_ms` / `dropout_count` を `/ws3d` + `/stats3d` JSON に露出。WebUI に `#trackers-table` を追加、state 色分け (active / leakage 黄 / frozen 赤)
+- **修正 1** (`18ef73e`): `quat_from_forward_up` の degeneracy 判定を `norm(cross) < 1e-6` (絶対しきい) → `sin θ < kRollSinLow` (相対しきい) に変更。`kRollSinLow` 0.05 → **0.15** (sin 8.6°)、`kRollSinHigh` 0.20 → **0.30** (sin 17.5°) に引き上げ。pick_up_multistage を経由しない rigid tracker (shin / chest / waist / foot) も degeneracy 保護下に
+- **修正 2** (`08140f7`): `upper_arm` を `upper_leg` と同じ 1-stage 構造に揃え、secondary lateral pin (neck - shoulder) / world-Z tertiary を `Vec3f{0,0,0}` sentinel に変更。水平腕で primary degenerate → freeze に倒れる経路を確立 (Phase 12 で大腿から撤去した lateral pin と同型の anti-pattern 解消)
+- **backstop** (`3613ade`): フル IK 設計メモ [`phase13-full-ik.md`](phase13-full-ik.md) を起票済として保存 (Tier A swing-twist + ROM clamp + 角速度 clamp + constrained Kalman / Tier C Bullet ragdoll)。本 Phase 13 で degeneracy gate 系統が実用品質に達したため、Tier A M1 の Phase 13 内取り込みは保留。Phase 14 候補
+- **M3 (max_freeze lifecycle) は不採用**: `valid=false` 時の publisher skip + SlimeVR Server 側の前周期保持で実用上問題なかったため見送り
+- 詳細は [`phase13-quality-refinement.md`](phase13-quality-refinement.md)
+
 ## 検証戦略
 
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
@@ -186,6 +207,8 @@ fitra-cam/
 | 5     | `./cpp/build/record_overlay --seconds 30`                    | 5 本の mp4 出力、メタデータ fps が実測通り                                       |
 | 9     | `./cpp/build/main --keypoint-format=halpe26 --pose-engine <halpe26.engine> ...` | 起動ログに `kp_format=halpe26 (26 keypoints)` / `/ws` JSON に `kp_format` フィールド / `grep -rn kNumKeypoints cpp/` = 0 件 |
 | 11    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --slimevr-out --slimevr-host=<windows-ip>` + Windows 側 SlimeVR Server GUI 目視 | 10 trackers (LeftUpperArm/RightUpperArm/Chest/Hip/LeftUpperLeg/RightUpperLeg/LeftLowerLeg/RightLowerLeg/LeftFoot/RightFoot) が GUI に **名前付き** で自動表示、live skeleton で avatar が破綻なく動く、`/stats3d` に `slimevr` フィールド (sent_rotations が 60×10≈600/s で増加 / ping_count > 0)、`ctest` で `test_firmware_protocol` + `test_tracker_extract` pass |
+| 12    | `ctest --test-dir cpp/build --output-on-failure -R 'tracker_extract\|firmware_protocol'` + Phase 11 Firmware UDP 経路 (`--slimevr-out --slimevr-host=<windows-ip>`) で目視 | M1 のみ完了: `test_tracker_extract` の 9 pose golden + 4 confidence ケース pass、Phase 11 経路の実機で二の腕ひねり解消 / 大腿 roll が SlimeVR GUI で追従 / 完全伸展時の roll twist 振動が収束。Bridge relay 経路 (M2-M7) は SteamVR と Named Pipe 排他 + 座標系問題で **没** にしたため archive ブランチに凍結 (詳細 [`phase12-slimevr-bridge-relay.md`](phase12-slimevr-bridge-relay.md)) |
+| 13    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --port 8000 ...` 起動 → ブラウザで `http://<jetson>:8000/` + `curl http://<jetson>:8000/stats3d` + Phase 11 経路で目視 | 3D viewer に 10 個の AxesHelper が表示・追従、`#trackers-table` が 30 Hz で更新、立位伸展時に脚 4 軸 + 上腕 2 軸が **state=frozen** + `ang_vel p95 < 1 rad/s`、歩行/しゃがみで `state=active` + `ang_vel p95 < 2 rad/s`、しゃがみ↔立位の遷移で snap なし。`ctest -R 'tracker_extract\|firmware_protocol'` で全 21 ケース pass。実機 (Phase 11 UDP 経路 SlimeVR Server GUI) で水平腕の上腕が体の捻りに rigid 共有されないこと |
 
 ## リスク・未確定事項
 
