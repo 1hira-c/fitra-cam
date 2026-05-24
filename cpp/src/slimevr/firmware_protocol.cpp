@@ -8,6 +8,22 @@ namespace fitra::slimevr {
 
 namespace {
 
+struct QuatWxyz {
+    float w;
+    float x;
+    float y;
+    float z;
+};
+
+QuatWxyz mul(QuatWxyz a, QuatWxyz b) {
+    return QuatWxyz{
+        a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z,
+        a.x*b.w + a.w*b.x - a.z*b.y + a.y*b.z,
+        a.y*b.w + a.z*b.x + a.w*b.y - a.x*b.z,
+        a.z*b.w - a.y*b.x + a.x*b.y + a.w*b.z,
+    };
+}
+
 inline void append_u8(std::vector<std::uint8_t>& out, std::uint8_t v) {
     out.push_back(v);
 }
@@ -295,6 +311,42 @@ QuatXyzw world_quat_to_slime(float qw, float qx, float qy, float qz) {
     q.x = kInvSqrt2 * (qw - qx);
     q.y = kInvSqrt2 * (qz - qy);
     q.z = kInvSqrt2 * (qy + qz);
+    return q;
+}
+
+QuatXyzw world_quat_to_slime_no_reset_preview(float qw, float qx, float qy, float qz) {
+    return world_quat_to_slime_no_reset_preview_adjusted(
+        qw, qx, qy, qz, 1.0f, 0.0f, 0.0f, 0.0f);
+}
+
+QuatXyzw world_quat_to_slime_no_reset_preview_adjusted(float qw,
+                                                       float qx,
+                                                       float qy,
+                                                       float qz,
+                                                       float corr_w,
+                                                       float corr_x,
+                                                       float corr_y,
+                                                       float corr_z) {
+    // Same world→Unity basis change as world_quat_to_slime(), but additionally
+    // pre-cancel SlimeVR's default raw→skeleton multiplication:
+    //
+    //   q_unity = (qw, -qx, qz, qy) * correction
+    //   M       = Quaternion.SLIMEVR.FRONT = (0, 0, 1, 0)  // wxyz
+    //   raw     = q_unity * inverse(M)
+    //           ≡ q_unity * M                              // same rotation
+    //   q_wire  = Rx(+90°) * raw                            // pre-cancel AXES_OFFSET
+    static constexpr float kInvSqrt2 = 0.70710678f;
+    const QuatWxyz q_unity = mul(
+        QuatWxyz{qw, -qx, qz, qy},
+        QuatWxyz{corr_w, corr_x, corr_y, corr_z});
+    const QuatWxyz default_mounting{0.0f, 0.0f, 1.0f, 0.0f};
+    const QuatWxyz rx90{kInvSqrt2, kInvSqrt2, 0.0f, 0.0f};
+    const QuatWxyz wire = mul(rx90, mul(q_unity, default_mounting));
+    QuatXyzw q;
+    q.x = wire.x;
+    q.y = wire.y;
+    q.z = wire.z;
+    q.w = wire.w;
     return q;
 }
 

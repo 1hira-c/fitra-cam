@@ -198,6 +198,24 @@ three_d:
     check(opts.ik_3d     == false, "no_3d_ik=true     -> ik_3d=false");
 }
 
+void test_slimevr_preview_no_reset_yaml_and_cli() {
+    auto p = write_tmp("slimevr_preview_no_reset.yaml", R"(schema: fitra_main_config_v1
+slimevr:
+  preview_no_reset: true
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(opts.slimevr_preview_no_reset == true,
+          "slimevr.preview_no_reset loads");
+
+    opts.slimevr_preview_no_reset = false;
+    std::vector<std::string> argv_buf{"--slimevr-preview-no-reset"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(opts.slimevr_preview_no_reset == true,
+          "--slimevr-preview-no-reset CLI sets option");
+}
+
 void test_validate_required_missing() {
     MainOptions opts;
     bool threw = false;
@@ -294,6 +312,7 @@ const TestCase kTests[] = {
     {"wrong_schema_fails",                     test_wrong_schema_fails},
     {"cli_overrides_yaml",                     test_cli_overrides_yaml},
     {"negated_three_d_keys_invert_bools",      test_negated_three_d_keys_invert_runtime_bools},
+    {"slimevr_preview_no_reset_yaml_and_cli",  test_slimevr_preview_no_reset_yaml_and_cli},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},
     {"validate_slimevr_requires_halpe26",      test_validate_slimevr_requires_halpe26},

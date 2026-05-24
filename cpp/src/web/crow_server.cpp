@@ -22,6 +22,12 @@ struct WsClients {
     std::set<crow::websocket::connection*> conns;
 };
 
+crow::response json_response(std::string body, int code = 200) {
+    crow::response resp{code, std::move(body)};
+    resp.set_header("Content-Type", "application/json; charset=utf-8");
+    return resp;
+}
+
 std::string read_file(const std::filesystem::path& p) {
     std::ifstream f(p, std::ios::binary);
     if (!f.is_open()) return {};
@@ -39,6 +45,37 @@ std::string guess_content_type(const std::filesystem::path& p) {
     if (ext == ".png")  return "image/png";
     if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
     return "application/octet-stream";
+}
+
+bool role_from_string(const std::string& name, slimevr::TrackerRole& out) {
+    for (std::size_t i = 0; i < slimevr::kTrackerCount; ++i) {
+        auto role = static_cast<slimevr::TrackerRole>(i);
+        if (name == slimevr::tracker_role_name(role)) {
+            out = role;
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string slimevr_corrections_json(slimevr::NativePublisher& publisher) {
+    auto corrections = publisher.debug_corrections();
+    std::ostringstream o;
+    o << "{\"ok\":true,\"preview_no_reset\":"
+      << (publisher.options().preview_no_reset ? "true" : "false")
+      << ",\"roles\":[";
+    for (std::size_t i = 0; i < corrections.size(); ++i) {
+        if (i) o << ",";
+        auto role = static_cast<slimevr::TrackerRole>(i);
+        const auto& c = corrections[i];
+        o << "{\"role\":\"" << slimevr::tracker_role_name(role)
+          << "\",\"yaw_quarters\":" << c.yaw_quarters
+          << ",\"pitch_quarters\":" << c.pitch_quarters
+          << ",\"roll_quarters\":" << c.roll_quarters
+          << "}";
+    }
+    o << "]}";
+    return o.str();
 }
 
 }  // namespace
@@ -161,6 +198,58 @@ void CrowServer::start() {
         crow::response resp{std::move(body)};
         resp.set_header("Content-Type", "application/json; charset=utf-8");
         return resp;
+    });
+
+    CROW_ROUTE(app, "/api/slimevr/corrections")
+    ([this]() {
+        if (!native_publisher_) {
+            return json_response(
+                "{\"ok\":false,\"err\":\"slimevr publisher not attached\",\"roles\":[]}",
+                503);
+        }
+        return json_response(slimevr_corrections_json(*native_publisher_));
+    });
+
+    CROW_ROUTE(app, "/api/slimevr/corrections").methods(crow::HTTPMethod::POST)
+    ([this](const crow::request& req) {
+        if (!native_publisher_) {
+            return json_response(
+                "{\"ok\":false,\"err\":\"slimevr publisher not attached\",\"roles\":[]}",
+                503);
+        }
+        auto body = crow::json::load(req.body);
+        if (!body) {
+            return json_response("{\"ok\":false,\"err\":\"invalid json\"}", 400);
+        }
+        bool reset = body.has("reset") && body["reset"].b();
+        if (reset && !body.has("role")) {
+            native_publisher_->reset_debug_corrections();
+            return json_response(slimevr_corrections_json(*native_publisher_));
+        }
+        if (!body.has("role")) {
+            return json_response("{\"ok\":false,\"err\":\"missing role\"}", 400);
+        }
+        slimevr::TrackerRole role;
+        std::string role_name = body["role"].s();
+        if (!role_from_string(role_name, role)) {
+            return json_response("{\"ok\":false,\"err\":\"unknown role\"}", 400);
+        }
+        slimevr::NativePublisherDebugCorrection correction;
+        if (!reset) {
+            auto current = native_publisher_->debug_corrections();
+            correction = current[static_cast<std::size_t>(role)];
+            if (body.has("yaw_quarters")) {
+                correction.yaw_quarters = static_cast<int>(body["yaw_quarters"].i());
+            }
+            if (body.has("pitch_quarters")) {
+                correction.pitch_quarters = static_cast<int>(body["pitch_quarters"].i());
+            }
+            if (body.has("roll_quarters")) {
+                correction.roll_quarters = static_cast<int>(body["roll_quarters"].i());
+            }
+        }
+        native_publisher_->set_debug_correction(role, correction);
+        return json_response(slimevr_corrections_json(*native_publisher_));
     });
 
     // Phase 8 calibration routes. Registered before the catch-all so /calib,

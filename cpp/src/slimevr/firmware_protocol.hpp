@@ -203,4 +203,34 @@ MacBytes mac_from_string(std::string_view name);
 // not +45° (which would be mirrored to the right side).
 QuatXyzw world_quat_to_slime(float qw, float qx, float qy, float qz);
 
+// Variant for SlimeVR's no-reset skeleton preview.
+//
+// SlimeVR Server does not feed raw UDP rotations directly into the skeleton:
+// `Tracker.getRotation()` applies the tracker's mountingOrientation even
+// before any full/yaw/mounting reset. For auto-created Firmware UDP trackers
+// in the current server, that default is Quaternion.SLIMEVR.FRONT
+// (HalfHorizontal). This variant pre-cancels that right-side multiplication so
+// the GUI skeleton preview sees the same bone-space orientation as q_world
+// immediately after SensorInfo, with no SlimeVR reset/calibration step.
+//
+// If the user has changed a tracker's manual mounting orientation in SlimeVR,
+// this assumption no longer holds; use the plain world_quat_to_slime() path or
+// clear/reset the SlimeVR tracker mounting config.
+QuatXyzw world_quat_to_slime_no_reset_preview(float qw,
+                                               float qx,
+                                               float qy,
+                                               float qz);
+
+// Same as world_quat_to_slime_no_reset_preview(), with an additional
+// right-side correction in SlimeVR/Unity bone space before the Server's default
+// mountingOrientation is pre-cancelled. `corr_*` is wxyz.
+QuatXyzw world_quat_to_slime_no_reset_preview_adjusted(float qw,
+                                                       float qx,
+                                                       float qy,
+                                                       float qz,
+                                                       float corr_w,
+                                                       float corr_x,
+                                                       float corr_y,
+                                                       float corr_z);
+
 }  // namespace fitra::slimevr
