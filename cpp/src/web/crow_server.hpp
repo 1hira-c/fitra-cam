@@ -27,6 +27,10 @@ class NativePublisher;   // fwd decl; full header included only in crow_server.c
 class SlimeTrackerBus;   // Phase 13 M1: tracker snapshot bus for /ws3d viz
 }
 
+namespace fitra::vmt {
+class VmtPublisher;      // Phase 14: fwd decl; full header in crow_server.cpp
+}
+
 namespace fitra::web {
 
 struct ServerOptions {
@@ -71,6 +75,12 @@ public:
     // (then the bundle has no `trackers` field).
     void set_tracker_bus(slimevr::SlimeTrackerBus* tracker_bus);
 
+    // Phase 14: attach the VMT publisher so /stats3d (and the /ws3d bundle
+    // splice) include its send counters under a top-level "vmt" key. Same
+    // ownership rules as set_native_publisher. Setting nullptr removes the
+    // splice (and the "vmt" key disappears from the JSON).
+    void set_vmt_publisher(vmt::VmtPublisher* publisher);
+
     // Start listening + broadcasting on a background thread. Returns when
     // the server is bound and ready (best-effort; Crow's run() blocks).
     void start();
@@ -91,6 +101,7 @@ private:
     pipeline::CalibPreflight       calib_defaults_;
     slimevr::NativePublisher*      native_publisher_ = nullptr;
     slimevr::SlimeTrackerBus*      tracker_bus_     = nullptr;
+    vmt::VmtPublisher*             vmt_publisher_   = nullptr;
 
     struct Impl;
     std::unique_ptr<Impl>  impl_;

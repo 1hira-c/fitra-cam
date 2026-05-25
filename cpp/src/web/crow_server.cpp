@@ -11,6 +11,7 @@
 
 #include "slimevr/native_publisher.hpp"
 #include "slimevr/slime_tracker_bus.hpp"
+#include "vmt/vmt_publisher.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::web {
@@ -69,6 +70,10 @@ void CrowServer::set_calibration_session(pipeline::CalibrationSession* session,
 
 void CrowServer::set_native_publisher(slimevr::NativePublisher* publisher) {
     native_publisher_ = publisher;
+}
+
+void CrowServer::set_vmt_publisher(vmt::VmtPublisher* publisher) {
+    vmt_publisher_ = publisher;
 }
 
 void CrowServer::set_tracker_bus(slimevr::SlimeTrackerBus* tracker_bus) {
@@ -152,6 +157,28 @@ void CrowServer::start() {
                   << ",\"skipped_invalid\":"               << s.skipped_invalid
                   << ",\"ping_count\":"                    << s.ping_count
                   << ",\"last_send_ms\":"                  << s.last_send_ms
+                  << "}}";
+            if (!body.empty() && body.back() == '}') {
+                body.pop_back();
+                body += extra.str();
+            }
+        }
+        // Phase 14: splice VMT publisher stats. Stacks on top of the slimevr
+        // splice (body now ends in `}` again after that), or applies fresh if
+        // slimevr is not attached.
+        if (vmt_publisher_) {
+            auto s = vmt_publisher_->stats();
+            const auto& o = vmt_publisher_->options();
+            std::ostringstream extra;
+            extra << ",\"vmt\":{\"sent_bundles\":"          << s.sent_bundles
+                  << ",\"sent_trackers\":"                  << s.sent_trackers
+                  << ",\"disabled_count\":"                 << s.disabled_count
+                  << ",\"skipped_invalid_bundles\":"        << s.skipped_invalid_bundles
+                  << ",\"last_send_ms\":"                   << s.last_send_ms
+                  << ",\"rate_hz\":"                        << o.send_rate_hz
+                  << ",\"port\":"                           << o.port
+                  << ",\"host\":\""                         << o.host << "\""
+                  << ",\"degeneracy_mode\":\""              << vmt::degen_mode_name(o.degeneracy_mode) << "\""
                   << "}}";
             if (!body.empty() && body.back() == '}') {
                 body.pop_back();

@@ -130,6 +130,7 @@ add_library(fitra_web STATIC
 target_link_libraries(fitra_web PUBLIC
     fitra_pipeline
     fitra_slimevr     # /stats3d reads NativePublisher::stats() when attached
+    fitra_vmt         # Phase 14: /stats3d also splices VmtPublisher::stats()
     Crow::Crow
 )
 

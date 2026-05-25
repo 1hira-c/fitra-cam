@@ -615,6 +615,9 @@ int main(int argc, char** argv) {
             if (slime_pub) {
                 server->set_native_publisher(slime_pub.get());
             }
+            if (vmt_pub) {
+                server->set_vmt_publisher(vmt_pub.get());
+            }
             if (slime_tracker_bus) {
                 server->set_tracker_bus(slime_tracker_bus.get());
             }
