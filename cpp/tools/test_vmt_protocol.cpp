@@ -1,0 +1,120 @@
+// test_vmt_protocol — verify the world → VMT Driver coordinate transform and
+// the TrackerRole → VMT index mapping.
+//
+// The transform values mirror the Phase 12 Bridge transforms (which target
+// the SAME SteamVR `TrackerYaw.kt` "x-right, y-up, z-back, RH" frame); the
+// Bridge code itself lives only on archive/botsu-phase12-bridge-relay and is
+// not linked from the mainline build, so we re-derive the goldens here.
+
+#include <cmath>
+#include <cstdio>
+#include <exception>
+#include <stdexcept>
+#include <string>
+
+#include "vmt/vmt_protocol.hpp"
+#include "slimevr/tracker_extract.hpp"
+
+namespace {
+
+void expect_near(float got, float want, float tol, const std::string& label) {
+    if (std::fabs(got - want) > tol) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "%s: got=%.6f want=%.6f tol=%g",
+                      label.c_str(), got, want, tol);
+        throw std::runtime_error(buf);
+    }
+}
+
+void test_pos_cardinals() {
+    using fitra::vmt::world_pos_to_vmt;
+    // world +X (right)   → vmt +X (right)
+    auto x = world_pos_to_vmt(1.0f, 0.0f, 0.0f);
+    expect_near(x.x,  1.0f, 1e-6f, "pos +X.x");
+    expect_near(x.y,  0.0f, 1e-6f, "pos +X.y");
+    expect_near(x.z,  0.0f, 1e-6f, "pos +X.z");
+    // world +Y (forward) → vmt -Z (forward in SteamVR Driver is -Z)
+    auto y = world_pos_to_vmt(0.0f, 1.0f, 0.0f);
+    expect_near(y.x,  0.0f, 1e-6f, "pos +Y.x");
+    expect_near(y.y,  0.0f, 1e-6f, "pos +Y.y");
+    expect_near(y.z, -1.0f, 1e-6f, "pos +Y.z");
+    // world +Z (up)      → vmt +Y (up)
+    auto z = world_pos_to_vmt(0.0f, 0.0f, 1.0f);
+    expect_near(z.x,  0.0f, 1e-6f, "pos +Z.x");
+    expect_near(z.y,  1.0f, 1e-6f, "pos +Z.y");
+    expect_near(z.z,  0.0f, 1e-6f, "pos +Z.z");
+}
+
+void test_quat_cardinals() {
+    using fitra::vmt::world_quat_to_vmt;
+    // identity → identity
+    {
+        auto q = world_quat_to_vmt(1.0f, 0.0f, 0.0f, 0.0f);
+        expect_near(q.x, 0.0f, 1e-6f, "quat identity.x");
+        expect_near(q.y, 0.0f, 1e-6f, "quat identity.y");
+        expect_near(q.z, 0.0f, 1e-6f, "quat identity.z");
+        expect_near(q.w, 1.0f, 1e-6f, "quat identity.w");
+    }
+    // world +X 90° (qwxyz = (k, k, 0, 0), k = sqrt(2)/2)
+    //   → vmt wire xyzw = (qx, qz, -qy, qw) = (k, 0, 0, k)
+    {
+        const float k = std::sqrt(2.0f) / 2.0f;
+        auto q = world_quat_to_vmt(k, k, 0.0f, 0.0f);
+        expect_near(q.x,  k,    1e-6f, "quat +X90.x");
+        expect_near(q.y,  0.0f, 1e-6f, "quat +X90.y");
+        expect_near(q.z,  0.0f, 1e-6f, "quat +X90.z");
+        expect_near(q.w,  k,    1e-6f, "quat +X90.w");
+    }
+    // world +Y 90° (qwxyz = (k, 0, k, 0))
+    //   → vmt wire xyzw = (0, 0, -k, k)
+    {
+        const float k = std::sqrt(2.0f) / 2.0f;
+        auto q = world_quat_to_vmt(k, 0.0f, k, 0.0f);
+        expect_near(q.x,  0.0f, 1e-6f, "quat +Y90.x");
+        expect_near(q.y,  0.0f, 1e-6f, "quat +Y90.y");
+        expect_near(q.z, -k,    1e-6f, "quat +Y90.z");
+        expect_near(q.w,  k,    1e-6f, "quat +Y90.w");
+    }
+    // world +Z 90° (qwxyz = (k, 0, 0, k))
+    //   → vmt wire xyzw = (0, k, 0, k)
+    {
+        const float k = std::sqrt(2.0f) / 2.0f;
+        auto q = world_quat_to_vmt(k, 0.0f, 0.0f, k);
+        expect_near(q.x,  0.0f, 1e-6f, "quat +Z90.x");
+        expect_near(q.y,  k,    1e-6f, "quat +Z90.y");
+        expect_near(q.z,  0.0f, 1e-6f, "quat +Z90.z");
+        expect_near(q.w,  k,    1e-6f, "quat +Z90.w");
+    }
+}
+
+void test_index_mapping() {
+    using fitra::vmt::vmt_index_for;
+    using fitra::slimevr::TrackerRole;
+    if (vmt_index_for(TrackerRole::LeftUpperArm)  != 0) throw std::runtime_error("LeftUpperArm != 0");
+    if (vmt_index_for(TrackerRole::RightUpperArm) != 1) throw std::runtime_error("RightUpperArm != 1");
+    if (vmt_index_for(TrackerRole::Chest)         != 2) throw std::runtime_error("Chest != 2");
+    if (vmt_index_for(TrackerRole::Waist)         != 3) throw std::runtime_error("Waist != 3");
+    if (vmt_index_for(TrackerRole::LeftUpperLeg)  != 4) throw std::runtime_error("LeftUpperLeg != 4");
+    if (vmt_index_for(TrackerRole::RightUpperLeg) != 5) throw std::runtime_error("RightUpperLeg != 5");
+    if (vmt_index_for(TrackerRole::LeftLowerLeg)  != 6) throw std::runtime_error("LeftLowerLeg != 6");
+    if (vmt_index_for(TrackerRole::RightLowerLeg) != 7) throw std::runtime_error("RightLowerLeg != 7");
+    if (vmt_index_for(TrackerRole::LeftFoot)      != 8) throw std::runtime_error("LeftFoot != 8");
+    if (vmt_index_for(TrackerRole::RightFoot)     != 9) throw std::runtime_error("RightFoot != 9");
+    if (fitra::slimevr::kTrackerCount             != 10) throw std::runtime_error("kTrackerCount != 10");
+}
+
+}  // namespace
+
+int main() {
+    try {
+        test_pos_cardinals();
+        test_quat_cardinals();
+        test_index_mapping();
+        std::puts("test_vmt_protocol ok");
+        return 0;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "test_vmt_protocol failed: %s\n", e.what());
+        return 1;
+    }
+}

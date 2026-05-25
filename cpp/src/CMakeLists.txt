@@ -102,6 +102,25 @@ target_link_libraries(fitra_slimevr PUBLIC
     opencv_core
 )
 
+# VMT (Virtual Motion Tracker) integration: OSC 1.0 writer + /VMT/Room/Driver
+# wire encoder + world→Driver coordinate transform. Phase 14.
+#
+# Separate from fitra_slimevr because VMT bypasses SlimeVR Server entirely
+# (it targets SteamVR Driver directly). Shares TrackerRole / kTrackerCount /
+# SlimeTracker via the fitra_slimevr public headers.
+add_library(fitra_vmt STATIC
+    vmt/osc_writer.cpp
+    vmt/vmt_protocol.cpp
+)
+
+target_include_directories(fitra_vmt PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(fitra_vmt PUBLIC
+    fitra_slimevr
+)
+
 # Crow HTTP+WebSocket server.
 add_library(fitra_web STATIC
     web/crow_server.cpp

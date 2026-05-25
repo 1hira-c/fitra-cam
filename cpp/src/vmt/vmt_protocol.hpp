@@ -1,0 +1,78 @@
+#pragma once
+//
+// Virtual Motion Tracker (VMT) wire protocol helpers (Phase 14).
+//
+// VMT is a SteamVR Driver that listens on UDP for OSC 1.0 packets and
+// surfaces each tracker as a SteamVR virtual device. Phase 14 sends 10
+// trackers (one per TrackerRole) on `/VMT/Room/Driver` at 60 Hz so VRChat
+// FBT can consume them directly, bypassing SlimeVR Server entirely.
+//
+// Protocol reference (VMT v0.15, https://gpsnmeajp.github.io/VirtualMotionTrackerDocument/api/):
+//   /VMT/Room/Driver i:index i:enable f:timeoffset
+//                    f:x f:y f:z f:qx f:qy f:qz f:qw
+//   - Driver room space = SteamVR Driver convention: Y-up RH, X-right,
+//     Z-back, units = meters / quaternion in xyzw order.
+
+#include <cstdint>
+
+#include "slimevr/tracker_extract.hpp"  // TrackerRole / kTrackerCount
+#include "vmt/osc_writer.hpp"
+
+namespace fitra::vmt {
+
+struct VmtPos  { float x, y, z; };
+struct VmtQuat { float x, y, z, w; };  // wire order = xyzw
+
+// World frame (Z-up RH, X-right, Y-forward) → VMT Driver frame (Y-up RH,
+// X-right, Z-back). Identical to the Phase 12 Bridge transform (the Bridge
+// path also targets SteamVR's `TrackerYaw.kt` world frame "x-right, y-up,
+// z-back, right-handed", which is the SteamVR Driver convention). The Bridge
+// code lives only on `archive/botsu-phase12-bridge-relay`; we copy the four-
+// line body here rather than re-vending the frozen branch's source.
+//
+// test_vmt_protocol locks the cardinal-axis behaviour to the same numbers as
+// archive/botsu-phase12-bridge-relay:cpp/tools/test_firmware_protocol.cpp.
+inline VmtPos world_pos_to_vmt(float x, float y, float z) {
+    return {x, z, -y};
+}
+
+// Rx(-90°) basis change in quaternion form:
+//   q_vmt_wxyz = P * q_world * P^{-1} with P = (cos(-45°), sin(-45°), 0, 0).
+//   The closed form, expanded, is (qw, qx, qz, -qy) (still in wxyz).
+// We return xyzw for direct feed into add_float() in OSC order.
+inline VmtQuat world_quat_to_vmt(float qw, float qx, float qy, float qz) {
+    return {qx, qz, -qy, qw};
+}
+
+// VMT tracker index mapping. We use TrackerRole's integer value verbatim so
+// vmt_0..vmt_9 follow the same body-part order as the rest of the pipeline.
+//
+// Index | TrackerRole       | suggested SteamVR Manage Trackers role
+//   0   | LeftUpperArm      | LeftElbow / LeftShoulder (VRChat extension)
+//   1   | RightUpperArm     | RightElbow / RightShoulder
+//   2   | Chest             | Chest
+//   3   | Waist (HIP)       | Waist
+//   4   | LeftUpperLeg      | LeftKnee
+//   5   | RightUpperLeg     | RightKnee
+//   6   | LeftLowerLeg      | (function-overlap with Knee; leave unmapped)
+//   7   | RightLowerLeg     | (ditto)
+//   8   | LeftFoot          | LeftFoot
+//   9   | RightFoot         | RightFoot
+inline int vmt_index_for(slimevr::TrackerRole role) {
+    return static_cast<int>(role);
+}
+
+// Append one `/VMT/Room/Driver` message to the writer. Caller is responsible
+// for begin_bundle / end_bundle.
+//   index:      0..57
+//   enable:     0=disabled, 1=tracker, (2=left controller etc. - unused here)
+//   timeoffset: seconds (0 = "now")
+//   pos / quat: already passed through world_pos_to_vmt / world_quat_to_vmt
+void encode_vmt_room_driver(OscWriter& w,
+                            int index,
+                            int enable,
+                            float timeoffset,
+                            const VmtPos&  pos,
+                            const VmtQuat& quat);
+
+}  // namespace fitra::vmt
