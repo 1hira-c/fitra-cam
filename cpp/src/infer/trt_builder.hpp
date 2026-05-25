@@ -29,10 +29,28 @@ struct BuildOptions {
     std::string onnx_path;
     std::string engine_path;
     bool        fp16           = false;
-    bool        int8           = false;   // not used in Phase 1
+    bool        int8           = false;
     std::size_t workspace_mb   = 1024;
     // Optional dynamic-shape profile. Empty input_name => static shapes only.
     std::vector<DynamicProfile> profiles;
+
+    // INT8 PTQ inputs (only consulted when int8 == true).
+    //
+    //   int8_blob_path    : raw float32 (N, C, H, W) blob produced by the
+    //                       Python helper. Empty => INT8 build proceeds
+    //                       without calibrator (cache must exist for the
+    //                       build to converge; otherwise TRT falls back to
+    //                       per-tensor minmax with poor accuracy).
+    //   int8_cache_path   : where to read/write the calibration cache.
+    //                       Empty => defaults to engine_path + ".calib_cache".
+    //   int8_batch_size   : must match the static input batch (YOLOX: 1) or
+    //                       the calibration profile's opt batch (RTMPose).
+    //   int8_input_name   : binding name to feed. Empty => use first network
+    //                       input's name.
+    std::string int8_blob_path;
+    std::string int8_cache_path;
+    int         int8_batch_size = 1;
+    std::string int8_input_name;
 };
 
 // Build an engine and write it to disk. Returns the engine size in bytes.

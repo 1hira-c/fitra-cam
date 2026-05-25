@@ -8,6 +8,7 @@
 
 #include <NvOnnxParser.h>
 
+#include "infer/int8_calibrator.hpp"
 #include "util/cuda_check.hpp"
 #include "util/logging.hpp"
 
@@ -73,11 +74,59 @@ std::size_t build_engine(const BuildOptions& opts, nvinfer1::ILogger& logger) {
         }
         config->setFlag(nvinfer1::BuilderFlag::kFP16);
     }
+    // Calibrator must outlive buildSerializedNetwork(), so allocate in this
+    // scope.
+    std::unique_ptr<Int8EntropyCalibrator2> calibrator;
     if (opts.int8) {
         if (!builder->platformHasFastInt8()) {
             FITRA_LOG_WARN("platform does not advertise fast INT8; building anyway");
         }
         config->setFlag(nvinfer1::BuilderFlag::kINT8);
+
+        if (network->getNbInputs() < 1) {
+            throw std::runtime_error("INT8 build requires at least one network input");
+        }
+        auto* in0 = network->getInput(0);
+        std::string in_name = opts.int8_input_name.empty()
+            ? std::string{in0->getName()}
+            : opts.int8_input_name;
+        auto dims = in0->getDimensions();
+        std::size_t per_image_elems = 1;
+        for (int i = 0; i < dims.nbDims; ++i) {
+            per_image_elems *= (dims.d[i] > 0)
+                ? static_cast<std::size_t>(dims.d[i])
+                : 1;
+        }
+        std::size_t bytes_per_image = per_image_elems * sizeof(float);
+
+        std::string cache_path = opts.int8_cache_path.empty()
+            ? opts.engine_path + ".calib_cache"
+            : opts.int8_cache_path;
+
+        if (opts.int8_blob_path.empty()) {
+            FITRA_LOG_WARN(
+                "INT8 build without --int8-blobs: relying on cache at {} "
+                "(may produce poor accuracy if cache is absent)",
+                cache_path);
+        } else {
+            calibrator = std::make_unique<Int8EntropyCalibrator2>(
+                opts.int8_blob_path,
+                bytes_per_image,
+                opts.int8_batch_size,
+                in_name,
+                cache_path);
+            // setInt8Calibrator is the PTQ path in TRT 10.3 — TRT marks it
+            // deprecated because the long-term direction is explicit QDQ in
+            // the ONNX graph, but the deprecation is informational and the
+            // function is still the only PTQ entry point.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+            config->setInt8Calibrator(calibrator.get());
+#pragma GCC diagnostic pop
+            FITRA_LOG_INFO("INT8 calibrator wired: input='{}' per_image_bytes={} batch={} N={}",
+                           in_name, bytes_per_image, opts.int8_batch_size,
+                           calibrator->total_images());
+        }
     }
 
     if (!opts.profiles.empty()) {

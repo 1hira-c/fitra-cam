@@ -115,8 +115,54 @@ for slug in ["yolox_s_8xb8-300e_humanart-3ef259a7",
 
 - **目視評価の本格化**: 横向き / 部分遮蔽の代表シーンを録って失敗フレーム数で再評価する作業は backlog のままで残す。本タスクでは latency 予算と engine ビルド経路の整備のみ。
 - **YOLOX-S と RTMPose-M halpe26 の組み合わせ動作確認**: aggregate スループット (Phase 4 ≥ 90 fps) は別途長時間ベンチで再検証する。
-- **INT8 PTQ**: `cpp/tools/build_engines.cpp:118` 付近の `--int8` フラグは calibrator 無し。RTMPose 側計画と統合してから扱う。
+- **INT8 PTQ**: 2026-05-25 に再着手 (下記 §2026-05-25 追記) → **YOLOX end2end ONNX 経路では TRT 10.3 calibration が assertion で死ぬため見送り**。calibrator 自体は salvage 済み (RTMPose INT8 計画で再利用)。
 - **`yolox_tiny.fp32.engine` の扱い**: 本タスクで latency 予算の参照として残置。Phase 4 完了時に FP16 専一にするか別途判断。
+
+## 2026-05-25 追記: YOLOX INT8 PTQ は TRT 10.3 制約で見送り
+
+「INT8 化で yolox-m を予算内に押し込めるか」を確かめるため calibrator を実装したが、mmdeploy 配布の YOLOX end2end ONNX では TRT 10.3 の INT8 calibration が動かないことが判明。**yolox-s FP16 既定** はそのまま維持。
+
+### 実装 (salvage 済み)
+
+- `cpp/src/infer/int8_calibrator.{hpp,cpp}` — `IInt8EntropyCalibrator2` 実装。raw `(N, C, H, W) float32` blob を mmap-less 読みで `getBatch` に流し、`writeCalibrationCache` でキャッシュ書き出し。lifetime は `build_engine()` のスコープで `unique_ptr` 保持。
+- `cpp/src/infer/trt_builder.{hpp,cpp}` — `BuildOptions` に `int8_blob_path` / `int8_cache_path` / `int8_batch_size` / `int8_input_name` を追加。`config->setInt8Calibrator()` は TRT 10.3 で deprecated 警告が出るが PTQ の唯一の入口なので `#pragma diagnostic` で局所抑制。
+- `cpp/tools/build_engines.cpp` — `--int8-blobs PATH` / `--int8-cache PATH` / `--int8-batch N` / `--int8-input NAME` を追加。help の "no calibrator wired yet" は撤去。
+- `python/scripts/dump_yolox_calibration_blobs.py` — `_yolox_letterbox` (BGR raw / 114 pad) を C++ 側と bit-for-bit 同一実装で再現し、`raw_cam{0,1}.mp4` から均等サンプリングで `(N, 3, S, S) float32` を吐く。416 / 640 両対応。
+
+ビルドは clean (`cmake --build cpp/build -j` 通過)、calibrator ログも期待通り (`INT8 calibrator wired: input='input' per_image_bytes=2076672 batch=1 N=200`) まで出る。
+
+### ブロッカー
+
+`build_engines --preset yolox --int8 --int8-blobs ... --onnx <yolox_tiny humanart>.onnx ...` で:
+
+```
+[trt] [slot.cpp::decode::44] Error Code 2: Internal Error
+      (Assertion index < nbSlots failed. invalid encoded reference to a slot)
+[trt] [calibrator.cpp::calibrateEngine::1236] Error Code 2: Internal Error
+      (Assertion context->executeV2(bindings.data()) failed.)
+```
+
+`--int8 --fp16` mixed precision でも同じ。`Yolox::infer()` 経路 (FP16/FP32 通常 build) では問題なく動いている。
+
+### 原因
+
+mmdeploy YOLOX end2end ONNX には NMS subgraph が baked-in:
+
+- `NonMaxSuppression` × 1, `TopK` × 2, `Where` / `Less` / `Gather` / `Shape` / `Reshape` × 10+
+- 出力が `dets (1, -1, 5)` / `labels (1, -1)` で **動的 N**
+
+TRT 10.3 の INT8 calibration は activation range 収集のため QDQ-aware FP32 forward を走らせる段で、この dynamic-output 系列の slot 解決を失敗させる。INT8 calibration 経路特有の TRT 10.3 内部制約 (or バグ)。
+
+### 検討した回避策
+
+- **C1 (per-layer precision constraints)** — `kTOPK` / `kNMS` / `kSELECT` 層に `setPrecision(kFLOAT)` + `kPREFER_PRECISION_CONSTRAINTS` で escape — 30 分実験対象として候補に挙げたが、エラー位置が calibration の executeV2 (INT8 量子化前の FP32 forward 段) なので per-layer 制約では救えない可能性が高く、コストパフォーマンスを取り **未着手で見送り**。
+- **C2 (NMS を ONNX から剥がす + C++ NMS)** — backbone+head だけ INT8 calibrate する案。1-2 日工数 + `Yolox::infer()` 数値再検証 (Phase 1 correctness 再回し) を要するため、**INT8 効果が読めない時点では割に合わず却下**。
+
+### 着地: salvage して RTMPose INT8 計画へ繰り越し
+
+- yolox-s FP16 既定はそのまま。本タスクで det 周辺の変更は **無し**。
+- 上記 calibrator + dumper のコードは [`rtmpose-int8-eval-plan.md`](rtmpose-int8-eval-plan.md) の Step 3-4 が想定していた成果物そのもの。RTMPose ONNX (NMS 等の dynamic-output ノード無し、純粋な Conv + SimCC) では同じブロッカーは出ない見込みなので、そのまま流用する。
+- 視覚評価 (横向き / 遮蔽の失敗フレーム数定量化) は本タスクで着手しないまま [`backlog-yolox-detector-upgrade.md`](../backlog-yolox-detector-upgrade.md) に残置。FP16-only での 3-engine 視覚評価は別タスク。
 
 ## 関連
 

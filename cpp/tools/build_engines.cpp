@@ -106,7 +106,12 @@ void print_help() {
         "\n"
         "Optional:\n"
         "  --fp16                enable FP16 (Jetson Orin Nano Super: recommended)\n"
-        "  --int8                enable INT8 (Phase 4; no calibrator wired yet)\n"
+        "  --int8                enable INT8 PTQ (requires --int8-blobs unless cache exists)\n"
+        "  --int8-blobs PATH     raw (N,C,H,W) float32 calibration blob\n"
+        "                        (produced by python/scripts/dump_yolox_calibration_blobs.py)\n"
+        "  --int8-cache PATH     calibration cache (default: <engine>.calib_cache)\n"
+        "  --int8-batch N        calibration batch size (default 1; must match static batch)\n"
+        "  --int8-input NAME     input binding to feed (default: first network input)\n"
         "  --workspace-mb N      builder workspace (default 1024)\n"
         "  --profile NAME:MIN:OPT:MAX  dynamic-shape profile (repeatable)\n"
         "                              e.g. input:1x3x256x192:3x3x256x192:3x3x256x192\n"
@@ -154,6 +159,14 @@ int main(int argc, char** argv) {
             opts.fp16 = true;
         } else if (a == "--int8") {
             opts.int8 = true;
+        } else if (a == "--int8-blobs") {
+            opts.int8_blob_path = need_arg("--int8-blobs");
+        } else if (a == "--int8-cache") {
+            opts.int8_cache_path = need_arg("--int8-cache");
+        } else if (a == "--int8-batch") {
+            opts.int8_batch_size = std::atoi(need_arg("--int8-batch"));
+        } else if (a == "--int8-input") {
+            opts.int8_input_name = need_arg("--int8-input");
         } else if (a == "--workspace-mb") {
             opts.workspace_mb = static_cast<std::size_t>(std::stoul(need_arg("--workspace-mb")));
         } else if (a == "--profile") {
