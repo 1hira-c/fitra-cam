@@ -22,6 +22,13 @@ using fitra::slimevr::QuatXyzw;
 using fitra::slimevr::RotationDataType;
 using fitra::slimevr::TrackerPosition;
 
+struct QuatWxyz {
+    float w;
+    float x;
+    float y;
+    float z;
+};
+
 void check(bool cond, const std::string& msg) {
     if (!cond) throw std::runtime_error(msg);
 }
@@ -280,6 +287,63 @@ void test_world_quat_to_slime() {
     // (This is a derivation check, not a separate assertion.)
 }
 
+QuatWxyz mul(QuatWxyz a, QuatWxyz b) {
+    return QuatWxyz{
+        a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z,
+        a.x*b.w + a.w*b.x - a.z*b.y + a.y*b.z,
+        a.y*b.w + a.z*b.x + a.w*b.y - a.x*b.z,
+        a.z*b.w - a.y*b.x + a.x*b.y + a.w*b.z,
+    };
+}
+
+QuatWxyz wxyz_from_wire(QuatXyzw q) {
+    return QuatWxyz{q.w, q.x, q.y, q.z};
+}
+
+bool same_rotation(QuatWxyz a, QuatWxyz b) {
+    float dot = a.w*b.w + a.x*b.x + a.y*b.y + a.z*b.z;
+    return std::fabs(std::fabs(dot) - 1.0f) < 1.0e-5f;
+}
+
+void test_world_quat_to_slime_no_reset_preview() {
+    const float k = 0.70710678f;   // 1/√2
+    const QuatWxyz axes_offset{k, -k, 0.0f, 0.0f}; // SlimeVR Server Rx(-90°)
+    const QuatWxyz default_mounting{0.0f, 0.0f, 1.0f, 0.0f}; // Quaternion.SLIMEVR.FRONT
+
+    auto expect_preview_adjusted = [&](float qw, float qx, float qy, float qz,
+                                       const char* label) {
+        auto wire = wxyz_from_wire(
+            fitra::slimevr::world_quat_to_slime_no_reset_preview(qw, qx, qy, qz));
+        QuatWxyz server_raw = mul(axes_offset, wire);
+        QuatWxyz preview_adjusted = mul(server_raw, default_mounting);
+        QuatWxyz expected_unity{qw, -qx, qz, qy};
+        check(same_rotation(preview_adjusted, expected_unity), label);
+    };
+
+    // Identity should not show as a 180°-yawed skeleton after SlimeVR applies
+    // the default mountingOrientation.
+    auto qi = fitra::slimevr::world_quat_to_slime_no_reset_preview(
+        1.0f, 0.0f, 0.0f, 0.0f);
+    check(std::fabs(qi.x - 0.0f) < 1.0e-6f, "no-reset identity qx");
+    check(std::fabs(qi.y - k)    < 1.0e-6f, "no-reset identity qy");
+    check(std::fabs(qi.z - k)    < 1.0e-6f, "no-reset identity qz");
+    check(std::fabs(qi.w - 0.0f) < 1.0e-6f, "no-reset identity qw");
+
+    expect_preview_adjusted(1.0f, 0.0f, 0.0f, 0.0f, "identity preview-adjusts to identity");
+    expect_preview_adjusted(k, 0.0f, 0.0f, k, "world +Z90 preview-adjusts to unity yaw");
+    expect_preview_adjusted(k, k, 0.0f, 0.0f, "world +X90 preview-adjusts to unity pitch");
+    expect_preview_adjusted(k, 0.0f, k, 0.0f, "world +Y90 preview-adjusts to unity roll");
+
+    auto wire = wxyz_from_wire(
+        fitra::slimevr::world_quat_to_slime_no_reset_preview_adjusted(
+            1.0f, 0.0f, 0.0f, 0.0f,
+            k, -k, 0.0f, 0.0f)); // backward pitch Rx(-90°)
+    QuatWxyz server_raw = mul(axes_offset, wire);
+    QuatWxyz preview_adjusted = mul(server_raw, default_mounting);
+    check(same_rotation(preview_adjusted, QuatWxyz{k, -k, 0.0f, 0.0f}),
+          "no-reset preview supports a backward pitch correction");
+}
+
 void test_sequence_independence() {
     // The encoder is a pure function: same arguments must produce identical
     // bytes regardless of call order. Sequence handling is the publisher's
@@ -304,6 +368,7 @@ int main() {
         test_ping_decode_roundtrip();     std::printf("[ok] ping decode roundtrip\n");
         test_mac_derivation_deterministic(); std::printf("[ok] mac derivation\n");
         test_world_quat_to_slime();       std::printf("[ok] world→slime quat transform\n");
+        test_world_quat_to_slime_no_reset_preview(); std::printf("[ok] no-reset preview quat transform\n");
         test_sequence_independence();     std::printf("[ok] encoder determinism\n");
         std::printf("test_firmware_protocol: all good\n");
         return 0;

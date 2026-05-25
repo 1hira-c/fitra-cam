@@ -81,6 +81,7 @@ struct MainOptions {
     int    slimevr_port = 6969;
     double slimevr_rate_hz = 60.0;
     double slimevr_quat_smooth = 0.5;
+    bool   slimevr_preview_no_reset = false;
 };
 
 // Schema version embedded in every YAML config. Bump only when a

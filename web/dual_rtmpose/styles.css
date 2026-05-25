@@ -162,6 +162,62 @@ canvas {
 .trackers-table tr.state-active  { background: transparent; }
 .trackers-table td.warn { color: #ff9966; }
 .trackers-table td.bad  { color: #ff6666; }
+.slimevr-corrections {
+  border-top: 1px solid #2b2f36;
+  padding-top: 8px;
+}
+.slimevr-corrections-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.slimevr-corrections-head h3 {
+  margin: 0;
+  font-size: 12px;
+  color: var(--accent);
+}
+.slimevr-corrections-head button,
+.slimevr-table button {
+  min-width: 28px;
+  height: 24px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: #252525;
+  color: #ddd;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.slimevr-corrections-head button:hover,
+.slimevr-table button:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.slimevr-corrections-head button:disabled,
+.slimevr-table button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+#slimevr-correction-status {
+  color: #888;
+  font-size: 11px;
+}
+#slimevr-correction-status.live { color: #4cf; }
+#slimevr-correction-status.dead { color: #f66; }
+.slimevr-table td {
+  vertical-align: middle;
+}
+.slimevr-axis-control {
+  display: inline-grid;
+  grid-template-columns: 28px 48px 28px;
+  align-items: center;
+  gap: 4px;
+}
+.slimevr-axis-value {
+  color: #ddd;
+  text-align: center;
+}
 
 @media (max-width: 900px) {
   main { grid-template-columns: 1fr; }
