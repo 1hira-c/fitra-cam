@@ -164,6 +164,24 @@ set_target_properties(fitra_test_vmt_protocol PROPERTIES
 
 add_test(NAME test_vmt_protocol COMMAND fitra_test_vmt_protocol)
 
+# Phase 14: position EMA in TrackerExtractor. Mirrors test_tracker_extract
+# style; lives in fitra_slimevr because the new helper is part of
+# tracker_extract.{hpp,cpp}.
+add_executable(fitra_test_tracker_extract_pos
+    test_tracker_extract_pos.cpp
+)
+
+target_link_libraries(fitra_test_tracker_extract_pos PRIVATE
+    fitra_slimevr
+)
+
+set_target_properties(fitra_test_tracker_extract_pos PROPERTIES
+    OUTPUT_NAME "test_tracker_extract_pos"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_tracker_extract_pos COMMAND fitra_test_tracker_extract_pos)
+
 # Backlog (`--config PATH`): MainOptions YAML loader, CLI overlay precedence,
 # and validate_options() — pure parser + checks, no TensorRT / CUDA / OpenCV.
 add_executable(fitra_test_main_config

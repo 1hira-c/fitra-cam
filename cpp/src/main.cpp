@@ -529,6 +529,11 @@ int main(int argc, char** argv) {
             fitra::slimevr::TrackerExtractorOptions tex_opts;
             tex_opts.extract_rate_hz = slimevr_rate_hz;
             tex_opts.quat_smooth     = static_cast<float>(slimevr_quat_smooth);
+            // Phase 14: pos EMA alpha is sourced from --vmt-pos-smooth. The
+            // WebUI viz also benefits from pos smoothing (AxesHelper jitter),
+            // so this runs regardless of --vmt-out / --slimevr-out toggles —
+            // same architecture as quat_smooth.
+            tex_opts.pos_smooth      = static_cast<float>(opts.vmt_pos_smooth);
             tracker_extractor = std::make_unique<fitra::slimevr::TrackerExtractor>(
                 *bus3d, *slime_tracker_bus, tex_opts);
             tracker_extractor->start();
