@@ -45,6 +45,7 @@
 #include "slimevr/tracker_extractor.hpp"
 #include "util/cuda_check.hpp"
 #include "util/logging.hpp"
+#include "vmt/vmt_publisher.hpp"
 #include "web/crow_server.hpp"
 
 namespace {
@@ -110,6 +111,15 @@ void print_help() {
         "  --slimevr-port N          UDP port (default 6969 — SlimeVR firmware port)\n"
         "  --slimevr-rate-hz F       RotationData send rate (default 60.0)\n"
         "  --slimevr-quat-smooth F   per-tracker slerp alpha 0..1 (default 0.5)\n"
+        "\n"
+        "Phase 14 — Virtual Motion Tracker (VMT) → SteamVR direct (requires --enable-3d + --keypoint-format=halpe26):\n"
+        "  --vmt-out                 enable the VMT OSC publisher (10 trackers, /VMT/Room/Driver)\n"
+        "  --vmt-host ADDR           VMT Manager host (default 127.0.0.1; typically the Windows IP)\n"
+        "  --vmt-port N              UDP port (default 39570 — VMT receive port)\n"
+        "  --vmt-rate-hz F           send rate (default 60.0)\n"
+        "  --vmt-pos-smooth F        position EMA alpha 0..1 (default 0.5; wired in M3)\n"
+        "  --vmt-degeneracy-mode S   what to do for invalid trackers: hold|disable|skip (default hold)\n"
+        "  --vmt-disable-below-floor disable trackers whose pos.z < 0 (room-matrix sanity, default off)\n"
         "\n"
         "Phase 8 — Subject calibration wizard (requires --enable-3d):\n"
         "  --calibrate                 auto-start calibration session at boot\n"
@@ -276,6 +286,12 @@ int main(int argc, char** argv) {
         auto& slimevr_port           = opts.slimevr_port;
         auto& slimevr_rate_hz        = opts.slimevr_rate_hz;
         auto& slimevr_quat_smooth    = opts.slimevr_quat_smooth;
+        auto& vmt_out                = opts.vmt_out;
+        auto& vmt_host               = opts.vmt_host;
+        auto& vmt_port               = opts.vmt_port;
+        auto& vmt_rate_hz            = opts.vmt_rate_hz;
+        auto& vmt_degeneracy_mode    = opts.vmt_degeneracy_mode;
+        auto& vmt_disable_below_floor= opts.vmt_disable_below_floor;
         auto& calibrate_on_boot      = opts.calibrate;
         auto& calib_subject_id       = opts.calib_subject_id;
         auto& calib_subject_height_m = opts.calib_subject_height_m;
@@ -538,18 +554,42 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Stop the publisher + tracker extractor on any scope exit. Must
+        // Phase 14: spin up the VMT publisher BEFORE the Crow server so
+        // /stats3d can hand out the vmt stats block. Independent of slimevr;
+        // both publishers can be enabled simultaneously and share the same
+        // TrackerExtractor state (Phase 13 single-producer invariant).
+        std::unique_ptr<fitra::vmt::VmtPublisher> vmt_pub;
+        if (vmt_out) {
+            fitra::vmt::VmtPublisherOptions vopts;
+            vopts.host         = vmt_host;
+            vopts.port         = static_cast<std::uint16_t>(vmt_port);
+            vopts.send_rate_hz = vmt_rate_hz;
+            vopts.disable_below_floor = vmt_disable_below_floor;
+            if (!fitra::vmt::parse_degen_mode(vmt_degeneracy_mode, vopts.degeneracy_mode)) {
+                // validate_options should have caught this, but defend in depth.
+                vopts.degeneracy_mode = fitra::vmt::DegenMode::Hold;
+            }
+            vmt_pub = std::make_unique<fitra::vmt::VmtPublisher>(
+                *bus3d, *slime_tracker_bus, vopts);
+            if (!vmt_pub->start()) {
+                vmt_pub.reset();
+            }
+        }
+
+        // Stop the publishers + tracker extractor on any scope exit. Must
         // outlive the server (so /stats3d never reads a dead pointer / a
-        // dead bus) and the driver (the publisher and extractor both read
+        // dead bus) and the driver (the publishers and extractor all read
         // buses the driver feeds).
         struct SlimeStop {
             fitra::slimevr::NativePublisher*  pub;
+            fitra::vmt::VmtPublisher*         vmt_pub;
             fitra::slimevr::TrackerExtractor* tex;
             ~SlimeStop() {
-                if (pub) pub->stop();
-                if (tex) tex->stop();
+                if (pub)     pub->stop();
+                if (vmt_pub) vmt_pub->stop();
+                if (tex)     tex->stop();
             }
-        } slime_stop{slime_pub.get(), tracker_extractor.get()};
+        } slime_stop{slime_pub.get(), vmt_pub.get(), tracker_extractor.get()};
 
         std::unique_ptr<fitra::web::CrowServer> server;
         if (!no_web) {

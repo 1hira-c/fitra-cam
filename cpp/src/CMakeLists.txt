@@ -111,6 +111,7 @@ target_link_libraries(fitra_slimevr PUBLIC
 add_library(fitra_vmt STATIC
     vmt/osc_writer.cpp
     vmt/vmt_protocol.cpp
+    vmt/vmt_publisher.cpp
 )
 
 target_include_directories(fitra_vmt PUBLIC
@@ -155,6 +156,7 @@ target_link_libraries(fitra_cam_main PRIVATE
     fitra_config
     fitra_pipeline
     fitra_web
+    fitra_vmt
 )
 
 set_target_properties(fitra_cam_main PROPERTIES

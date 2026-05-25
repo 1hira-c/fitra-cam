@@ -159,6 +159,22 @@ void load_slimevr(const YAML::Node& section, MainOptions& out) {
     if (section["quat_smooth"]) out.slimevr_quat_smooth = parse_scalar<double>(section["quat_smooth"],       "slimevr.quat_smooth");
 }
 
+void load_vmt(const YAML::Node& section, MainOptions& out) {
+    ensure_map(section, "vmt");
+    static const std::set<std::string> allowed{
+        "vmt_out", "host", "port", "rate_hz", "pos_smooth",
+        "degeneracy_mode", "disable_below_floor",
+    };
+    check_keys(section, allowed, "vmt");
+    if (section["vmt_out"])             out.vmt_out                 = parse_scalar<bool>(section["vmt_out"],                       "vmt.vmt_out");
+    if (section["host"])                out.vmt_host                = parse_scalar<std::string>(section["host"],                   "vmt.host");
+    if (section["port"])                out.vmt_port                = parse_scalar<int>(section["port"],                           "vmt.port");
+    if (section["rate_hz"])             out.vmt_rate_hz             = parse_scalar<double>(section["rate_hz"],                     "vmt.rate_hz");
+    if (section["pos_smooth"])          out.vmt_pos_smooth          = parse_scalar<double>(section["pos_smooth"],                  "vmt.pos_smooth");
+    if (section["degeneracy_mode"])     out.vmt_degeneracy_mode     = parse_scalar<std::string>(section["degeneracy_mode"],        "vmt.degeneracy_mode");
+    if (section["disable_below_floor"]) out.vmt_disable_below_floor = parse_scalar<bool>(section["disable_below_floor"],           "vmt.disable_below_floor");
+}
+
 }  // namespace
 
 void load_main_config(const std::string& path, MainOptions& out) {
@@ -185,7 +201,7 @@ void load_main_config(const std::string& path, MainOptions& out) {
 
     static const std::set<std::string> top_allowed{
         "schema", "cameras", "inference", "web", "three_d",
-        "subject", "calibration", "logging", "slimevr",
+        "subject", "calibration", "logging", "slimevr", "vmt",
     };
     for (auto it = root.begin(); it != root.end(); ++it) {
         const auto key = it->first.as<std::string>();
@@ -202,6 +218,7 @@ void load_main_config(const std::string& path, MainOptions& out) {
     if (root["calibration"]) load_calibration(root["calibration"], out);
     if (root["logging"])     load_logging   (root["logging"],     out);
     if (root["slimevr"])     load_slimevr   (root["slimevr"],     out);
+    if (root["vmt"])         load_vmt       (root["vmt"],         out);
 }
 
 EarlyArgs scan_early_args(int argc, char** argv) {
@@ -272,6 +289,13 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--slimevr-port")      { out.slimevr_port = std::atoi(need(i, "--slimevr-port")); }
         else if (a == "--slimevr-rate-hz")   { out.slimevr_rate_hz = std::stod(need(i, "--slimevr-rate-hz")); }
         else if (a == "--slimevr-quat-smooth"){ out.slimevr_quat_smooth = std::stod(need(i, "--slimevr-quat-smooth")); }
+        else if (a == "--vmt-out")           { out.vmt_out = true; }
+        else if (a == "--vmt-host")          { out.vmt_host = need(i, "--vmt-host"); }
+        else if (a == "--vmt-port")          { out.vmt_port = std::atoi(need(i, "--vmt-port")); }
+        else if (a == "--vmt-rate-hz")       { out.vmt_rate_hz = std::stod(need(i, "--vmt-rate-hz")); }
+        else if (a == "--vmt-pos-smooth")    { out.vmt_pos_smooth = std::stod(need(i, "--vmt-pos-smooth")); }
+        else if (a == "--vmt-degeneracy-mode"){ out.vmt_degeneracy_mode = need(i, "--vmt-degeneracy-mode"); }
+        else if (a == "--vmt-disable-below-floor"){ out.vmt_disable_below_floor = true; }
         else if (a == "--calibrate")             { out.calibrate = true; }
         else if (a == "--calib-subject-id")      { out.calib_subject_id = need(i, "--calib-subject-id"); }
         else if (a == "--calib-subject-height-m"){ out.calib_subject_height_m = std::stod(need(i, "--calib-subject-height-m")); }
@@ -318,6 +342,31 @@ void validate_options(const MainOptions& opts) {
         }
         if (opts.slimevr_quat_smooth < 0.0 || opts.slimevr_quat_smooth > 1.0) {
             fail("--slimevr-quat-smooth must be in [0, 1]");
+        }
+    }
+    if (opts.vmt_out) {
+        if (!opts.enable_3d) {
+            fail("--vmt-out requires --enable-3d");
+        }
+        if (opts.keypoint_format != "halpe26") {
+            fail("--vmt-out requires --keypoint-format=halpe26");
+        }
+        if (opts.calibrate) {
+            fail("--vmt-out cannot be combined with --calibrate");
+        }
+        if (opts.vmt_port <= 0 || opts.vmt_port > 65535) {
+            fail("--vmt-port must be in [1, 65535]");
+        }
+        if (opts.vmt_rate_hz <= 0.0 || opts.vmt_rate_hz > 240.0) {
+            fail("--vmt-rate-hz must be in (0, 240]");
+        }
+        if (opts.vmt_pos_smooth < 0.0 || opts.vmt_pos_smooth > 1.0) {
+            fail("--vmt-pos-smooth must be in [0, 1]");
+        }
+        if (opts.vmt_degeneracy_mode != "hold"
+            && opts.vmt_degeneracy_mode != "disable"
+            && opts.vmt_degeneracy_mode != "skip") {
+            fail("--vmt-degeneracy-mode must be one of hold|disable|skip");
         }
     }
     if (opts.calibrate && !opts.enable_3d) {
