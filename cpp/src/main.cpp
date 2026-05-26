@@ -46,6 +46,7 @@
 #include "util/cuda_check.hpp"
 #include "util/logging.hpp"
 #include "vmt/vmt_publisher.hpp"
+#include "vmt/hmd_pose_receiver.hpp"
 #include "web/crow_server.hpp"
 
 namespace {
@@ -122,6 +123,12 @@ void print_help() {
         "  --vmt-pos-smooth F        position EMA alpha 0..1 (default 0.5; wired in M3)\n"
         "  --vmt-degeneracy-mode S   what to do for invalid trackers: hold|disable|skip (default hold)\n"
         "  --vmt-disable-below-floor disable trackers whose pos.z < 0 (room-matrix sanity, default off)\n"
+        "\n"
+        "Phase 15 — HMD pose receiver from vmt_hmd_pose_sender.exe (Windows side):\n"
+        "  --hmd-listen-enabled      bind a UDP socket and accept /fitra/hmd_pose datagrams\n"
+        "  --hmd-listen-port N       UDP port to listen on (default 39571)\n"
+        "  --hmd-listen-bind ADDR    bind address (default 0.0.0.0)\n"
+        "  --hmd-stale-ms F          milliseconds without a packet → snapshot.stale=true (default 200)\n"
         "\n"
         "Phase 8 — Subject calibration wizard (requires --enable-3d):\n"
         "  --calibrate                 auto-start calibration session at boot\n"
@@ -296,6 +303,10 @@ int main(int argc, char** argv) {
         auto& vmt_rate_hz            = opts.vmt_rate_hz;
         auto& vmt_degeneracy_mode    = opts.vmt_degeneracy_mode;
         auto& vmt_disable_below_floor= opts.vmt_disable_below_floor;
+        auto& hmd_listen_enabled     = opts.hmd_listen_enabled;
+        auto& hmd_listen_port        = opts.hmd_listen_port;
+        auto& hmd_listen_bind        = opts.hmd_listen_bind;
+        auto& hmd_stale_ms           = opts.hmd_stale_ms;
         auto& calibrate_on_boot      = opts.calibrate;
         auto& calib_subject_id       = opts.calib_subject_id;
         auto& calib_subject_height_m = opts.calib_subject_height_m;
@@ -586,6 +597,23 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Phase 15: optional HMD pose receiver. Standalone from vmt_pub —
+        // both can run independently for diagnostics, but the auto-alignment
+        // solver (M3/M4) needs both producer and the chest tracker.
+        auto hmd_pose_bus = std::make_unique<fitra::vmt::HmdPoseBus>();
+        std::unique_ptr<fitra::vmt::HmdPoseReceiver> hmd_pose_recv;
+        if (hmd_listen_enabled) {
+            fitra::vmt::HmdPoseReceiverOptions hopts;
+            hopts.bind     = hmd_listen_bind;
+            hopts.port     = static_cast<std::uint16_t>(hmd_listen_port);
+            hopts.stale_ms = hmd_stale_ms;
+            hmd_pose_recv = std::make_unique<fitra::vmt::HmdPoseReceiver>(
+                *hmd_pose_bus, hopts);
+            if (!hmd_pose_recv->start()) {
+                hmd_pose_recv.reset();
+            }
+        }
+
         // Stop the publishers + tracker extractor on any scope exit. Must
         // outlive the server (so /stats3d never reads a dead pointer / a
         // dead bus) and the driver (the publishers and extractor all read
@@ -593,13 +621,16 @@ int main(int argc, char** argv) {
         struct SlimeStop {
             fitra::slimevr::NativePublisher*  pub;
             fitra::vmt::VmtPublisher*         vmt_pub;
+            fitra::vmt::HmdPoseReceiver*      hmd_recv;
             fitra::slimevr::TrackerExtractor* tex;
             ~SlimeStop() {
-                if (pub)     pub->stop();
-                if (vmt_pub) vmt_pub->stop();
-                if (tex)     tex->stop();
+                if (pub)      pub->stop();
+                if (vmt_pub)  vmt_pub->stop();
+                if (hmd_recv) hmd_recv->stop();
+                if (tex)      tex->stop();
             }
-        } slime_stop{slime_pub.get(), vmt_pub.get(), tracker_extractor.get()};
+        } slime_stop{slime_pub.get(), vmt_pub.get(), hmd_pose_recv.get(),
+                     tracker_extractor.get()};
 
         std::unique_ptr<fitra::web::CrowServer> server;
         if (!no_web) {

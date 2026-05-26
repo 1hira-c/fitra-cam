@@ -182,6 +182,22 @@ set_target_properties(fitra_test_vmt_protocol PROPERTIES
 
 add_test(NAME test_vmt_protocol COMMAND fitra_test_vmt_protocol)
 
+# Phase 15 M2: HMD pose UDP receiver — wire-format parser + bus stale logic.
+add_executable(fitra_test_hmd_pose_receiver
+    test_hmd_pose_receiver.cpp
+)
+
+target_link_libraries(fitra_test_hmd_pose_receiver PRIVATE
+    fitra_vmt
+)
+
+set_target_properties(fitra_test_hmd_pose_receiver PROPERTIES
+    OUTPUT_NAME "test_hmd_pose_receiver"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_hmd_pose_receiver COMMAND fitra_test_hmd_pose_receiver)
+
 # Phase 14: position EMA in TrackerExtractor. Mirrors test_tracker_extract
 # style; lives in fitra_slimevr because the new helper is part of
 # tracker_extract.{hpp,cpp}.

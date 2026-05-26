@@ -94,6 +94,13 @@ struct MainOptions {
     // "hold" (default) | "disable" | "skip" — see vmt_publisher.hpp DegenMode
     std::string vmt_degeneracy_mode = "hold";
     bool   vmt_disable_below_floor = false;
+    // Phase 15: receive HMD pose from the Windows-side vmt_hmd_pose_sender.
+    // Independent of vmt_out (sender path) — receiver can run alone for
+    // diagnostics, but Phase 15 auto-alignment requires both.
+    bool        hmd_listen_enabled = false;
+    int         hmd_listen_port    = 39571;
+    std::string hmd_listen_bind    = "0.0.0.0";
+    double      hmd_stale_ms       = 200.0;
 };
 
 // Schema version embedded in every YAML config. Bump only when a

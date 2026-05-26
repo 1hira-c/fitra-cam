@@ -184,6 +184,8 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
     static const std::set<std::string> allowed{
         "vmt_out", "host", "port", "rate_hz", "pos_smooth",
         "degeneracy_mode", "disable_below_floor",
+        // Phase 15 HMD pose receiver.
+        "hmd_listen_enabled", "hmd_listen_port", "hmd_listen_bind", "hmd_stale_ms",
     };
     check_keys(section, allowed, "vmt");
     if (section["vmt_out"])             out.vmt_out                 = parse_scalar<bool>(section["vmt_out"],                       "vmt.vmt_out");
@@ -193,6 +195,10 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
     if (section["pos_smooth"])          out.vmt_pos_smooth          = parse_scalar<double>(section["pos_smooth"],                  "vmt.pos_smooth");
     if (section["degeneracy_mode"])     out.vmt_degeneracy_mode     = parse_scalar<std::string>(section["degeneracy_mode"],        "vmt.degeneracy_mode");
     if (section["disable_below_floor"]) out.vmt_disable_below_floor = parse_scalar<bool>(section["disable_below_floor"],           "vmt.disable_below_floor");
+    if (section["hmd_listen_enabled"])  out.hmd_listen_enabled      = parse_scalar<bool>(section["hmd_listen_enabled"],            "vmt.hmd_listen_enabled");
+    if (section["hmd_listen_port"])     out.hmd_listen_port         = parse_scalar<int>(section["hmd_listen_port"],                "vmt.hmd_listen_port");
+    if (section["hmd_listen_bind"])     out.hmd_listen_bind         = parse_scalar<std::string>(section["hmd_listen_bind"],        "vmt.hmd_listen_bind");
+    if (section["hmd_stale_ms"])        out.hmd_stale_ms            = parse_scalar<double>(section["hmd_stale_ms"],                "vmt.hmd_stale_ms");
 }
 
 }  // namespace
@@ -319,6 +325,10 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--vmt-pos-smooth")    { out.vmt_pos_smooth = std::stod(need(i, "--vmt-pos-smooth")); }
         else if (a == "--vmt-degeneracy-mode"){ out.vmt_degeneracy_mode = need(i, "--vmt-degeneracy-mode"); }
         else if (a == "--vmt-disable-below-floor"){ out.vmt_disable_below_floor = true; }
+        else if (a == "--hmd-listen-enabled") { out.hmd_listen_enabled = true; }
+        else if (a == "--hmd-listen-port")    { out.hmd_listen_port    = std::atoi(need(i, "--hmd-listen-port")); }
+        else if (a == "--hmd-listen-bind")    { out.hmd_listen_bind    = need(i, "--hmd-listen-bind"); }
+        else if (a == "--hmd-stale-ms")       { out.hmd_stale_ms       = std::stod(need(i, "--hmd-stale-ms")); }
         else if (a == "--calibrate")             { out.calibrate = true; }
         else if (a == "--calib-subject-id")      { out.calib_subject_id = need(i, "--calib-subject-id"); }
         else if (a == "--calib-subject-height-m"){ out.calib_subject_height_m = std::stod(need(i, "--calib-subject-height-m")); }
@@ -390,6 +400,14 @@ void validate_options(const MainOptions& opts) {
             && opts.vmt_degeneracy_mode != "disable"
             && opts.vmt_degeneracy_mode != "skip") {
             fail("--vmt-degeneracy-mode must be one of hold|disable|skip");
+        }
+    }
+    if (opts.hmd_listen_enabled) {
+        if (opts.hmd_listen_port <= 0 || opts.hmd_listen_port > 65535) {
+            fail("--hmd-listen-port must be in [1, 65535]");
+        }
+        if (opts.hmd_stale_ms <= 0.0 || opts.hmd_stale_ms > 10000.0) {
+            fail("--hmd-stale-ms must be in (0, 10000]");
         }
     }
     if (opts.calibrate && !opts.enable_3d) {
