@@ -132,8 +132,8 @@ void validate_subject_profile(const SubjectProfile& profile) {
     if (profile.schema != expected_schema) {
         // A profile recorded under a different topology cannot be migrated
         // automatically (bone-length indices and major-bone subsets differ).
-        // The Phase 8 wizard rewrites the profile when the operator runs a
-        // fresh session.
+        // The calibration wizard rewrites the profile when the operator
+        // runs a fresh session.
         throw std::runtime_error(
             "subject profile schema " + profile.schema
             + " does not match active --keypoint-format ("

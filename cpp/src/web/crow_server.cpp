@@ -219,7 +219,7 @@ std::string slimevr_corrections_json(slimevr::NativePublisher& publisher) {
 
 }  // namespace
 
-// Phase 15: in-flight motion calibration state. One AutoAlignSession at a
+// In-flight motion calibration state. One AutoAlignSession at a
 // time (start while collecting → 409). The collector thread polls the HMD
 // bus + tracker bus and accumulates xz samples until the requested
 // duration_s elapses or stop is requested; on completion it solves with
@@ -341,21 +341,19 @@ void CrowServer::start() {
 
     CROW_ROUTE(app, "/stats3d")
     ([this]() {
-        // Phase 13 M1: when a tracker bus is attached, embed the smoothed
-        // SlimeVR tracker snapshot (role/pos/quat/valid/roll_confidence) as
-        // a top-level field of the bundle so the WebUI can render axes.
+        // When a tracker bus is attached, embed the smoothed SlimeVR
+        // tracker snapshot (role/pos/quat/valid/roll_confidence) as a
+        // top-level field of the bundle so the WebUI can render axes.
         std::string trackers_fragment;
         if (tracker_bus_) {
             trackers_fragment = slimevr::make_tracker_bundle_fragment(*tracker_bus_);
         }
         std::string body = bus3d_ ? bus3d_->make_bundle_json(trackers_fragment)
                                   : pipeline::make_disabled_3d_json();
-        // Phase 11: when the native SlimeVR publisher is wired up, splice
-        // its send counters into the bundle JSON. The bundle always ends
-        // in a single `}` (the outer message close); Phase 13 weakened
-        // the previous "ends in `}}`" invariant since `extra_fields_json`
-        // can inject e.g. `]` (trackers array close) right before it. The
-        // splice only relies on `body.back() == '}'`, so it stays correct.
+        // When the native SlimeVR publisher is wired up, splice its send
+        // counters into the bundle JSON. The splice only relies on
+        // `body.back() == '}'` (the outer message close), so it stays
+        // correct even when `extra_fields_json` injects e.g. `]` before it.
         if (native_publisher_) {
             auto s = native_publisher_->stats();
             std::ostringstream extra;
@@ -372,8 +370,8 @@ void CrowServer::start() {
                 body += extra.str();
             }
         }
-        // Phase 14: splice VMT publisher stats. Stacks on top of the slimevr
-        // splice (body now ends in `}` again after that), or applies fresh if
+        // Splice VMT publisher stats. Stacks on top of the slimevr splice
+        // (body now ends in `}` again after that), or applies fresh if
         // slimevr is not attached.
         if (vmt_publisher_) {
             std::ostringstream extra;
@@ -383,7 +381,7 @@ void CrowServer::start() {
                 body += extra.str();
             }
         }
-        // Phase 15: HMD status block. Always present iff a bus is attached;
+        // HMD status block. Always present iff a bus is attached;
         // when have_any=false the consumer (WebUI) shows "no hmd".
         if (hmd_pose_bus_) {
             auto snap = hmd_pose_bus_->snapshot(hmd_stale_ms_);
@@ -438,7 +436,7 @@ void CrowServer::start() {
     });
 
     // ----------------------------------------------------------------------
-    // Phase 15: HMD-driven auto alignment.
+    // HMD-driven auto alignment.
     //
     // tpose:        single-shot from a paired HMD/chest snapshot.
     // motion/start: background thread accumulates HMD/chest xz pairs for
@@ -718,7 +716,7 @@ void CrowServer::start() {
         return json_response(slimevr_corrections_json(*native_publisher_));
     });
 
-    // Phase 8 calibration routes. Registered before the catch-all so /calib,
+    // Subject calibration routes. Registered before the catch-all so /calib,
     // /api/calib/* and /artifacts/<path> are not shadowed by the static
     // handler below.
     register_calibration_routes_();
@@ -778,7 +776,7 @@ void CrowServer::stop() {
     if (!server_thread_.joinable() && !publisher_thread_.joinable()) return;
     stop_.store(true);
     if (impl_) {
-        // Phase 15: tear down the auto-alignment session before app.stop()
+        // Tear down the auto-alignment session before app.stop()
         // so the worker thread (if collecting) exits cleanly.
         impl_->auto_align.stop_requested.store(true);
         if (impl_->auto_align.worker.joinable()) {
@@ -911,8 +909,8 @@ void CrowServer::publisher_loop() {
         if (stop_.load()) break;
 
         auto msg = bus_.make_bundle_json();
-        // Phase 13 M1: include trackers fragment in the WS broadcast so the
-        // 3D viewer can keep AxesHelpers per tracker in sync at publish_hz.
+        // Include trackers fragment in the WS broadcast so the 3D viewer
+        // can keep AxesHelpers per tracker in sync at publish_hz.
         std::string trackers_fragment;
         if (tracker_bus_) {
             trackers_fragment = slimevr::make_tracker_bundle_fragment(*tracker_bus_);

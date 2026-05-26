@@ -1,10 +1,6 @@
 // test_vmt_protocol — verify the world → VMT Driver coordinate transform and
-// the TrackerRole → VMT index mapping.
-//
-// The transform values mirror the Phase 12 Bridge transforms (which target
-// the SAME SteamVR `TrackerYaw.kt` "x-right, y-up, z-back, RH" frame); the
-// Bridge code itself lives only on archive/botsu-phase12-bridge-relay and is
-// not linked from the mainline build, so we re-derive the goldens here.
+// the TrackerRole → VMT index mapping. The goldens are derived from the
+// SteamVR "x-right, y-up, z-back, RH" Driver frame.
 
 #include <cmath>
 #include <cstdio>

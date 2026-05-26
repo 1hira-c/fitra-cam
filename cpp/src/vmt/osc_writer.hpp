@@ -1,13 +1,6 @@
 #pragma once
 //
-// Hand-rolled OSC 1.0 wire-format serializer (Phase 14 / VMT path).
-//
-// Restored from Phase 11 commit a64becf (originally under fitra::slimevr for
-// the VMC publisher) and re-namespaced into fitra::vmt for the SteamVR-direct
-// path. The VMC original was removed in commit 14ec5d4 when Phase 11
-// switched to SlimeVR's native Firmware UDP protocol; Phase 14 needs OSC
-// again for `/VMT/Room/Driver`, so we bring back the same serializer rather
-// than re-deriving it.
+// Hand-rolled OSC 1.0 wire-format serializer for the VMT path.
 //
 // Spec reference: Open Sound Control 1.0 (Stanford, 2002).
 //   - Strings: NUL-terminated + zero-pad to a 4-byte boundary.

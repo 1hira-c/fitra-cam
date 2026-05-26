@@ -1,6 +1,6 @@
 #pragma once
 //
-// Phase 15 M2: receive HMD pose datagrams from the Windows-side
+// Receive HMD pose datagrams from the Windows-side
 // `vmt_hmd_pose_sender.exe`.
 //
 // Wire format (single OSC 1.0 message per UDP packet, no bundle):
@@ -12,8 +12,8 @@
 //
 // Coordinate frame matches `world_pos_to_vmt` / `world_quat_to_vmt` output
 // — SteamVR Standing universe, Y-up RH, X-right, Z-back, metres. The auto
-// alignment solver (Phase 15 M3) compares this directly against the chest
-// tracker pose that VmtPublisher would emit.
+// alignment solver compares this directly against the chest tracker pose
+// that VmtPublisher would emit.
 //
 
 #include <atomic>

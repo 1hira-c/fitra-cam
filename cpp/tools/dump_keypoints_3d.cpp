@@ -1,4 +1,4 @@
-// dump_keypoints_3d — Phase 7 offline 2-camera 3D MVP.
+// dump_keypoints_3d — offline 2-camera 3D dump.
 //
 // Runs YOLOX + RTMPose on synchronized recorded videos, triangulates either
 // COCO17 (17 kpts, default) or Halpe26 (26 kpts) joints with a calibration
@@ -99,9 +99,9 @@ void print_help() {
         "Optional:\n"
         "  --summary PATH            output summary JSON (default: <out>.summary.json)\n"
         "  --overlay-dir DIR         write reprojection overlay MP4s\n"
-        "  --pose-session PATH       Phase 8 pose_session.json with per-pose clips\n"
-        "  --subject-profile-out PATH write Phase 8 subject profile YAML\n"
-        "  --quality-out PATH        write Phase 8 quality JSON\n"
+        "  --pose-session PATH       pose_session.json with per-pose clips\n"
+        "  --subject-profile-out PATH write subject profile YAML\n"
+        "  --quality-out PATH        write quality JSON\n"
         "  --max-frames N            stop after N synchronized frames\n"
         "  --cam1-frame-offset N     skip N frames on cam1 before pairing (negative skips cam0)\n"
         "  --det-score F             YOLOX score threshold (default 0.5)\n"

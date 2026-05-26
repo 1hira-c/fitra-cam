@@ -87,15 +87,15 @@ public:
     // Build the WebSocket JSON bundle. `extra_fields_json` (optional) is
     // inserted at the top level as a sibling of `stats` — caller supplies
     // a comma-less fragment of the form `"key":value[,"key":value]`.
-    // Used by CrowServer to embed Phase 13 SlimeVR tracker snapshots without
+    // Used by CrowServer to embed SlimeVR tracker snapshots without
     // creating a circular dep on the slimevr lib.
     std::string make_bundle_json(const std::string& extra_fields_json = "");
 
     // Lock-protected value-copy of the latest snapshot. Used by external
     // consumers that want the raw Skeleton3DSnapshot (Joint3D + stats) rather
-    // than the JSON wire form -- in particular the Phase 11 SlimeVR/VMC
-    // publisher, which needs to run its own quaternion compose and coordinate
-    // transform on the snapshot before serializing.
+    // than the JSON wire form -- in particular the SlimeVR / VMT publishers,
+    // which need to run their own quaternion compose and coordinate transform
+    // on the snapshot before serializing.
     Skeleton3DSnapshot snapshot() const;
 
 private:

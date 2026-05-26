@@ -1,6 +1,6 @@
 #pragma once
 //
-// Phase 14: Virtual Motion Tracker (VMT) publisher thread.
+// Virtual Motion Tracker (VMT) publisher thread.
 //
 // Owns a UDP socket pointed at a VMT Manager (default 127.0.0.1:39570; usually
 // the Windows host running SteamVR + VMT Driver). Runs a single paced send
@@ -13,8 +13,8 @@
 // so unlike NativePublisher there is no recv loop.
 //
 // Architecture mirrors NativePublisher: read-only consumer of the shared
-// TrackerExtractor state (Phase 13 invariant — single producer), no I/O on
-// the inference threads, gated by Skeleton3DStats::ik_locked.
+// TrackerExtractor state (single producer), no I/O on the inference threads,
+// gated by Skeleton3DStats::ik_locked.
 
 #include <atomic>
 #include <cstdint>

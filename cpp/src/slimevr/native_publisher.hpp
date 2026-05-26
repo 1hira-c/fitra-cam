@@ -1,14 +1,13 @@
 #pragma once
 //
-// Phase 11: SlimeVR Firmware UDP publisher thread.
+// SlimeVR Firmware UDP publisher thread.
 //
 // Owns a UDP socket connected to the SlimeVR Server (default 127.0.0.1:6969;
 // typically the Windows host's IP in our deployment), runs its own paced send
 // loop at `send_rate_hz` (default 60 Hz), and a separate recv loop that
 // replies to PingPong packets so the server doesn't mark us disconnected.
 //
-// Architecture mirrors the (deleted) VMC publisher: snapshot the latest 3D
-// skeleton under the bus mutex, build the trackers off-lock, transform to
+// Hot path: snapshot the smoothed trackers from SlimeTrackerBus, transform to
 // SlimeVR Y-up coordinates, serialize via firmware_protocol::encode_*,
 // sendto(). The send loop performs no I/O on the inference threads, so
 // toggling --slimevr-out should not move aggregate pose throughput.
@@ -60,15 +59,13 @@ struct NativePublisherDebugCorrection {
 
 class NativePublisher {
 public:
-    // Phase 13 M1: NativePublisher now consumes pre-smoothed tracker snapshots
-    // from the SlimeTrackerBus (produced by TrackerExtractor). It no longer
-    // owns prev_quat smoothing state — that lives in TrackerExtractor so the
-    // WebUI viz and the UDP send path see one shared smoothed history.
+    // Consumes pre-smoothed tracker snapshots from `tracker_bus` (produced by
+    // TrackerExtractor). Smoothing state lives there so the WebUI viz and the
+    // UDP send path share one history.
     //
-    // `skel_bus` is still passed in only to read the ik_locked / enabled flag
-    // from Skeleton3DStats so the publisher gates RotationData bursts the same
-    // way as Phase 11 (skip when 3D inference is paused). The body of the
-    // tracker data comes from `tracker_bus`.
+    // `skel_bus` is read only for the ik_locked / enabled flag in
+    // Skeleton3DStats: the publisher skips RotationData bursts while 3D
+    // inference is paused.
     NativePublisher(pipeline::Skeleton3DBus& skel_bus,
                     SlimeTrackerBus&         tracker_bus,
                     NativePublisherOptions   opts);

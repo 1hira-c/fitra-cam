@@ -1,6 +1,6 @@
 #pragma once
 //
-// Phase 11: SlimeVR Firmware UDP protocol — wire-format codec.
+// SlimeVR Firmware UDP protocol — wire-format codec.
 //
 // Pure serialization / parsing functions; no socket I/O. The publisher
 // (slimevr::NativePublisher) owns the socket and the sequence counter and

@@ -1,4 +1,4 @@
-// Phase 15 M3 — unit tests for solve_tpose and solve_motion.
+// Unit tests for solve_tpose and solve_motion.
 //
 // All inputs/outputs are in VMT Driver frame (Y-up RH). 2D xz plane Procrustes.
 

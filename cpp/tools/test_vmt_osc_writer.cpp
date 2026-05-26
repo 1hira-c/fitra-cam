@@ -1,6 +1,5 @@
 // test_vmt_osc_writer — exercise fitra::vmt::OscWriter against hand-crafted
-// byte tables. Restored from Phase 11 commit a64becf and re-pointed at the
-// Phase 14 `/VMT/Room/Driver` packet shape in the fifth case.
+// byte tables. The fifth case is the `/VMT/Room/Driver` packet shape.
 //
 // Each test case builds an OSC packet with the writer, then compares byte-by-
 // byte against a literal expected buffer constructed from the OSC 1.0 spec.

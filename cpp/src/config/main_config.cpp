@@ -184,7 +184,7 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
     static const std::set<std::string> allowed{
         "vmt_out", "host", "port", "rate_hz", "pos_smooth",
         "degeneracy_mode", "disable_below_floor",
-        // Phase 15 HMD pose receiver.
+        // HMD pose receiver.
         "hmd_listen_enabled", "hmd_listen_port", "hmd_listen_bind", "hmd_stale_ms",
     };
     check_keys(section, allowed, "vmt");

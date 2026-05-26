@@ -3,14 +3,14 @@
 // Raw V4L2 MJPEG capture for a single camera.
 //
 // Bypasses OpenCV's VideoCapture so we can choose buffer count, decode
-// path, and synchronization explicitly. Phase 2 keeps things simple:
+// path, and synchronization explicitly:
 //   - 4 mmap buffers (matches the migration plan's ring size)
 //   - blocking VIDIOC_DQBUF in a worker thread
 //   - latest-frame-wins semantics (drop older frames if the consumer is
 //     behind), mirroring python/scripts/pose_pipeline.py::CameraReader
 //
 // The Frame holds a COPY of the JPEG bytes so the V4L2 buffer can be
-// re-queued immediately. Phase 4 will swap this for NvBuffer zero-copy.
+// re-queued immediately.
 
 #include <atomic>
 #include <chrono>

@@ -1,7 +1,7 @@
 // test_tracker_extract_pos — exercise apply_pos_smoothing.
 //
-// Phase 14 adds a position EMA in TrackerExtractor (mirroring the existing
-// per-tracker quat smoothing). We verify:
+// TrackerExtractor maintains a position EMA (mirroring the existing per-tracker
+// quat smoothing). We verify:
 //   1. pos_smooth=1.0 passes raw curr.pos through unchanged
 //   2. pos_smooth=0.5 converges toward the target after a few frames
 //   3. valid=false holds prev_pos (curr.pos snaps to prev, prev untouched)
@@ -113,23 +113,23 @@ void test_dropout_recovery() {
     std::array<cv::Vec3f, kTrackerCount> prev{};
     const float alpha = 0.5f;
 
-    // Phase 1: valid at (1,0,0)
+    // Step 1: valid at (1,0,0)
     for (int f = 0; f < 3; ++f) {
         auto ts = make_trackers({1.0f, 0.0f, 0.0f}, /*valid=*/true);
         apply_pos_smoothing(ts, prev, alpha);
     }
     // After 3 frames with alpha=0.5 toward 1.0 from 0: prev = 1 - 0.5^3 = 0.875
-    check_close(prev[0][0], 0.875f, "dropout.phase1.prev[0].x");
+    check_close(prev[0][0], 0.875f, "dropout.step1.prev[0].x");
 
-    // Phase 2: invalid (occluded) — must hold prev unchanged
+    // Step 2: invalid (occluded) — must hold prev unchanged
     for (int f = 0; f < 2; ++f) {
         auto ts = make_trackers({999.0f, 999.0f, 999.0f}, /*valid=*/false);
         apply_pos_smoothing(ts, prev, alpha);
     }
-    check_close(prev[0][0], 0.875f, "dropout.phase2.prev held");
-    check_close(prev[0][1], 0.0f,   "dropout.phase2.prev y held");
+    check_close(prev[0][0], 0.875f, "dropout.step2.prev held");
+    check_close(prev[0][1], 0.0f,   "dropout.step2.prev y held");
 
-    // Phase 3: recover at (1.5,0,0) — convergence starts from 0.875, NOT 0
+    // Step 3: recover at (1.5,0,0) — convergence starts from 0.875, NOT 0
     auto ts = make_trackers({1.5f, 0.0f, 0.0f}, /*valid=*/true);
     apply_pos_smoothing(ts, prev, alpha);
     // After 1 frame with alpha=0.5: prev = 0.875 + 0.5*(1.5 - 0.875) = 1.1875.

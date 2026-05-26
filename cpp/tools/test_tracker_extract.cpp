@@ -84,7 +84,7 @@ fitra::infer::Skeleton3D make_t_pose() {
     set_joint(s,  5, 0.18f,0,     1.42f);  // l_shoulder
     set_joint(s,  6, -0.18f,0,    1.42f);  // r_shoulder
     set_joint(s,  7, 0.45f, 0.02f, 1.42f); // l_elbow (~3 cm forward)
-    // Phase 13: wrists dropped 15 cm in Z (forearm hangs slightly below the
+    // Wrists dropped 15 cm in Z (forearm hangs slightly below the
     // upper-arm axis). The previous strictly-horizontal arm had
     // wrist - elbow ∥ elbow - shoulder (both pointing +X with only ~3 cm Y
     // offset), so primary up was sin θ ≈ 0.01 from fwd → falls into the
@@ -95,7 +95,7 @@ fitra::infer::Skeleton3D make_t_pose() {
     set_joint(s,  9, 0.72f, 0.05f, 1.27f); // l_wrist
     set_joint(s,  8, -0.45f,0.02f, 1.42f); // r_elbow
     set_joint(s, 10, -0.72f,0.05f, 1.27f); // r_wrist
-    // Phase 13: T-pose has anatomically realistic mild knee flexion (knee 10 cm
+    // T-pose has anatomically realistic mild knee flexion (knee 10 cm
     // forward of the hip-ankle line ≈ 12°). The previous 1 cm offset was a
     // visually-T-shaped figure but anatomically degenerate — both thigh fwd
     // (knee-hip) and shin up (hip-knee) became near-parallel to the leg axis,
@@ -532,9 +532,8 @@ void test_thigh_walking_knee_60() {
     auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
         // hip standard; knee lifted forward & up; shin swings forward by 60°
         // (mid-swing phase of walking gait — anatomically ~60-70° knee flexion).
-        // Phase 13 raised the degeneracy gate to sin 0.15, so the old 30°-bent
-        // geometry (sin ≈ 0.12 for thigh primary) just barely failed; 60° gives
-        // sin ≈ 0.60, comfortably above the full-confidence ceiling (0.30).
+        // The degeneracy gate is sin 0.15; 60° gives sin ≈ 0.60, comfortably
+        // above the full-confidence ceiling (0.30).
         set_joint(s, 11, 0.1f,  0.0f,  0.9f);    // l_hip
         set_joint(s, 13, 0.1f,  0.15f, 0.55f);   // l_knee
         // Thigh axis = (0, 0.15, -0.35) ≈ forward-down. Shin pivots 60° forward
@@ -597,10 +596,8 @@ void test_thigh_lateral_ankle_uses_primary() {
         set_joint(s, 13, 0.1f,  0.0f, 0.45f);   // l_knee (femur vertical)
         // ankle laterally offset 15 cm outboard of knee. primary up
         // (ankle - knee) = (0.15, 0, -0.40), |up|=0.427, sin θ = 0.15/0.427 ≈
-        // 0.351 → > kRollSinHigh (0.30) → full confidence. Phase 13 raised
-        // the degeneracy gate from sin 0.05 → 0.15, so the previous 5 cm
-        // offset (sin ≈ 0.12) now falls into the freeze regime; 15 cm puts
-        // the lateral cue safely above the new gate.
+        // 0.351 → > kRollSinHigh (0.30) → full confidence. 15 cm puts the
+        // lateral cue safely above the kRollSinLow (0.15) gate.
         set_joint(s, 15, 0.25f, 0.0f, 0.05f);
     });
     auto trackers = fitra::slimevr::extract_trackers(skel_lateral);
@@ -719,7 +716,7 @@ void test_upper_arm_confidence_zero_all_degenerate() {
 void test_upper_arm_confidence_smoothstep_midrange() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     // Pose: arm overhead (fwd ≈ +Z), wrist offset from elbow at θ such that
-    // sin θ = 0.225 (= midpoint of the Phase 13 smoothstep band [0.15, 0.30]).
+    // sin θ = 0.225 (= midpoint of the smoothstep band [0.15, 0.30]).
     // With forearm length 0.25 m and elbow at (0, 0, 1.85),
     // wrist = elbow + (sin θ · 0.25, 0, cos θ · 0.25) ≈ (0.05625, 0, 2.0936).
     auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {

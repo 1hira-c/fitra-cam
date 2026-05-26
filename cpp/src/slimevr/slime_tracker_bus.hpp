@@ -1,6 +1,6 @@
 #pragma once
 //
-// Phase 13 M1: latest SlimeVR tracker snapshot bus.
+// Latest SlimeVR tracker snapshot bus.
 //
 // Produced by TrackerExtractor (extract_trackers + apply_quat_smoothing on the
 // Skeleton3DBus output, owning the prev_quat smoothing state). Consumed by:
@@ -21,7 +21,7 @@
 
 namespace fitra::slimevr {
 
-// Phase 13 M2: per-tracker rolling stats published alongside the smoothed
+// Per-tracker rolling stats published alongside the smoothed
 // trackers themselves. Computed by TrackerExtractor over a fixed window
 // (default 2 s of frames at the extractor's tick rate, e.g. 120 frames at
 // 60 Hz). Exposed to the WebUI so the user can see which tracker is the
@@ -82,8 +82,8 @@ private:
     SlimeTrackerSnapshot snapshot_{};
 };
 
-// Phase 13 M1: render the bus snapshot as a JSON fragment ready to inject
-// into Skeleton3DBus::make_bundle_json's `extra_fields_json` parameter.
+// Render the bus snapshot as a JSON fragment ready to inject into
+// Skeleton3DBus::make_bundle_json's `extra_fields_json` parameter.
 //
 // Output shape (no leading or trailing comma; valid as a top-level field):
 //   "trackers":[

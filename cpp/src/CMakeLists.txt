@@ -1,6 +1,6 @@
-# Calibration / lifting support shared by tools and the future 3D pipeline.
+# Calibration / lifting support shared by tools and the 3D pipeline.
 # Declared before fitra_infer so RTMPose can use the active KeypointFormat
-# (Phase 9) to validate engine K against the runtime topology.
+# to validate engine K against the runtime topology.
 add_library(fitra_lift STATIC
     lift/calib_io.cpp
     lift/triangulator.cpp
@@ -38,12 +38,11 @@ target_link_libraries(fitra_infer PUBLIC
     Threads::Threads
     opencv_core
     opencv_imgproc
-    fitra_lift          # Phase 9: RTMPose validates engine K against the active topology
+    fitra_lift          # RTMPose validates engine K against the active topology
 )
 
-# Camera capture + JPEG decode + per-camera decode worker.
-# Phase 4d parallelizes CPU decode across cameras via FrameSource.
-# Full GPU NVJPEG / NvBuffer is a Phase 5 consideration.
+# Camera capture + JPEG decode + per-camera decode worker
+# (FrameSource parallelizes CPU decode across cameras).
 add_library(fitra_camera STATIC
     camera/v4l2_capture.cpp
     camera/jpeg_decoder.cpp
@@ -76,14 +75,8 @@ target_link_libraries(fitra_pipeline PUBLIC
     opencv_videoio
 )
 
-# SlimeVR integration: tracker extraction (rotation synthesis) + native
-# Firmware UDP publisher. Phase 11.
-#
-# This phase is mid-migration: VMC over OSC is being replaced with SlimeVR's
-# native Firmware UDP protocol (port 6969). VMC source files were removed in
-# M1. The publisher (native_publisher) and protocol codec (firmware_protocol)
-# are added in M2/M4; tracker_extract is rewritten for the 10-tracker layout
-# in M3.
+# SlimeVR integration: tracker extraction (rotation synthesis) +
+# native Firmware UDP publisher (port 6969, 10-tracker layout).
 add_library(fitra_slimevr STATIC
     slimevr/firmware_protocol.cpp
     slimevr/native_publisher.cpp
@@ -102,12 +95,10 @@ target_link_libraries(fitra_slimevr PUBLIC
     opencv_core
 )
 
-# VMT (Virtual Motion Tracker) integration: OSC 1.0 writer + /VMT/Room/Driver
-# wire encoder + world→Driver coordinate transform. Phase 14.
-#
-# Separate from fitra_slimevr because VMT bypasses SlimeVR Server entirely
-# (it targets SteamVR Driver directly). Shares TrackerRole / kTrackerCount /
-# SlimeTracker via the fitra_slimevr public headers.
+# VMT (Virtual Motion Tracker) integration: OSC 1.0 writer +
+# /VMT/Room/Driver wire encoder + world→Driver coordinate transform.
+# Bypasses SlimeVR Server (targets SteamVR Driver directly). Shares
+# TrackerRole / kTrackerCount / SlimeTracker via fitra_slimevr headers.
 add_library(fitra_vmt STATIC
     vmt/osc_writer.cpp
     vmt/vmt_protocol.cpp
@@ -132,7 +123,7 @@ add_library(fitra_web STATIC
 target_link_libraries(fitra_web PUBLIC
     fitra_pipeline
     fitra_slimevr     # /stats3d reads NativePublisher::stats() when attached
-    fitra_vmt         # Phase 14: /stats3d also splices VmtPublisher::stats()
+    fitra_vmt         # /stats3d also splices VmtPublisher::stats()
     Crow::Crow
 )
 

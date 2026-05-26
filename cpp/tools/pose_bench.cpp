@@ -1,4 +1,4 @@
-// pose_bench — Phase 2 single-camera end-to-end benchmark.
+// pose_bench — single-camera end-to-end benchmark.
 //
 // Opens one V4L2 camera, runs the YOLOX + RTMPose pipeline, prints
 // rolling fps / stage latency until --max-frames or Ctrl-C.
@@ -53,7 +53,7 @@ public:
 
 void print_help() {
     std::puts(
-        "pose_bench — Phase 2 single-camera benchmark\n"
+        "pose_bench — single-camera benchmark\n"
         "\n"
         "Required:\n"
         "  --cam0 PATH               V4L2 device (e.g. /dev/v4l/by-path/...index0)\n"

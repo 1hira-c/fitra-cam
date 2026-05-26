@@ -12,12 +12,12 @@
 // Two RTMPose code paths:
 //   - default: rtmpose.infer(frame, bboxes)  (internal preprocess)
 //   - --prebaked: preprocess_to_blob + infer_prebaked(), mirrors the
-//     Phase 6b live-pipeline path. Use this to verify the fast path is
-//     numerically equivalent on a recorded MP4.
+//     live-pipeline path. Use this to verify the fast path is numerically
+//     equivalent on a recorded MP4.
 //
-// --overlay PATH also writes an MP4 with skeleton drawn on each frame so
-// a human can sanity-check the result visually (the Phase 6 PR demands
-// this; raw fps numbers say nothing about whether bboxes/kpts make sense).
+// --overlay PATH also writes an MP4 with skeleton drawn on each frame so a
+// human can sanity-check the result visually (raw fps numbers say nothing
+// about whether bboxes/kpts make sense).
 
 #include <algorithm>
 #include <chrono>
@@ -79,7 +79,7 @@ void print_help() {
         "  --det-score F             detection score threshold (default 0.5)\n"
         "  --keypoint-format FMT     pose topology: coco17 (default) or halpe26\n"
         "  --multi-person            run pose on all bboxes (default: largest only)\n"
-        "  --prebaked                use Phase 6b infer_prebaked() path\n"
+        "  --prebaked                use the infer_prebaked() path\n"
         "                             (preprocess_to_blob + infer_prebaked)\n"
         "  --overlay PATH            also write an overlay MP4 with skeleton drawn\n"
         "  --help                    show this help\n");
@@ -261,8 +261,8 @@ int main(int argc, char** argv) {
 
             std::vector<fitra::infer::Person> persons;
             if (use_prebaked) {
-                // Mirrors the Phase 6b live path: preprocess_to_blob on the
-                // caller side, then infer_prebaked.
+                // Mirrors the live path: preprocess_to_blob on the caller
+                // side, then infer_prebaked.
                 chw_bufs.resize(bboxes.size());
                 M_invs.resize(bboxes.size());
                 prereqs.clear();

@@ -75,7 +75,7 @@ struct MainOptions {
     // logging
     double log_every_s = 2.0;
 
-    // slimevr (Phase 11 native Firmware UDP publisher)
+    // slimevr native Firmware UDP publisher
     bool   slimevr_out = false;
     std::string slimevr_host = "127.0.0.1";
     int    slimevr_port = 6969;
@@ -83,20 +83,20 @@ struct MainOptions {
     double slimevr_quat_smooth = 0.5;
     bool   slimevr_preview_no_reset = false;
 
-    // vmt (Phase 14 Virtual Motion Tracker publisher, SteamVR Driver direct).
-    // Independent of slimevr; both can be enabled simultaneously and share the
-    // same TrackerExtractor state (Phase 13 single-producer invariant).
+    // VMT (Virtual Motion Tracker) publisher, SteamVR Driver direct.
+    // Independent of slimevr; both can be enabled simultaneously and share
+    // the same TrackerExtractor state (single-producer invariant).
     bool   vmt_out = false;
     std::string vmt_host = "127.0.0.1";
     int    vmt_port = 39570;
     double vmt_rate_hz = 60.0;
-    double vmt_pos_smooth = 0.5;             // Position EMA alpha, wired in M3
+    double vmt_pos_smooth = 0.5;             // Position EMA alpha
     // "hold" (default) | "disable" | "skip" — see vmt_publisher.hpp DegenMode
     std::string vmt_degeneracy_mode = "hold";
     bool   vmt_disable_below_floor = false;
-    // Phase 15: receive HMD pose from the Windows-side vmt_hmd_pose_sender.
+    // Receive HMD pose from the Windows-side vmt_hmd_pose_sender.
     // Independent of vmt_out (sender path) — receiver can run alone for
-    // diagnostics, but Phase 15 auto-alignment requires both.
+    // diagnostics, but auto-alignment requires both.
     bool        hmd_listen_enabled = false;
     int         hmd_listen_port    = 39571;
     std::string hmd_listen_bind    = "0.0.0.0";

@@ -1,6 +1,6 @@
 #pragma once
 //
-// Phase 15 M3: Solve VmtAlignment from HMD + chest tracker observations.
+// Solve VmtAlignment from HMD + chest tracker observations.
 //
 // Both inputs MUST be in the same VMT Driver frame (Y-up RH, X-right,
 // Z-back, metres):

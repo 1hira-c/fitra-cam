@@ -1,5 +1,5 @@
-// Phase 15 M2 — golden-bytes unit tests for parse_hmd_pose_packet and
-// HmdPoseBus stale judgement. Pure unit tests, no socket I/O.
+// Golden-bytes unit tests for parse_hmd_pose_packet and HmdPoseBus stale
+// judgement. Pure unit tests, no socket I/O.
 
 #include "vmt/hmd_pose_receiver.hpp"
 

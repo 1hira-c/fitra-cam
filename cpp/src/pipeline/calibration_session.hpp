@@ -1,6 +1,6 @@
 #pragma once
 //
-// Phase 8 subject-profile calibration orchestrator.
+// Subject-profile calibration orchestrator.
 //
 // Lives next to MultiCameraDriver and consumes its frame/skeleton taps. The
 // state machine cycles through 4 target poses (standing, t_pose, elbow_flex,

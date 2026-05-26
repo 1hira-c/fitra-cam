@@ -1,11 +1,11 @@
 #pragma once
 //
-// Virtual Motion Tracker (VMT) wire protocol helpers (Phase 14).
+// Virtual Motion Tracker (VMT) wire protocol helpers.
 //
 // VMT is a SteamVR Driver that listens on UDP for OSC 1.0 packets and
-// surfaces each tracker as a SteamVR virtual device. Phase 14 sends 10
-// trackers (one per TrackerRole) on `/VMT/Room/Driver` at 60 Hz so VRChat
-// FBT can consume them directly, bypassing SlimeVR Server entirely.
+// surfaces each tracker as a SteamVR virtual device. We send 10 trackers
+// (one per TrackerRole) on `/VMT/Room/Driver` at 60 Hz so VRChat FBT can
+// consume them directly, bypassing SlimeVR Server entirely.
 //
 // Protocol reference (VMT v0.15, https://gpsnmeajp.github.io/VirtualMotionTrackerDocument/api/):
 //   /VMT/Room/Driver i:index i:enable f:timeoffset
@@ -34,14 +34,10 @@ struct VmtAlignment {
 };
 
 // World frame (Z-up RH, X-right, Y-forward) → VMT Driver frame (Y-up RH,
-// X-right, Z-back). Identical to the Phase 12 Bridge transform (the Bridge
-// path also targets SteamVR's `TrackerYaw.kt` world frame "x-right, y-up,
-// z-back, right-handed", which is the SteamVR Driver convention). The Bridge
-// code lives only on `archive/botsu-phase12-bridge-relay`; we copy the four-
-// line body here rather than re-vending the frozen branch's source.
+// X-right, Z-back). The Driver frame matches SteamVR's "x-right, y-up,
+// z-back, right-handed" convention.
 //
-// test_vmt_protocol locks the cardinal-axis behaviour to the same numbers as
-// archive/botsu-phase12-bridge-relay:cpp/tools/test_firmware_protocol.cpp.
+// test_vmt_protocol locks the cardinal-axis behaviour.
 inline VmtPos world_pos_to_vmt(float x, float y, float z) {
     return {x, z, -y};
 }

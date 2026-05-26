@@ -1,6 +1,6 @@
 #pragma once
 //
-// Phase 11: extract 10 SlimeVR full-body trackers from a Halpe26 3D skeleton.
+// Extract 10 SlimeVR full-body trackers from a Halpe26 3D skeleton.
 // Output is in the WORLD frame (Z-up, X-right, Y-forward, meters); the
 // publisher applies the SlimeVR Y-up coordinate transform when serializing
 // (see firmware_protocol::world_quat_to_slime).
@@ -98,7 +98,7 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           float base_alpha);
 
-// Phase 14: per-tracker position exponential moving average.
+// Per-tracker position exponential moving average.
 //   curr_i.pos ← prev_pos_i + base_alpha · (curr_i.pos − prev_pos_i)
 // base_alpha ∈ [0, 1]. 0 = freeze (prev forever), 1 = no smoothing.
 //
@@ -109,9 +109,9 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
 // can still see a stable position).
 //
 // Wired into TrackerExtractor::run_loop directly after apply_quat_smoothing
-// so Phase 14's VMT publisher (which sends pos on the wire) and the WebUI
-// viz (which renders pos via AxesHelper) both see one shared smoothed
-// history — same architectural invariant as the quat path.
+// so the VMT publisher (which sends pos on the wire) and the WebUI viz
+// (which renders pos via AxesHelper) both see one shared smoothed history —
+// same architectural invariant as the quat path.
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          float base_alpha);
