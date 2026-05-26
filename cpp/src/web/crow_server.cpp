@@ -14,6 +14,8 @@
 #include "slimevr/native_publisher.hpp"
 #include "slimevr/slime_tracker_bus.hpp"
 #include "vmt/vmt_publisher.hpp"
+#include "vmt/hmd_pose_receiver.hpp"
+#include "vmt/auto_alignment.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::web {
@@ -104,6 +106,59 @@ std::string make_vmt_stats_fragment(const vmt::VmtPublisher& publisher) {
     return out.str();
 }
 
+std::string make_hmd_status_fragment(const vmt::HmdPoseSnapshot& snap,
+                                      bool enabled) {
+    std::ostringstream out;
+    out << "\"hmd\":{\"enabled\":" << (enabled ? "true" : "false")
+        << ",\"have_any\":" << (snap.have_any ? "true" : "false")
+        << ",\"stale\":"    << (snap.stale ? "true" : "false");
+    if (snap.have_any) {
+        // age_ms can be +inf if have_any == false but the snapshot interface
+        // also returns inf in pathological cases; guard for JSON validity.
+        double age = snap.age_ms;
+        if (!std::isfinite(age)) age = -1.0;
+        out << ",\"valid\":" << (snap.pose.valid ? "true" : "false")
+            << ",\"age_ms\":" << age
+            << ",\"timestamp_s\":" << snap.pose.timestamp_s
+            << ",\"pos\":[" << snap.pose.x << "," << snap.pose.y << ","
+            << snap.pose.z << "]"
+            << ",\"quat_xyzw\":[" << snap.pose.qx << "," << snap.pose.qy
+            << "," << snap.pose.qz << "," << snap.pose.qw << "]"
+            << ",\"yaw_deg\":" <<
+                (180.0f / 3.14159265358979323846f) *
+                vmt::yaw_from_vmt_quat(vmt::VmtQuat{
+                    snap.pose.qx, snap.pose.qy, snap.pose.qz, snap.pose.qw});
+    }
+    out << "}";
+    return out.str();
+}
+
+// Convert a chest tracker (world Z-up RH frame, see SlimeTracker docs) into
+// VMT Driver frame (Y-up RH). Mirrors the per-tracker transform the VMT
+// publisher applies before sending /VMT/Room/Driver.
+void chest_in_vmt(const slimevr::SlimeTracker& chest,
+                  vmt::VmtPos&  out_pos,
+                  vmt::VmtQuat& out_quat_xyzw) {
+    out_pos       = vmt::world_pos_to_vmt(chest.pos[0],   chest.pos[1],   chest.pos[2]);
+    out_quat_xyzw = vmt::world_quat_to_vmt(chest.quat_wxyz[0], chest.quat_wxyz[1],
+                                           chest.quat_wxyz[2], chest.quat_wxyz[3]);
+}
+
+void append_auto_result_json(std::ostringstream& out,
+                              const vmt::AutoAlignmentResult& r,
+                              const std::string& mode,
+                              int samples_seen) {
+    out << "{\"status\":\"" << vmt::status_name(r.status) << "\""
+        << ",\"mode\":\"" << json_escape(mode) << "\""
+        << ",\"n_samples\":" << r.n_samples
+        << ",\"samples_seen\":" << samples_seen
+        << ",\"residual_m\":" << r.residual_m
+        << ",\"err\":\"" << json_escape(r.err) << "\""
+        << ",\"alignment\":";
+    append_vmt_alignment_json(out, r.alignment);
+    out << "}";
+}
+
 bool read_required_number(const crow::json::rvalue& body,
                           const char* key,
                           float& out,
@@ -164,10 +219,39 @@ std::string slimevr_corrections_json(slimevr::NativePublisher& publisher) {
 
 }  // namespace
 
+// Phase 15: in-flight motion calibration state. One AutoAlignSession at a
+// time (start while collecting → 409). The collector thread polls the HMD
+// bus + tracker bus and accumulates xz samples until the requested
+// duration_s elapses or stop is requested; on completion it solves with
+// auto_alignment::solve_motion and pushes the result into the publisher's
+// VmtAlignment (same channel as the manual UI).
+struct AutoAlignSession {
+    enum class State { Idle, Collecting, Ok, Err };
+
+    std::mutex                 mu;
+    State                      state = State::Idle;
+    std::atomic<bool>          stop_requested{false};
+    std::thread                worker;
+
+    // Last finalised result (motion or tpose). Held under mu.
+    vmt::AutoAlignmentResult   last;
+    std::string                last_mode;   // "tpose" | "motion"
+    double                     duration_s   = 0.0;
+    double                     sample_hz    = 0.0;
+    int                        samples_seen = 0;
+
+    void join_if_done() {
+        if (worker.joinable() && state != State::Collecting) {
+            worker.join();
+        }
+    }
+};
+
 struct CrowServer::Impl {
-    crow::SimpleApp app;
-    WsClients       clients2d;
-    WsClients       clients3d;
+    crow::SimpleApp     app;
+    WsClients           clients2d;
+    WsClients           clients3d;
+    AutoAlignSession    auto_align;
 };
 
 CrowServer::CrowServer(pipeline::SnapshotBus& bus, ServerOptions opts)
@@ -194,6 +278,11 @@ void CrowServer::set_native_publisher(slimevr::NativePublisher* publisher) {
 
 void CrowServer::set_vmt_publisher(vmt::VmtPublisher* publisher) {
     vmt_publisher_ = publisher;
+}
+
+void CrowServer::set_hmd_pose_bus(vmt::HmdPoseBus* bus, double stale_threshold_ms) {
+    hmd_pose_bus_ = bus;
+    if (stale_threshold_ms > 0.0) hmd_stale_ms_ = stale_threshold_ms;
 }
 
 void CrowServer::set_tracker_bus(slimevr::SlimeTrackerBus* tracker_bus) {
@@ -294,6 +383,17 @@ void CrowServer::start() {
                 body += extra.str();
             }
         }
+        // Phase 15: HMD status block. Always present iff a bus is attached;
+        // when have_any=false the consumer (WebUI) shows "no hmd".
+        if (hmd_pose_bus_) {
+            auto snap = hmd_pose_bus_->snapshot(hmd_stale_ms_);
+            std::ostringstream extra;
+            extra << "," << make_hmd_status_fragment(snap, true) << "}";
+            if (!body.empty() && body.back() == '}') {
+                body.pop_back();
+                body += extra.str();
+            }
+        }
         crow::response resp{std::move(body)};
         resp.set_header("Content-Type", "application/json; charset=utf-8");
         return resp;
@@ -333,6 +433,235 @@ void CrowServer::start() {
         std::ostringstream out;
         out << "{\"ok\":true,\"enabled\":true,\"alignment\":";
         append_vmt_alignment_json(out, a);
+        out << "}";
+        return json_response(out.str());
+    });
+
+    // ----------------------------------------------------------------------
+    // Phase 15: HMD-driven auto alignment.
+    //
+    // tpose:        single-shot from a paired HMD/chest snapshot.
+    // motion/start: background thread accumulates HMD/chest xz pairs for
+    //               `duration_s` at `sample_hz`, then solves on completion.
+    //               One session at a time.
+    // motion/stop:  request the worker to stop early and return.
+    // status:       last-finalised result + state.
+    // ----------------------------------------------------------------------
+    CROW_ROUTE(app, "/api/vmt/alignment/auto/tpose").methods(crow::HTTPMethod::POST)
+    ([this](const crow::request& /*req*/) {
+        if (!vmt_publisher_) {
+            return json_response("{\"ok\":false,\"err\":\"vmt publisher disabled\"}", 409);
+        }
+        if (!hmd_pose_bus_) {
+            return json_response("{\"ok\":false,\"err\":\"hmd pose bus not attached\"}", 409);
+        }
+        if (!tracker_bus_) {
+            return json_response("{\"ok\":false,\"err\":\"tracker bus not attached\"}", 409);
+        }
+
+        // Block tpose while a motion session is collecting.
+        auto& sess = impl_->auto_align;
+        {
+            std::lock_guard<std::mutex> g(sess.mu);
+            if (sess.state == AutoAlignSession::State::Collecting) {
+                return json_response(
+                    "{\"ok\":false,\"err\":\"motion session in progress\"}", 409);
+            }
+        }
+        // Reap a finished motion worker, if any, before starting new work.
+        if (sess.worker.joinable()) sess.worker.join();
+
+        auto hmd_snap = hmd_pose_bus_->snapshot(hmd_stale_ms_);
+        if (!hmd_snap.have_any) {
+            return json_response(
+                "{\"ok\":false,\"err\":\"no hmd packets yet\",\"status\":\"no_hmd\"}", 409);
+        }
+        if (hmd_snap.stale) {
+            return json_response(
+                "{\"ok\":false,\"err\":\"hmd packet stale\",\"status\":\"stale_hmd\"}", 409);
+        }
+
+        auto trk = tracker_bus_->snapshot();
+        if (!trk.has_data) {
+            return json_response(
+                "{\"ok\":false,\"err\":\"no tracker data yet\"}", 409);
+        }
+        const auto& chest = trk.trackers[static_cast<std::size_t>(
+            slimevr::TrackerRole::Chest)];
+        if (!chest.valid) {
+            return json_response(
+                "{\"ok\":false,\"err\":\"chest tracker invalid\"}", 409);
+        }
+
+        vmt::VmtPos  cpos;
+        vmt::VmtQuat cquat;
+        chest_in_vmt(chest, cpos, cquat);
+        auto r = vmt::solve_tpose(hmd_snap.pose, cpos, cquat);
+
+        {
+            std::lock_guard<std::mutex> g(sess.mu);
+            sess.last           = r;
+            sess.last_mode      = "tpose";
+            sess.samples_seen   = 1;
+            sess.state = (r.status == vmt::AutoAlignmentStatus::Ok)
+                ? AutoAlignSession::State::Ok
+                : AutoAlignSession::State::Err;
+        }
+        if (r.status == vmt::AutoAlignmentStatus::Ok) {
+            vmt_publisher_->set_alignment(r.alignment);
+        }
+
+        std::ostringstream out;
+        out << "{\"ok\":" << (r.status == vmt::AutoAlignmentStatus::Ok ? "true" : "false")
+            << ",\"result\":";
+        append_auto_result_json(out, r, "tpose", 1);
+        out << "}";
+        return json_response(out.str());
+    });
+
+    CROW_ROUTE(app, "/api/vmt/alignment/auto/motion/start").methods(crow::HTTPMethod::POST)
+    ([this](const crow::request& req) {
+        if (!vmt_publisher_) {
+            return json_response("{\"ok\":false,\"err\":\"vmt publisher disabled\"}", 409);
+        }
+        if (!hmd_pose_bus_) {
+            return json_response("{\"ok\":false,\"err\":\"hmd pose bus not attached\"}", 409);
+        }
+        if (!tracker_bus_) {
+            return json_response("{\"ok\":false,\"err\":\"tracker bus not attached\"}", 409);
+        }
+
+        double duration_s = 3.0;
+        double sample_hz  = 30.0;
+        if (!req.body.empty()) {
+            auto body = crow::json::load(req.body);
+            if (body && body.has("duration_s")) {
+                double v = body["duration_s"].d();
+                if (v < 0.5 || v > 30.0) {
+                    return json_response(
+                        "{\"ok\":false,\"err\":\"duration_s must be in [0.5, 30]\"}", 400);
+                }
+                duration_s = v;
+            }
+            if (body && body.has("sample_hz")) {
+                double v = body["sample_hz"].d();
+                if (v < 5.0 || v > 120.0) {
+                    return json_response(
+                        "{\"ok\":false,\"err\":\"sample_hz must be in [5, 120]\"}", 400);
+                }
+                sample_hz = v;
+            }
+        }
+
+        auto& sess = impl_->auto_align;
+        {
+            std::lock_guard<std::mutex> g(sess.mu);
+            if (sess.state == AutoAlignSession::State::Collecting) {
+                return json_response(
+                    "{\"ok\":false,\"err\":\"motion session already in progress\"}", 409);
+            }
+        }
+        if (sess.worker.joinable()) sess.worker.join();
+
+        sess.stop_requested.store(false);
+        {
+            std::lock_guard<std::mutex> g(sess.mu);
+            sess.state        = AutoAlignSession::State::Collecting;
+            sess.last_mode    = "motion";
+            sess.duration_s   = duration_s;
+            sess.sample_hz    = sample_hz;
+            sess.samples_seen = 0;
+            sess.last         = vmt::AutoAlignmentResult{};
+        }
+
+        vmt::HmdPoseBus*           hmd     = hmd_pose_bus_;
+        const double               stale   = hmd_stale_ms_;
+        slimevr::SlimeTrackerBus*  tracker = tracker_bus_;
+        vmt::VmtPublisher*         pub     = vmt_publisher_;
+
+        sess.worker = std::thread([&sess, hmd, stale, tracker, pub,
+                                   duration_s, sample_hz]() {
+            using namespace std::chrono;
+            const auto period = duration<double>(1.0 / sample_hz);
+            const auto t0     = steady_clock::now();
+            std::vector<vmt::MotionSample> samples;
+            samples.reserve(static_cast<std::size_t>(duration_s * sample_hz + 8));
+            auto next_tick = t0;
+            while (!sess.stop_requested.load()) {
+                if (steady_clock::now() - t0 >= duration<double>(duration_s)) break;
+                auto h = hmd->snapshot(stale);
+                if (h.have_any && !h.stale && h.pose.valid && tracker) {
+                    auto trk = tracker->snapshot();
+                    const auto& chest = trk.trackers[static_cast<std::size_t>(
+                        slimevr::TrackerRole::Chest)];
+                    if (trk.has_data && chest.valid) {
+                        vmt::VmtPos  cpos;
+                        vmt::VmtQuat cquat;
+                        chest_in_vmt(chest, cpos, cquat);
+                        samples.push_back({h.pose.x, h.pose.z, cpos.x, cpos.z});
+                    }
+                }
+                {
+                    std::lock_guard<std::mutex> g(sess.mu);
+                    sess.samples_seen = static_cast<int>(samples.size());
+                }
+                next_tick += duration_cast<steady_clock::duration>(period);
+                std::this_thread::sleep_until(next_tick);
+            }
+
+            auto result = vmt::solve_motion(samples);
+            {
+                std::lock_guard<std::mutex> g(sess.mu);
+                sess.last      = result;
+                sess.last_mode = "motion";
+                sess.state = (result.status == vmt::AutoAlignmentStatus::Ok)
+                    ? AutoAlignSession::State::Ok
+                    : AutoAlignSession::State::Err;
+            }
+            if (result.status == vmt::AutoAlignmentStatus::Ok && pub) {
+                pub->set_alignment(result.alignment);
+            }
+        });
+
+        std::ostringstream out;
+        out << "{\"ok\":true,\"state\":\"collecting\""
+            << ",\"duration_s\":" << duration_s
+            << ",\"sample_hz\":" << sample_hz << "}";
+        return json_response(out.str());
+    });
+
+    CROW_ROUTE(app, "/api/vmt/alignment/auto/motion/stop").methods(crow::HTTPMethod::POST)
+    ([this](const crow::request& /*req*/) {
+        auto& sess = impl_->auto_align;
+        sess.stop_requested.store(true);
+        if (sess.worker.joinable()) sess.worker.join();
+
+        std::lock_guard<std::mutex> g(sess.mu);
+        std::ostringstream out;
+        out << "{\"ok\":true,\"state\":\""
+            << (sess.state == AutoAlignSession::State::Ok ? "ok" :
+                sess.state == AutoAlignSession::State::Err ? "err" : "idle")
+            << "\",\"result\":";
+        append_auto_result_json(out, sess.last, sess.last_mode, sess.samples_seen);
+        out << "}";
+        return json_response(out.str());
+    });
+
+    CROW_ROUTE(app, "/api/vmt/alignment/auto/status")
+    ([this]() {
+        auto& sess = impl_->auto_align;
+        std::lock_guard<std::mutex> g(sess.mu);
+        const char* state_str =
+            sess.state == AutoAlignSession::State::Collecting ? "collecting" :
+            sess.state == AutoAlignSession::State::Ok         ? "ok"         :
+            sess.state == AutoAlignSession::State::Err        ? "err"        : "idle";
+        std::ostringstream out;
+        out << "{\"state\":\"" << state_str << "\""
+            << ",\"samples_seen\":" << sess.samples_seen
+            << ",\"duration_s\":" << sess.duration_s
+            << ",\"sample_hz\":" << sess.sample_hz
+            << ",\"last\":";
+        append_auto_result_json(out, sess.last, sess.last_mode, sess.samples_seen);
         out << "}";
         return json_response(out.str());
     });
@@ -448,7 +777,15 @@ void CrowServer::start() {
 void CrowServer::stop() {
     if (!server_thread_.joinable() && !publisher_thread_.joinable()) return;
     stop_.store(true);
-    if (impl_) impl_->app.stop();
+    if (impl_) {
+        // Phase 15: tear down the auto-alignment session before app.stop()
+        // so the worker thread (if collecting) exits cleanly.
+        impl_->auto_align.stop_requested.store(true);
+        if (impl_->auto_align.worker.joinable()) {
+            impl_->auto_align.worker.join();
+        }
+        impl_->app.stop();
+    }
     if (publisher_thread_.joinable()) publisher_thread_.join();
     if (server_thread_.joinable())    server_thread_.join();
 }

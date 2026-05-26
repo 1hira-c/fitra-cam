@@ -29,6 +29,7 @@ class SlimeTrackerBus;   // Phase 13 M1: tracker snapshot bus for /ws3d viz
 
 namespace fitra::vmt {
 class VmtPublisher;      // Phase 14: fwd decl; full header in crow_server.cpp
+class HmdPoseBus;        // Phase 15: HMD pose source for auto-alignment routes
 }
 
 namespace fitra::web {
@@ -81,6 +82,12 @@ public:
     // splice (and the "vmt" key disappears from the JSON).
     void set_vmt_publisher(vmt::VmtPublisher* publisher);
 
+    // Phase 15: attach the HMD pose bus so the /api/vmt/alignment/auto/*
+    // routes have an input. `stale_threshold_ms` is the value passed to
+    // HmdPoseBus::snapshot() — packets older than that are considered
+    // stale and the auto-alignment routes return StaleHmd.
+    void set_hmd_pose_bus(vmt::HmdPoseBus* bus, double stale_threshold_ms);
+
     // Start listening + broadcasting on a background thread. Returns when
     // the server is bound and ready (best-effort; Crow's run() blocks).
     void start();
@@ -102,6 +109,8 @@ private:
     slimevr::NativePublisher*      native_publisher_ = nullptr;
     slimevr::SlimeTrackerBus*      tracker_bus_     = nullptr;
     vmt::VmtPublisher*             vmt_publisher_   = nullptr;
+    vmt::HmdPoseBus*               hmd_pose_bus_    = nullptr;
+    double                         hmd_stale_ms_    = 200.0;
 
     struct Impl;
     std::unique_ptr<Impl>  impl_;

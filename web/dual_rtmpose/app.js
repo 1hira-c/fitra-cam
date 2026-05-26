@@ -88,6 +88,16 @@ const vmtAlignTotals = {
 const VMT_ALIGN_KEYS = ["x", "y", "z", "yaw_deg"];
 const VMT_ALIGN_BASE_STEP = { x: 1, y: 1, z: 1, yaw_deg: 45 };
 
+// Phase 15: auto alignment elements.
+const vmtAutoForm        = document.getElementById("vmt-auto-form");
+const vmtHmdStatus       = document.getElementById("vmt-hmd-status");
+const vmtAutoTposeBtn    = document.getElementById("vmt-auto-tpose");
+const vmtAutoStartBtn    = document.getElementById("vmt-auto-motion-start");
+const vmtAutoStopBtn     = document.getElementById("vmt-auto-motion-stop");
+const vmtAutoResult      = document.getElementById("vmt-auto-result");
+const VMT_AUTO_DURATION_S = 3.0;
+const VMT_AUTO_SAMPLE_HZ  = 30.0;
+
 const state = {
   // per-camera latest snapshot (sparse — keyed by camera id)
   bundles: {},
@@ -891,6 +901,38 @@ function update3DStats() {
       `z=${formatInputNumber(vmtAlignment?.z ?? 0)} ` +
       `yaw=${formatInputNumber(vmtAlignment?.yaw_deg ?? 0)}`
     : "\nvmt            off";
+  // Phase 15: HMD pose receiver status (block exists iff bus is attached).
+  const hmd = bundle.hmd || null;
+  let hmdLine = "";
+  let hmdStatusText = "no hmd";
+  let hmdStatusClass = "";
+  if (hmd && hmd.enabled) {
+    if (!hmd.have_any) {
+      hmdStatusText  = "waiting for hmd";
+      hmdStatusClass = "";
+      hmdLine = "\nhmd            waiting";
+    } else if (hmd.stale) {
+      hmdStatusText  = `stale (${Math.round(hmd.age_ms ?? 0)}ms)`;
+      hmdStatusClass = "dead";
+      hmdLine = `\nhmd            stale (${(hmd.age_ms ?? 0).toFixed(0)}ms)`;
+    } else if (hmd.valid === false) {
+      hmdStatusText  = "lost";
+      hmdStatusClass = "dead";
+      hmdLine = "\nhmd            lost";
+    } else {
+      hmdStatusText  = `tracking (${Math.round(hmd.age_ms ?? 0)}ms)`;
+      hmdStatusClass = "live";
+      const pos = hmd.pos || [0, 0, 0];
+      hmdLine =
+        `\nhmd_pos        [${pos[0]?.toFixed(3)}, ${pos[1]?.toFixed(3)}, ${pos[2]?.toFixed(3)}]` +
+        `\nhmd_yaw_deg    ${(hmd.yaw_deg ?? 0).toFixed(2)}` +
+        `\nhmd_age_ms     ${(hmd.age_ms ?? 0).toFixed(0)}`;
+    }
+  }
+  if (vmtHmdStatus) {
+    vmtHmdStatus.textContent = hmdStatusText;
+    vmtHmdStatus.className   = `vmt-align-status ${hmdStatusClass}`.trim();
+  }
   stats3d.textContent =
     `tri_fps         ${(s.tri_fps ?? 0).toFixed(2)}\n` +
     `reproj_med_px  ${(s.reproj_err_med_px ?? 0).toFixed(2)}\n` +
@@ -906,7 +948,8 @@ function update3DStats() {
     `sync_miss      ${s.sync_miss ?? 0}\n` +
     `ik_locked      ${s.ik_locked ? "true" : "false"}\n` +
     `bundle_seq     ${state.server3dSeq}` +
-    vmtLine;
+    vmtLine +
+    hmdLine;
   updateTrackerTable(bundle);
 }
 
@@ -1248,6 +1291,106 @@ if (vmtAlignReset) {
     }
   });
 }
+
+// Phase 15: auto alignment helpers.
+function setAutoResultText(text) {
+  if (vmtAutoResult) vmtAutoResult.textContent = text || "—";
+}
+
+function describeAutoResult(result) {
+  if (!result) return "—";
+  if (result.status !== "ok") {
+    return `${result.status}${result.err ? `: ${result.err}` : ""}`;
+  }
+  const a = result.alignment || {};
+  const yaw = Number.isFinite(a.yaw_deg) ? a.yaw_deg : 0;
+  const tx  = Number.isFinite(a.x) ? a.x : 0;
+  const tz  = Number.isFinite(a.z) ? a.z : 0;
+  const res = Number.isFinite(result.residual_m) ? result.residual_m : 0;
+  return `yaw=${yaw.toFixed(2)}° tx=${tx.toFixed(3)} tz=${tz.toFixed(3)} residual=${res.toFixed(4)}m (n=${result.n_samples})`;
+}
+
+async function postAutoTpose() {
+  if (!vmtAutoTposeBtn) return;
+  vmtAutoTposeBtn.disabled = true;
+  setAutoResultText("solving…");
+  try {
+    const resp = await fetch("/api/vmt/alignment/auto/tpose", { method: "POST" });
+    const data = await resp.json();
+    if (!resp.ok || data.ok === false) {
+      setAutoResultText((data && data.err) || `HTTP ${resp.status}`);
+      return;
+    }
+    setAutoResultText(describeAutoResult(data.result));
+    // Reflect the new alignment in the manual form so subsequent slider
+    // tweaks start from the auto-derived baseline.
+    if (data.result && data.result.alignment) {
+      writeVmtAlignmentForm(data.result.alignment);
+    }
+  } catch (e) {
+    setAutoResultText(e.message || "request failed");
+  } finally {
+    vmtAutoTposeBtn.disabled = false;
+  }
+}
+
+let vmtAutoMotionTimer = null;
+
+function setAutoMotionUiCollecting(on) {
+  if (vmtAutoStartBtn) vmtAutoStartBtn.disabled = on;
+  if (vmtAutoStopBtn)  vmtAutoStopBtn.disabled  = !on;
+  if (vmtAutoTposeBtn) vmtAutoTposeBtn.disabled = on;
+}
+
+async function startMotionCalib() {
+  if (!vmtAutoStartBtn) return;
+  setAutoMotionUiCollecting(true);
+  setAutoResultText("collecting…");
+  try {
+    const resp = await fetch("/api/vmt/alignment/auto/motion/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ duration_s: VMT_AUTO_DURATION_S, sample_hz: VMT_AUTO_SAMPLE_HZ }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.ok === false) {
+      setAutoMotionUiCollecting(false);
+      setAutoResultText((data && data.err) || `HTTP ${resp.status}`);
+      return;
+    }
+    // Auto-stop after duration + small slack so the server is guaranteed
+    // to have finished the solve.
+    vmtAutoMotionTimer = setTimeout(() => { stopMotionCalib(); },
+                                    Math.round((VMT_AUTO_DURATION_S + 0.4) * 1000));
+  } catch (e) {
+    setAutoMotionUiCollecting(false);
+    setAutoResultText(e.message || "request failed");
+  }
+}
+
+async function stopMotionCalib() {
+  if (vmtAutoMotionTimer !== null) { clearTimeout(vmtAutoMotionTimer); vmtAutoMotionTimer = null; }
+  try {
+    const resp = await fetch("/api/vmt/alignment/auto/motion/stop", { method: "POST" });
+    const data = await resp.json();
+    if (!resp.ok || data.ok === false) {
+      setAutoResultText((data && data.err) || `HTTP ${resp.status}`);
+    } else {
+      setAutoResultText(describeAutoResult(data.result));
+      if (data.result && data.result.status === "ok" && data.result.alignment) {
+        writeVmtAlignmentForm(data.result.alignment);
+      }
+    }
+  } catch (e) {
+    setAutoResultText(e.message || "request failed");
+  } finally {
+    setAutoMotionUiCollecting(false);
+  }
+}
+
+if (vmtAutoTposeBtn) vmtAutoTposeBtn.addEventListener("click", postAutoTpose);
+if (vmtAutoStartBtn) vmtAutoStartBtn.addEventListener("click", startMotionCalib);
+if (vmtAutoStopBtn)  vmtAutoStopBtn.addEventListener("click",  stopMotionCalib);
 
 connect();
 connect3d();

@@ -657,6 +657,13 @@ int main(int argc, char** argv) {
             if (slime_tracker_bus) {
                 server->set_tracker_bus(slime_tracker_bus.get());
             }
+            // Phase 15: always attach the HMD pose bus when --enable-3d is on,
+            // even if the receiver wasn't started. The /stats3d block then
+            // reports enabled=true / have_any=false so the WebUI can show
+            // "waiting for hmd" instead of suppressing the section.
+            if (hmd_listen_enabled) {
+                server->set_hmd_pose_bus(hmd_pose_bus.get(), hmd_stale_ms);
+            }
             server->start();
         }
 
