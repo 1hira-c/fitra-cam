@@ -198,6 +198,22 @@ set_target_properties(fitra_test_hmd_pose_receiver PROPERTIES
 
 add_test(NAME test_hmd_pose_receiver COMMAND fitra_test_hmd_pose_receiver)
 
+# Phase 15 M3: VmtAlignment auto solver — T-pose + 2D Procrustes motion mode.
+add_executable(fitra_test_auto_alignment
+    test_auto_alignment.cpp
+)
+
+target_link_libraries(fitra_test_auto_alignment PRIVATE
+    fitra_vmt
+)
+
+set_target_properties(fitra_test_auto_alignment PROPERTIES
+    OUTPUT_NAME "test_auto_alignment"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_auto_alignment COMMAND fitra_test_auto_alignment)
+
 # Phase 14: position EMA in TrackerExtractor. Mirrors test_tracker_extract
 # style; lives in fitra_slimevr because the new helper is part of
 # tracker_extract.{hpp,cpp}.

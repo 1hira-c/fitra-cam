@@ -113,6 +113,7 @@ add_library(fitra_vmt STATIC
     vmt/vmt_protocol.cpp
     vmt/vmt_publisher.cpp
     vmt/hmd_pose_receiver.cpp
+    vmt/auto_alignment.cpp
 )
 
 target_include_directories(fitra_vmt PUBLIC
