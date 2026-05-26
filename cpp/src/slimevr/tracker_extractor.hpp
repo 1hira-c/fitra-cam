@@ -32,6 +32,10 @@ namespace fitra::slimevr {
 struct TrackerExtractorOptions {
     double extract_rate_hz   = 60.0;   // produce snapshots at this cadence
     float  quat_smooth       = 0.5f;   // apply_quat_smoothing base alpha
+    // Phase 14: position EMA base alpha (apply_pos_smoothing). Independent
+    // from quat_smooth so the operator can dial pos and quat damping
+    // separately — pos jitter and roll jitter have different noise sources.
+    float  pos_smooth        = 0.5f;
     // Phase 13 M2: rolling window (in frames) used for percentile stats.
     // 120 frames ≈ 2 s at 60 Hz — long enough to catch a sustained drift but
     // short enough to react to scene changes.
@@ -68,6 +72,11 @@ private:
     // raw (unsmoothed) extractions and so the prev_quat history is preserved
     // across consumers (no double history).
     std::array<cv::Vec4f, kTrackerCount> prev_quat_{};
+
+    // Phase 14: position EMA history. Same single-history invariant as
+    // prev_quat_. Initialized to (0,0,0) in the ctor; first valid frame
+    // converges to the real position within a few frames at pos_smooth=0.5.
+    std::array<cv::Vec3f, kTrackerCount> prev_pos_{};
 
     // Phase 13 M2: per-tracker rolling stats state.
     //

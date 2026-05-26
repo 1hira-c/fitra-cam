@@ -82,6 +82,18 @@ struct MainOptions {
     double slimevr_rate_hz = 60.0;
     double slimevr_quat_smooth = 0.5;
     bool   slimevr_preview_no_reset = false;
+
+    // vmt (Phase 14 Virtual Motion Tracker publisher, SteamVR Driver direct).
+    // Independent of slimevr; both can be enabled simultaneously and share the
+    // same TrackerExtractor state (Phase 13 single-producer invariant).
+    bool   vmt_out = false;
+    std::string vmt_host = "127.0.0.1";
+    int    vmt_port = 39570;
+    double vmt_rate_hz = 60.0;
+    double vmt_pos_smooth = 0.5;             // Position EMA alpha, wired in M3
+    // "hold" (default) | "disable" | "skip" — see vmt_publisher.hpp DegenMode
+    std::string vmt_degeneracy_mode = "hold";
+    bool   vmt_disable_below_floor = false;
 };
 
 // Schema version embedded in every YAML config. Bump only when a

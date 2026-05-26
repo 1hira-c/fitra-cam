@@ -42,6 +42,7 @@ TrackerExtractor::TrackerExtractor(pipeline::Skeleton3DBus& skeleton_bus,
                                    TrackerExtractorOptions  opts)
     : skel_bus_(skeleton_bus), tracker_bus_(tracker_bus), opts_(opts) {
     for (auto& q : prev_quat_) q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
+    for (auto& p : prev_pos_)  p = cv::Vec3f{0.0f, 0.0f, 0.0f};
     for (auto& q : last_emitted_quat_) q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
 
     // Pre-allocate ring buffers + percentile scratch so the run loop is
@@ -126,6 +127,7 @@ void TrackerExtractor::run_loop() {
 
         auto trackers = raw_trackers;
         apply_quat_smoothing(trackers, prev_quat_, opts_.quat_smooth);
+        apply_pos_smoothing (trackers, prev_pos_,  opts_.pos_smooth);
 
         // ------ Phase 13 M2: per-tracker rolling stats -----------------
         SlimeTrackerStats stats_out{};

@@ -148,6 +148,58 @@ set_target_properties(fitra_test_tracker_extract PROPERTIES
 
 add_test(NAME test_tracker_extract COMMAND fitra_test_tracker_extract)
 
+# Phase 14: VMT OSC 1.0 wire-format byte-level golden test. Restored from
+# Phase 11's test_osc_roundtrip (commit a64becf) and re-pointed at the
+# `/VMT/Room/Driver` packet shape in the fifth case.
+add_executable(fitra_test_vmt_osc_writer
+    test_vmt_osc_writer.cpp
+)
+
+target_link_libraries(fitra_test_vmt_osc_writer PRIVATE
+    fitra_vmt
+)
+
+set_target_properties(fitra_test_vmt_osc_writer PROPERTIES
+    OUTPUT_NAME "test_vmt_osc_writer"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_vmt_osc_writer COMMAND fitra_test_vmt_osc_writer)
+
+# Phase 14: world→VMT Driver coordinate transform + TrackerRole index mapping.
+add_executable(fitra_test_vmt_protocol
+    test_vmt_protocol.cpp
+)
+
+target_link_libraries(fitra_test_vmt_protocol PRIVATE
+    fitra_vmt
+)
+
+set_target_properties(fitra_test_vmt_protocol PROPERTIES
+    OUTPUT_NAME "test_vmt_protocol"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_vmt_protocol COMMAND fitra_test_vmt_protocol)
+
+# Phase 14: position EMA in TrackerExtractor. Mirrors test_tracker_extract
+# style; lives in fitra_slimevr because the new helper is part of
+# tracker_extract.{hpp,cpp}.
+add_executable(fitra_test_tracker_extract_pos
+    test_tracker_extract_pos.cpp
+)
+
+target_link_libraries(fitra_test_tracker_extract_pos PRIVATE
+    fitra_slimevr
+)
+
+set_target_properties(fitra_test_tracker_extract_pos PROPERTIES
+    OUTPUT_NAME "test_tracker_extract_pos"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_tracker_extract_pos COMMAND fitra_test_tracker_extract_pos)
+
 # Backlog (`--config PATH`): MainOptions YAML loader, CLI overlay precedence,
 # and validate_options() — pure parser + checks, no TensorRT / CUDA / OpenCV.
 add_executable(fitra_test_main_config

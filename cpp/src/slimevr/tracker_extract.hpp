@@ -98,6 +98,24 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           float base_alpha);
 
+// Phase 14: per-tracker position exponential moving average.
+//   curr_i.pos ← prev_pos_i + base_alpha · (curr_i.pos − prev_pos_i)
+// base_alpha ∈ [0, 1]. 0 = freeze (prev forever), 1 = no smoothing.
+//
+// Unlike apply_quat_smoothing, this does NOT modulate the alpha by
+// roll_confidence — pos noise (camera triangulation reprojection error /
+// keypoint score) is independent of roll observability. Invalid trackers
+// keep prev_pos unchanged (curr.pos is replaced by prev_pos so the publisher
+// can still see a stable position).
+//
+// Wired into TrackerExtractor::run_loop directly after apply_quat_smoothing
+// so Phase 14's VMT publisher (which sends pos on the wire) and the WebUI
+// viz (which renders pos via AxesHelper) both see one shared smoothed
+// history — same architectural invariant as the quat path.
+void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+                         std::array<cv::Vec3f, kTrackerCount>& prev_pos,
+                         float base_alpha);
+
 namespace detail {
 // Build a (right, up, forward) → wxyz quaternion via Shoemake's matrix-to-quat.
 // Inputs need not be unit; routine orthonormalizes. Returns identity + false

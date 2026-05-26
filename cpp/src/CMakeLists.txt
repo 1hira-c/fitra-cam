@@ -102,6 +102,26 @@ target_link_libraries(fitra_slimevr PUBLIC
     opencv_core
 )
 
+# VMT (Virtual Motion Tracker) integration: OSC 1.0 writer + /VMT/Room/Driver
+# wire encoder + world→Driver coordinate transform. Phase 14.
+#
+# Separate from fitra_slimevr because VMT bypasses SlimeVR Server entirely
+# (it targets SteamVR Driver directly). Shares TrackerRole / kTrackerCount /
+# SlimeTracker via the fitra_slimevr public headers.
+add_library(fitra_vmt STATIC
+    vmt/osc_writer.cpp
+    vmt/vmt_protocol.cpp
+    vmt/vmt_publisher.cpp
+)
+
+target_include_directories(fitra_vmt PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(fitra_vmt PUBLIC
+    fitra_slimevr
+)
+
 # Crow HTTP+WebSocket server.
 add_library(fitra_web STATIC
     web/crow_server.cpp
@@ -110,6 +130,7 @@ add_library(fitra_web STATIC
 target_link_libraries(fitra_web PUBLIC
     fitra_pipeline
     fitra_slimevr     # /stats3d reads NativePublisher::stats() when attached
+    fitra_vmt         # Phase 14: /stats3d also splices VmtPublisher::stats()
     Crow::Crow
 )
 
@@ -136,6 +157,7 @@ target_link_libraries(fitra_cam_main PRIVATE
     fitra_config
     fitra_pipeline
     fitra_web
+    fitra_vmt
 )
 
 set_target_properties(fitra_cam_main PROPERTIES

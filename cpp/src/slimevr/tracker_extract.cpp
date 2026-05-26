@@ -468,4 +468,25 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
     }
 }
 
+void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+                         std::array<cv::Vec3f, kTrackerCount>& prev_pos,
+                         float base_alpha) {
+    base_alpha = std::clamp(base_alpha, 0.0f, 1.0f);
+    for (std::size_t i = 0; i < kTrackerCount; ++i) {
+        if (!curr[i].valid) {
+            // Hold previous position: publisher sees prev via curr, and
+            // prev_pos itself is left untouched so a tracker can recover
+            // from a dropped frame without snapping back through (0,0,0).
+            curr[i].pos = prev_pos[i];
+            continue;
+        }
+        cv::Vec3f& p = prev_pos[i];
+        const cv::Vec3f q = curr[i].pos;
+        p[0] += base_alpha * (q[0] - p[0]);
+        p[1] += base_alpha * (q[1] - p[1]);
+        p[2] += base_alpha * (q[2] - p[2]);
+        curr[i].pos = p;
+    }
+}
+
 }  // namespace fitra::slimevr

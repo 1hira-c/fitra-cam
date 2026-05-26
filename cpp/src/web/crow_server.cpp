@@ -1,16 +1,19 @@
 #include "web/crow_server.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <mutex>
 #include <set>
 #include <sstream>
+#include <string_view>
 
 #define CROW_MAIN
 #include <crow.h>
 
 #include "slimevr/native_publisher.hpp"
 #include "slimevr/slime_tracker_bus.hpp"
+#include "vmt/vmt_publisher.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::web {
@@ -45,6 +48,87 @@ std::string guess_content_type(const std::filesystem::path& p) {
     if (ext == ".png")  return "image/png";
     if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
     return "application/octet-stream";
+}
+
+std::string json_escape(std::string_view s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    constexpr char hex[] = "0123456789abcdef";
+                    out += "\\u00";
+                    out += hex[(c >> 4) & 0xf];
+                    out += hex[c & 0xf];
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out;
+}
+
+void append_vmt_alignment_json(std::ostringstream& out,
+                               const vmt::VmtAlignment& a) {
+    out << "{\"x\":" << a.x
+        << ",\"y\":" << a.y
+        << ",\"z\":" << a.z
+        << ",\"yaw_deg\":" << a.yaw_deg
+        << "}";
+}
+
+std::string make_vmt_stats_fragment(const vmt::VmtPublisher& publisher) {
+    auto s = publisher.stats();
+    const auto& o = publisher.options();
+    std::ostringstream out;
+    out << "\"vmt\":{\"sent_bundles\":"          << s.sent_bundles
+        << ",\"sent_trackers\":"                  << s.sent_trackers
+        << ",\"disabled_count\":"                 << s.disabled_count
+        << ",\"skipped_invalid_bundles\":"        << s.skipped_invalid_bundles
+        << ",\"last_send_ms\":"                   << s.last_send_ms
+        << ",\"rate_hz\":"                        << o.send_rate_hz
+        << ",\"port\":"                           << o.port
+        << ",\"host\":\""                         << json_escape(o.host) << "\""
+        << ",\"degeneracy_mode\":\""              << json_escape(vmt::degen_mode_name(o.degeneracy_mode)) << "\""
+        << ",\"alignment\":";
+    append_vmt_alignment_json(out, publisher.alignment());
+    out << "}";
+    return out.str();
+}
+
+bool read_required_number(const crow::json::rvalue& body,
+                          const char* key,
+                          float& out,
+                          std::string& err) {
+    if (!body.has(key)) {
+        err = std::string("missing field ") + key;
+        return false;
+    }
+    const auto& value = body[key];
+    if (value.t() != crow::json::type::Number) {
+        err = std::string("invalid field ") + key;
+        return false;
+    }
+    const double v = value.d();
+    if (!std::isfinite(v)) {
+        err = std::string("invalid field ") + key;
+        return false;
+    }
+    const float f = static_cast<float>(v);
+    if (!std::isfinite(f)) {
+        err = std::string("invalid field ") + key;
+        return false;
+    }
+    out = f;
+    return true;
 }
 
 bool role_from_string(const std::string& name, slimevr::TrackerRole& out) {
@@ -106,6 +190,10 @@ void CrowServer::set_calibration_session(pipeline::CalibrationSession* session,
 
 void CrowServer::set_native_publisher(slimevr::NativePublisher* publisher) {
     native_publisher_ = publisher;
+}
+
+void CrowServer::set_vmt_publisher(vmt::VmtPublisher* publisher) {
+    vmt_publisher_ = publisher;
 }
 
 void CrowServer::set_tracker_bus(slimevr::SlimeTrackerBus* tracker_bus) {
@@ -195,9 +283,58 @@ void CrowServer::start() {
                 body += extra.str();
             }
         }
+        // Phase 14: splice VMT publisher stats. Stacks on top of the slimevr
+        // splice (body now ends in `}` again after that), or applies fresh if
+        // slimevr is not attached.
+        if (vmt_publisher_) {
+            std::ostringstream extra;
+            extra << "," << make_vmt_stats_fragment(*vmt_publisher_) << "}";
+            if (!body.empty() && body.back() == '}') {
+                body.pop_back();
+                body += extra.str();
+            }
+        }
         crow::response resp{std::move(body)};
         resp.set_header("Content-Type", "application/json; charset=utf-8");
         return resp;
+    });
+
+    CROW_ROUTE(app, "/api/vmt/alignment")
+    ([this]() {
+        std::ostringstream out;
+        out << "{\"enabled\":" << (vmt_publisher_ ? "true" : "false")
+            << ",\"alignment\":";
+        append_vmt_alignment_json(out,
+            vmt_publisher_ ? vmt_publisher_->alignment() : vmt::VmtAlignment{});
+        out << "}";
+        return json_response(out.str());
+    });
+
+    CROW_ROUTE(app, "/api/vmt/alignment").methods(crow::HTTPMethod::POST)
+    ([this](const crow::request& req) {
+        if (!vmt_publisher_) {
+            return json_response("{\"ok\":false,\"err\":\"vmt publisher disabled\"}", 409);
+        }
+        auto body = crow::json::load(req.body);
+        if (!body) {
+            return json_response("{\"ok\":false,\"err\":\"invalid json\"}", 400);
+        }
+        vmt::VmtAlignment a;
+        std::string err;
+        if (!read_required_number(body, "x", a.x, err)
+            || !read_required_number(body, "y", a.y, err)
+            || !read_required_number(body, "z", a.z, err)
+            || !read_required_number(body, "yaw_deg", a.yaw_deg, err)) {
+            std::ostringstream out;
+            out << "{\"ok\":false,\"err\":\"" << json_escape(err) << "\"}";
+            return json_response(out.str(), 400);
+        }
+        vmt_publisher_->set_alignment(a);
+        std::ostringstream out;
+        out << "{\"ok\":true,\"enabled\":true,\"alignment\":";
+        append_vmt_alignment_json(out, a);
+        out << "}";
+        return json_response(out.str());
     });
 
     CROW_ROUTE(app, "/api/slimevr/corrections")
@@ -443,7 +580,12 @@ void CrowServer::publisher_loop() {
         if (tracker_bus_) {
             trackers_fragment = slimevr::make_tracker_bundle_fragment(*tracker_bus_);
         }
-        auto msg3d = bus3d_ ? bus3d_->make_bundle_json(trackers_fragment)
+        std::string extra3d = trackers_fragment;
+        if (vmt_publisher_) {
+            if (!extra3d.empty()) extra3d += ",";
+            extra3d += make_vmt_stats_fragment(*vmt_publisher_);
+        }
+        auto msg3d = bus3d_ ? bus3d_->make_bundle_json(extra3d)
                             : pipeline::make_disabled_3d_json();
         {
             std::lock_guard<std::mutex> lk{impl_->clients2d.mu};
