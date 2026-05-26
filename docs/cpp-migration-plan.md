@@ -208,6 +208,17 @@ fitra-cam/
 - M1: VMT wire (`osc_writer` 復元 + `vmt_protocol`) + 8 ctest, M2: VMT publisher + CLI 配線 + main 統合, M3: 位置 EMA を TrackerExtractor に追加 + 4 ctest, M4: `/stats3d` に `vmt` ブロック splice, M5: 本 doc + 検証戦略表行 + 実機 E2E
 - 詳細は [`phase14-vmt-steamvr.md`](phase14-vmt-steamvr.md)
 
+### Phase 15 — SteamVR HMD pose 駆動の自動 VMT alignment (2026-05-26 着手)
+
+- Phase 14 の手動 alignment UI (yaw + xyz offset) では yaw 数度の誤差で足元が大きくずれ、被験者ごとに毎回数十秒の調整が必要だった。Phase 15 で **SteamVR 側 HMD の現在 pose を取り込み、chest tracker との対応から VmtAlignment を 2D Procrustes で自動算出** する経路を確立する
+- **Windows 側は独立 overlay app `vmt_hmd_pose_sender` を新設** (`windows/vmt_hmd_pose_sender/`)。VMT 本体は触らない。OpenVR の `VRApplication_Background` + `TrackingUniverseStanding` で HMD pose を取り、`/fitra/hmd_pose` を 60 Hz UDP で Jetson に送る
+- Jetson 側 `HmdPoseReceiver` (UDP listen + 手書き OSC parser) → `HmdPoseBus` (latest-wins + stale 判定) → `AutoAlignmentSolver` (`cv::SVD` ベース 2D Procrustes, Eigen 引かない)
+- 操作は (a) T ポーズで瞬時キャリブ (`solve_tpose` n=1) と (b) 3 秒間歩行で精度モード (`solve_motion` 2D Procrustes, default n=90) の 2 通り。両方とも結果は `VmtAlignment` (手動 UI と同 channel) に流し込み、`writeVmtAlignmentForm` で UI にも反映 → 自動→手動微調整の連続フロー
+- HMD = 頭頂 / chest = 胴体中心の Y 差 (個人差 0.35–0.55m) は自動では触らない (`alignment.y` 据え置き)。Y は手動 slider で被験者ごとに合わせる運用
+- Room Matrix 自動化、alignment YAML 永続化、Y 軸自動補正、複数 reference 選択は Phase 16 候補
+- M1: Windows overlay app, M2: HmdPoseBus + HmdPoseReceiver + CLI 配線 + 4 ctest, M3: AutoAlignment solver (`solve_tpose` + 2D Procrustes) + 8 ctest, M4: `/api/vmt/alignment/auto/*` 4 ルート + Web UI 新 form + `/stats3d.hmd` splice, M5: 本 doc + 検証戦略表行
+- 詳細は [`phase15-vmt-hmd-auto-align.md`](phase15-vmt-hmd-auto-align.md)
+
 ## 検証戦略
 
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
@@ -223,6 +234,7 @@ fitra-cam/
 | 12    | `ctest --test-dir cpp/build --output-on-failure -R 'tracker_extract\|firmware_protocol'` + Phase 11 Firmware UDP 経路 (`--slimevr-out --slimevr-host=<windows-ip>`) で目視 | M1 のみ完了: `test_tracker_extract` の 9 pose golden + 4 confidence ケース pass、Phase 11 経路の実機で二の腕ひねり解消 / 大腿 roll が SlimeVR GUI で追従 / 完全伸展時の roll twist 振動が収束。Bridge relay 経路 (M2-M7) は SteamVR と Named Pipe 排他 + 座標系問題で **没** にしたため archive ブランチに凍結 (詳細 [`phase12-slimevr-bridge-relay.md`](phase12-slimevr-bridge-relay.md)) |
 | 13    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --port 8000 ...` 起動 → ブラウザで `http://<jetson>:8000/` + `curl http://<jetson>:8000/stats3d` + Phase 11 経路で目視 | 3D viewer に 10 個の AxesHelper が表示・追従、`#trackers-table` が 30 Hz で更新、立位伸展時に脚 4 軸 + 上腕 2 軸が **state=frozen** + `ang_vel p95 < 1 rad/s`、歩行/しゃがみで `state=active` + `ang_vel p95 < 2 rad/s`、しゃがみ↔立位の遷移で snap なし。`ctest -R 'tracker_extract\|firmware_protocol'` で全 21 ケース pass。実機 (Phase 11 UDP 経路 SlimeVR Server GUI) で水平腕の上腕が体の捻りに rigid 共有されないこと |
 | 14    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --vmt-out --vmt-host=<windows-ip>` + Windows 側 SteamVR + VMT Manager v0.15 + VRChat 目視 | `vmt_0..vmt_9` が SteamVR Manage Trackers に出現、role 手動割当 (Waist/Chest/両足/両膝/両肘) 後 VRChat FBT で 10-point IK 追従、`/stats3d.vmt.sent_bundles` が ~60/s で増加、`disabled_count` 定常 0、`ctest -R 'vmt\|tracker_extract\|firmware_protocol'` で新 12 + 既存全 pass、`--slimevr-out` 併用で extractor state 競合なし、`nc -u -l 39570 \| xxd` で `#bundle\0` + 10 × `/VMT/Room/Driver` が 60 Hz 観測可 |
+| 15    | Windows で `vmt_hmd_pose_sender.exe --jetson <jetson-ip>` 起動 → Jetson で `./cpp/build/main --enable-3d --keypoint-format=halpe26 --vmt-out --hmd-listen-enabled ...` → `http://<jetson>:8000/` をブラウザで開く | `/stats3d.hmd` が `valid=true / age_ms < 50` で更新、Web UI の HMD status バッジが "tracking"、「Tポーズで合わせる」押下で yaw/tx/tz が手動 form に反映され SteamVR avatar が HMD と一致、「移動キャリブ開始 (3s)」で歩行後 `residual_m < 0.02m`、`ctest --output-on-failure -R 'hmd_pose\|auto_alignment\|vmt'` で新 12 + 既存全 pass |
 | 番外 #9 | `./cpp/build/tools/det_bench --frame outputs/recorded_rtmpose/20260515_064342/raw_cam0_frame0.jpg --iters 300 --warmup 50 --engine outputs/tensorrt_engines/yolox_tiny.fp32.engine --engine outputs/tensorrt_engines/yolox_s.fp16.engine` | yolox-s FP16 の median latency が yolox-tiny FP32 の +10% 以内に収まる (Orin Nano Super, 22→24ms 帯)。`Yolox` ロード時のログに `input_size auto-set from engine: 640` が出る。 詳細は [`research/yolox-detector-eval-result.md`](research/yolox-detector-eval-result.md) |
 
 ## リスク・未確定事項
