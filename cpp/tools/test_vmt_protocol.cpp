@@ -104,6 +104,62 @@ void test_index_mapping() {
     if (fitra::slimevr::kTrackerCount             != 10) throw std::runtime_error("kTrackerCount != 10");
 }
 
+void test_alignment_identity() {
+    fitra::vmt::VmtPos pos{1.0f, 2.0f, 3.0f};
+    fitra::vmt::VmtQuat quat{0.0f, 0.0f, 0.0f, 1.0f};
+    fitra::vmt::apply_vmt_alignment(pos, quat, fitra::vmt::VmtAlignment{});
+    expect_near(pos.x, 1.0f, 1e-6f, "align identity.pos.x");
+    expect_near(pos.y, 2.0f, 1e-6f, "align identity.pos.y");
+    expect_near(pos.z, 3.0f, 1e-6f, "align identity.pos.z");
+    expect_near(quat.x, 0.0f, 1e-6f, "align identity.quat.x");
+    expect_near(quat.y, 0.0f, 1e-6f, "align identity.quat.y");
+    expect_near(quat.z, 0.0f, 1e-6f, "align identity.quat.z");
+    expect_near(quat.w, 1.0f, 1e-6f, "align identity.quat.w");
+}
+
+void test_alignment_translation() {
+    fitra::vmt::VmtPos pos{1.0f, 2.0f, 3.0f};
+    fitra::vmt::VmtQuat quat{0.0f, 0.0f, 0.0f, 1.0f};
+    fitra::vmt::VmtAlignment a;
+    a.x = 0.5f;
+    a.y = -1.0f;
+    a.z = 2.0f;
+    fitra::vmt::apply_vmt_alignment(pos, quat, a);
+    expect_near(pos.x, 1.5f, 1e-6f, "align translation.pos.x");
+    expect_near(pos.y, 1.0f, 1e-6f, "align translation.pos.y");
+    expect_near(pos.z, 5.0f, 1e-6f, "align translation.pos.z");
+}
+
+void test_alignment_yaw_position() {
+    fitra::vmt::VmtPos pos{1.0f, 0.0f, 0.0f};
+    fitra::vmt::VmtQuat quat{0.0f, 0.0f, 0.0f, 1.0f};
+    fitra::vmt::VmtAlignment a;
+    a.yaw_deg = 90.0f;
+    fitra::vmt::apply_vmt_alignment(pos, quat, a);
+    const float k = std::sqrt(2.0f) / 2.0f;
+    expect_near(pos.x,  0.0f, 1e-5f, "align yaw.pos.x");
+    expect_near(pos.y,  0.0f, 1e-5f, "align yaw.pos.y");
+    expect_near(pos.z, -1.0f, 1e-5f, "align yaw.pos.z");
+    expect_near(quat.x, 0.0f, 1e-5f, "align yaw.quat.x");
+    expect_near(quat.y, k,    1e-5f, "align yaw.quat.y");
+    expect_near(quat.z, 0.0f, 1e-5f, "align yaw.quat.z");
+    expect_near(quat.w, k,    1e-5f, "align yaw.quat.w");
+}
+
+void test_alignment_yaw_quat_left_multiply() {
+    const float k = std::sqrt(2.0f) / 2.0f;
+    fitra::vmt::VmtPos pos{0.0f, 0.0f, 0.0f};
+    // Input is +X 90 degrees in VMT xyzw.
+    fitra::vmt::VmtQuat quat{k, 0.0f, 0.0f, k};
+    fitra::vmt::VmtAlignment a;
+    a.yaw_deg = 90.0f;
+    fitra::vmt::apply_vmt_alignment(pos, quat, a);
+    expect_near(quat.x,  0.5f, 1e-5f, "align yaw left-mul.quat.x");
+    expect_near(quat.y,  0.5f, 1e-5f, "align yaw left-mul.quat.y");
+    expect_near(quat.z, -0.5f, 1e-5f, "align yaw left-mul.quat.z");
+    expect_near(quat.w,  0.5f, 1e-5f, "align yaw left-mul.quat.w");
+}
+
 }  // namespace
 
 int main() {
@@ -111,6 +167,10 @@ int main() {
         test_pos_cardinals();
         test_quat_cardinals();
         test_index_mapping();
+        test_alignment_identity();
+        test_alignment_translation();
+        test_alignment_yaw_position();
+        test_alignment_yaw_quat_left_multiply();
         std::puts("test_vmt_protocol ok");
         return 0;
     } catch (const std::exception& e) {

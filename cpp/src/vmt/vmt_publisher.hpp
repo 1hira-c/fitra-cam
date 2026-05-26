@@ -26,6 +26,7 @@
 #include "slimevr/slime_tracker_bus.hpp"
 #include "slimevr/tracker_extract.hpp"
 #include "vmt/osc_writer.hpp"
+#include "vmt/vmt_protocol.hpp"
 
 namespace fitra::vmt {
 
@@ -79,6 +80,12 @@ public:
     VmtPublisherStats stats() const;
     const VmtPublisherOptions& options() const { return opts_; }
 
+    // Temporary runtime-only manual offset for aligning VMT trackers with the
+    // SteamVR HMD playspace. Thread-safe; changes take effect on the next
+    // send-loop bundle.
+    void set_alignment(const VmtAlignment& alignment);
+    VmtAlignment alignment() const;
+
 private:
     void send_loop();
 
@@ -92,6 +99,9 @@ private:
 
     mutable std::mutex          stats_mu_;
     VmtPublisherStats           stats_;
+
+    mutable std::mutex          alignment_mu_;
+    VmtAlignment                alignment_;
 };
 
 }  // namespace fitra::vmt

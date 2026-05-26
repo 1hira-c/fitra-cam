@@ -35,6 +35,46 @@
       <div id="status3d" class="canvas-status">(no 3D data)</div>
     </div>
     <pre id="stats3d" class="stats">waiting…</pre>
+    <form id="vmt-align-form" class="vmt-align" aria-label="VMT alignment">
+      <div class="vmt-align-head">
+        <h3>VMT alignment</h3>
+        <button type="submit">Apply</button>
+        <button type="button" id="vmt-align-reset">Reset</button>
+        <span id="vmt-align-status" class="vmt-align-status">waiting…</span>
+      </div>
+      <div class="vmt-axis-row">
+        <label for="vmt-align-x-slider">X</label>
+        <input id="vmt-align-x-slider" class="vmt-align-slider" data-axis="x"
+               type="range" min="-0.5" max="0.5" step="0.005" value="0">
+        <input id="vmt-align-x" class="vmt-align-number" name="x"
+               type="number" step="1" value="0" aria-label="X base">
+        <output id="vmt-align-x-total" class="vmt-align-total" for="vmt-align-x vmt-align-x-slider">0</output>
+      </div>
+      <div class="vmt-axis-row">
+        <label for="vmt-align-y-slider">Y</label>
+        <input id="vmt-align-y-slider" class="vmt-align-slider" data-axis="y"
+               type="range" min="-0.5" max="0.5" step="0.005" value="0">
+        <input id="vmt-align-y" class="vmt-align-number" name="y"
+               type="number" step="1" value="0" aria-label="Y base">
+        <output id="vmt-align-y-total" class="vmt-align-total" for="vmt-align-y vmt-align-y-slider">0</output>
+      </div>
+      <div class="vmt-axis-row">
+        <label for="vmt-align-z-slider">Z</label>
+        <input id="vmt-align-z-slider" class="vmt-align-slider" data-axis="z"
+               type="range" min="-0.5" max="0.5" step="0.005" value="0">
+        <input id="vmt-align-z" class="vmt-align-number" name="z"
+               type="number" step="1" value="0" aria-label="Z base">
+        <output id="vmt-align-z-total" class="vmt-align-total" for="vmt-align-z vmt-align-z-slider">0</output>
+      </div>
+      <div class="vmt-axis-row">
+        <label for="vmt-align-yaw-slider">yaw</label>
+        <input id="vmt-align-yaw-slider" class="vmt-align-slider" data-axis="yaw_deg"
+               type="range" min="-45" max="45" step="0.5" value="0">
+        <input id="vmt-align-yaw" class="vmt-align-number" name="yaw_deg"
+               type="number" step="45" value="0" aria-label="yaw base">
+        <output id="vmt-align-yaw-total" class="vmt-align-total" for="vmt-align-yaw vmt-align-yaw-slider">0</output>
+      </div>
+    </form>
     <table id="trackers-table" class="trackers-table" aria-label="tracker stats">
       <thead>
         <tr>

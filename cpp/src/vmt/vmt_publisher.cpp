@@ -101,6 +101,16 @@ VmtPublisherStats VmtPublisher::stats() const {
     return stats_;
 }
 
+void VmtPublisher::set_alignment(const VmtAlignment& alignment) {
+    std::lock_guard<std::mutex> lk{alignment_mu_};
+    alignment_ = alignment;
+}
+
+VmtAlignment VmtPublisher::alignment() const {
+    std::lock_guard<std::mutex> lk{alignment_mu_};
+    return alignment_;
+}
+
 void VmtPublisher::send_loop() {
     using clk = std::chrono::steady_clock;
     const auto period_d =
@@ -129,6 +139,7 @@ void VmtPublisher::send_loop() {
 
         writer.clear();
         writer.begin_bundle(OscWriter::ntp_timetag_now());
+        const VmtAlignment alignment = this->alignment();
 
         std::uint64_t msgs_this_bundle = 0;
         std::uint64_t disabled_this_bundle = 0;
@@ -153,6 +164,7 @@ void VmtPublisher::send_loop() {
             VmtPos  pos  = world_pos_to_vmt(t.pos[0], t.pos[1], t.pos[2]);
             VmtQuat quat = world_quat_to_vmt(t.quat_wxyz[0], t.quat_wxyz[1],
                                               t.quat_wxyz[2], t.quat_wxyz[3]);
+            apply_vmt_alignment(pos, quat, alignment);
             encode_vmt_room_driver(writer,
                                    vmt_index_for(t.role),
                                    enable,

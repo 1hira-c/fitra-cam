@@ -112,6 +112,22 @@ vmt:
   disable_below_floor: false
 ```
 
+## 暫定 WebUI 手動位置合わせ
+
+VMT 経由では SteamVR/HMD playspace と Jetson 側 tracker 座標の原点・向きを合わせる必要がある。HMD pose を使った自動位置合わせは別フェーズとし、当面は WebUI の 3D panel から手動で VMT 送信値へオフセットをかける。
+
+- UI: `http://<jetson>:8000/` の `VMT alignment`
+- API:
+  - `GET /api/vmt/alignment`
+  - `POST /api/vmt/alignment`
+- JSON:
+
+```json
+{"x":0.0,"y":0.0,"z":0.0,"yaw_deg":0.0}
+```
+
+座標系は VMT/SteamVR Driver frame で、`X=right`, `Y=up`, `Z=back`、単位は meter。`yaw_deg` は `+Y` 軸回りの degree。適用順は `p' = R_y(yaw) * p + offset`、`q' = q_yaw * q`。WebUI は `base number + fine slider = 送信値` として扱う。`X/Y/Z` の数値 input は 1m 単位の粗調整、横幅いっぱいの slider は `-0.5..+0.5m` の微調整。`yaw` も数値 input と slider を分け、slider は `-45..+45deg` の微調整。値はプロセス内メモリだけに保持し、再起動で 0 に戻る。CLI/YAML 永続化や HMD pose 由来の自動推定は入れない。
+
 ## VMT プロトコル詳細
 
 OSC 1.0 wire format で UDP 39570 へ 1 datagram per send-loop tick:
@@ -231,7 +247,8 @@ default `hold` の根拠: Phase 11 で `valid=false` 時の SlimeVR Server 側�
     "rate_hz": 60.0,
     "port": 39570,
     "host": "192.168.1.50",
-    "degeneracy_mode": "hold"
+    "degeneracy_mode": "hold",
+    "alignment": {"x":0.0,"y":0.0,"z":0.0,"yaw_deg":0.0}
   }
 }
 ```

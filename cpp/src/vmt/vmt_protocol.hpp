@@ -23,6 +23,16 @@ namespace fitra::vmt {
 struct VmtPos  { float x, y, z; };
 struct VmtQuat { float x, y, z, w; };  // wire order = xyzw
 
+// Temporary manual alignment offset for matching VMT trackers to the SteamVR
+// HMD playspace. Values are already in VMT Driver frame:
+//   X = right, Y = up, Z = back, meters; yaw_deg rotates around +Y.
+struct VmtAlignment {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float yaw_deg = 0.0f;
+};
+
 // World frame (Z-up RH, X-right, Y-forward) → VMT Driver frame (Y-up RH,
 // X-right, Z-back). Identical to the Phase 12 Bridge transform (the Bridge
 // path also targets SteamVR's `TrackerYaw.kt` world frame "x-right, y-up,
@@ -61,6 +71,11 @@ inline VmtQuat world_quat_to_vmt(float qw, float qx, float qy, float qz) {
 inline int vmt_index_for(slimevr::TrackerRole role) {
     return static_cast<int>(role);
 }
+
+// Apply manual alignment in VMT Driver frame.
+// Order: rotate around +Y by yaw_deg, then add xyz translation.
+// Quaternion order mirrors position: q_out = q_yaw * q_in.
+void apply_vmt_alignment(VmtPos& pos, VmtQuat& quat, const VmtAlignment& alignment);
 
 // Append one `/VMT/Room/Driver` message to the writer. Caller is responsible
 // for begin_bundle / end_bundle.

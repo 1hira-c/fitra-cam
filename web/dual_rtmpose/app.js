@@ -64,6 +64,29 @@ const conn3d = document.getElementById("conn3d");
 const canvas3d = document.getElementById("canvas3d");
 const status3d = document.getElementById("status3d");
 const stats3d = document.getElementById("stats3d");
+const vmtAlignForm = document.getElementById("vmt-align-form");
+const vmtAlignStatus = document.getElementById("vmt-align-status");
+const vmtAlignReset = document.getElementById("vmt-align-reset");
+const vmtAlignInputs = {
+  x: document.getElementById("vmt-align-x"),
+  y: document.getElementById("vmt-align-y"),
+  z: document.getElementById("vmt-align-z"),
+  yaw_deg: document.getElementById("vmt-align-yaw"),
+};
+const vmtAlignSliders = {
+  x: document.getElementById("vmt-align-x-slider"),
+  y: document.getElementById("vmt-align-y-slider"),
+  z: document.getElementById("vmt-align-z-slider"),
+  yaw_deg: document.getElementById("vmt-align-yaw-slider"),
+};
+const vmtAlignTotals = {
+  x: document.getElementById("vmt-align-x-total"),
+  y: document.getElementById("vmt-align-y-total"),
+  z: document.getElementById("vmt-align-z-total"),
+  yaw_deg: document.getElementById("vmt-align-yaw-total"),
+};
+const VMT_ALIGN_KEYS = ["x", "y", "z", "yaw_deg"];
+const VMT_ALIGN_BASE_STEP = { x: 1, y: 1, z: 1, yaw_deg: 45 };
 
 const state = {
   // per-camera latest snapshot (sparse — keyed by camera id)
@@ -83,7 +106,158 @@ const state = {
   // servers omit it, so we default to coco17 for compatibility.
   kpFormat2D: "coco17",
   kpFormat3D: "coco17",
+  vmtAlignmentEnabled: false,
+  vmtPostTimer: null,
 };
+
+function formatInputNumber(v) {
+  const n = Number.isFinite(Number(v)) ? Number(v) : 0;
+  const s = n.toFixed(3).replace(/\.?0+$/, "");
+  return s === "-0" ? "0" : s;
+}
+
+function setVmtAlignmentStatus(text, className = "") {
+  if (!vmtAlignStatus) return;
+  vmtAlignStatus.textContent = text;
+  vmtAlignStatus.className = `vmt-align-status ${className}`.trim();
+}
+
+function setVmtAlignmentEnabled(enabled) {
+  state.vmtAlignmentEnabled = !!enabled;
+  for (const input of Object.values(vmtAlignInputs)) {
+    if (input) input.disabled = !enabled;
+  }
+  for (const slider of Object.values(vmtAlignSliders)) {
+    if (slider) slider.disabled = !enabled;
+  }
+  if (vmtAlignForm) {
+    for (const button of vmtAlignForm.querySelectorAll("button")) {
+      button.disabled = !enabled;
+    }
+  }
+}
+
+function splitVmtAlignmentValue(key, total) {
+  const step = VMT_ALIGN_BASE_STEP[key] ?? 1;
+  const value = Number.isFinite(Number(total)) ? Number(total) : 0;
+  let base = Math.trunc(value / step) * step;
+  let fine = value - base;
+  const min = Number(vmtAlignSliders[key]?.min ?? -step * 0.5);
+  const max = Number(vmtAlignSliders[key]?.max ??  step * 0.5);
+  if (fine > max) {
+    base += step;
+    fine -= step;
+  } else if (fine < min) {
+    base -= step;
+    fine += step;
+  }
+  return { base, fine };
+}
+
+function totalVmtAlignmentValue(key) {
+  const base = Number(vmtAlignInputs[key]?.value ?? 0);
+  const fine = Number(vmtAlignSliders[key]?.value ?? 0);
+  if (!Number.isFinite(base) || !Number.isFinite(fine)) {
+    throw new Error(`invalid ${key}`);
+  }
+  return base + fine;
+}
+
+function updateVmtAlignmentTotals() {
+  for (const key of VMT_ALIGN_KEYS) {
+    const output = vmtAlignTotals[key];
+    if (!output) continue;
+    let total = 0;
+    try {
+      total = totalVmtAlignmentValue(key);
+    } catch (e) {
+      output.textContent = "-";
+      continue;
+    }
+    output.textContent = formatInputNumber(total);
+  }
+}
+
+function writeVmtAlignmentForm(alignment, opts = {}) {
+  if (!alignment) return;
+  const splitControls = opts.splitControls !== false;
+  for (const key of VMT_ALIGN_KEYS) {
+    const total = Number(alignment[key] ?? 0);
+    const parts = splitControls ? splitVmtAlignmentValue(key, total)
+                                : { base: total, fine: Number(vmtAlignSliders[key]?.value ?? 0) };
+    if (vmtAlignInputs[key]) {
+      vmtAlignInputs[key].value = formatInputNumber(parts.base);
+    }
+    if (vmtAlignSliders[key]) {
+      vmtAlignSliders[key].value = formatInputNumber(parts.fine);
+    }
+  }
+  updateVmtAlignmentTotals();
+}
+
+function readVmtAlignmentForm() {
+  const alignment = {};
+  for (const key of VMT_ALIGN_KEYS) {
+    alignment[key] = totalVmtAlignmentValue(key);
+  }
+  return alignment;
+}
+
+async function loadVmtAlignment() {
+  if (!vmtAlignForm) return;
+  setVmtAlignmentEnabled(false);
+  setVmtAlignmentStatus("loading");
+  try {
+    const resp = await fetch("/api/vmt/alignment", { cache: "no-store" });
+    const data = await resp.json();
+    writeVmtAlignmentForm(data.alignment);
+    setVmtAlignmentEnabled(!!data.enabled);
+    setVmtAlignmentStatus(data.enabled ? "ready" : "vmt off", data.enabled ? "live" : "");
+  } catch (e) {
+    setVmtAlignmentEnabled(false);
+    setVmtAlignmentStatus("api error", "dead");
+  }
+}
+
+async function postVmtAlignment(alignment, opts = {}) {
+  const resp = await fetch("/api/vmt/alignment", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(alignment),
+  });
+  let data = null;
+  try {
+    data = await resp.json();
+  } catch (e) {
+    // fall through to status handling below
+  }
+  if (!resp.ok || !data || data.ok === false) {
+    throw new Error((data && data.err) || `HTTP ${resp.status}`);
+  }
+  if (opts.syncForm !== false) {
+    writeVmtAlignmentForm(data.alignment);
+  } else {
+    updateVmtAlignmentTotals();
+  }
+  return data.alignment;
+}
+
+function scheduleVmtAlignmentPost(delayMs = 70) {
+  if (state.vmtPostTimer !== null) {
+    clearTimeout(state.vmtPostTimer);
+  }
+  state.vmtPostTimer = setTimeout(async () => {
+    state.vmtPostTimer = null;
+    if (!state.vmtAlignmentEnabled) return;
+    setVmtAlignmentStatus("applying");
+    try {
+      await postVmtAlignment(readVmtAlignmentForm(), { syncForm: false });
+      setVmtAlignmentStatus("applied", "live");
+    } catch (e) {
+      setVmtAlignmentStatus(e.message || "apply failed", "dead");
+    }
+  }, delayMs);
+}
 
 function isVisible3DJoint(joint) {
   if (!Array.isArray(joint) || joint.length < 3) return false;
@@ -707,6 +881,16 @@ function update3DStats() {
     return;
   }
   const s = bundle.stats || {};
+  const vmt = bundle.vmt || null;
+  const vmtAlignment = vmt && vmt.alignment ? vmt.alignment : null;
+  const vmtLine = vmt
+    ? `\nvmt_bundles    ${vmt.sent_bundles ?? 0}` +
+      `\nvmt_disabled   ${vmt.disabled_count ?? 0}` +
+      `\nvmt_align      x=${formatInputNumber(vmtAlignment?.x ?? 0)} ` +
+      `y=${formatInputNumber(vmtAlignment?.y ?? 0)} ` +
+      `z=${formatInputNumber(vmtAlignment?.z ?? 0)} ` +
+      `yaw=${formatInputNumber(vmtAlignment?.yaw_deg ?? 0)}`
+    : "\nvmt            off";
   stats3d.textContent =
     `tri_fps         ${(s.tri_fps ?? 0).toFixed(2)}\n` +
     `reproj_med_px  ${(s.reproj_err_med_px ?? 0).toFixed(2)}\n` +
@@ -721,7 +905,8 @@ function update3DStats() {
     `processed      ${s.processed ?? 0}\n` +
     `sync_miss      ${s.sync_miss ?? 0}\n` +
     `ik_locked      ${s.ik_locked ? "true" : "false"}\n` +
-    `bundle_seq     ${state.server3dSeq}`;
+    `bundle_seq     ${state.server3dSeq}` +
+    vmtLine;
   updateTrackerTable(bundle);
 }
 
@@ -844,6 +1029,70 @@ if (trackerToggle) {
   });
 }
 
+if (vmtAlignForm) {
+  setVmtAlignmentEnabled(false);
+  vmtAlignForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (!state.vmtAlignmentEnabled) return;
+    if (state.vmtPostTimer !== null) {
+      clearTimeout(state.vmtPostTimer);
+      state.vmtPostTimer = null;
+    }
+    setVmtAlignmentStatus("applying");
+    try {
+      await postVmtAlignment(readVmtAlignmentForm());
+      setVmtAlignmentStatus("applied", "live");
+    } catch (e) {
+      setVmtAlignmentStatus(e.message || "apply failed", "dead");
+    }
+  });
+
+  for (const key of Object.keys(vmtAlignInputs)) {
+    const input = vmtAlignInputs[key];
+    if (!input) continue;
+    input.addEventListener("change", () => {
+      if (!state.vmtAlignmentEnabled) return;
+      updateVmtAlignmentTotals();
+      scheduleVmtAlignmentPost(0);
+    });
+  }
+
+  for (const key of Object.keys(vmtAlignSliders)) {
+    const slider = vmtAlignSliders[key];
+    if (!slider) continue;
+    slider.addEventListener("input", () => {
+      if (!state.vmtAlignmentEnabled) return;
+      updateVmtAlignmentTotals();
+      scheduleVmtAlignmentPost();
+    });
+    slider.addEventListener("change", () => {
+      if (!state.vmtAlignmentEnabled) return;
+      updateVmtAlignmentTotals();
+      scheduleVmtAlignmentPost(0);
+    });
+  }
+}
+
+if (vmtAlignReset) {
+  vmtAlignReset.addEventListener("click", async () => {
+    if (!state.vmtAlignmentEnabled) return;
+    if (state.vmtPostTimer !== null) {
+      clearTimeout(state.vmtPostTimer);
+      state.vmtPostTimer = null;
+    }
+    const zero = { x: 0, y: 0, z: 0, yaw_deg: 0 };
+    writeVmtAlignmentForm(zero);
+    setVmtAlignmentStatus("resetting");
+    try {
+      await postVmtAlignment(zero);
+      setVmtAlignmentStatus("reset", "live");
+    } catch (e) {
+      setVmtAlignmentStatus(e.message || "reset failed", "dead");
+    }
+  });
+}
+
 connect();
 connect3d();
+loadVmtAlignment();
 requestAnimationFrame(renderTick);
