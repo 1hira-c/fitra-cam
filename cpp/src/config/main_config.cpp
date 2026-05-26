@@ -150,13 +150,33 @@ void load_slimevr(const YAML::Node& section, MainOptions& out) {
     ensure_map(section, "slimevr");
     static const std::set<std::string> allowed{
         "slimevr_out", "host", "port", "rate_hz", "quat_smooth",
+        "preview_no_reset",
     };
     check_keys(section, allowed, "slimevr");
-    if (section["slimevr_out"]) out.slimevr_out         = parse_scalar<bool>(section["slimevr_out"],         "slimevr.slimevr_out");
-    if (section["host"])        out.slimevr_host        = parse_scalar<std::string>(section["host"],         "slimevr.host");
-    if (section["port"])        out.slimevr_port        = parse_scalar<int>(section["port"],                 "slimevr.port");
-    if (section["rate_hz"])     out.slimevr_rate_hz     = parse_scalar<double>(section["rate_hz"],           "slimevr.rate_hz");
-    if (section["quat_smooth"]) out.slimevr_quat_smooth = parse_scalar<double>(section["quat_smooth"],       "slimevr.quat_smooth");
+    if (section["slimevr_out"]) {
+        out.slimevr_out = parse_scalar<bool>(
+            section["slimevr_out"], "slimevr.slimevr_out");
+    }
+    if (section["host"]) {
+        out.slimevr_host = parse_scalar<std::string>(
+            section["host"], "slimevr.host");
+    }
+    if (section["port"]) {
+        out.slimevr_port = parse_scalar<int>(
+            section["port"], "slimevr.port");
+    }
+    if (section["rate_hz"]) {
+        out.slimevr_rate_hz = parse_scalar<double>(
+            section["rate_hz"], "slimevr.rate_hz");
+    }
+    if (section["quat_smooth"]) {
+        out.slimevr_quat_smooth = parse_scalar<double>(
+            section["quat_smooth"], "slimevr.quat_smooth");
+    }
+    if (section["preview_no_reset"]) {
+        out.slimevr_preview_no_reset = parse_scalar<bool>(
+            section["preview_no_reset"], "slimevr.preview_no_reset");
+    }
 }
 
 void load_vmt(const YAML::Node& section, MainOptions& out) {
@@ -289,6 +309,9 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--slimevr-port")      { out.slimevr_port = std::atoi(need(i, "--slimevr-port")); }
         else if (a == "--slimevr-rate-hz")   { out.slimevr_rate_hz = std::stod(need(i, "--slimevr-rate-hz")); }
         else if (a == "--slimevr-quat-smooth"){ out.slimevr_quat_smooth = std::stod(need(i, "--slimevr-quat-smooth")); }
+        else if (a == "--slimevr-preview-no-reset") {
+            out.slimevr_preview_no_reset = true;
+        }
         else if (a == "--vmt-out")           { out.vmt_out = true; }
         else if (a == "--vmt-host")          { out.vmt_host = need(i, "--vmt-host"); }
         else if (a == "--vmt-port")          { out.vmt_port = std::atoi(need(i, "--vmt-port")); }

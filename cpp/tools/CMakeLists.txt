@@ -30,6 +30,24 @@ set_target_properties(fitra_dump_keypoints PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
+# Issue #9 (backlog): YOLOX engine per-frame latency benchmark.
+add_executable(fitra_det_bench
+    det_bench.cpp
+)
+
+target_link_libraries(fitra_det_bench PRIVATE
+    fitra_infer
+    opencv_videoio
+    opencv_imgcodecs
+    opencv_imgproc
+    opencv_core
+)
+
+set_target_properties(fitra_det_bench PROPERTIES
+    OUTPUT_NAME "det_bench"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
 # Phase 2: single-camera live benchmark.
 add_executable(fitra_pose_bench
     pose_bench.cpp

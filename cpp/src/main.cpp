@@ -111,6 +111,8 @@ void print_help() {
         "  --slimevr-port N          UDP port (default 6969 — SlimeVR firmware port)\n"
         "  --slimevr-rate-hz F       RotationData send rate (default 60.0)\n"
         "  --slimevr-quat-smooth F   per-tracker slerp alpha 0..1 (default 0.5)\n"
+        "  --slimevr-preview-no-reset  pre-cancel SlimeVR default mounting so GUI preview\n"
+        "                              works before reset\n"
         "\n"
         "Phase 14 — Virtual Motion Tracker (VMT) → SteamVR direct (requires --enable-3d + --keypoint-format=halpe26):\n"
         "  --vmt-out                 enable the VMT OSC publisher (10 trackers, /VMT/Room/Driver)\n"
@@ -286,6 +288,8 @@ int main(int argc, char** argv) {
         auto& slimevr_port           = opts.slimevr_port;
         auto& slimevr_rate_hz        = opts.slimevr_rate_hz;
         auto& slimevr_quat_smooth    = opts.slimevr_quat_smooth;
+        auto& slimevr_preview_no_reset =
+            opts.slimevr_preview_no_reset;
         auto& vmt_out                = opts.vmt_out;
         auto& vmt_host               = opts.vmt_host;
         auto& vmt_port               = opts.vmt_port;
@@ -550,6 +554,7 @@ int main(int argc, char** argv) {
             opts.port         = static_cast<std::uint16_t>(slimevr_port);
             opts.send_rate_hz = slimevr_rate_hz;
             opts.quat_smooth  = static_cast<float>(slimevr_quat_smooth);
+            opts.preview_no_reset = slimevr_preview_no_reset;
             slime_pub = std::make_unique<fitra::slimevr::NativePublisher>(
                 *bus3d, *slime_tracker_bus, opts);
             if (!slime_pub->start()) {

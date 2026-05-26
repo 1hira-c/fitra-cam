@@ -134,7 +134,9 @@ Handshake 直後にトラッカー 10 個分まとめて送る:
 [1 u8]  accuracy_info = 0
 ```
 
-Quaternion は xyzw on wire で、SlimeVR 内部 frame (Y-up Unity LH) で解釈される。world wxyz から `world_quat_to_slime()` で `(qx, qz, -qy, -qw)` に変換。
+Quaternion は xyzw on wire で、SlimeVR Server が受信時に `AXES_OFFSET = Rx(-90°)` を左から掛ける。通常は `world_quat_to_slime()` で world wxyz (Z-up RH) を wire xyzw に変換し、Server 適用後の raw rotation が SlimeVR/Unity bone space になるようにする。
+
+SlimeVR GUI の skeleton preview は raw rotation ではなく `Tracker.getRotation()` を使うため、未 reset でも `raw * mountingOrientation` が掛かる。`--slimevr-preview-no-reset` を使うと `world_quat_to_slime_no_reset_preview_adjusted()` で SlimeVR の既定 `mountingOrientation = Quaternion.SLIMEVR.FRONT` を送信側で逆算し、さらに preview 上のズレを role 別に補正する (胸/腰/足は `Rx(+90°)`、上腕は `Rx(-180°)`、大腿/脛は `Rz(180°)`)。これにより full/yaw/mounting reset 前でも preview が bone-space の向きに近づく。WebUI の `SlimeVR correction` はこの固定補正に対する一時的な上乗せで、再起動時は 0 に戻る。
 
 ### Heartbeat (tag = 0)
 
@@ -174,6 +176,7 @@ CMake:
 --slimevr-port N          UDP port (default 6969 — SlimeVR firmware port)
 --slimevr-rate-hz F       RotationData 送出周期 (default 60.0、最大 240)
 --slimevr-quat-smooth F   per-tracker slerp alpha 0..1 (default 0.5)
+--slimevr-preview-no-reset  SlimeVR GUI preview 用に既定 mountingOrientation を相殺
 ```
 
 Gating (main.cpp で early-fail):
@@ -251,12 +254,13 @@ Terminal A 側で:
 2. Jetson 側:
    ```bash
    ./cpp/build/main --enable-3d --keypoint-format=halpe26 \
-       --slimevr-out --slimevr-host=192.168.1.50 \
+       --slimevr-out --slimevr-preview-no-reset --slimevr-host=192.168.1.50 \
        --cam0 ... --cam1 ... --calib ... --det-engine ... --pose-engine ...
    ```
 3. SlimeVR GUI で **10 個のトラッカーが Left Upper Arm / Right Upper Arm / Chest / Hip / Left Upper Leg / Right Upper Leg / Left Lower Leg / Right Lower Leg / Left Foot / Right Foot の名前で自動表示** されること (連番ならない、手動 assign 不要)。
-4. 被験者の腕上げ / しゃがみ / 歩行で各トラッカーの回転が破綻なく追従し、SteamVR Avatar の FBT が成立すること。
-5. `curl http://<jetson-ip>:8000/stats3d` の `"slimevr"` ブロックで:
+4. `--slimevr-preview-no-reset` を付けた場合、SlimeVR 側で full/yaw/mounting reset を実行しなくても GUI skeleton preview が被験者の向きで動くこと。過去に SlimeVR GUI で manual mounting を変更している tracker は、SlimeVR 側 config の mounting orientation と送信側の前提がズレるので clear/reset して確認する。
+5. 被験者の腕上げ / しゃがみ / 歩行で各トラッカーの回転が破綻なく追従し、SteamVR Avatar の FBT が成立すること。
+6. `curl http://<jetson-ip>:8000/stats3d` の `"slimevr"` ブロックで:
    - `sent_handshakes` = 1
    - `sent_sensor_info` = 10
    - `sent_rotations` が steady-state で 60×10 = 600/s 程度に増加

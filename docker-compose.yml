@@ -58,7 +58,7 @@ services:
       - "--cam1"
       - "/dev/v4l/by-path/platform-3610000.usb-usb-0:2.4:1.0-video-index0"
       - "--det-engine"
-      - "/workspace/outputs/tensorrt_engines/yolox_tiny.fp16.engine"
+      - "/workspace/outputs/tensorrt_engines/yolox_s.fp16.engine"
       - "--pose-engine"
       - "/workspace/outputs/tensorrt_engines/rtmpose_m_halpe26.fp16.engine"
       - "--keypoint-format"
@@ -74,10 +74,31 @@ services:
   # `--profile tools` を付けない限り起動しない。
   # ---------------------------------------------------------------------
   # build_engines の CLI は "--flag value" 形式 (= 区切りは受け付けない)。
+  # Issue #9 番外編で yolox-s humanart に既定差し替え。tiny は
+  # build-engines-yolox-tiny で引き続きビルド可能。
+  # ONNX は TopK K=5000 のままだと TRT 10.3 の ITopKLayer 上限 (3840) を
+  # 越えるため、TopK K=3000 に書き換えた .topk3000.onnx を入力にする。
+  # 生成方法は docs/research/yolox-detector-eval-result.md 参照。
   build-engines-yolox:
     <<: [*common-build, *nvidia-runtime, *common-volumes]
     profiles: ["tools"]
     container_name: fitra-cam-build-yolox
+    entrypoint: ["/workspace/cpp/build/tools/build_engines"]
+    command:
+      - "--preset"
+      - "yolox"
+      - "--onnx"
+      - "/workspace/outputs/onnx/yolox_s_8xb8-300e_humanart-3ef259a7.topk3000.onnx"
+      - "--output"
+      - "/workspace/outputs/tensorrt_engines/yolox_s.fp16.engine"
+      - "--fp16"
+      - "--workspace-mb"
+      - "2048"
+
+  build-engines-yolox-tiny:
+    <<: [*common-build, *nvidia-runtime, *common-volumes]
+    profiles: ["tools"]
+    container_name: fitra-cam-build-yolox-tiny
     entrypoint: ["/workspace/cpp/build/tools/build_engines"]
     command:
       - "--preset"

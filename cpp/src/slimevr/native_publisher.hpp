@@ -34,6 +34,10 @@ struct NativePublisherOptions {
     float         quat_smooth  = 0.5f;           // 0 = freeze, 1 = no smoothing
     double        heartbeat_hz = 1.0;            // background keep-alive
     std::string   firmware_version = "fitra-cam 0.1";
+    // Pre-cancel SlimeVR Server's default mountingOrientation so the GUI
+    // skeleton preview matches fitra-cam's bone-space rotations before any
+    // SlimeVR full/yaw/mounting reset.
+    bool          preview_no_reset = false;
 };
 
 struct NativePublisherStats {
@@ -44,6 +48,14 @@ struct NativePublisherStats {
     std::uint64_t skipped_invalid  = 0;   // !ik_locked or empty snapshot
     std::uint64_t ping_count       = 0;   // server pings we replied to
     double        last_send_ms     = 0.0; // wall-clock of last RotationData burst
+};
+
+struct NativePublisherDebugCorrection {
+    // Quarter turns in SlimeVR/Unity local axes, applied after the built-in
+    // no-reset preview correction. 1 = +90 degrees, 2 = 180 degrees.
+    int yaw_quarters   = 0;  // local Y
+    int pitch_quarters = 0;  // local X
+    int roll_quarters  = 0;  // local Z
 };
 
 class NativePublisher {
@@ -75,6 +87,11 @@ public:
 
     NativePublisherStats stats() const;
     const NativePublisherOptions& options() const { return opts_; }
+    std::array<NativePublisherDebugCorrection, kTrackerCount>
+    debug_corrections() const;
+    void set_debug_correction(TrackerRole role,
+                              NativePublisherDebugCorrection correction);
+    void reset_debug_corrections();
 
 private:
     void send_loop();
@@ -100,6 +117,9 @@ private:
 
     mutable std::mutex              stats_mu_;
     NativePublisherStats            stats_;
+
+    mutable std::mutex              debug_mu_;
+    std::array<NativePublisherDebugCorrection, kTrackerCount> debug_corrections_{};
 };
 
 }  // namespace fitra::slimevr

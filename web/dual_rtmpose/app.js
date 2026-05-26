@@ -911,6 +911,163 @@ function update3DStats() {
 }
 
 const trackerTbody = document.getElementById("trackers-tbody");
+const correctionTbody = document.getElementById("slimevr-corrections-tbody");
+const correctionStatus = document.getElementById("slimevr-correction-status");
+const correctionResetAll = document.getElementById("slimevr-reset-all");
+const CORRECTION_AXES = ["yaw", "pitch", "roll"];
+
+function normalizeQuarters(q) {
+  let v = Number.isFinite(q) ? Math.trunc(q) : 0;
+  v %= 4;
+  if (v < 0) v += 4;
+  return v === 3 ? -1 : v;
+}
+
+function setCorrectionStatus(text, cls = "") {
+  if (!correctionStatus) return;
+  correctionStatus.textContent = text;
+  correctionStatus.className = cls;
+}
+
+function updateCorrectionRowsEnabled(enabled) {
+  if (!correctionTbody) return;
+  for (const button of correctionTbody.querySelectorAll("button")) {
+    button.disabled = !enabled;
+  }
+  if (correctionResetAll) correctionResetAll.disabled = !enabled;
+}
+
+function ensureCorrectionRows() {
+  if (!correctionTbody) return false;
+  if (correctionTbody.dataset.built === "1") return true;
+  correctionTbody.replaceChildren();
+  for (const role of TRACKER_ROLES) {
+    const tr = document.createElement("tr");
+    tr.dataset.role = role;
+
+    const roleCell = document.createElement("td");
+    roleCell.textContent = role;
+    tr.appendChild(roleCell);
+
+    for (const axis of CORRECTION_AXES) {
+      const td = document.createElement("td");
+      const wrap = document.createElement("span");
+      wrap.className = "slimevr-axis-control";
+
+      const minus = document.createElement("button");
+      minus.type = "button";
+      minus.textContent = "-90";
+      minus.addEventListener("click", () => adjustCorrection(role, axis, -1));
+
+      const value = document.createElement("span");
+      value.className = "slimevr-axis-value";
+      value.dataset.axis = axis;
+      value.textContent = "0";
+
+      const plus = document.createElement("button");
+      plus.type = "button";
+      plus.textContent = "+90";
+      plus.addEventListener("click", () => adjustCorrection(role, axis, 1));
+
+      wrap.appendChild(minus);
+      wrap.appendChild(value);
+      wrap.appendChild(plus);
+      td.appendChild(wrap);
+      tr.appendChild(td);
+    }
+
+    const resetCell = document.createElement("td");
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.textContent = "0";
+    reset.addEventListener("click", () => resetCorrection(role));
+    resetCell.appendChild(reset);
+    tr.appendChild(resetCell);
+
+    correctionTbody.appendChild(tr);
+  }
+  correctionTbody.dataset.built = "1";
+  updateCorrectionRowsEnabled(false);
+  return true;
+}
+
+function applyCorrectionsPayload(payload) {
+  if (!ensureCorrectionRows() || !payload || !Array.isArray(payload.roles)) return;
+  for (const row of correctionTbody.children) {
+    const role = row.dataset.role;
+    const c = payload.roles.find((entry) => entry.role === role) || {};
+    for (const axis of CORRECTION_AXES) {
+      const q = normalizeQuarters(Number(c[`${axis}_quarters`] ?? 0));
+      const value = row.querySelector(`[data-axis="${axis}"]`);
+      if (value) value.textContent = String(q * 90);
+    }
+  }
+  updateCorrectionRowsEnabled(true);
+  setCorrectionStatus(payload.preview_no_reset === false ? "preview off" : "ready", "live");
+}
+
+async function loadCorrections() {
+  if (!ensureCorrectionRows()) return;
+  try {
+    const res = await fetch("/api/slimevr/corrections", { cache: "no-store" });
+    const payload = await res.json();
+    if (!res.ok || !payload.ok) {
+      updateCorrectionRowsEnabled(false);
+      setCorrectionStatus(payload.err || "unavailable", "dead");
+      return;
+    }
+    applyCorrectionsPayload(payload);
+  } catch (e) {
+    updateCorrectionRowsEnabled(false);
+    setCorrectionStatus("unavailable", "dead");
+  }
+}
+
+function rowCorrection(role) {
+  const row = correctionTbody?.querySelector(`tr[data-role="${role}"]`);
+  const out = {};
+  for (const axis of CORRECTION_AXES) {
+    const value = row?.querySelector(`[data-axis="${axis}"]`);
+    out[`${axis}_quarters`] = normalizeQuarters(Number(value?.textContent ?? 0) / 90);
+  }
+  return out;
+}
+
+async function postCorrection(body) {
+  updateCorrectionRowsEnabled(false);
+  setCorrectionStatus("applying", "");
+  try {
+    const res = await fetch("/api/slimevr/corrections", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const payload = await res.json();
+    if (!res.ok || !payload.ok) {
+      setCorrectionStatus(payload.err || "failed", "dead");
+      updateCorrectionRowsEnabled(true);
+      return;
+    }
+    applyCorrectionsPayload(payload);
+  } catch (e) {
+    setCorrectionStatus("failed", "dead");
+    updateCorrectionRowsEnabled(true);
+  }
+}
+
+function adjustCorrection(role, axis, delta) {
+  const current = rowCorrection(role);
+  current[`${axis}_quarters`] = normalizeQuarters(current[`${axis}_quarters`] + delta);
+  postCorrection({ role, ...current });
+}
+
+function resetCorrection(role) {
+  postCorrection({ role, reset: true });
+}
+
+if (correctionResetAll) {
+  correctionResetAll.addEventListener("click", () => postCorrection({ reset: true }));
+}
 
 // Phase 13 M2: live per-tracker stats table. Built once (lazy on first
 // bundle), then cells are updated in place to avoid DOM churn at 30Hz.
@@ -1095,4 +1252,5 @@ if (vmtAlignReset) {
 connect();
 connect3d();
 loadVmtAlignment();
+loadCorrections();
 requestAnimationFrame(renderTick);

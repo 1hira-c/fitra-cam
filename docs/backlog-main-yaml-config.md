@@ -107,6 +107,7 @@ slimevr:
   port: 6969
   rate_hz: 60.0
   quat_smooth: 0.5
+  preview_no_reset: false
 ```
 
 ルール:

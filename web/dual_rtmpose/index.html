@@ -75,6 +75,25 @@
         <output id="vmt-align-yaw-total" class="vmt-align-total" for="vmt-align-yaw vmt-align-yaw-slider">0</output>
       </div>
     </form>
+    <div class="slimevr-corrections">
+      <div class="slimevr-corrections-head">
+        <h3>SlimeVR correction</h3>
+        <button type="button" id="slimevr-reset-all">reset all</button>
+        <span id="slimevr-correction-status">not loaded</span>
+      </div>
+      <table id="slimevr-corrections-table" class="trackers-table slimevr-table" aria-label="SlimeVR correction controls">
+        <thead>
+          <tr>
+            <th>tracker</th>
+            <th>yaw</th>
+            <th>pitch</th>
+            <th>roll</th>
+            <th>reset</th>
+          </tr>
+        </thead>
+        <tbody id="slimevr-corrections-tbody"></tbody>
+      </table>
+    </div>
     <table id="trackers-table" class="trackers-table" aria-label="tracker stats">
       <thead>
         <tr>

@@ -81,6 +81,7 @@ struct MainOptions {
     int    slimevr_port = 6969;
     double slimevr_rate_hz = 60.0;
     double slimevr_quat_smooth = 0.5;
+    bool   slimevr_preview_no_reset = false;
 
     // vmt (Phase 14 Virtual Motion Tracker publisher, SteamVR Driver direct).
     // Independent of slimevr; both can be enabled simultaneously and share the

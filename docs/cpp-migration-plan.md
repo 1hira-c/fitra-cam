@@ -223,6 +223,7 @@ fitra-cam/
 | 12    | `ctest --test-dir cpp/build --output-on-failure -R 'tracker_extract\|firmware_protocol'` + Phase 11 Firmware UDP 経路 (`--slimevr-out --slimevr-host=<windows-ip>`) で目視 | M1 のみ完了: `test_tracker_extract` の 9 pose golden + 4 confidence ケース pass、Phase 11 経路の実機で二の腕ひねり解消 / 大腿 roll が SlimeVR GUI で追従 / 完全伸展時の roll twist 振動が収束。Bridge relay 経路 (M2-M7) は SteamVR と Named Pipe 排他 + 座標系問題で **没** にしたため archive ブランチに凍結 (詳細 [`phase12-slimevr-bridge-relay.md`](phase12-slimevr-bridge-relay.md)) |
 | 13    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --port 8000 ...` 起動 → ブラウザで `http://<jetson>:8000/` + `curl http://<jetson>:8000/stats3d` + Phase 11 経路で目視 | 3D viewer に 10 個の AxesHelper が表示・追従、`#trackers-table` が 30 Hz で更新、立位伸展時に脚 4 軸 + 上腕 2 軸が **state=frozen** + `ang_vel p95 < 1 rad/s`、歩行/しゃがみで `state=active` + `ang_vel p95 < 2 rad/s`、しゃがみ↔立位の遷移で snap なし。`ctest -R 'tracker_extract\|firmware_protocol'` で全 21 ケース pass。実機 (Phase 11 UDP 経路 SlimeVR Server GUI) で水平腕の上腕が体の捻りに rigid 共有されないこと |
 | 14    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --vmt-out --vmt-host=<windows-ip>` + Windows 側 SteamVR + VMT Manager v0.15 + VRChat 目視 | `vmt_0..vmt_9` が SteamVR Manage Trackers に出現、role 手動割当 (Waist/Chest/両足/両膝/両肘) 後 VRChat FBT で 10-point IK 追従、`/stats3d.vmt.sent_bundles` が ~60/s で増加、`disabled_count` 定常 0、`ctest -R 'vmt\|tracker_extract\|firmware_protocol'` で新 12 + 既存全 pass、`--slimevr-out` 併用で extractor state 競合なし、`nc -u -l 39570 \| xxd` で `#bundle\0` + 10 × `/VMT/Room/Driver` が 60 Hz 観測可 |
+| 番外 #9 | `./cpp/build/tools/det_bench --frame outputs/recorded_rtmpose/20260515_064342/raw_cam0_frame0.jpg --iters 300 --warmup 50 --engine outputs/tensorrt_engines/yolox_tiny.fp32.engine --engine outputs/tensorrt_engines/yolox_s.fp16.engine` | yolox-s FP16 の median latency が yolox-tiny FP32 の +10% 以内に収まる (Orin Nano Super, 22→24ms 帯)。`Yolox` ロード時のログに `input_size auto-set from engine: 640` が出る。 詳細は [`research/yolox-detector-eval-result.md`](research/yolox-detector-eval-result.md) |
 
 ## リスク・未確定事項
 
@@ -547,6 +548,28 @@ SimCC head の argmax が FP16 のビン比較反転で別位置に飛んでい�
 - 既存 `web/dual_rtmpose/` 静的ファイルがそのまま使え、ブラウザで 3 ペイン skeleton が見える
 - `python/` 配下に旧実装が残り、README から退避場所が辿れる
 - engine prebuild → cold start ≤ 3 秒
+
+## 番外編: YOLOX 検出器のモデルサイズ × 量子化精度の再評価 (2026-05-24)
+
+Issue [#9](https://github.com/1hira-c/fitra-cam/issues/9) — 横向き / 部分遮蔽で YOLOX-tiny humanart が崩れる運用上の不満を起点に、より大きい YOLOX-{S, M, X} を yolox-tiny **FP32** の e2e latency 予算で再評価。
+
+- `det_bench` (新規 `cpp/tools/det_bench.cpp`) で recorded `raw_cam0.mp4` の 1 フレームに対し `Yolox::infer()` の host 側 wall-clock (preprocessing + H2D + enqueue + sync + D2H) を 300 iter × 3 round 測定
+- mmdeploy 配布の YOLOX-S/M/X end2end ONNX は TopK K=5000 で TRT 10.3 の `ITopKLayer` 上限 (3840) を越えるため、`outputs/onnx/<slug>.topk3000.onnx` に書き換えてから build。手順は [`research/yolox-detector-eval-result.md`](research/yolox-detector-eval-result.md)
+- `Yolox::Options::input_size` は engine binding の dims から自動で 416/640 を拾う作りに変更 (`cpp/src/infer/yolox.cpp`)。`--det-engine` 差し替えだけで切り替わる
+
+結果 (Orin Nano Super, raw_cam0 1 frame, median ms / 300 iter):
+
+| engine | 入力 | median (ms) | p90 (ms) | 判定 |
+|---|---|---|---|---|
+| yolox-tiny FP32 | 416 | **22.3** (budget) | 22.5 | baseline |
+| yolox-tiny FP16 | 416 | 19.1 | 19.5 | 現運用 |
+| **yolox-s FP16** | **640** | **23.9** | **24.1** | **採用 (budget +7%)** |
+| yolox-m FP16 | 640 | 27.9 | 30.4 | 予算 +25% |
+| yolox-x FP16 | 640 | 52.3 | 52.6 | 予算 +134% |
+
+- 既定切替: `docker-compose.yml` の runtime + `build-engines-yolox` を `yolox_s.fp16.engine` に変更 (旧 tiny は `build-engines-yolox-tiny` で並存)
+- Python 側 (`python/scripts/pose_pipeline.py::DEFAULT_DET_MODEL`) は **据え置き**。Python ORT YOLOX-tiny は Phase 1 の回帰 baseline として固定 (`docs/backlog-yolox-detector-upgrade.md` の評価データセット節)。`--det-model outputs/onnx/yolox_s_8xb8-300e_humanart-3ef259a7.onnx` で個別に試せる
+- 視覚再評価 (横向き / 部分遮蔽) は本番運用で都度確認する方針に変更。失敗フレームの定量比較は backlog のままで、INT8 PTQ も RTMPose 側と合流するタイミング (`docs/research/rtmpose-int8-eval-plan.md`) で扱う
 
 ## Phase 番外編: Docker 化 (2026-05-19)
 
