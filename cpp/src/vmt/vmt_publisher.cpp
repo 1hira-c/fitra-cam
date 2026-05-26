@@ -1,6 +1,5 @@
 #include "vmt/vmt_publisher.hpp"
 
-#include <algorithm>
 #include <chrono>
 #include <cstring>
 
@@ -37,6 +36,10 @@ bool sendto_buf(int fd, const std::uint8_t* data, std::size_t n) {
     ssize_t r = ::send(fd, data, n, MSG_NOSIGNAL);
     if (r < 0) {
         FITRA_LOG_WARN("[vmt] send failed: {} ({})", std::strerror(errno), errno);
+        return false;
+    }
+    if (static_cast<std::size_t>(r) != n) {
+        FITRA_LOG_WARN("[vmt] send truncated: {} of {} bytes", r, n);
         return false;
     }
     return true;
@@ -88,12 +91,11 @@ bool VmtPublisher::start() {
 
 void VmtPublisher::stop() {
     if (stop_.exchange(true)) return;
+    if (send_thread_.joinable()) send_thread_.join();
     if (sock_fd_ >= 0) {
-        ::shutdown(sock_fd_, SHUT_RDWR);
         ::close(sock_fd_);
         sock_fd_ = -1;
     }
-    if (send_thread_.joinable()) send_thread_.join();
 }
 
 VmtPublisherStats VmtPublisher::stats() const {
@@ -113,16 +115,21 @@ VmtAlignment VmtPublisher::alignment() const {
 
 void VmtPublisher::send_loop() {
     using clk = std::chrono::steady_clock;
+    const double rate = opts_.send_rate_hz > 0.0 ? opts_.send_rate_hz : 60.0;
     const auto period_d =
         std::chrono::duration_cast<clk::duration>(
-            std::chrono::duration<double>(1.0 / std::max(1.0, opts_.send_rate_hz)));
+            std::chrono::duration<double>(1.0 / rate));
 
     OscWriter writer;
     auto next = clk::now() + period_d;
 
     while (!stop_.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_until(next);
+        const auto now = clk::now();
         next += period_d;
+        // If we fell behind (system lag / suspend), reset the schedule to
+        // avoid a 100% CPU spin until `next` catches up.
+        if (next < now) next = now + period_d;
 
         auto skel_snap = skel_bus_.snapshot();
         if (!skel_snap.stats.enabled || !skel_snap.stats.ik_locked) {

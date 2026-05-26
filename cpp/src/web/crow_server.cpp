@@ -6,6 +6,7 @@
 #include <mutex>
 #include <set>
 #include <sstream>
+#include <string_view>
 
 #define CROW_MAIN
 #include <crow.h>
@@ -43,6 +44,32 @@ std::string guess_content_type(const std::filesystem::path& p) {
     return "application/octet-stream";
 }
 
+std::string json_escape(std::string_view s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    constexpr char hex[] = "0123456789abcdef";
+                    out += "\\u00";
+                    out += hex[(c >> 4) & 0xf];
+                    out += hex[c & 0xf];
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out;
+}
+
 void append_vmt_alignment_json(std::ostringstream& out,
                                const vmt::VmtAlignment& a) {
     out << "{\"x\":" << a.x
@@ -63,8 +90,8 @@ std::string make_vmt_stats_fragment(const vmt::VmtPublisher& publisher) {
         << ",\"last_send_ms\":"                   << s.last_send_ms
         << ",\"rate_hz\":"                        << o.send_rate_hz
         << ",\"port\":"                           << o.port
-        << ",\"host\":\""                         << o.host << "\""
-        << ",\"degeneracy_mode\":\""              << vmt::degen_mode_name(o.degeneracy_mode) << "\""
+        << ",\"host\":\""                         << json_escape(o.host) << "\""
+        << ",\"degeneracy_mode\":\""              << json_escape(vmt::degen_mode_name(o.degeneracy_mode)) << "\""
         << ",\"alignment\":";
     append_vmt_alignment_json(out, publisher.alignment());
     out << "}";

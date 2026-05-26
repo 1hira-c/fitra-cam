@@ -136,8 +136,8 @@ std::uint64_t OscWriter::ntp_timetag_now() {
     auto frac_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                        since_epoch - std::chrono::seconds(secs)).count();
     std::uint64_t ntp_sec  = static_cast<std::uint64_t>(secs) + 2208988800ULL;
-    std::uint64_t ntp_frac = static_cast<std::uint64_t>(
-        (static_cast<__uint128_t>(frac_ns) * (static_cast<__uint128_t>(1) << 32)) / 1000000000ULL);
+    // frac_ns < 1e9, so (frac_ns << 32) < 1e9 * 2^32 ≈ 4.29e18 fits in uint64.
+    std::uint64_t ntp_frac = (static_cast<std::uint64_t>(frac_ns) << 32) / 1000000000ULL;
     return (ntp_sec << 32) | (ntp_frac & 0xffffffffULL);
 }
 
