@@ -1,5 +1,16 @@
 # fitra-cam C++ 移行計画 (3 カメラ・最大性能)
 
+> **【凍結・歴史記録】** C++ 移行 (Phase 0–6) はゴール達成済み (aggregate 170 fps)。
+> 2026-05-27 に phase 番号制は廃止し、継続開発は**ドメイン別トラック制** ([`docs/tracks/`](tracks/)) に移行した。
+> 本 doc は **移行の歴史記録 + core-pipeline のアーキ仕様 (アーキ図・レイアウト・依存表・検証戦略表)** として残す。
+> 新しい作業は該当トラック doc の changelog に追記すること。phase 詳細設計 doc は [`docs/archive/`](archive/) に退避済。
+>
+> | 旧 Phase | 移行先トラック |
+> |---|---|
+> | 0–6, 9 (capture / 推論 / Web / 性能 / keypoint) | [core-pipeline](tracks/core-pipeline.md) |
+> | 7, 8, 12-M1, 13 (lift / IK / roll 品質 / calibration) | [pose-3d](tracks/pose-3d.md) |
+> | 11, 12-bridge, 14, 15, 15.5 (SlimeVR / VMT / SteamVR) | [vr-output](tracks/vr-output.md) |
+
 ## Context
 
 Python 版で並列 2 カメラ × RTMPose を動かしたところ、`recent_pose_fps` が 18fps で頭打ちになった。マイクロベンチでは pose 単独 50fps 出るのに、二並列で詰まる原因は CUDA セッションのコンテキスト切替 + Python GIL に張り付いた前後処理。
@@ -157,7 +168,7 @@ fitra-cam/
 - 新規ヘッダ `cpp/src/lift/keypoint_format.hpp` に SkeletonDef + active format singleton
 - `fitra_subject_profile_v1`(COCO17) / `v2`(Halpe26) を厳格に分離。マイグレーション無しで再キャリブを要求
 - 完了条件 = halpe26 でフル機能 (検出→IK→Phase 8 calibration)
-- 詳細は [`phase9-halpe26-migration.md`](phase9-halpe26-migration.md)
+- 詳細は [`phase9-halpe26-migration.md`](archive/phase9-halpe26-migration.md)
 
 ### Phase 11 — SlimeVR ネイティブ Firmware UDP 連携 (2026-05-21 改訂)
 
@@ -172,7 +183,7 @@ fitra-cam/
 - `Skeleton3DBus::snapshot()` getter を流用 (M1)。publisher スレッドは値コピーのみで pose pipeline と非干渉
 - `/stats3d` に `"slimevr":{sent_handshakes,sent_sensor_info,sent_rotations,sent_heartbeats,skipped_invalid,ping_count,last_send_ms}` を露出
 - 完了条件 = 10 trackers が SlimeVR Server GUI に **名前付き** で自動表示 (連番ならない / 手動 assign 不要)、live skeleton で avatar が動くこと
-- 詳細は [`phase11-slimevr-integration.md`](phase11-slimevr-integration.md)
+- 詳細は [`phase11-slimevr-integration.md`](archive/phase11-slimevr-integration.md)
 
 ### Phase 12 — roll 品質改善 (M1 のみ完了) + Bridge relay 経路は没 (2026-05-22 起票 / 2026-05-23 縮退)
 
@@ -182,7 +193,7 @@ fitra-cam/
   - **SteamVR と Named Pipe の排他**: SteamVR 起動中は `\\.\pipe\SlimeVRInput` が排他占有され、relay の接続要求が受け付けられない (少なくとも 2026-05-23 時点の SlimeVR Server 実装)。FBT 運用は SteamVR + SlimeVR 同時起動前提なので不可
 - 凍結保存: Bridge 関連実装一式 (Jetson 側 + Windows .NET 8 relay) は `archive/botsu-phase12-bridge-relay` に Y 字 merge で残置
 - **位置情報を VR に流す経路は Phase 13 以降に持ち越し**
-- 詳細は [`phase12-slimevr-bridge-relay.md`](phase12-slimevr-bridge-relay.md) 冒頭の 没 セクション
+- 詳細は [`phase12-slimevr-bridge-relay.md`](archive/phase12-slimevr-bridge-relay.md) 冒頭の 没 セクション
 
 ### Phase 13 — roll 品質詰め + WebUI tracker 可視化 + per-tracker stats (2026-05-24 着手 / 2026-05-25 締め)
 
@@ -191,9 +202,9 @@ fitra-cam/
 - **M2** (`71899c8`): per-tracker rolling stats (`SlimeTrackerStats`) を TrackerExtractor 内で計算。120 frame ring buffer で `angular_velocity_rad_s` p50/p95、`roll_confidence_avg`、`leakage_pct` (smoothstep 中間域フレーム比)、`freeze_pct` / `freeze_current_ms` / `freeze_max_ms` / `dropout_count` を `/ws3d` + `/stats3d` JSON に露出。WebUI に `#trackers-table` を追加、state 色分け (active / leakage 黄 / frozen 赤)
 - **修正 1** (`18ef73e`): `quat_from_forward_up` の degeneracy 判定を `norm(cross) < 1e-6` (絶対しきい) → `sin θ < kRollSinLow` (相対しきい) に変更。`kRollSinLow` 0.05 → **0.15** (sin 8.6°)、`kRollSinHigh` 0.20 → **0.30** (sin 17.5°) に引き上げ。pick_up_multistage を経由しない rigid tracker (shin / chest / waist / foot) も degeneracy 保護下に
 - **修正 2** (`08140f7`): `upper_arm` を `upper_leg` と同じ 1-stage 構造に揃え、secondary lateral pin (neck - shoulder) / world-Z tertiary を `Vec3f{0,0,0}` sentinel に変更。水平腕で primary degenerate → freeze に倒れる経路を確立 (Phase 12 で大腿から撤去した lateral pin と同型の anti-pattern 解消)
-- **backstop** (`3613ade`): フル IK 設計メモ [`phase13-full-ik.md`](phase13-full-ik.md) を起票済として保存 (Tier A swing-twist + ROM clamp + 角速度 clamp + constrained Kalman / Tier C Bullet ragdoll)。本 Phase 13 で degeneracy gate 系統が実用品質に達したため、Tier A M1 の Phase 13 内取り込みは保留。Phase 14 候補
+- **backstop** (`3613ade`): フル IK 設計メモ [`phase13-full-ik.md`](archive/phase13-full-ik.md) を起票済として保存 (Tier A swing-twist + ROM clamp + 角速度 clamp + constrained Kalman / Tier C Bullet ragdoll)。本 Phase 13 で degeneracy gate 系統が実用品質に達したため、Tier A M1 の Phase 13 内取り込みは保留。Phase 14 候補
 - **M3 (max_freeze lifecycle) は不採用**: `valid=false` 時の publisher skip + SlimeVR Server 側の前周期保持で実用上問題なかったため見送り
-- 詳細は [`phase13-quality-refinement.md`](phase13-quality-refinement.md)
+- 詳細は [`phase13-quality-refinement.md`](archive/phase13-quality-refinement.md)
 
 ### Phase 14 — Virtual Motion Tracker (VMT) 経由 SteamVR 直結 (2026-05-25 着手)
 
@@ -206,7 +217,7 @@ fitra-cam/
 - 座標変換 (`world_pos_to_vmt` / `world_quat_to_vmt`) は archive Bridge と完全同型 (Bridge も SteamVR `TrackerYaw.kt` の Y-up RH frame を target にしていた) なので関数本体を `cpp/src/vmt/vmt_protocol.cpp` にコピー
 - OSC 1.0 wire writer は Phase 11 commit `a64becf` (撤去は `14ec5d4`) から復元し namespace `fitra::vmt` に再配置
 - M1: VMT wire (`osc_writer` 復元 + `vmt_protocol`) + 8 ctest, M2: VMT publisher + CLI 配線 + main 統合, M3: 位置 EMA を TrackerExtractor に追加 + 4 ctest, M4: `/stats3d` に `vmt` ブロック splice, M5: 本 doc + 検証戦略表行 + 実機 E2E
-- 詳細は [`phase14-vmt-steamvr.md`](phase14-vmt-steamvr.md)
+- 詳細は [`phase14-vmt-steamvr.md`](archive/phase14-vmt-steamvr.md)
 
 ### Phase 15 — SteamVR HMD pose 駆動の自動 VMT alignment (2026-05-26 着手)
 
@@ -217,7 +228,18 @@ fitra-cam/
 - HMD = 頭頂 / chest = 胴体中心の Y 差 (個人差 0.35–0.55m) は自動では触らない (`alignment.y` 据え置き)。Y は手動 slider で被験者ごとに合わせる運用
 - Room Matrix 自動化、alignment YAML 永続化、Y 軸自動補正、複数 reference 選択は Phase 16 候補
 - M1: Windows overlay app, M2: HmdPoseBus + HmdPoseReceiver + CLI 配線 + 4 ctest, M3: AutoAlignment solver (`solve_tpose` + 2D Procrustes) + 8 ctest, M4: `/api/vmt/alignment/auto/*` 4 ルート + Web UI 新 form + `/stats3d.hmd` splice, M5: 本 doc + 検証戦略表行
-- 詳細は [`phase15-vmt-hmd-auto-align.md`](phase15-vmt-hmd-auto-align.md)
+- 詳細は [`phase15-vmt-hmd-auto-align.md`](archive/phase15-vmt-hmd-auto-align.md)
+
+### Phase 15.5 — VMT 登録ゲートによるコントローラ奪取回避 + sender の Manager 統合 (2026-05-27 着手)
+
+- **VMT が SteamVR のコントローラを奪う** 問題 (Quest 接続より先に VMT デバイスが登録され入力フォーカスが張り付く) を解決。切り分けで Priority / 互換モード / Driver コード改変いずれも無効、**fitra-cam を Quest 接続後に起動すれば奪われない** = 純粋な登録タイミングレースと確定
+- **案A (Driver 側ハードゲート)** を採用: Driver の `Config.WaitForHmd=true` 時、`RegisterToVRSystem` を arm まで保留。Manager が `IVRSystem` で HMD valid && L/R controller connected を検知して `/VMT/Set/RegistrationEnable 1` を送る → Quest が揃ってから登録され奪取が起きない
+- **`vmt_hmd_pose_sender` (Phase 15) を廃止して `vmt_manager` に吸収**: Manager は既に OpenVR client (`IVRSystem` + `OSC.cs` + 100ms timer) なので、HMD pose 中継 + 登録 arm + auto-launch を担える。常駐の手間ゼロ
+- **Jetson IP は自動学習**: Driver が OSC 受信の `remoteEndpoint` (`CommunicationManager.cpp:184`) から fitra-cam の IP を取得し `/VMT/Report/JetsonAddr` で Manager に中継。Manager は `<学習IP>:39571` に `/fitra/hmd_pose` を送る。Jetson IP の手動設定が全経路から消える
+- **fitra-cam は無改修**: Phase 15 の `HmdPoseReceiver` がそのまま `/fitra/hmd_pose` を受ける (送信元が sender → Manager に変わるだけ、スキーマ不変)。**実装は VMT フォーク側に存在し、fitra-cam には本 doc (設計の source of truth) のみ**
+- ビルド/検証は Windows のみ (`vmt_driver.sln` MSVC / `vmt_manager.sln` C#)。ctest 対象外、Windows 手動スモークで検証
+- M1: Driver ゲート + `/VMT/Set/RegistrationEnable` + `WaitForHmd` Config + 送信元 IP 通報, M2: Manager presence poll + arm + HMD pose 中継 + Jetson IP 受信, M3: `.vrmanifest` + auto-launch 登録, M4: 本 doc + 検証戦略表行 + Windows E2E
+- 詳細は [`phase15.5-vmt-registration-gate.md`](archive/phase15.5-vmt-registration-gate.md)
 
 ## 検証戦略
 
@@ -231,10 +253,11 @@ fitra-cam/
 | 5     | `./cpp/build/record_overlay --seconds 30`                    | 5 本の mp4 出力、メタデータ fps が実測通り                                       |
 | 9     | `./cpp/build/main --keypoint-format=halpe26 --pose-engine <halpe26.engine> ...` | 起動ログに `kp_format=halpe26 (26 keypoints)` / `/ws` JSON に `kp_format` フィールド / `grep -rn kNumKeypoints cpp/` = 0 件 |
 | 11    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --slimevr-out --slimevr-host=<windows-ip>` + Windows 側 SlimeVR Server GUI 目視 | 10 trackers (LeftUpperArm/RightUpperArm/Chest/Hip/LeftUpperLeg/RightUpperLeg/LeftLowerLeg/RightLowerLeg/LeftFoot/RightFoot) が GUI に **名前付き** で自動表示、live skeleton で avatar が破綻なく動く、`/stats3d` に `slimevr` フィールド (sent_rotations が 60×10≈600/s で増加 / ping_count > 0)、`ctest` で `test_firmware_protocol` + `test_tracker_extract` pass |
-| 12    | `ctest --test-dir cpp/build --output-on-failure -R 'tracker_extract\|firmware_protocol'` + Phase 11 Firmware UDP 経路 (`--slimevr-out --slimevr-host=<windows-ip>`) で目視 | M1 のみ完了: `test_tracker_extract` の 9 pose golden + 4 confidence ケース pass、Phase 11 経路の実機で二の腕ひねり解消 / 大腿 roll が SlimeVR GUI で追従 / 完全伸展時の roll twist 振動が収束。Bridge relay 経路 (M2-M7) は SteamVR と Named Pipe 排他 + 座標系問題で **没** にしたため archive ブランチに凍結 (詳細 [`phase12-slimevr-bridge-relay.md`](phase12-slimevr-bridge-relay.md)) |
+| 12    | `ctest --test-dir cpp/build --output-on-failure -R 'tracker_extract\|firmware_protocol'` + Phase 11 Firmware UDP 経路 (`--slimevr-out --slimevr-host=<windows-ip>`) で目視 | M1 のみ完了: `test_tracker_extract` の 9 pose golden + 4 confidence ケース pass、Phase 11 経路の実機で二の腕ひねり解消 / 大腿 roll が SlimeVR GUI で追従 / 完全伸展時の roll twist 振動が収束。Bridge relay 経路 (M2-M7) は SteamVR と Named Pipe 排他 + 座標系問題で **没** にしたため archive ブランチに凍結 (詳細 [`phase12-slimevr-bridge-relay.md`](archive/phase12-slimevr-bridge-relay.md)) |
 | 13    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --port 8000 ...` 起動 → ブラウザで `http://<jetson>:8000/` + `curl http://<jetson>:8000/stats3d` + Phase 11 経路で目視 | 3D viewer に 10 個の AxesHelper が表示・追従、`#trackers-table` が 30 Hz で更新、立位伸展時に脚 4 軸 + 上腕 2 軸が **state=frozen** + `ang_vel p95 < 1 rad/s`、歩行/しゃがみで `state=active` + `ang_vel p95 < 2 rad/s`、しゃがみ↔立位の遷移で snap なし。`ctest -R 'tracker_extract\|firmware_protocol'` で全 21 ケース pass。実機 (Phase 11 UDP 経路 SlimeVR Server GUI) で水平腕の上腕が体の捻りに rigid 共有されないこと |
 | 14    | `./cpp/build/main --enable-3d --keypoint-format=halpe26 --vmt-out --vmt-host=<windows-ip>` + Windows 側 SteamVR + VMT Manager v0.15 + VRChat 目視 | `vmt_10..vmt_19` が SteamVR Manage Trackers に出現、role 手動割当 (Waist/Chest/両足/両膝/両肘) 後 VRChat FBT で 10-point IK 追従、`/stats3d.vmt.sent_bundles` が ~60/s で増加、`disabled_count` 定常 0、`ctest -R 'vmt\|tracker_extract\|firmware_protocol'` で新 12 + 既存全 pass、`--slimevr-out` 併用で extractor state 競合なし、`nc -u -l 39570 \| xxd` で `#bundle\0` + 10 × `/VMT/Room/Driver` が 60 Hz 観測可 |
 | 15    | Windows で `vmt_hmd_pose_sender.exe --jetson <jetson-ip>` 起動 → Jetson で `./cpp/build/main --enable-3d --keypoint-format=halpe26 --vmt-out --hmd-listen-enabled ...` → `http://<jetson>:8000/` をブラウザで開く | `/stats3d.hmd` が `valid=true / age_ms < 50` で更新、Web UI の HMD status バッジが "tracking"、「Tポーズで合わせる」押下で yaw/tx/tz が手動 form に反映され SteamVR avatar が HMD と一致、「移動キャリブ開始 (3s)」で歩行後 `residual_m < 0.02m`、`ctest --output-on-failure -R 'hmd_pose\|auto_alignment\|vmt'` で新 12 + 既存全 pass |
+| 15.5  | (VMT フォーク, Windows 手動スモーク) `WaitForHmd=true` でビルド → SteamVR 起動 → `vmt_manager` auto-launch → HMD/コントローラ未接続のまま fitra-cam で `--vmt-out` 送信 → Quest 装着で arm | HMD 未接続の間は VMT デバイスが Manage Trackers に出ない、Quest 装着 + 両コントローラ起動で初めて登録され **VRChat FBT でコントローラが Quest に割り当たる (奪取なし)**、`vmt_hmd_pose_sender` 不起動で `curl http://<jetson>:8000/stats3d \| jq .hmd` が `valid=true` (Jetson IP 手動設定なし)、fitra-cam 先行起動 → SteamVR 後起動の順序でも奪取なし。実装は VMT フォーク側、fitra-cam は [`phase15.5-vmt-registration-gate.md`](archive/phase15.5-vmt-registration-gate.md) のみ |
 | 番外 #9 | `./cpp/build/tools/det_bench --frame outputs/recorded_rtmpose/20260515_064342/raw_cam0_frame0.jpg --iters 300 --warmup 50 --engine outputs/tensorrt_engines/yolox_tiny.fp32.engine --engine outputs/tensorrt_engines/yolox_s.fp16.engine` | yolox-s FP16 の median latency が yolox-tiny FP32 の +10% 以内に収まる (Orin Nano Super, 22→24ms 帯)。`Yolox` ロード時のログに `input_size auto-set from engine: 640` が出る。 詳細は [`research/yolox-detector-eval-result.md`](research/yolox-detector-eval-result.md) |
 
 ## リスク・未確定事項

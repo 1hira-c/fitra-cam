@@ -2,7 +2,7 @@
 
 > **方向転換 (2026-05-21)**: VMC over OSC で 8 トラッカーを送る初版を実装したが、SlimeVR Server 上で **OSC 経由のトラッカーが連番表示にしかならず、画面上での body-part assign が極めて煩雑** であることが運用で判明。OSC は諦めて **SlimeVR Firmware UDP プロトコル (port 6969)** へ移行。トラッカー構成も 8→10 (二の腕×2/胸/腰/腿×2/脛×2/足×2) に変更。
 >
-> - **Bridge protocol は不採用**: 位置+回転を送れる SlimeVR の native IPC 経路 (Unix socket / Named pipe + Protobuf) は同一マシン専用で、SlimeVR Server が別 PC の Windows で動く我々の環境ではネットワーク越しに使えない。Windows 側にリレー常駐を置く案 (B 案) は [`backlog-slimevr-bridge-relay.md`](backlog-slimevr-bridge-relay.md) に積み課題として残す。
+> - **Bridge protocol は不採用**: 位置+回転を送れる SlimeVR の native IPC 経路 (Unix socket / Named pipe + Protobuf) は同一マシン専用で、SlimeVR Server が別 PC の Windows で動く我々の環境ではネットワーク越しに使えない。Windows 側にリレー常駐を置く案 (B 案) は [`backlog-slimevr-bridge-relay.md`](../backlog-slimevr-bridge-relay.md) に積み課題として残す。
 > - **Firmware UDP は回転のみ**: 位置は SlimeVR の IK が骨格 + 回転 + HMD から再構築する。カメラ由来の絶対位置は wire に乗らない。サーバ側 `UDPPacket27Position` は実装上存在するが UDP-created tracker は `hasPosition=false` で固定されており、送っても IK には反映されないことを確認済み (SlimeVR-Server 2026-05 時点)。
 > - **トラッカー命名は SensorInfo packet 15 で解決**: `TrackerPosition` enum に `LEFT_UPPER_ARM(15)/RIGHT_UPPER_ARM(16)/CHEST(4)/HIP(6)/LEFT_UPPER_LEG(7)/RIGHT_UPPER_LEG(8)/LEFT_LOWER_LEG(9)/RIGHT_LOWER_LEG(10)/LEFT_FOOT(11)/RIGHT_FOOT(12)` の 10 個が完全に乗る (骨盤は当初 WAIST(5) を指定していたが SlimeVR Server で auto-assign が走らず手動割り当てが必要だったため HIP(6) に変更。`pos = hip_center` から作っているので Hip の方が解剖学的にも整合)。MAC は hostname ハッシュから決定論的に生成し再起動を跨いで同一にする (SlimeVR 側の trackerPosition 設定が persistence される)。
 > - **`--slimevr-port` のデフォルトは 6969** (旧 VMC の 39539 から変更)。
@@ -276,10 +276,10 @@ Terminal A 側で:
 | R2 | SlimeVR 側 IK が回転だけでは想定外の体型に解いてしまう | M6 で実機目視。被験者の身長を SlimeVR 側でも合わせる (HMD 高さ調整) ことが前提 |
 | R3 | Server からの ping に応答しない / 遅延 | recv ループの SO_RCVTIMEO=250ms。stop 中は shutdown(SHUT_RDWR) でブロックを解除 |
 | R4 | Jetson 内で gethostname() が変わると MAC が変わって SlimeVR 設定が無効化 | hostname を固定して運用。Docker コンテナ起動時は `--hostname fitra-jetson` を渡す |
-| R5 | 位置情報を VR 側で活用したい用途 | Bridge protocol over network のリレー実装が必要。[`backlog-slimevr-bridge-relay.md`](backlog-slimevr-bridge-relay.md) に積み課題として記録 |
+| R5 | 位置情報を VR 側で活用したい用途 | Bridge protocol over network のリレー実装が必要。[`backlog-slimevr-bridge-relay.md`](../backlog-slimevr-bridge-relay.md) に積み課題として記録 |
 
 ## 関連ドキュメント
 
-- [`backlog-slimevr-bridge-relay.md`](backlog-slimevr-bridge-relay.md) — 位置を含めて送りたい場合の Bridge protocol relay 構想 (B 案)
-- [`cpp-migration-plan.md`](cpp-migration-plan.md) — 全体ロードマップと Phase 11 検証行
+- [`backlog-slimevr-bridge-relay.md`](../backlog-slimevr-bridge-relay.md) — 位置を含めて送りたい場合の Bridge protocol relay 構想 (B 案)
+- [`cpp-migration-plan.md`](../cpp-migration-plan.md) — 全体ロードマップと Phase 11 検証行
 - [`phase9-halpe26-migration.md`](phase9-halpe26-migration.md) — 前提となる Halpe26 移行

@@ -361,4 +361,4 @@ curl http://<jetson>:8000/stats3d | jq .vmt
 - [`phase11-slimevr-integration.md`](phase11-slimevr-integration.md) — Firmware UDP 経路 (回転のみ、本流維持)
 - [`phase12-slimevr-bridge-relay.md`](phase12-slimevr-bridge-relay.md) — Bridge relay 経路 (没、archive 凍結)
 - [`phase13-quality-refinement.md`](phase13-quality-refinement.md) — degeneracy gate + per-tracker stats (Phase 14 はこの上に積む)
-- [`cpp-migration-plan.md`](cpp-migration-plan.md) — 段階実装 + 検証戦略表
+- [`cpp-migration-plan.md`](../cpp-migration-plan.md) — 段階実装 + 検証戦略表

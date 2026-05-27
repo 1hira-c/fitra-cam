@@ -298,4 +298,4 @@ curl http://localhost:8000/stats3d | jq '.hmd'
 
 - [`phase14-vmt-steamvr.md`](phase14-vmt-steamvr.md) — VMT 経路の確立 (前提)
 - [`phase12-slimevr-bridge-relay.md`](phase12-slimevr-bridge-relay.md) — Bridge relay 没経緯
-- [`cpp-migration-plan.md`](cpp-migration-plan.md) — 段階実装 + 検証戦略表
+- [`cpp-migration-plan.md`](../cpp-migration-plan.md) — 段階実装 + 検証戦略表
