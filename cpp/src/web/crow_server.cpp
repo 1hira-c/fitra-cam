@@ -98,6 +98,7 @@ std::string make_vmt_stats_fragment(const vmt::VmtPublisher& publisher) {
         << ",\"last_send_ms\":"                   << s.last_send_ms
         << ",\"rate_hz\":"                        << o.send_rate_hz
         << ",\"port\":"                           << o.port
+        << ",\"index_base\":"                     << o.index_base
         << ",\"host\":\""                         << json_escape(o.host) << "\""
         << ",\"degeneracy_mode\":\""              << json_escape(vmt::degen_mode_name(o.degeneracy_mode)) << "\""
         << ",\"alignment\":";

@@ -50,22 +50,23 @@ inline VmtQuat world_quat_to_vmt(float qw, float qx, float qy, float qz) {
     return {qx, qz, -qy, qw};
 }
 
-// VMT tracker index mapping. We use TrackerRole's integer value verbatim so
-// vmt_0..vmt_9 follow the same body-part order as the rest of the pipeline.
+// VMT tracker index mapping. The role order stays stable, but callers may add
+// an index base to avoid SteamVR/VMT setups that reserve VMT_0..VMT_2 for HMD
+// or controller tracking overrides.
 //
 // Index | TrackerRole       | suggested SteamVR Manage Trackers role
-//   0   | LeftUpperArm      | LeftElbow / LeftShoulder (VRChat extension)
-//   1   | RightUpperArm     | RightElbow / RightShoulder
-//   2   | Chest             | Chest
-//   3   | Waist (HIP)       | Waist
-//   4   | LeftUpperLeg      | LeftKnee
-//   5   | RightUpperLeg     | RightKnee
-//   6   | LeftLowerLeg      | (function-overlap with Knee; leave unmapped)
-//   7   | RightLowerLeg     | (ditto)
-//   8   | LeftFoot          | LeftFoot
-//   9   | RightFoot         | RightFoot
-inline int vmt_index_for(slimevr::TrackerRole role) {
-    return static_cast<int>(role);
+//   B+0 | LeftUpperArm      | LeftElbow / LeftShoulder (VRChat extension)
+//   B+1 | RightUpperArm     | RightElbow / RightShoulder
+//   B+2 | Chest             | Chest
+//   B+3 | Waist (HIP)       | Waist
+//   B+4 | LeftUpperLeg      | LeftKnee
+//   B+5 | RightUpperLeg     | RightKnee
+//   B+6 | LeftLowerLeg      | (function-overlap with Knee; leave unmapped)
+//   B+7 | RightLowerLeg     | (ditto)
+//   B+8 | LeftFoot          | LeftFoot
+//   B+9 | RightFoot         | RightFoot
+inline int vmt_index_for(slimevr::TrackerRole role, int index_base = 0) {
+    return index_base + static_cast<int>(role);
 }
 
 // Apply manual alignment in VMT Driver frame.

@@ -90,6 +90,7 @@ struct MainOptions {
     std::string vmt_host = "127.0.0.1";
     int    vmt_port = 39570;
     double vmt_rate_hz = 60.0;
+    int    vmt_index_base = 10;
     double vmt_pos_smooth = 0.5;             // Position EMA alpha
     // "hold" (default) | "disable" | "skip" — see vmt_publisher.hpp DegenMode
     std::string vmt_degeneracy_mode = "hold";

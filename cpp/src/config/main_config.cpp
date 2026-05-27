@@ -182,7 +182,7 @@ void load_slimevr(const YAML::Node& section, MainOptions& out) {
 void load_vmt(const YAML::Node& section, MainOptions& out) {
     ensure_map(section, "vmt");
     static const std::set<std::string> allowed{
-        "vmt_out", "host", "port", "rate_hz", "pos_smooth",
+        "vmt_out", "host", "port", "rate_hz", "index_base", "pos_smooth",
         "degeneracy_mode", "disable_below_floor",
         // HMD pose receiver.
         "hmd_listen_enabled", "hmd_listen_port", "hmd_listen_bind", "hmd_stale_ms",
@@ -192,6 +192,7 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
     if (section["host"])                out.vmt_host                = parse_scalar<std::string>(section["host"],                   "vmt.host");
     if (section["port"])                out.vmt_port                = parse_scalar<int>(section["port"],                           "vmt.port");
     if (section["rate_hz"])             out.vmt_rate_hz             = parse_scalar<double>(section["rate_hz"],                     "vmt.rate_hz");
+    if (section["index_base"])          out.vmt_index_base          = parse_scalar<int>(section["index_base"],                    "vmt.index_base");
     if (section["pos_smooth"])          out.vmt_pos_smooth          = parse_scalar<double>(section["pos_smooth"],                  "vmt.pos_smooth");
     if (section["degeneracy_mode"])     out.vmt_degeneracy_mode     = parse_scalar<std::string>(section["degeneracy_mode"],        "vmt.degeneracy_mode");
     if (section["disable_below_floor"]) out.vmt_disable_below_floor = parse_scalar<bool>(section["disable_below_floor"],           "vmt.disable_below_floor");
@@ -322,6 +323,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--vmt-host")          { out.vmt_host = need(i, "--vmt-host"); }
         else if (a == "--vmt-port")          { out.vmt_port = std::atoi(need(i, "--vmt-port")); }
         else if (a == "--vmt-rate-hz")       { out.vmt_rate_hz = std::stod(need(i, "--vmt-rate-hz")); }
+        else if (a == "--vmt-index-base")    { out.vmt_index_base = std::atoi(need(i, "--vmt-index-base")); }
         else if (a == "--vmt-pos-smooth")    { out.vmt_pos_smooth = std::stod(need(i, "--vmt-pos-smooth")); }
         else if (a == "--vmt-degeneracy-mode"){ out.vmt_degeneracy_mode = need(i, "--vmt-degeneracy-mode"); }
         else if (a == "--vmt-disable-below-floor"){ out.vmt_disable_below_floor = true; }
@@ -392,6 +394,9 @@ void validate_options(const MainOptions& opts) {
         }
         if (opts.vmt_rate_hz <= 0.0 || opts.vmt_rate_hz > 240.0) {
             fail("--vmt-rate-hz must be in (0, 240]");
+        }
+        if (opts.vmt_index_base < 0 || opts.vmt_index_base > 48) {
+            fail("--vmt-index-base must be in [0, 48] so 10 trackers fit VMT index 0..57");
         }
         if (opts.vmt_pos_smooth < 0.0 || opts.vmt_pos_smooth > 1.0) {
             fail("--vmt-pos-smooth must be in [0, 1]");

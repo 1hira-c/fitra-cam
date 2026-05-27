@@ -83,8 +83,10 @@ bool VmtPublisher::start() {
 
     stop_.store(false);
     send_thread_ = std::thread([this]() { send_loop(); });
-    FITRA_LOG_INFO("[vmt] publisher up: {}:{} @ {} Hz, 10 trackers, degen={}",
+    FITRA_LOG_INFO("[vmt] publisher up: {}:{} @ {} Hz, 10 trackers, index={}..{}, degen={}",
                    opts_.host, opts_.port, opts_.send_rate_hz,
+                   opts_.index_base,
+                   opts_.index_base + static_cast<int>(slimevr::kTrackerCount) - 1,
                    degen_mode_name(opts_.degeneracy_mode));
     return true;
 }
@@ -173,7 +175,7 @@ void VmtPublisher::send_loop() {
                                               t.quat_wxyz[2], t.quat_wxyz[3]);
             apply_vmt_alignment(pos, quat, alignment);
             encode_vmt_room_driver(writer,
-                                   vmt_index_for(t.role),
+                                   vmt_index_for(t.role, opts_.index_base),
                                    enable,
                                    /*timeoffset=*/0.0f,
                                    pos, quat);

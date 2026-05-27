@@ -120,6 +120,7 @@ void print_help() {
         "  --vmt-host ADDR           VMT Manager host (default 127.0.0.1; typically the Windows IP)\n"
         "  --vmt-port N              UDP port (default 39570 — VMT receive port)\n"
         "  --vmt-rate-hz F           send rate (default 60.0)\n"
+        "  --vmt-index-base N        first VMT device index (default 10 -> VMT_10..VMT_19)\n"
         "  --vmt-pos-smooth F        position EMA alpha 0..1 (default 0.5; wired in M3)\n"
         "  --vmt-degeneracy-mode S   what to do for invalid trackers: hold|disable|skip (default hold)\n"
         "  --vmt-disable-below-floor disable trackers whose pos.z < 0 (room-matrix sanity, default off)\n"
@@ -301,6 +302,7 @@ int main(int argc, char** argv) {
         auto& vmt_host               = opts.vmt_host;
         auto& vmt_port               = opts.vmt_port;
         auto& vmt_rate_hz            = opts.vmt_rate_hz;
+        auto& vmt_index_base         = opts.vmt_index_base;
         auto& vmt_degeneracy_mode    = opts.vmt_degeneracy_mode;
         auto& vmt_disable_below_floor= opts.vmt_disable_below_floor;
         auto& hmd_listen_enabled     = opts.hmd_listen_enabled;
@@ -584,6 +586,7 @@ int main(int argc, char** argv) {
             vopts.host         = vmt_host;
             vopts.port         = static_cast<std::uint16_t>(vmt_port);
             vopts.send_rate_hz = vmt_rate_hz;
+            vopts.index_base   = vmt_index_base;
             vopts.disable_below_floor = vmt_disable_below_floor;
             if (!fitra::vmt::parse_degen_mode(vmt_degeneracy_mode, vopts.degeneracy_mode)) {
                 // validate_options should have caught this, but defend in depth.

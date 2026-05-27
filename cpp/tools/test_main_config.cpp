@@ -216,6 +216,40 @@ slimevr:
           "--slimevr-preview-no-reset CLI sets option");
 }
 
+void test_vmt_index_base_yaml_cli_and_validate() {
+    auto p = write_tmp("vmt_index_base.yaml", R"(schema: fitra_main_config_v1
+vmt:
+  index_base: 20
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(opts.vmt_index_base == 20, "vmt.index_base loads");
+
+    std::vector<std::string> argv_buf{"--vmt-index-base", "10"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(opts.vmt_index_base == 10, "--vmt-index-base CLI overrides YAML");
+
+    opts.cam_paths[0] = "/tmp/a";
+    opts.det_engine   = "/tmp/y";
+    opts.pose_engine  = "/tmp/r";
+    opts.enable_3d    = true;
+    opts.calib        = "/tmp/cam.yaml";
+    opts.vmt_out      = true;
+    opts.keypoint_format = "halpe26";
+    validate_options(opts);
+
+    opts.vmt_index_base = 49;
+    bool threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--vmt-index-base", "vmt_index_base range msg");
+    }
+    check(threw, "vmt_index_base 49 must throw");
+}
+
 void test_validate_required_missing() {
     MainOptions opts;
     bool threw = false;
@@ -313,6 +347,7 @@ const TestCase kTests[] = {
     {"cli_overrides_yaml",                     test_cli_overrides_yaml},
     {"negated_three_d_keys_invert_bools",      test_negated_three_d_keys_invert_runtime_bools},
     {"slimevr_preview_no_reset_yaml_and_cli",  test_slimevr_preview_no_reset_yaml_and_cli},
+    {"vmt_index_base_yaml_cli_and_validate",   test_vmt_index_base_yaml_cli_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},
     {"validate_slimevr_requires_halpe26",      test_validate_slimevr_requires_halpe26},
