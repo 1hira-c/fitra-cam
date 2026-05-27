@@ -58,11 +58,18 @@ extrinsic (相対 6DoF) が要る。現状リポジトリにカメラ extrinsic 
 ### 連結原理 (同時可視なしでカメラを繋ぐ)
 
 コントローラに剛体固定したマーカーは「VR world で 6DoF 既知の動く標的」。各カメラは別々の
-時刻にマーカーを見ればよい:
+時刻にマーカーを見ればよい。各サンプル i の剛体鎖を forward に書くと (下の hand-eye と同形):
 
 ```
-camA: T_camA←marker(t1) · T_world←controller(t1) → T_camA←world
-camB: T_camB←marker(t2) · T_world←controller(t2) → T_camB←world
+T_cam←marker(i) = T_cam←world · T_world←controller(i) · T_controller←marker
+```
+
+`X = T_cam←world` と `Y = T_controller←marker` を hand-eye で解けば、各カメラが同一 world frame
+に載る (合成の隣接インデックスが消えるよう逆行列を取る):
+
+```
+T_cam←world    = T_cam←marker(i) · Y⁻¹ · T_world←controller(i)⁻¹
+               = T_cam←marker(i) · T_marker←controller · T_controller←world
 extrinsic(A,B) = T_camA←world ∘ (T_camB←world)⁻¹
 ```
 
