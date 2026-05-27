@@ -96,13 +96,12 @@ void TrackerExtractor::run_loop() {
         const bool halpe = fitra::lift::active_keypoint_format() ==
                            fitra::lift::KeypointFormat::Halpe26;
 
-        // Phase 13 (Codex P2): publish on EVERY tick — even when the
-        // skeleton snapshot is empty / disabled / in the wrong KP format —
-        // so the bus does not retain stale `has_data=true` trackers from a
-        // previous successful frame. Without this, /ws3d would keep
-        // rendering old AxesHelpers and NativePublisher would keep sending
-        // last-known rotations while the actual subject is out of view
-        // (regression vs. the pre-refactor publisher's pick_skeleton skip).
+        // Publish on EVERY tick — even when the skeleton snapshot is empty
+        // / disabled / in the wrong KP format — so the bus does not retain
+        // stale `has_data=true` trackers from a previous successful frame.
+        // Without this, /ws3d would keep rendering old AxesHelpers and
+        // NativePublisher would keep sending last-known rotations while
+        // the actual subject is out of view.
         //
         // The "no data" case is signalled by marking every tracker
         // valid=false: apply_quat_smoothing replaces each curr.quat with
@@ -129,7 +128,7 @@ void TrackerExtractor::run_loop() {
         apply_quat_smoothing(trackers, prev_quat_, opts_.quat_smooth);
         apply_pos_smoothing (trackers, prev_pos_,  opts_.pos_smooth);
 
-        // ------ Phase 13 M2: per-tracker rolling stats -----------------
+        // ------ Per-tracker rolling stats ------------------------------
         SlimeTrackerStats stats_out{};
         stats_out.window_frames = opts_.stats_window;
 
@@ -149,13 +148,11 @@ void TrackerExtractor::run_loop() {
 
             // 3. Freeze / dropout edges.
             //
-            // Phase 13 (Codex P3 / Copilot): `prev_was_valid_seen` makes the
-            // very first sample exempt from dropout counting — a tracker
-            // that's invalid on the first frame is "born invalid", not a
-            // valid→invalid transition. Also: freeze_max_ms is now updated
-            // on EVERY invalid frame including the first valid→invalid edge
-            // (previously the first invalid frame set freeze_current_ms but
-            // skipped the max update, so a 1-frame freeze reported max=0).
+            // `prev_was_valid_seen` makes the very first sample exempt from
+            // dropout counting — a tracker that's invalid on the first frame
+            // is "born invalid", not a valid→invalid transition. freeze_max_ms
+            // is updated on EVERY invalid frame (including the first
+            // valid→invalid edge) so a 1-frame freeze does not report max=0.
             bool was_valid = raw_valid[i];
             std::uint8_t freeze_flag = was_valid ? 0 : 1;
             if (was_valid) {

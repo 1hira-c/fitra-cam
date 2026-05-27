@@ -71,7 +71,7 @@ std::string make_tracker_bundle_fragment(const SlimeTrackerBus& bus) {
             out += (t.valid ? "true" : "false");
             out += ",\"roll_confidence\":";
             append_float(out, t.roll_confidence, 4);
-            // Phase 13 M2 per-tracker rolling stats. Indexing is parallel
+            // Per-tracker rolling stats. Indexing is parallel
             // to the trackers array (TrackerRole enum order).
             out += ",\"stats\":{";
             out += "\"ang_vel_p50\":";   append_float(out, s.angular_velocity_rad_s_p50[i], 4);

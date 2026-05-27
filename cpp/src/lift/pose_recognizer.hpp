@@ -1,15 +1,14 @@
 #pragma once
 //
-// 3D-angle based pose classifier for the Phase 8 calibration wizard.
+// 3D-angle based pose classifier for the subject-calibration wizard.
 // Operates on a Skeleton3D (already IK-projected with a height-prior or
 // loaded profile) plus the IK's current bone_drift_pct, and reports whether
 // the subject is holding the requested target pose for long enough to start
 // recording.
 //
 // Joint angles are computed in 3D world space, so judgment is independent of
-// the cameras' azimuth/elevation; this is the key reason Phase 8 requires a
-// subject height up front (it primes the IK so usable 3D angles exist from
-// frame 1).
+// the cameras' azimuth/elevation; this is why the wizard requires a subject
+// height up front (it primes the IK so usable 3D angles exist from frame 1).
 
 #include <array>
 #include <string>

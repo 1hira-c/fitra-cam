@@ -75,6 +75,18 @@
         <output id="vmt-align-yaw-total" class="vmt-align-total" for="vmt-align-yaw vmt-align-yaw-slider">0</output>
       </div>
     </form>
+    <form id="vmt-auto-form" class="vmt-align" aria-label="VMT auto alignment">
+      <div class="vmt-align-head">
+        <h3>VMT auto-alignment</h3>
+        <span id="vmt-hmd-status" class="vmt-align-status">no hmd</span>
+      </div>
+      <div class="vmt-axis-row">
+        <button type="button" id="vmt-auto-tpose">Tポーズで合わせる</button>
+        <button type="button" id="vmt-auto-motion-start">移動キャリブ開始</button>
+        <button type="button" id="vmt-auto-motion-stop" disabled>停止</button>
+        <output id="vmt-auto-result" class="vmt-align-total">—</output>
+      </div>
+    </form>
     <div class="slimevr-corrections">
       <div class="slimevr-corrections-head">
         <h3>SlimeVR correction</h3>

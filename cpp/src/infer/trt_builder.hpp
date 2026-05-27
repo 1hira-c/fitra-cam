@@ -29,7 +29,7 @@ struct BuildOptions {
     std::string onnx_path;
     std::string engine_path;
     bool        fp16           = false;
-    bool        int8           = false;   // not used in Phase 1
+    bool        int8           = false;
     std::size_t workspace_mb   = 1024;
     // Optional dynamic-shape profile. Empty input_name => static shapes only.
     std::vector<DynamicProfile> profiles;

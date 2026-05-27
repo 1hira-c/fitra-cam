@@ -1,8 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
-# CUDA language is enabled later (when we add .cu kernels in Phase 2/4). For
-# Phase 0/1 we only need libcudart + TensorRT, which find_package(CUDAToolkit)
-# below pulls in without requiring nvcc on PATH.
+# We don't ship .cu kernels — libcudart + TensorRT is enough, and
+# find_package(CUDAToolkit) below pulls those in without requiring nvcc on PATH.
 project(fitra_cam CXX)
 
 # -------- compiler --------
@@ -28,8 +27,8 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(CUDAToolkit REQUIRED)
 find_package(TensorRT REQUIRED)
 
-# OpenCV (apt: libopencv-dev). We need imgproc + imgcodecs + videoio for the
-# correctness check tool; the hot pipeline avoids OpenCV.
+# OpenCV (apt: libopencv-dev). The correctness/dump tools need
+# imgproc + imgcodecs + videoio; the hot pipeline avoids OpenCV.
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio calib3d)
 
 # Threads

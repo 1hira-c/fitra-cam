@@ -1,4 +1,4 @@
-// fitra-cam main — Phase 3 driver.
+// fitra-cam main — N-camera driver.
 //
 // Runs N V4L2 USB cameras through the shared YOLOX + RTMPose TRT
 // pipeline and exposes the result via Crow (HTTP + WebSocket).
@@ -9,7 +9,7 @@
 //             [--width 640] [--height 480] [--fps 30]
 //             [--det-frequency 10] [--multi-person] [--enable-3d --calib PATH] [--probe]
 //
-// `--probe` keeps the Phase 0 diagnostic (CUDA device + TRT runtime sanity check).
+// `--probe` is a CUDA device + TRT runtime sanity check that exits.
 
 #include <atomic>
 #include <chrono>
@@ -46,6 +46,7 @@
 #include "util/cuda_check.hpp"
 #include "util/logging.hpp"
 #include "vmt/vmt_publisher.hpp"
+#include "vmt/hmd_pose_receiver.hpp"
 #include "web/crow_server.hpp"
 
 namespace {
@@ -67,7 +68,7 @@ public:
 
 void print_help() {
     std::puts(
-        "fitra-cam (C++) — Phase 3 driver\n"
+        "fitra-cam (C++)\n"
         "\n"
         "Required:\n"
         "  --cam0 PATH               first V4L2 device (e.g. /dev/v4l/by-path/...index0)\n"
@@ -105,7 +106,7 @@ void print_help() {
         "  --no-3d-kalman            disable 3D Kalman smoothing\n"
         "  --no-3d-ik                disable 3D IK projection\n"
         "\n"
-        "Phase 11 — SlimeVR native Firmware UDP output (requires --enable-3d + --keypoint-format=halpe26):\n"
+        "SlimeVR native Firmware UDP output (requires --enable-3d + --keypoint-format=halpe26):\n"
         "  --slimevr-out             enable the native Firmware UDP publisher (10 trackers)\n"
         "  --slimevr-host ADDR       SlimeVR Server host (default 127.0.0.1; typically the Windows IP)\n"
         "  --slimevr-port N          UDP port (default 6969 — SlimeVR firmware port)\n"
@@ -114,16 +115,23 @@ void print_help() {
         "  --slimevr-preview-no-reset  pre-cancel SlimeVR default mounting so GUI preview\n"
         "                              works before reset\n"
         "\n"
-        "Phase 14 — Virtual Motion Tracker (VMT) → SteamVR direct (requires --enable-3d + --keypoint-format=halpe26):\n"
+        "Virtual Motion Tracker (VMT) → SteamVR direct (requires --enable-3d + --keypoint-format=halpe26):\n"
         "  --vmt-out                 enable the VMT OSC publisher (10 trackers, /VMT/Room/Driver)\n"
         "  --vmt-host ADDR           VMT Manager host (default 127.0.0.1; typically the Windows IP)\n"
         "  --vmt-port N              UDP port (default 39570 — VMT receive port)\n"
         "  --vmt-rate-hz F           send rate (default 60.0)\n"
+        "  --vmt-index-base N        first VMT device index (default 10 -> VMT_10..VMT_19)\n"
         "  --vmt-pos-smooth F        position EMA alpha 0..1 (default 0.5; wired in M3)\n"
         "  --vmt-degeneracy-mode S   what to do for invalid trackers: hold|disable|skip (default hold)\n"
         "  --vmt-disable-below-floor disable trackers whose pos.z < 0 (room-matrix sanity, default off)\n"
         "\n"
-        "Phase 8 — Subject calibration wizard (requires --enable-3d):\n"
+        "HMD pose receiver from vmt_hmd_pose_sender.exe (Windows side):\n"
+        "  --hmd-listen-enabled      bind a UDP socket and accept /fitra/hmd_pose datagrams\n"
+        "  --hmd-listen-port N       UDP port to listen on (default 39571)\n"
+        "  --hmd-listen-bind ADDR    bind address (default 0.0.0.0)\n"
+        "  --hmd-stale-ms F          milliseconds without a packet → snapshot.stale=true (default 200)\n"
+        "\n"
+        "Subject calibration wizard (requires --enable-3d):\n"
         "  --calibrate                 auto-start calibration session at boot\n"
         "  --calib-subject-id ID       required with --calibrate (subject identifier)\n"
         "  --calib-subject-height-m F  required with --calibrate (1.0 .. 2.3 m)\n"
@@ -140,7 +148,7 @@ void print_help() {
         "                            CLI flags on the same invocation always override the YAML value.\n"
         "                            If --probe is also passed, --probe wins and the config is not read.\n"
         "\n"
-        "  --probe                   Phase 0 sanity check and exit\n"
+        "  --probe                   CUDA + TRT runtime sanity check and exit\n"
         "  --help                    show this help\n");
 }
 
@@ -212,7 +220,7 @@ int main(int argc, char** argv) {
     fitra::config::MainOptions opts;
 
     try {
-        // --probe wins over --config; a Phase 0 sanity run shouldn't depend
+        // --probe wins over --config; a sanity run shouldn't depend
         // on a runtime YAML being valid.
         if (early.want_probe) return probe();
 
@@ -294,8 +302,13 @@ int main(int argc, char** argv) {
         auto& vmt_host               = opts.vmt_host;
         auto& vmt_port               = opts.vmt_port;
         auto& vmt_rate_hz            = opts.vmt_rate_hz;
+        auto& vmt_index_base         = opts.vmt_index_base;
         auto& vmt_degeneracy_mode    = opts.vmt_degeneracy_mode;
         auto& vmt_disable_below_floor= opts.vmt_disable_below_floor;
+        auto& hmd_listen_enabled     = opts.hmd_listen_enabled;
+        auto& hmd_listen_port        = opts.hmd_listen_port;
+        auto& hmd_listen_bind        = opts.hmd_listen_bind;
+        auto& hmd_stale_ms           = opts.hmd_stale_ms;
         auto& calibrate_on_boot      = opts.calibrate;
         auto& calib_subject_id       = opts.calib_subject_id;
         auto& calib_subject_height_m = opts.calib_subject_height_m;
@@ -364,10 +377,10 @@ int main(int argc, char** argv) {
             src_opts.det_frequency = det_frequency;
             src_opts.single_person = !multi_person;
             src_opts.fake_bbox_if_empty = bench_fake_bbox;
-            // Phase 8 records raw per-camera clips through MultiCameraDriver's
-            // frame tap. The same flag pauses YOLOX + RTMPose pre-bake while
-            // recording so disk I/O has the CPU/GPU headroom and we don't burn
-            // cycles on a pose feed nobody is watching.
+            // Subject-calibration recording taps MultiCameraDriver's frame tap.
+            // The same flag pauses YOLOX + RTMPose pre-bake while recording so
+            // disk I/O has the CPU/GPU headroom and we don't burn cycles on a
+            // pose feed nobody is watching.
             if (calib_frame_recording_possible) {
                 src_opts.calib_recording_flag = calib_recording_flag;
             }
@@ -385,9 +398,8 @@ int main(int argc, char** argv) {
 
         std::unique_ptr<fitra::lift::Triangulator> triangulator;
         std::unique_ptr<fitra::pipeline::Skeleton3DBus> bus3d;
-        // Phase 13 M1: SlimeVR tracker snapshot bus + extractor thread.
-        // Always alive when enable_3d so the WebUI orientation viz works
-        // without requiring --slimevr-out.
+        // SlimeVR tracker snapshot bus + extractor thread. Always alive when
+        // enable_3d so the WebUI orientation viz works without --slimevr-out.
         std::unique_ptr<fitra::slimevr::SlimeTrackerBus>   slime_tracker_bus;
         std::unique_ptr<fitra::slimevr::TrackerExtractor>  tracker_extractor;
         fitra::lift::SubjectProfile subject_profile;
@@ -456,10 +468,10 @@ int main(int argc, char** argv) {
             ~DriverStop() { if (d) d->stop(); }
         } driver_stop{driver.get()};
 
-        // Phase 8 calibration session: only set up when 3D is enabled AND
+        // Subject calibration session: only set up when 3D is enabled AND
         // exactly 2 cameras are attached. The session orchestrator and
-        // dump_keypoints_3d both assume cam0/cam1 (Phase 7 spec); refuse to
-        // attach for 1- or 3-camera runs rather than silently dropping cam2.
+        // dump_keypoints_3d both assume cam0/cam1; refuse to attach for 1-
+        // or 3-camera runs rather than silently dropping cam2.
         std::unique_ptr<fitra::pipeline::CalibrationSession> calib_session;
         fitra::pipeline::CalibPreflight calib_defaults;
         const bool calib_available = enable_3d && n_cams == 2;
@@ -524,27 +536,27 @@ int main(int argc, char** argv) {
                 });
         }
 
-        // Phase 13 M1: start the TrackerExtractor before any consumer (so the
-        // SlimeVR Firmware UDP publisher and the WebUI both see the same
-        // smoothed tracker stream). Always running when enable_3d, regardless
-        // of --slimevr-out — the WebUI orientation viz needs trackers even
-        // when the Firmware UDP path is off.
+        // Start the TrackerExtractor before any consumer so the SlimeVR
+        // Firmware UDP publisher and the WebUI both see the same smoothed
+        // tracker stream. Always running when enable_3d, regardless of
+        // --slimevr-out — the WebUI orientation viz needs trackers even when
+        // the Firmware UDP path is off.
         if (bus3d && slime_tracker_bus) {
             fitra::slimevr::TrackerExtractorOptions tex_opts;
             tex_opts.extract_rate_hz = slimevr_rate_hz;
             tex_opts.quat_smooth     = static_cast<float>(slimevr_quat_smooth);
-            // Phase 14: pos EMA alpha is sourced from --vmt-pos-smooth. The
-            // WebUI viz also benefits from pos smoothing (AxesHelper jitter),
-            // so this runs regardless of --vmt-out / --slimevr-out toggles —
-            // same architecture as quat_smooth.
+            // pos EMA alpha is sourced from --vmt-pos-smooth. The WebUI viz
+            // also benefits from pos smoothing (AxesHelper jitter), so this
+            // runs regardless of --vmt-out / --slimevr-out toggles — same
+            // architecture as quat_smooth.
             tex_opts.pos_smooth      = static_cast<float>(opts.vmt_pos_smooth);
             tracker_extractor = std::make_unique<fitra::slimevr::TrackerExtractor>(
                 *bus3d, *slime_tracker_bus, tex_opts);
             tracker_extractor->start();
         }
 
-        // Phase 11: spin up the native SlimeVR Firmware UDP publisher BEFORE
-        // the Crow server so /stats3d can hand out the slimevr stats block.
+        // Spin up the native SlimeVR Firmware UDP publisher BEFORE the Crow
+        // server so /stats3d can hand out the slimevr stats block.
         // bus3d / slime_tracker_bus are guaranteed non-null at this point
         // (gated by enable_3d).
         std::unique_ptr<fitra::slimevr::NativePublisher> slime_pub;
@@ -564,16 +576,17 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Phase 14: spin up the VMT publisher BEFORE the Crow server so
-        // /stats3d can hand out the vmt stats block. Independent of slimevr;
-        // both publishers can be enabled simultaneously and share the same
-        // TrackerExtractor state (Phase 13 single-producer invariant).
+        // Spin up the VMT publisher BEFORE the Crow server so /stats3d can
+        // hand out the vmt stats block. Independent of slimevr; both
+        // publishers can be enabled simultaneously and share the same
+        // TrackerExtractor state (single-producer invariant).
         std::unique_ptr<fitra::vmt::VmtPublisher> vmt_pub;
         if (vmt_out) {
             fitra::vmt::VmtPublisherOptions vopts;
             vopts.host         = vmt_host;
             vopts.port         = static_cast<std::uint16_t>(vmt_port);
             vopts.send_rate_hz = vmt_rate_hz;
+            vopts.index_base   = vmt_index_base;
             vopts.disable_below_floor = vmt_disable_below_floor;
             if (!fitra::vmt::parse_degen_mode(vmt_degeneracy_mode, vopts.degeneracy_mode)) {
                 // validate_options should have caught this, but defend in depth.
@@ -586,6 +599,23 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Optional HMD pose receiver. Standalone from vmt_pub — both can run
+        // independently for diagnostics, but the auto-alignment solver needs
+        // both the HMD producer and the chest tracker.
+        auto hmd_pose_bus = std::make_unique<fitra::vmt::HmdPoseBus>();
+        std::unique_ptr<fitra::vmt::HmdPoseReceiver> hmd_pose_recv;
+        if (hmd_listen_enabled) {
+            fitra::vmt::HmdPoseReceiverOptions hopts;
+            hopts.bind     = hmd_listen_bind;
+            hopts.port     = static_cast<std::uint16_t>(hmd_listen_port);
+            hopts.stale_ms = hmd_stale_ms;
+            hmd_pose_recv = std::make_unique<fitra::vmt::HmdPoseReceiver>(
+                *hmd_pose_bus, hopts);
+            if (!hmd_pose_recv->start()) {
+                hmd_pose_recv.reset();
+            }
+        }
+
         // Stop the publishers + tracker extractor on any scope exit. Must
         // outlive the server (so /stats3d never reads a dead pointer / a
         // dead bus) and the driver (the publishers and extractor all read
@@ -593,13 +623,16 @@ int main(int argc, char** argv) {
         struct SlimeStop {
             fitra::slimevr::NativePublisher*  pub;
             fitra::vmt::VmtPublisher*         vmt_pub;
+            fitra::vmt::HmdPoseReceiver*      hmd_recv;
             fitra::slimevr::TrackerExtractor* tex;
             ~SlimeStop() {
-                if (pub)     pub->stop();
-                if (vmt_pub) vmt_pub->stop();
-                if (tex)     tex->stop();
+                if (pub)      pub->stop();
+                if (vmt_pub)  vmt_pub->stop();
+                if (hmd_recv) hmd_recv->stop();
+                if (tex)      tex->stop();
             }
-        } slime_stop{slime_pub.get(), vmt_pub.get(), tracker_extractor.get()};
+        } slime_stop{slime_pub.get(), vmt_pub.get(), hmd_pose_recv.get(),
+                     tracker_extractor.get()};
 
         std::unique_ptr<fitra::web::CrowServer> server;
         if (!no_web) {
@@ -625,6 +658,13 @@ int main(int argc, char** argv) {
             }
             if (slime_tracker_bus) {
                 server->set_tracker_bus(slime_tracker_bus.get());
+            }
+            // Always attach the HMD pose bus when --enable-3d is on, even if
+            // the receiver wasn't started. The /stats3d block then reports
+            // enabled=true / have_any=false so the WebUI can show
+            // "waiting for hmd" instead of suppressing the section.
+            if (hmd_listen_enabled) {
+                server->set_hmd_pose_bus(hmd_pose_bus.get(), hmd_stale_ms);
             }
             server->start();
         }

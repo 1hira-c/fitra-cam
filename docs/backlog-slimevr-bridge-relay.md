@@ -89,5 +89,5 @@ Phase 11 では Firmware UDP に倒して回転だけ運ぶことにした。代
 
 ## 関連リンク
 
-- [`phase11-slimevr-integration.md`](phase11-slimevr-integration.md) — Phase 11 で採用した Firmware UDP の設計
+- [`phase11-slimevr-integration.md`](archive/phase11-slimevr-integration.md) — Phase 11 で採用した Firmware UDP の設計
 - [`cpp-migration-plan.md`](cpp-migration-plan.md) — 全体ロードマップ

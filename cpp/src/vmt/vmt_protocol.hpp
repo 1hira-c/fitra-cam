@@ -1,11 +1,11 @@
 #pragma once
 //
-// Virtual Motion Tracker (VMT) wire protocol helpers (Phase 14).
+// Virtual Motion Tracker (VMT) wire protocol helpers.
 //
 // VMT is a SteamVR Driver that listens on UDP for OSC 1.0 packets and
-// surfaces each tracker as a SteamVR virtual device. Phase 14 sends 10
-// trackers (one per TrackerRole) on `/VMT/Room/Driver` at 60 Hz so VRChat
-// FBT can consume them directly, bypassing SlimeVR Server entirely.
+// surfaces each tracker as a SteamVR virtual device. We send 10 trackers
+// (one per TrackerRole) on `/VMT/Room/Driver` at 60 Hz so VRChat FBT can
+// consume them directly, bypassing SlimeVR Server entirely.
 //
 // Protocol reference (VMT v0.15, https://gpsnmeajp.github.io/VirtualMotionTrackerDocument/api/):
 //   /VMT/Room/Driver i:index i:enable f:timeoffset
@@ -34,14 +34,10 @@ struct VmtAlignment {
 };
 
 // World frame (Z-up RH, X-right, Y-forward) → VMT Driver frame (Y-up RH,
-// X-right, Z-back). Identical to the Phase 12 Bridge transform (the Bridge
-// path also targets SteamVR's `TrackerYaw.kt` world frame "x-right, y-up,
-// z-back, right-handed", which is the SteamVR Driver convention). The Bridge
-// code lives only on `archive/botsu-phase12-bridge-relay`; we copy the four-
-// line body here rather than re-vending the frozen branch's source.
+// X-right, Z-back). The Driver frame matches SteamVR's "x-right, y-up,
+// z-back, right-handed" convention.
 //
-// test_vmt_protocol locks the cardinal-axis behaviour to the same numbers as
-// archive/botsu-phase12-bridge-relay:cpp/tools/test_firmware_protocol.cpp.
+// test_vmt_protocol locks the cardinal-axis behaviour.
 inline VmtPos world_pos_to_vmt(float x, float y, float z) {
     return {x, z, -y};
 }
@@ -54,22 +50,23 @@ inline VmtQuat world_quat_to_vmt(float qw, float qx, float qy, float qz) {
     return {qx, qz, -qy, qw};
 }
 
-// VMT tracker index mapping. We use TrackerRole's integer value verbatim so
-// vmt_0..vmt_9 follow the same body-part order as the rest of the pipeline.
+// VMT tracker index mapping. The role order stays stable, but callers may add
+// an index base to avoid SteamVR/VMT setups that reserve VMT_0..VMT_2 for HMD
+// or controller tracking overrides.
 //
 // Index | TrackerRole       | suggested SteamVR Manage Trackers role
-//   0   | LeftUpperArm      | LeftElbow / LeftShoulder (VRChat extension)
-//   1   | RightUpperArm     | RightElbow / RightShoulder
-//   2   | Chest             | Chest
-//   3   | Waist (HIP)       | Waist
-//   4   | LeftUpperLeg      | LeftKnee
-//   5   | RightUpperLeg     | RightKnee
-//   6   | LeftLowerLeg      | (function-overlap with Knee; leave unmapped)
-//   7   | RightLowerLeg     | (ditto)
-//   8   | LeftFoot          | LeftFoot
-//   9   | RightFoot         | RightFoot
-inline int vmt_index_for(slimevr::TrackerRole role) {
-    return static_cast<int>(role);
+//   B+0 | LeftUpperArm      | LeftElbow / LeftShoulder (VRChat extension)
+//   B+1 | RightUpperArm     | RightElbow / RightShoulder
+//   B+2 | Chest             | Chest
+//   B+3 | Waist (HIP)       | Waist
+//   B+4 | LeftUpperLeg      | LeftKnee
+//   B+5 | RightUpperLeg     | RightKnee
+//   B+6 | LeftLowerLeg      | (function-overlap with Knee; leave unmapped)
+//   B+7 | RightLowerLeg     | (ditto)
+//   B+8 | LeftFoot          | LeftFoot
+//   B+9 | RightFoot         | RightFoot
+inline int vmt_index_for(slimevr::TrackerRole role, int index_base = 0) {
+    return index_base + static_cast<int>(role);
 }
 
 // Apply manual alignment in VMT Driver frame.

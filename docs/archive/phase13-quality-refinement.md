@@ -211,7 +211,7 @@ SlimeVR Server GUI で 10 トラッカーが名前付き表示、avatar が:
 - [`phase13-full-ik.md`](phase13-full-ik.md) — backstop プラン (Tier A swing-twist + ROM / Tier C Bullet ragdoll)。本 Phase 13 で取り込まなかったが Phase 14 候補
 - [`phase12-slimevr-bridge-relay.md`](phase12-slimevr-bridge-relay.md) — Phase 12 M1 (confidence-modulated smoothing) の前提設計。Phase 13 修正 2 (上腕 1-stage 化) で同 doc の Upper Arm セクションを更新
 - [`phase11-slimevr-integration.md`](phase11-slimevr-integration.md) — Phase 11 Firmware UDP 経路 (本 Phase 13 が乗る本流)
-- [`cpp-migration-plan.md`](cpp-migration-plan.md) — 全体ロードマップと検証戦略 (Phase 13 行追加済)
+- [`cpp-migration-plan.md`](../cpp-migration-plan.md) — 全体ロードマップと検証戦略 (Phase 13 行追加済)
 
 ## 参照リソース
 

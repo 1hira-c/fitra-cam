@@ -34,8 +34,8 @@ public:
     void reload_from_profile(const SubjectProfile& profile);
 
     // Re-prime IK from a subject height (AIST/HQL anthropometry ratios) at
-    // runtime. Used by the Phase 8 calibration wizard during preflight so the
-    // 3D angle recognizer sees a sensible bone-length lock from frame 1.
+    // runtime. Used by the calibration wizard during preflight so the 3D
+    // angle recognizer sees a sensible bone-length lock from frame 1.
     // Clears the observation sample buffer, clears profile_loaded_, sets
     // locked_ = true. No-op if m <= 0.
     void apply_subject_height(double m);

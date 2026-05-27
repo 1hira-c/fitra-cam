@@ -49,17 +49,13 @@ constexpr std::size_t kLBigToe   = 20, kRBigToe   = 21;
 // (confidence 1). Between, smoothstep gradually opens the gate so the update
 // rate scales with measurement reliability. See docs/phase12-slimevr-bridge-relay.md.
 //
-// Phase 13 (2026-05-25): raised from 0.05 / 0.20 → 0.15 / 0.30 after the
-// 直立で脚を伸ばし切ったときに大腿が一気に 90° roll する現象の実機ログ
-// (ang vel p95 = 1.8 rad/s, conf_avg = 0.16, leakage_pct = 100% on the
-// thigh during slow extension) で smoothstep leakage 仮説が確定したため。
-// 新しきい:
-//   * sin 0.15 ≈ 8.6° bend: degenerate gate。歩行 (>30°) / しゃがみ (>60°)
-//     /着座 (~90°) は確実に超え、立位伸展 (0-5°) は確実に下回る
+// しきい:
+//   * sin 0.15 ≈ 8.6° bend: degenerate gate。歩行 (>30°) / しゃがみ (>60°) /
+//     着座 (~90°) は確実に超え、立位伸展 (0-5°) は確実に下回る
 //   * sin 0.30 ≈ 17.5° bend: full-confidence ceiling。中間域 (8.6°..17.5°)
 //     だけが smoothstep の漸進更新ゾーンになり、実用ポーズ域からは離れる
-// `quat_from_forward_up` の degeneracy 判定も同じ kRollSinLow を sin θ
-// gate として使うので、pick_up_multistage を経由しない rigid tracker
+// `quat_from_forward_up` の degeneracy 判定も同じ kRollSinLow を sin θ gate
+// として使うので、pick_up_multistage を経由しない rigid tracker
 // (shin / foot / chest / waist) も同等に守られる。
 constexpr float kRollSinLow  = 0.15f;  // sin 8.6°: degenerate gate
 constexpr float kRollSinHigh = 0.30f;  // sin 17.5°: full-confidence ceiling
@@ -169,9 +165,9 @@ bool quat_from_forward_up(const cv::Vec3f& forward_raw,
         return false;
     }
     cv::Vec3f right_raw = cross(up_raw, fwd);
-    // Phase 13: sin θ-based degeneracy gate so rigid trackers (shin, foot,
-    // chest, waist) that don't go through pick_up_multistage still get the
-    // same near-parallel protection as the thigh / upper-arm path.
+    // sin θ-based degeneracy gate so rigid trackers (shin, foot, chest,
+    // waist) that don't go through pick_up_multistage still get the same
+    // near-parallel protection as the thigh / upper-arm path.
     //   sin θ = |cross(up, fwd)| / (|up| · |fwd|)
     // fwd is already unit-normalized above (norm > 0.5 + normalize_or_zero
     // gave it length ~1.0). So we just need |up|.
@@ -273,9 +269,9 @@ extract_trackers(const infer::Skeleton3D& skel) {
     // toward the ceiling" as an arbitrary roll. Secondary `(neck - shoulder)`
     // is the chest's lateral axis; when primary degenerates with the arm
     // straight, secondary rigidly couples upper-arm roll to torso yaw — the
-    // same "rigid pelvis pin" anti-pattern we removed from upper_leg in
-    // Phase 12 M1. With both fallbacks zeroed, pick_up_multistage hits its
-    // confidence=0 sentinel and quat_from_forward_up returns valid=false →
+    // same "rigid pelvis pin" anti-pattern we removed from upper_leg.
+    // With both fallbacks zeroed, pick_up_multistage hits its confidence=0
+    // sentinel and quat_from_forward_up returns valid=false →
     // apply_quat_smoothing holds the previous humerus quat.
     //
     // Active regime: knee/elbow-style hinge with wrist offset > sin 0.15 from

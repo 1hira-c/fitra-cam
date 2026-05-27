@@ -7,11 +7,11 @@
 // cached bboxes and optional pre-baked RTMPose inputs so the central
 // inference thread only has to batch them into a single RTMPose call.
 //
-// Why "optional" YOLOX: if the caller passes a Yolox*, the per-cam
-// thread runs detection inline. With nullptr, the source is decode-only
-// (Phase 2/4 behaviour). Each Yolox is built from a TrtEngine that
-// shares ICudaEngine via TrtEngine::from_shared — TRT execution contexts
-// themselves are not thread-safe, so per-cam Yolox = per-cam context.
+// Why "optional" YOLOX: if the caller passes a Yolox*, the per-cam thread
+// runs detection inline. With nullptr, the source is decode-only. Each
+// Yolox is built from a TrtEngine that shares ICudaEngine via
+// TrtEngine::from_shared — TRT execution contexts themselves are not
+// thread-safe, so per-cam Yolox = per-cam context.
 //
 // State for det-frequency decimation + single-person filter lives here
 // rather than in the central pipeline, so each camera tracks its own
@@ -40,7 +40,7 @@ namespace fitra::camera {
 
 struct DecodedFrame {
     // Populated for decode-only sources, and for prebaked RTMPose sources
-    // when Options::retain_bgr is enabled (Phase 8 recording tap).
+    // when Options::retain_bgr is enabled (calibration recording tap).
     cv::Mat                              bgr;
     std::uint64_t                        seq{0};
     std::chrono::steady_clock::time_point captured_at{};
@@ -68,7 +68,7 @@ public:
         // enabled. This costs a full-frame clone per decoded frame, so callers
         // should enable it only when another consumer needs raw pixels.
         bool retain_bgr = false;
-        // Phase 8 "calibration is actively recording" flag. When set, the
+        // "Calibration is actively recording" flag. When set, the
         // decode worker (a) retains the BGR copy and (b) skips the RTMPose
         // pre-bake (and YOLOX) so the per-camera worker can keep up with
         // V4L2 dequeue while disk I/O is the bottleneck. The central

@@ -106,8 +106,8 @@ void FrameSource::decode_loop() {
 
         if (rtmpose_enabled_ && !df.bboxes.empty()) {
             // Preprocess each (frame, bbox) into the contiguous CHW block
-            // here on the per-camera worker thread. Phase 6b: shifts the
-            // dominant CPU cost off the central inference thread.
+            // here on the per-camera worker thread, shifting the dominant
+            // CPU cost off the central inference thread.
             const std::size_t per_item =
                 infer::RtmPose::blob_floats_per_item(rtmpose_opts_);
             df.chw_concat.resize(df.bboxes.size() * per_item);

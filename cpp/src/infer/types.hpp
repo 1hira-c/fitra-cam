@@ -2,12 +2,12 @@
 //
 // Shared types for YOLOX bboxes and RTMPose persons.
 //
-// Phase 9 sizing: `Person` and `Skeleton3D` carry up to `kMaxKeypoints` (26)
-// slots — enough for Halpe26. The number of *logical* keypoints depends on
-// the active format and is mirrored in `kp_count` on each instance. COCO17
-// runs leave kpts[17..25] / joints[17..25] zero-initialized; consumers must
-// loop up to `kp_count`, not `kpts.size()`, so the trailing zero slots are
-// not emitted to JSON / drawn / processed by IK.
+// `Person` and `Skeleton3D` carry up to `kMaxKeypoints` (26) slots — enough
+// for Halpe26. The number of *logical* keypoints depends on the active
+// format and is mirrored in `kp_count` on each instance. COCO17 runs leave
+// kpts[17..25] / joints[17..25] zero-initialized; consumers must loop up to
+// `kp_count`, not `kpts.size()`, so the trailing zero slots are not emitted
+// to JSON / drawn / processed by IK.
 
 #include <array>
 #include <cstddef>

@@ -1,11 +1,8 @@
 #pragma once
 //
-// MJPEG -> BGR cv::Mat decode.
-//
-// Phase 2 uses cv::imdecode (libjpeg-turbo backed) on the CPU. This is
-// adequate for the Phase 2 throughput target (≥ 1.5× Python on the same
-// camera). Phase 4 will swap this for Jetson MM API libnvjpeg or CUDA
-// nvjpeg to keep frames on the GPU and skip the host roundtrip.
+// MJPEG -> BGR cv::Mat decode via cv::imdecode (libjpeg-turbo backed) on the
+// CPU. Adequate for current throughput targets; a GPU nvjpeg path is a
+// future optimization.
 
 #include <cstddef>
 #include <cstdint>

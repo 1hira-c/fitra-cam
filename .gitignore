@@ -12,6 +12,8 @@ calibrations/
 # C++ build / TensorRT engines
 cpp/build/
 cpp/.cache/
+windows/**/build*/
+windows/**/out/
 models/
 *.engine
 *.plan

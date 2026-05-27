@@ -1,10 +1,6 @@
 // test_vmt_protocol — verify the world → VMT Driver coordinate transform and
-// the TrackerRole → VMT index mapping.
-//
-// The transform values mirror the Phase 12 Bridge transforms (which target
-// the SAME SteamVR `TrackerYaw.kt` "x-right, y-up, z-back, RH" frame); the
-// Bridge code itself lives only on archive/botsu-phase12-bridge-relay and is
-// not linked from the mainline build, so we re-derive the goldens here.
+// the TrackerRole → VMT index mapping. The goldens are derived from the
+// SteamVR "x-right, y-up, z-back, RH" Driver frame.
 
 #include <cmath>
 #include <cstdio>
@@ -104,6 +100,15 @@ void test_index_mapping() {
     if (fitra::slimevr::kTrackerCount             != 10) throw std::runtime_error("kTrackerCount != 10");
 }
 
+void test_index_base_mapping() {
+    using fitra::vmt::vmt_index_for;
+    using fitra::slimevr::TrackerRole;
+    if (vmt_index_for(TrackerRole::LeftUpperArm, 10)  != 10) throw std::runtime_error("LeftUpperArm base 10 != 10");
+    if (vmt_index_for(TrackerRole::RightUpperArm, 10) != 11) throw std::runtime_error("RightUpperArm base 10 != 11");
+    if (vmt_index_for(TrackerRole::Chest, 10)         != 12) throw std::runtime_error("Chest base 10 != 12");
+    if (vmt_index_for(TrackerRole::RightFoot, 10)     != 19) throw std::runtime_error("RightFoot base 10 != 19");
+}
+
 void test_alignment_identity() {
     fitra::vmt::VmtPos pos{1.0f, 2.0f, 3.0f};
     fitra::vmt::VmtQuat quat{0.0f, 0.0f, 0.0f, 1.0f};
@@ -167,6 +172,7 @@ int main() {
         test_pos_cardinals();
         test_quat_cardinals();
         test_index_mapping();
+        test_index_base_mapping();
         test_alignment_identity();
         test_alignment_translation();
         test_alignment_yaw_position();

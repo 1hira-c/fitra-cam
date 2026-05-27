@@ -110,10 +110,10 @@ void MultiCameraDriver::loop() {
 
             latest_per_cam_[i] = std::move(df);
 
-            // Phase 8: frame tap. Read the callback into a local std::function
-            // under the lock, then invoke without the lock held -- the user
-            // callback may take its own mutex and we must not let it back into
-            // tap_mu_ via a re-entrant set_frame_tap.
+            // Frame tap. Read the callback into a local std::function under
+            // the lock, then invoke without the lock held -- the user callback
+            // may take its own mutex and we must not let it back into tap_mu_
+            // via a re-entrant set_frame_tap.
             FrameTapFn tap_local;
             {
                 std::lock_guard<std::mutex> g(tap_mu_);
@@ -324,8 +324,8 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         drift = ik_.bone_drift_pct(skel);
     }
 
-    // Phase 8: skeleton tap (after IK so the calibration session sees the
-    // same drift the snapshot publishes).
+    // Skeleton tap (after IK so the calibration session sees the same
+    // drift the snapshot publishes).
     Skeleton3DTapFn skel_tap_local;
     {
         std::lock_guard<std::mutex> g(tap_mu_);

@@ -69,7 +69,7 @@ public:
         return recv > pr ? recv - pr : 0;
     }
 
-    // Taps for the Phase 8 calibration wizard. Set/replace before start(),
+    // Taps for the subject calibration wizard. Set/replace before start(),
     // or while running -- writes to the std::function are protected by a
     // tiny mutex on the call side so they're safe to swap from another
     // thread. Both taps default to no-op.
@@ -113,7 +113,7 @@ private:
     lift::SkeletonKalman kalman_;
     lift::IkSolver       ik_;
 
-    // Phase 8 taps. Loop reads these via a local snapshot to avoid holding
+    // Tap callbacks. Loop reads these via a local snapshot to avoid holding
     // the mutex across the user callback.
     std::mutex           tap_mu_;
     FrameTapFn           frame_tap_;

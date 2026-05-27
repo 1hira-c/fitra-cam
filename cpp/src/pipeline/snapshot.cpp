@@ -58,9 +58,9 @@ std::string SnapshotBus::make_bundle_json() {
     out += std::to_string(bundle_seq_);
     out += ",\"ts_ms\":";
     out += std::to_string(static_cast<long long>(now_ms));
-    // Phase 9: surface the active topology so the frontend knows whether the
-    // keypoint array has 17 (COCO17) or 26 (Halpe26) entries and which edge
-    // table to draw.
+    // Surface the active topology so the frontend knows whether the keypoint
+    // array has 17 (COCO17) or 26 (Halpe26) entries and which edge table to
+    // draw.
     out += ",\"kp_format\":\"";
     out += fitra::lift::keypoint_format_name(fitra::lift::active_keypoint_format());
     out += "\"";

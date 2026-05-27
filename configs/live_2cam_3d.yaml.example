@@ -47,3 +47,12 @@ web:
 #   port: 6969
 #   rate_hz: 60.0
 #   preview_no_reset: true # make SlimeVR GUI skeleton preview usable before reset
+
+# vmt:
+#   vmt_out: true
+#   host: 192.168.1.100    # IP of the Windows machine running VMT Manager
+#   port: 39570
+#   rate_hz: 60.0
+#   index_base: 10         # publishes VMT_10..VMT_19; avoids common VMT_0..2 HMD/hand overrides
+#   pos_smooth: 0.5
+#   degeneracy_mode: hold

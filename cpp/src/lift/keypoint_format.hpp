@@ -1,6 +1,6 @@
 #pragma once
 //
-// Phase 9: COCO17 vs Halpe26 topology selector.
+// COCO17 vs Halpe26 topology selector.
 //
 // One canonical `KeypointFormat` enum drives every part of the pipeline that
 // needs to know the runtime keypoint count (`kp_count`), the parent tree, the

@@ -14,7 +14,7 @@
 //   --preset rtmpose-384  => dynamic batch profile on input "input" with
 //                            min=1,opt=3,max=3 over (B,3,384,288)
 //
-// Phase 1 use (one command per model; line continuations omitted on purpose):
+// Typical use (one command per model; line continuations omitted on purpose):
 //   build_engines --preset yolox   --onnx <yolox_tiny....onnx>   --output models/yolox_tiny.fp16.engine   --fp16
 //   build_engines --preset rtmpose --onnx <rtmpose-s....onnx>    --output models/rtmpose_s.fp16.engine    --fp16
 
@@ -106,7 +106,7 @@ void print_help() {
         "\n"
         "Optional:\n"
         "  --fp16                enable FP16 (Jetson Orin Nano Super: recommended)\n"
-        "  --int8                enable INT8 (Phase 4; no calibrator wired yet)\n"
+        "  --int8                enable INT8 (no calibrator wired yet)\n"
         "  --workspace-mb N      builder workspace (default 1024)\n"
         "  --profile NAME:MIN:OPT:MAX  dynamic-shape profile (repeatable)\n"
         "                              e.g. input:1x3x256x192:3x3x256x192:3x3x256x192\n"

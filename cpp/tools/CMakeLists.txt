@@ -13,7 +13,7 @@ set_target_properties(fitra_build_engines PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
-# Phase 1 correctness driver: video -> JSONL of per-frame YOLOX/RTMPose results.
+# Correctness driver: video -> JSONL of per-frame YOLOX/RTMPose results.
 add_executable(fitra_dump_keypoints
     dump_keypoints.cpp
 )
@@ -30,7 +30,7 @@ set_target_properties(fitra_dump_keypoints PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
-# Issue #9 (backlog): YOLOX engine per-frame latency benchmark.
+# YOLOX engine per-frame latency benchmark.
 add_executable(fitra_det_bench
     det_bench.cpp
 )
@@ -48,7 +48,7 @@ set_target_properties(fitra_det_bench PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
-# Phase 2: single-camera live benchmark.
+# Single-camera live benchmark.
 add_executable(fitra_pose_bench
     pose_bench.cpp
 )
@@ -78,7 +78,7 @@ set_target_properties(fitra_check_calibration PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
-# Phase 7: recorded two-camera 2D -> 3D dump with reprojection overlays.
+# Recorded two-camera 2D -> 3D dump with reprojection overlays.
 add_executable(fitra_dump_keypoints_3d
     dump_keypoints_3d.cpp
 )
@@ -111,7 +111,7 @@ set_target_properties(fitra_test_triangulator PROPERTIES
 
 add_test(NAME test_triangulator COMMAND fitra_test_triangulator)
 
-# Phase 11: SlimeVR Firmware UDP wire-format byte-level golden test. Verifies
+# SlimeVR Firmware UDP wire-format byte-level golden test. Verifies
 # handshake / sensor_info / rotation_data / ping_reply layouts and the MAC
 # derivation. No SlimeVR server needed.
 add_executable(fitra_test_firmware_protocol
@@ -129,10 +129,8 @@ set_target_properties(fitra_test_firmware_protocol PROPERTIES
 
 add_test(NAME test_firmware_protocol COMMAND fitra_test_firmware_protocol)
 
-# Phase 11: Halpe26 → SlimeVR tracker extraction test. M3 rewrites the
-# layout to 10 trackers (upper arms / chest / waist / upper legs / lower
-# legs / feet); the test currently targets the legacy 8-tracker VMC layout
-# until that milestone lands.
+# Halpe26 → 10 SlimeVR tracker extraction test
+# (upper arms / chest / waist / upper legs / lower legs / feet).
 add_executable(fitra_test_tracker_extract
     test_tracker_extract.cpp
 )
@@ -148,9 +146,8 @@ set_target_properties(fitra_test_tracker_extract PROPERTIES
 
 add_test(NAME test_tracker_extract COMMAND fitra_test_tracker_extract)
 
-# Phase 14: VMT OSC 1.0 wire-format byte-level golden test. Restored from
-# Phase 11's test_osc_roundtrip (commit a64becf) and re-pointed at the
-# `/VMT/Room/Driver` packet shape in the fifth case.
+# VMT OSC 1.0 wire-format byte-level golden test, including
+# the `/VMT/Room/Driver` packet shape.
 add_executable(fitra_test_vmt_osc_writer
     test_vmt_osc_writer.cpp
 )
@@ -166,7 +163,7 @@ set_target_properties(fitra_test_vmt_osc_writer PROPERTIES
 
 add_test(NAME test_vmt_osc_writer COMMAND fitra_test_vmt_osc_writer)
 
-# Phase 14: world→VMT Driver coordinate transform + TrackerRole index mapping.
+# world→VMT Driver coordinate transform + TrackerRole index mapping.
 add_executable(fitra_test_vmt_protocol
     test_vmt_protocol.cpp
 )
@@ -182,9 +179,40 @@ set_target_properties(fitra_test_vmt_protocol PROPERTIES
 
 add_test(NAME test_vmt_protocol COMMAND fitra_test_vmt_protocol)
 
-# Phase 14: position EMA in TrackerExtractor. Mirrors test_tracker_extract
-# style; lives in fitra_slimevr because the new helper is part of
-# tracker_extract.{hpp,cpp}.
+# HMD pose UDP receiver — wire-format parser + bus stale logic.
+add_executable(fitra_test_hmd_pose_receiver
+    test_hmd_pose_receiver.cpp
+)
+
+target_link_libraries(fitra_test_hmd_pose_receiver PRIVATE
+    fitra_vmt
+)
+
+set_target_properties(fitra_test_hmd_pose_receiver PROPERTIES
+    OUTPUT_NAME "test_hmd_pose_receiver"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_hmd_pose_receiver COMMAND fitra_test_hmd_pose_receiver)
+
+# VmtAlignment auto solver — T-pose + 2D Procrustes motion mode.
+add_executable(fitra_test_auto_alignment
+    test_auto_alignment.cpp
+)
+
+target_link_libraries(fitra_test_auto_alignment PRIVATE
+    fitra_vmt
+)
+
+set_target_properties(fitra_test_auto_alignment PROPERTIES
+    OUTPUT_NAME "test_auto_alignment"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_auto_alignment COMMAND fitra_test_auto_alignment)
+
+# Position EMA in TrackerExtractor. Lives in fitra_slimevr because the
+# helper is part of tracker_extract.{hpp,cpp}.
 add_executable(fitra_test_tracker_extract_pos
     test_tracker_extract_pos.cpp
 )
@@ -200,7 +228,7 @@ set_target_properties(fitra_test_tracker_extract_pos PROPERTIES
 
 add_test(NAME test_tracker_extract_pos COMMAND fitra_test_tracker_extract_pos)
 
-# Backlog (`--config PATH`): MainOptions YAML loader, CLI overlay precedence,
+# `--config PATH`: MainOptions YAML loader, CLI overlay precedence,
 # and validate_options() — pure parser + checks, no TensorRT / CUDA / OpenCV.
 add_executable(fitra_test_main_config
     test_main_config.cpp

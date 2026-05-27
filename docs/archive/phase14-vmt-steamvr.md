@@ -15,7 +15,7 @@ VMT (Virtual Motion Tracker, gpsnmeajp/VirtualMotionTracker, v0.15) は SteamVR 
 調査で確定した方針 (2026-05-25):
 
 - **プロトコル: VMT OSC over UDP (`/VMT/Room/Driver`, port 39570)**。OSC 1.0 wire-format シリアライザは Phase 11 で commit `a64becf` に書いたものを github 履歴から復元 (Phase 11 撤去は `14ec5d4`)。namespace を `fitra::vmt` に再配置
-- **Tracker 構成: 10 本** (Phase 11 と同じ TrackerRole enum 順)。`vmt_index = static_cast<int>(TrackerRole)` で 0..9
+- **Tracker 構成: 10 本** (Phase 11 と同じ TrackerRole enum 順)。既定は `vmt_index = 10 + static_cast<int>(TrackerRole)` で **VMT_10..VMT_19**。VMT/SteamVR の `VMT_0..VMT_2` は HMD/左右手の TrackingOverrides や過去の controller 登録と衝突しやすいため避ける。互換性が必要なら `--vmt-index-base=0` で従来の 0..9 に戻せる
 - **位置 + 回転 両方** wire に乗せる。Phase 11 までは `SlimeTracker.pos` が wire に乗らなかったので、Phase 14 で初めて使う
 - **座標変換**: world (Z-up RH, X-right, Y-forward) → VMT Driver (Y-up RH, X-right, Z-back)。Phase 12 Bridge transform (`world_pos_to_slime` / `world_quat_to_bridge_slime`) と完全同型 (Bridge も SteamVR の `TrackerYaw.kt` が固定する frame に揃えていた)。archive ブランチの関数本体 4 行 + 7 行を `cpp/src/vmt/vmt_protocol.cpp` にコピー
 - **位置 smoothing**: Phase 11 (回転のみ) では未着手だった位置 EMA を `TrackerExtractor` に追加 (`apply_pos_smoothing`)。Phase 13 「state を一箇所で持つ」原則を保ち、`prev_quat_` の隣で `prev_pos_` を持つ。confidence modulation は採用しない (pos のノイズ源は roll の observability と独立)
@@ -28,7 +28,7 @@ VMT (Virtual Motion Tracker, gpsnmeajp/VirtualMotionTracker, v0.15) は SteamVR 
 ## ゴール / 完了条件
 
 1. `--vmt-out` で 10 trackers を `/VMT/Room/Driver` 60 Hz で送信
-2. SteamVR の Manage Trackers に `vmt_0..vmt_9` が出現し、role 手動割当後 VRChat avatar が 10-point FBT で追従
+2. SteamVR の Manage Trackers に `vmt_10..vmt_19` が出現し、role 手動割当後 VRChat avatar が 10-point FBT で追従
 3. `/stats3d` の `"vmt":{...}` が steady-state で `sent_bundles ~ 60/s` / `disabled_count` 定常 0
 4. `ctest -R 'vmt|tracker_extract|firmware_protocol'` が全 pass (新 12 ケース + 既存退行なし)
 5. `--slimevr-out --vmt-out` 同時起動で extractor の state が 1 個だけ存在し二重 smoothing にならない (コードレビュー + smoke test で確認済)
@@ -88,6 +88,7 @@ VMT (Virtual Motion Tracker, gpsnmeajp/VirtualMotionTracker, v0.15) は SteamVR 
 | `--vmt-host ADDR` | string | `127.0.0.1` | VMT Manager host (別 PC Windows なら IP) |
 | `--vmt-port N` | int | 39570 | VMT 受信 UDP port |
 | `--vmt-rate-hz F` | double | 60.0 | 送信レート (0, 240] |
+| `--vmt-index-base N` | int | 10 | 先頭 VMT index。既定は `VMT_10..VMT_19`、範囲は 0..48 |
 | `--vmt-pos-smooth F` | double | 0.5 | 位置 EMA alpha [0, 1]、0=freeze、1=smoothing なし |
 | `--vmt-degeneracy-mode S` | enum | `hold` | `hold` / `disable` / `skip` |
 | `--vmt-disable-below-floor` | bool | false | `pos.z < 0` の tracker は `enable=0` (room matrix sanity, debug) |
@@ -95,7 +96,7 @@ VMT (Virtual Motion Tracker, gpsnmeajp/VirtualMotionTracker, v0.15) は SteamVR 
 `validate_options`:
 - `--vmt-out` ⇒ `--enable-3d` + `--keypoint-format=halpe26` 必須
 - `--vmt-out` ⇒ `--calibrate` と排他
-- `--vmt-port` ∈ [1, 65535] / `--vmt-rate-hz` ∈ (0, 240] / `--vmt-pos-smooth` ∈ [0, 1]
+- `--vmt-port` ∈ [1, 65535] / `--vmt-rate-hz` ∈ (0, 240] / `--vmt-index-base` ∈ [0, 48] / `--vmt-pos-smooth` ∈ [0, 1]
 - `--vmt-degeneracy-mode` ∈ {hold, disable, skip}
 - `--vmt-out` と `--slimevr-out` の併用は許可
 
@@ -107,6 +108,7 @@ vmt:
   host: 192.168.1.50
   port: 39570
   rate_hz: 60.0
+  index_base: 10
   pos_smooth: 0.5
   degeneracy_mode: hold
   disable_below_floor: false
@@ -146,7 +148,7 @@ OSC 1.0 wire format で UDP 39570 へ 1 datagram per send-loop tick:
 ```
 "/VMT/Room/Driver\0\0\0\0"                 // OSC string (NUL + 3 byte pad to 16)
 ",iiffffffff\0"                            // typetag: 2 ints + 8 floats + NUL + 4 byte pad (16 byte)
-<i32 BE> index                             // 0..9 (TrackerRole enum 順)
+<i32 BE> index                             // index_base..index_base+9 (default 10..19)
 <i32 BE> enable                            // 1 = active, 0 = disabled
 <f32 BE> timeoffset                        // 0.0 (now)
 <f32 BE> x, <f32 BE> y, <f32 BE> z         // pos in VMT Driver Y-up RH (meters)
@@ -174,18 +176,18 @@ Phase 12 Bridge の `world_quat_to_bridge_slime` と完全同型 (Bridge コメ�
 
 ## Tracker index mapping (VRChat FBT role 手動割当の目安)
 
-| vmt_index | TrackerRole | SteamVR Manage Trackers role (推奨) | VRChat IK |
+| default vmt_index | TrackerRole | SteamVR Manage Trackers role (推奨) | VRChat IK |
 |---|---|---|---|
-| 0 | LeftUpperArm  | LeftShoulder (拡張) / LeftElbow | VRChat IK 2.0 / 拡張 |
-| 1 | RightUpperArm | RightShoulder (拡張) / RightElbow | 同上 |
-| 2 | Chest         | Chest | VRChat 標準 |
-| 3 | Waist (HIP)   | Waist | VRChat 標準 |
-| 4 | LeftUpperLeg  | LeftKnee | VRChat 標準 |
-| 5 | RightUpperLeg | RightKnee | VRChat 標準 |
-| 6 | LeftLowerLeg  | (未割当推奨 — Knee と機能重複) | - |
-| 7 | RightLowerLeg | 同上 | - |
-| 8 | LeftFoot      | LeftFoot | VRChat 標準 |
-| 9 | RightFoot     | RightFoot | VRChat 標準 |
+| 10 | LeftUpperArm  | LeftShoulder (拡張) / LeftElbow | VRChat IK 2.0 / 拡張 |
+| 11 | RightUpperArm | RightShoulder (拡張) / RightElbow | 同上 |
+| 12 | Chest         | Chest | VRChat 標準 |
+| 13 | Waist (HIP)   | Waist | VRChat 標準 |
+| 14 | LeftUpperLeg  | LeftKnee | VRChat 標準 |
+| 15 | RightUpperLeg | RightKnee | VRChat 標準 |
+| 16 | LeftLowerLeg  | (未割当推奨 — Knee と機能重複) | - |
+| 17 | RightLowerLeg | 同上 | - |
+| 18 | LeftFoot      | LeftFoot | VRChat 標準 |
+| 19 | RightFoot     | RightFoot | VRChat 標準 |
 
 VRChat 標準 FBT は Chest + Waist + 両足 + 両膝 + 両肘 の 8-point IK。LowerLeg (6, 7) は VRChat 標準 role に対応がないので、SteamVR Manage Trackers では未割当のままにし、知覚情報として送るだけ (avatar への影響なし)。10 個全部を avatar に反映させたい場合は VRChat 側 IK 拡張 (例えば Custom Animator) を別途用意する。
 
@@ -245,6 +247,7 @@ default `hold` の根拠: Phase 11 で `valid=false` 時の SlimeVR Server 側�
     "skipped_invalid_bundles": 5,
     "last_send_ms": 1748086342123.0,
     "rate_hz": 60.0,
+    "index_base": 10,
     "port": 39570,
     "host": "192.168.1.50",
     "degeneracy_mode": "hold",
@@ -280,7 +283,7 @@ ctest --test-dir cpp/build --output-on-failure -R 'vmt|tracker_extract|firmware_
 | test | 何を検証するか |
 |---|---|
 | `test_vmt_osc_writer` (5 case) | OSC 1.0 wire bytes golden + `/VMT/Room/Driver` full packet shape |
-| `test_vmt_protocol` (3 case) | TrackerRole→vmt_index 順 / `world_pos_to_vmt` 3 軸 cardinal / `world_quat_to_vmt` 4 cardinal |
+| `test_vmt_protocol` (4 case) | TrackerRole→vmt_index 順 + index_base offset / `world_pos_to_vmt` 3 軸 cardinal / `world_quat_to_vmt` 4 cardinal |
 | `test_tracker_extract_pos` (4 case) | alpha=1 passthrough / 6-frame 収束 / valid=false hold + prev 不変 / dropout 復帰時 prev が (0,0,0) に戻らない |
 | 既存 `test_firmware_protocol` / `test_tracker_extract` | 退行なし |
 
@@ -315,7 +318,7 @@ curl http://<jetson>:8000/stats3d | jq .vmt
 2. zip 展開後 `vmt_manager.exe` を起動 → 「Install Driver」ボタンを押下 (内部で `vrpathreg.exe register` を実行、SteamVR の `steamvr.vrsettings` にドライバパスを登録)
 3. SteamVR を一度終了して再起動 (Driver の自動ロードが起動時のみ走るため)
 4. SteamVR + VMT Manager が両方起動した状態で、HMD を装着して被験者の立ち位置 (Jetson カメラの視野内) で「Set Room Matrix」ボタン押下 → Manager が SteamVR HMD pose を基準に Jetson 世界座標との変換行列を計算し `setting.json` に永続化
-5. SteamVR Settings → Controllers → Manage Trackers で 10 個の `vmt_0`..`vmt_9` を見つけ、上の対応表に従って role を手動割当
+5. SteamVR Settings → Controllers → Manage Trackers で 10 個の `vmt_10`..`vmt_19` を見つけ、上の対応表に従って role を手動割当
 
 #### Jetson 通電
 
@@ -358,4 +361,4 @@ curl http://<jetson>:8000/stats3d | jq .vmt
 - [`phase11-slimevr-integration.md`](phase11-slimevr-integration.md) — Firmware UDP 経路 (回転のみ、本流維持)
 - [`phase12-slimevr-bridge-relay.md`](phase12-slimevr-bridge-relay.md) — Bridge relay 経路 (没、archive 凍結)
 - [`phase13-quality-refinement.md`](phase13-quality-refinement.md) — degeneracy gate + per-tracker stats (Phase 14 はこの上に積む)
-- [`cpp-migration-plan.md`](cpp-migration-plan.md) — 段階実装 + 検証戦略表
+- [`cpp-migration-plan.md`](../cpp-migration-plan.md) — 段階実装 + 検証戦略表

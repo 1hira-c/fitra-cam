@@ -334,8 +334,8 @@ slimevr-bridge-relay.exe --port 6970
 ## 関連ドキュメント
 
 - [`phase11-slimevr-integration.md`](phase11-slimevr-integration.md) — Phase 11 で本流に乗せた Firmware UDP (回転のみ) 経路
-- [`backlog-slimevr-bridge-relay.md`](backlog-slimevr-bridge-relay.md) — 本 phase の前身となる積み課題ドキュメント (Phase 12 完了時に削除可否を判断)
-- [`cpp-migration-plan.md`](cpp-migration-plan.md) — 全体ロードマップと検証戦略
+- [`backlog-slimevr-bridge-relay.md`](../backlog-slimevr-bridge-relay.md) — 本 phase の前身となる積み課題ドキュメント (Phase 12 完了時に削除可否を判断)
+- [`cpp-migration-plan.md`](../cpp-migration-plan.md) — 全体ロードマップと検証戦略
 - [`phase9-halpe26-migration.md`](phase9-halpe26-migration.md) — 前提となる Halpe26 移行
 
 ## 参照リソース (clone 済)

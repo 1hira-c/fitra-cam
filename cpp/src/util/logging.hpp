@@ -1,9 +1,6 @@
 #pragma once
 //
-// Minimal logging facade.
-//
-// Phase 0 implementation: writes "[level] message" to std::cerr.
-// Phase 1+ may swap the backend to spdlog without changing call sites.
+// Minimal logging facade. Writes "[level] message" to std::cerr.
 //
 // Usage:
 //   FITRA_LOG_INFO("opened camera {}", cam_id);
@@ -48,7 +45,7 @@ void emit_one(std::ostringstream& oss, T&& head, Rest&&... rest) {
 }
 
 // Very small "{}" substitution. Not printf, not std::format. Enough to keep
-// call sites readable in Phase 0 without depending on libfmt/spdlog yet.
+// call sites readable without depending on libfmt/spdlog.
 inline std::string render(std::string_view fmt) {
     return std::string{fmt};
 }

@@ -24,11 +24,12 @@
 
 namespace fitra::slimevr {
 class NativePublisher;   // fwd decl; full header included only in crow_server.cpp
-class SlimeTrackerBus;   // Phase 13 M1: tracker snapshot bus for /ws3d viz
+class SlimeTrackerBus;   // tracker snapshot bus for /ws3d viz
 }
 
 namespace fitra::vmt {
-class VmtPublisher;      // Phase 14: fwd decl; full header in crow_server.cpp
+class VmtPublisher;      // fwd decl; full header in crow_server.cpp
+class HmdPoseBus;        // HMD pose source for auto-alignment routes
 }
 
 namespace fitra::web {
@@ -40,7 +41,7 @@ struct ServerOptions {
     double      publish_hz = 30.0;
     int         crow_threads = 2;
 
-    // Phase 8: directory that contains web/calibration/{index.html,app.js,...}.
+    // Directory that contains web/calibration/{index.html,app.js,...}.
     // When non-empty (and a CalibrationSession is attached) /calib serves
     // the wizard frontend and /api/calib/* exposes the orchestrator.
     std::string calib_static_dir;
@@ -63,23 +64,29 @@ public:
     void set_calibration_session(pipeline::CalibrationSession* session,
                                  pipeline::CalibPreflight defaults);
 
-    // Phase 11: attach the SlimeVR native publisher so /stats3d includes its
-    // send counters. Caller retains ownership; the pointer must outlive the
-    // CrowServer or be cleared with set_native_publisher(nullptr) before the
-    // publisher dies. The crow server only calls const observers (stats()).
+    // Attach the SlimeVR native publisher so /stats3d includes its send
+    // counters. Caller retains ownership; the pointer must outlive the
+    // CrowServer or be cleared with set_native_publisher(nullptr) before
+    // the publisher dies. The crow server only calls const observers (stats()).
     void set_native_publisher(slimevr::NativePublisher* publisher);
 
-    // Phase 13 M1: attach the SlimeVR tracker bus so /ws3d's bundle includes
-    // a `trackers` field with each tracker's role / pos / quat / valid /
-    // roll_confidence. Caller retains ownership. Set to nullptr to disable
-    // (then the bundle has no `trackers` field).
+    // Attach the SlimeVR tracker bus so /ws3d's bundle includes a `trackers`
+    // field with each tracker's role / pos / quat / valid / roll_confidence.
+    // Caller retains ownership. Set to nullptr to disable (then the bundle
+    // has no `trackers` field).
     void set_tracker_bus(slimevr::SlimeTrackerBus* tracker_bus);
 
-    // Phase 14: attach the VMT publisher so /stats3d (and the /ws3d bundle
-    // splice) include its send counters under a top-level "vmt" key. Same
-    // ownership rules as set_native_publisher. Setting nullptr removes the
-    // splice (and the "vmt" key disappears from the JSON).
+    // Attach the VMT publisher so /stats3d (and the /ws3d bundle splice)
+    // include its send counters under a top-level "vmt" key. Same ownership
+    // rules as set_native_publisher. Setting nullptr removes the splice
+    // (and the "vmt" key disappears from the JSON).
     void set_vmt_publisher(vmt::VmtPublisher* publisher);
+
+    // Attach the HMD pose bus so the /api/vmt/alignment/auto/*
+    // routes have an input. `stale_threshold_ms` is the value passed to
+    // HmdPoseBus::snapshot() — packets older than that are considered
+    // stale and the auto-alignment routes return StaleHmd.
+    void set_hmd_pose_bus(vmt::HmdPoseBus* bus, double stale_threshold_ms);
 
     // Start listening + broadcasting on a background thread. Returns when
     // the server is bound and ready (best-effort; Crow's run() blocks).
@@ -102,6 +109,8 @@ private:
     slimevr::NativePublisher*      native_publisher_ = nullptr;
     slimevr::SlimeTrackerBus*      tracker_bus_     = nullptr;
     vmt::VmtPublisher*             vmt_publisher_   = nullptr;
+    vmt::HmdPoseBus*               hmd_pose_bus_    = nullptr;
+    double                         hmd_stale_ms_    = 200.0;
 
     struct Impl;
     std::unique_ptr<Impl>  impl_;
