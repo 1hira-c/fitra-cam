@@ -12,9 +12,9 @@ namespace {
 constexpr float kPi = 3.14159265358979323846f;
 
 inline float wrap_pi(float x) {
-    while (x >  kPi) x -= 2.0f * kPi;
-    while (x < -kPi) x += 2.0f * kPi;
-    return x;
+    // std::remainder maps to [-pi, pi] in O(1) and returns NaN for non-finite
+    // input, avoiding the infinite loop a subtractive wrap would hit on Inf.
+    return std::remainder(x, 2.0f * kPi);
 }
 
 inline float rad_to_deg(float r) { return r * (180.0f / kPi); }

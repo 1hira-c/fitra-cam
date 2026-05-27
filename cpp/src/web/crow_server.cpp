@@ -2,11 +2,14 @@
 
 #include <chrono>
 #include <cmath>
+#include <exception>
 #include <fstream>
 #include <mutex>
 #include <set>
 #include <sstream>
 #include <string_view>
+#include <thread>
+#include <utility>
 
 #define CROW_MAIN
 #include <crow.h>
@@ -246,6 +249,16 @@ struct AutoAlignSession {
             worker.join();
         }
     }
+
+    // RAII safety net: stop + join the worker on teardown even if
+    // CrowServer::stop() took an early-return path. A still-joinable
+    // std::thread destructor would otherwise call std::terminate().
+    ~AutoAlignSession() {
+        stop_requested.store(true);
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
 };
 
 struct CrowServer::Impl {
@@ -458,17 +471,22 @@ void CrowServer::start() {
             return json_response("{\"ok\":false,\"err\":\"tracker bus not attached\"}", 409);
         }
 
-        // Block tpose while a motion session is collecting.
+        // Block tpose while a motion session is collecting, and reap a
+        // finished motion worker. Move the thread out under the lock and
+        // join it outside, so concurrent requests never join() the same
+        // std::thread object (UB) nor join() while holding sess.mu (the
+        // worker grabs sess.mu on exit → deadlock).
         auto& sess = impl_->auto_align;
+        std::thread old_worker;
         {
             std::lock_guard<std::mutex> g(sess.mu);
             if (sess.state == AutoAlignSession::State::Collecting) {
                 return json_response(
                     "{\"ok\":false,\"err\":\"motion session in progress\"}", 409);
             }
+            if (sess.worker.joinable()) old_worker = std::move(sess.worker);
         }
-        // Reap a finished motion worker, if any, before starting new work.
-        if (sess.worker.joinable()) sess.worker.join();
+        if (old_worker.joinable()) old_worker.join();
 
         auto hmd_snap = hmd_pose_bus_->snapshot(hmd_stale_ms_);
         if (!hmd_snap.have_any) {
@@ -533,52 +551,63 @@ void CrowServer::start() {
         double duration_s = 3.0;
         double sample_hz  = 30.0;
         if (!req.body.empty()) {
-            auto body = crow::json::load(req.body);
-            if (body && body.has("duration_s")) {
-                double v = body["duration_s"].d();
-                if (v < 0.5 || v > 30.0) {
-                    return json_response(
-                        "{\"ok\":false,\"err\":\"duration_s must be in [0.5, 30]\"}", 400);
+            // .d() throws if the field is present but non-numeric; map that to
+            // 400 rather than letting it surface as a 500.
+            try {
+                auto body = crow::json::load(req.body);
+                if (!body) {
+                    return json_response("{\"ok\":false,\"err\":\"invalid json\"}", 400);
                 }
-                duration_s = v;
-            }
-            if (body && body.has("sample_hz")) {
-                double v = body["sample_hz"].d();
-                if (v < 5.0 || v > 120.0) {
-                    return json_response(
-                        "{\"ok\":false,\"err\":\"sample_hz must be in [5, 120]\"}", 400);
+                if (body.has("duration_s")) {
+                    double v = body["duration_s"].d();
+                    if (v < 0.5 || v > 30.0) {
+                        return json_response(
+                            "{\"ok\":false,\"err\":\"duration_s must be in [0.5, 30]\"}", 400);
+                    }
+                    duration_s = v;
                 }
-                sample_hz = v;
+                if (body.has("sample_hz")) {
+                    double v = body["sample_hz"].d();
+                    if (v < 5.0 || v > 120.0) {
+                        return json_response(
+                            "{\"ok\":false,\"err\":\"sample_hz must be in [5, 120]\"}", 400);
+                    }
+                    sample_hz = v;
+                }
+            } catch (const std::exception&) {
+                return json_response(
+                    "{\"ok\":false,\"err\":\"duration_s/sample_hz must be numbers\"}", 400);
             }
         }
 
+        // Claim the session and move out any finished worker under one lock,
+        // then join outside the lock. Setting Collecting here makes concurrent
+        // start/tpose requests bail before they can touch sess.worker.
         auto& sess = impl_->auto_align;
+        std::thread old_worker;
         {
             std::lock_guard<std::mutex> g(sess.mu);
             if (sess.state == AutoAlignSession::State::Collecting) {
                 return json_response(
                     "{\"ok\":false,\"err\":\"motion session already in progress\"}", 409);
             }
-        }
-        if (sess.worker.joinable()) sess.worker.join();
-
-        sess.stop_requested.store(false);
-        {
-            std::lock_guard<std::mutex> g(sess.mu);
             sess.state        = AutoAlignSession::State::Collecting;
             sess.last_mode    = "motion";
             sess.duration_s   = duration_s;
             sess.sample_hz    = sample_hz;
             sess.samples_seen = 0;
             sess.last         = vmt::AutoAlignmentResult{};
+            if (sess.worker.joinable()) old_worker = std::move(sess.worker);
         }
+        if (old_worker.joinable()) old_worker.join();
+        sess.stop_requested.store(false);
 
         vmt::HmdPoseBus*           hmd     = hmd_pose_bus_;
         const double               stale   = hmd_stale_ms_;
         slimevr::SlimeTrackerBus*  tracker = tracker_bus_;
         vmt::VmtPublisher*         pub     = vmt_publisher_;
 
-        sess.worker = std::thread([&sess, hmd, stale, tracker, pub,
+        std::thread new_worker([&sess, hmd, stale, tracker, pub,
                                    duration_s, sample_hz]() {
             using namespace std::chrono;
             const auto period = duration<double>(1.0 / sample_hz);
@@ -622,6 +651,13 @@ void CrowServer::start() {
             }
         });
 
+        // Publish the running thread under the lock; /stop and CrowServer::stop
+        // also touch sess.worker only while holding sess.mu.
+        {
+            std::lock_guard<std::mutex> g(sess.mu);
+            sess.worker = std::move(new_worker);
+        }
+
         std::ostringstream out;
         out << "{\"ok\":true,\"state\":\"collecting\""
             << ",\"duration_s\":" << duration_s
@@ -633,7 +669,12 @@ void CrowServer::start() {
     ([this](const crow::request& /*req*/) {
         auto& sess = impl_->auto_align;
         sess.stop_requested.store(true);
-        if (sess.worker.joinable()) sess.worker.join();
+        std::thread old_worker;
+        {
+            std::lock_guard<std::mutex> g(sess.mu);
+            if (sess.worker.joinable()) old_worker = std::move(sess.worker);
+        }
+        if (old_worker.joinable()) old_worker.join();
 
         std::lock_guard<std::mutex> g(sess.mu);
         std::ostringstream out;
@@ -778,11 +819,17 @@ void CrowServer::stop() {
     stop_.store(true);
     if (impl_) {
         // Tear down the auto-alignment session before app.stop()
-        // so the worker thread (if collecting) exits cleanly.
-        impl_->auto_align.stop_requested.store(true);
-        if (impl_->auto_align.worker.joinable()) {
-            impl_->auto_align.worker.join();
+        // so the worker thread (if collecting) exits cleanly. Move the
+        // thread out under the lock and join outside (the worker grabs
+        // sess.mu on exit, so joining under the lock would deadlock).
+        auto& sess = impl_->auto_align;
+        sess.stop_requested.store(true);
+        std::thread old_worker;
+        {
+            std::lock_guard<std::mutex> g(sess.mu);
+            if (sess.worker.joinable()) old_worker = std::move(sess.worker);
         }
+        if (old_worker.joinable()) old_worker.join();
         impl_->app.stop();
     }
     if (publisher_thread_.joinable()) publisher_thread_.join();
