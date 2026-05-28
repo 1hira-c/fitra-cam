@@ -569,6 +569,12 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
             } else {
                 curr[i].pos = p;
             }
+            // Saturate at uint32 so a tracker that's been invalid since
+            // process start doesn't wrap; once large, the gate effectively
+            // collapses to "no gate" anyway because elapsed → ∞.
+            if (ctx.invalid_ticks_since_last_raw[i] < 0xFFFFFFFFu) {
+                ctx.invalid_ticks_since_last_raw[i] += 1;
+            }
             continue;
         }
 
@@ -581,14 +587,22 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
         // a single triangulation glitch (curr jumps several meters relative
         // to the previous valid frame) collapses the alpha; nominal motion
         // (walking, gestures) passes through.
+        //
+        // After an N-frame dropout, the real elapsed time between
+        // last_raw_pos and q is (1 + N) · dt_s, not a single tick — without
+        // this correction a recovery frame would divide a normal
+        // displacement by a single tick and collapse the alpha, leaving
+        // the smoother stuck on the held position.
         float alpha = base_alpha;
         if (ctx.has_last_raw[i]) {
             float dx = q[0] - ctx.last_raw_pos[i][0];
             float dy = q[1] - ctx.last_raw_pos[i][1];
             float dz = q[2] - ctx.last_raw_pos[i][2];
-            float dist  = std::sqrt(dx*dx + dy*dy + dz*dz);
-            float v_mps = dist / dt;
-            float gate  = smoothstep01(v_mps, kPosVelGateLow_mps, kPosVelGateHigh_mps);
+            float dist     = std::sqrt(dx*dx + dy*dy + dz*dz);
+            float elapsed  = dt * static_cast<float>(
+                                       1u + ctx.invalid_ticks_since_last_raw[i]);
+            float v_mps    = dist / elapsed;
+            float gate     = smoothstep01(v_mps, kPosVelGateLow_mps, kPosVelGateHigh_mps);
             alpha = base_alpha * (1.0f - gate);
         }
 
@@ -598,6 +612,7 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
         curr[i].pos = p;
         ctx.last_raw_pos[i] = q;
         ctx.has_last_raw[i] = true;
+        ctx.invalid_ticks_since_last_raw[i] = 0;
     }
 
     // Cache the hip position for the next call's hip-relative hold.

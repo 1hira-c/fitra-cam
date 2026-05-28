@@ -221,6 +221,52 @@ void test_velocity_gate_attenuates_jump() {
               " (want < 0.05 m for ~300 m/s spike)");
 }
 
+// Regression for codex review: after an N-frame dropout, the recovery
+// frame's prev→curr displacement is divided by (1 + N) · dt_s, not by a
+// single tick. Without this, a 0.5 m recovery after a 30-frame occlusion
+// would compute v = 0.5 / (1/60) = 30 m/s and gate alpha to 0 — the
+// tracker would stay stuck on its held position instead of converging
+// toward the freshly observed location.
+void test_velocity_gate_handles_multi_frame_dropout_recovery() {
+    std::array<cv::Vec3f, kTrackerCount> prev{};
+    PosSmoothingContext ctx;
+    ctx.dt_s = 1.0f / 60.0f;
+
+    // Converge prev to (1, 0, 0) so last_raw_pos[0] = (1, 0, 0).
+    for (int f = 0; f < 6; ++f) {
+        auto ts = make_trackers({1.0f, 0.0f, 0.0f}, /*valid=*/true);
+        apply_pos_smoothing(ts, prev, ctx, /*base_alpha=*/0.5f);
+    }
+    check_close(ctx.last_raw_pos[0][0], 1.0f, "dropout-rec.seed.last_raw.x");
+
+    // 30 invalid frames (subject occluded for 0.5 s at 60 Hz).
+    for (int f = 0; f < 30; ++f) {
+        auto ts = make_trackers({0.0f, 0.0f, 0.0f}, /*valid=*/false);
+        apply_pos_smoothing(ts, prev, ctx, /*base_alpha=*/0.5f);
+    }
+    check(ctx.invalid_ticks_since_last_raw[0] == 30u,
+          "dropout-rec.counter advanced");
+
+    // Recovery: tracker reappears at (1.5, 0, 0) — a 0.5 m delta over
+    // 31 ticks ≈ 0.97 m/s, well below the 8 m/s gate start. Without
+    // the elapsed-tick correction, dist/dt = 0.5/(1/60) = 30 m/s →
+    // gate would clamp alpha to 0.
+    const float pre_x = prev[0][0];
+    auto ts = make_trackers({1.5f, 0.0f, 0.0f}, /*valid=*/true);
+    apply_pos_smoothing(ts, prev, ctx, /*base_alpha=*/0.5f);
+
+    // alpha should be ~0.5 (no attenuation), so prev moves about halfway
+    // toward 1.5 from its held position. Without the fix prev would barely
+    // move.
+    const float delta = prev[0][0] - pre_x;
+    check(delta > 0.10f,
+          "dropout-rec.gate.recover: delta=" + std::to_string(delta) +
+              " (want > 0.10 m at alpha ≈ 0.5)");
+    // And the invalid-tick counter must reset on the valid frame.
+    check(ctx.invalid_ticks_since_last_raw[0] == 0u,
+          "dropout-rec.counter reset on valid");
+}
+
 // Plausible 5 m/s motion (vigorous walking / jogging) must pass through the
 // velocity gate without attenuation. With prev at (1,0,0) and curr at
 // (1.083, 0, 0) in 16 ms ≈ 5 m/s, the EMA should converge normally.
@@ -255,6 +301,7 @@ int main() {
         test_hip_relative_hold_on_invalid();
         test_first_valid_frame_skips_velocity_gate();
         test_velocity_gate_attenuates_jump();
+        test_velocity_gate_handles_multi_frame_dropout_recovery();
         test_velocity_gate_passes_plausible_motion();
         std::puts("test_tracker_extract_pos ok");
         return 0;

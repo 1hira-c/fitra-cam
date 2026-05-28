@@ -120,9 +120,18 @@ infer::Skeleton3D SkeletonKalman::update(const infer::Skeleton3D& measurement,
 
         // A child cannot be initialized or even predicted in offset space
         // until its parent has a world position. Skip and leave the
-        // measurement queued for a later frame.
+        // measurement queued for a later frame — but still age an
+        // already-initialized child's missing counter so a long parent
+        // dropout drops the stale offset instead of resurrecting it once
+        // the parent reappears.
         if (!is_root && (parent < 0 ||
                          !states_[static_cast<std::size_t>(parent)].initialized)) {
+            if (s.initialized) {
+                s.missing += 1;
+                if (s.missing > opts_.reset_after_missing) {
+                    s = JointState{};
+                }
+            }
             continue;
         }
 

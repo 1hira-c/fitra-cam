@@ -160,7 +160,50 @@ void test_chain_recovers_after_long_missing() {
     check_close(out.joints[15].z, 0.5f, "chain.ankle.recover.z");
 }
 
-// ---------- Test 4: child skipped when parent uninitialized ----------
+// ---------- Test 4b: child ages while parent unavailable ----------
+//
+// Regression for codex review: when a child is skipped because its parent
+// has reset / become uninitialized, the child's missing counter still
+// needs to advance so a long parent dropout drops the stale child offset.
+// Without this, a child kept "frozen alive" can re-emerge with a stale
+// offset the moment the parent reappears.
+void test_chain_child_ages_when_parent_skipped() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    fitra::lift::SkeletonKalman::Options opts;
+    opts.reset_after_missing = 3;
+    fitra::lift::SkeletonKalman kf(opts);
+    settle(kf);
+
+    const double dt = 1.0 / 60.0;
+
+    // Drop the hip_center for long enough that the root state resets.
+    // While the root is missing, ALL children are skipped on the
+    // "parent uninitialized" path, so their missing counters must
+    // advance there too.
+    for (int i = 0; i < 10; ++i) {
+        fitra::infer::Skeleton3D skel;
+        skel.kp_count = 26;
+        for (auto& j : skel.joints) j.valid = false;
+        // No joints valid → root resets after 3 frames, then children
+        // age on the "parent uninitialized" path.
+        (void)kf.update(skel, dt);
+    }
+
+    // Re-establish the root only, with the body translated 2 m in X.
+    // If the child ankle state still held a stale offset learned at the
+    // origin, the next ankle measurement would only nudge it slightly,
+    // so the output ankle would NOT jump to the new measured world
+    // position. The fix forces a clean re-init.
+    auto skel_recover = make_skel(2.0f, 0.0f, 0.9f);
+    auto out = kf.update(skel_recover, dt);
+
+    // Ankle world x should be at the new measurement, not somewhere
+    // between the old (~0.1) and new (~2.1) due to stale state.
+    check(out.joints[15].valid, "chain.age.ankle valid after re-init");
+    check_close(out.joints[15].x, 2.1f, "chain.age.ankle.x == fresh measurement", 0.05);
+}
+
+// ---------- Test 5: child skipped when parent uninitialized ----------
 void test_chain_child_skipped_when_parent_never_seen() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     fitra::lift::SkeletonKalman kf;
@@ -191,6 +234,8 @@ int main() {
         std::printf("[ok] chain Kalman corrects offset from child measurement\n");
         test_chain_recovers_after_long_missing();
         std::printf("[ok] chain Kalman recovers after long missing run\n");
+        test_chain_child_ages_when_parent_skipped();
+        std::printf("[ok] chain Kalman ages child while parent is unavailable\n");
         test_chain_child_skipped_when_parent_never_seen();
         std::printf("[ok] chain Kalman skips child whose parent never observed\n");
         std::puts("test_kalman_chain ok");

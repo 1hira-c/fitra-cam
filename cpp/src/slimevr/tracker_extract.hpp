@@ -155,8 +155,15 @@ struct PosSmoothingContext {
     // valid at least once" — gates the hip-relative hold on the first
     // invalid frame after init, and prevents the very first valid frame
     // from being misread as a 70 m/s outlier off the (0,0,0) sentinel.
-    std::array<cv::Vec3f, kTrackerCount> last_raw_pos{};
-    std::array<bool,      kTrackerCount> has_last_raw{};
+    //
+    // `invalid_ticks_since_last_raw` counts publish ticks where the tracker
+    // came in invalid (last_raw_pos held). On the recovery frame the
+    // velocity gate divides the prev→curr distance by (1 + invalid_ticks)
+    // · dt_s so a several-frame dropout doesn't read as a single-tick spike
+    // and erroneously gate the recovery into freeze-at-stale-position.
+    std::array<cv::Vec3f,    kTrackerCount> last_raw_pos{};
+    std::array<bool,         kTrackerCount> has_last_raw{};
+    std::array<std::uint32_t, kTrackerCount> invalid_ticks_since_last_raw{};
     float     dt_s = 1.0f / 60.0f;
 };
 
