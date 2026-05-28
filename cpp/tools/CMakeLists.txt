@@ -228,6 +228,23 @@ set_target_properties(fitra_test_tracker_extract_pos PROPERTIES
 
 add_test(NAME test_tracker_extract_pos COMMAND fitra_test_tracker_extract_pos)
 
+# Kinematic-tree Kalman: root vs offset state, FK propagation, child
+# skipping when parent uninitialized, missing-run reset.
+add_executable(fitra_test_kalman_chain
+    test_kalman_chain.cpp
+)
+
+target_link_libraries(fitra_test_kalman_chain PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_kalman_chain PROPERTIES
+    OUTPUT_NAME "test_kalman_chain"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_kalman_chain COMMAND fitra_test_kalman_chain)
+
 # `--config PATH`: MainOptions YAML loader, CLI overlay precedence,
 # and validate_options() — pure parser + checks, no TensorRT / CUDA / OpenCV.
 add_executable(fitra_test_main_config
