@@ -32,6 +32,45 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-05-27 — コントローラ固定 AprilTag extrinsic: M1 transport + M2 ソルバ/検出コア
+案C (コントローラ固定マーカー + VR world 連結) のソフト側コアを着手・実装。実機を要する
+M0 (PnP 残差 / SLAM ドリフト実測) と live 収集 UI (M2 後半 / M4) は手戻りリスクを承知で後回し、
+ハードに依存しない 3 モジュールを単体テスト付きで先行実装した:
+- **M1 transport**: `vmt/controller_pose_receiver.{hpp,cpp}` — `/fitra/controller_pose`
+  (`,iiffffffff` = HMD の `,iffffffff` に `eTrackingResult` を 1 個追加) を HMD と並列の
+  latest-wins bus で受信。`running_ok()` ゲート (`bPoseIsValid && Running_OK`)。OSC decode
+  helper を `vmt/osc_decode.hpp` に抽出し HMD 経路と共有。
+- **M2 ソルバ**: `lift/extrinsic_solver.{hpp,cpp}` — `A_i·X = Z·B_i` を
+  `cv::calibrateRobotWorldHandEye` (AX=ZB) に写像 (A=T_cam←marker / B=T_world←controller /
+  Z=T_cam←world / X=T_marker←controller=Y_face⁻¹)。(camera,face) グループ毎に解き、面間で
+  T_cam←world を集約 + spread を品質指標化、自己残差も算出。
+- **M2 検出**: `lift/apriltag_marker.{hpp,cpp}` — `DICT_APRILTAG_36h11` 検出 + 面 ID→サイズ
+  設定 + `SOLVEPNP_IPPE_SQUARE` で T_cam←face。`objdetect` を OpenCV link に追加。
+- **収集ループ骨格 + 配線**: `pipeline/extrinsic_calib_session.{hpp,cpp}` — frame tap → 検出 →
+  controller pose ペアリング → モーションゲート (線速/角速しきい) → (cam,face) 毎バースト平均 →
+  `ExtrinsicSample` 蓄積 → 終了時 solve + `CalibrationSet` 書き出し。`calib_io::write_calibration`
+  新設。`main`/`main_config` に `--extrinsic-calib` / `extrinsic_calib:` セクションと
+  `ControllerPoseReceiver` 起動を配線 (subject wizard と frame tap 排他)。
+- **Crow 配線 + WebUI**: `crow_server` に `set_extrinsic_calib_session` +
+  `/api/excal/{state,start,stop,solve,extrinsics}` (subject wizard の `/api/calib/*` と同型) +
+  `/extrinsic-calib` 静的配信。フロントエンド `web/extrinsic_calibration/` — Start/Stop/Solve、
+  理由付き Capture gate (GOOD/MOVING/NO_TAG/NO_POSE)、per-camera ライブ検出 (face·reproj·age)、
+  被覆マトリクス (cam×face, min_samples でセル色)、Solve 後 per-camera 結果。`state_json` に
+  `num_cams`/`min_samples`/`faces`/`gate_reason`/`detections` 追加。
+- **3D 検証シーン**: `scene.html`+`scene.js` (three.js, vendor 流用) が `/api/excal/extrinsics`
+  (intrinsics + `T_cam_world` + center) を読み、各カメラ 6DoF を共通 world frame に frustum 配置。
+  session は `on_frame` で per-camera 最新検出を保持 + `gate_reason_`/`extrinsics_json` を公開。
+- 検証: `ctest -R 'extrinsic_solver|apriltag_marker|controller_pose_receiver|extrinsic_calib_session|main_config|crow_excal'`。
+  合成データで厳密復元 (1e-9 m / 1e-6°)・相対 extrinsic 恒等・ノイズ <1cm/<1°、tag
+  render→detect→PnP 往復、収集ループの gate/burst + end-to-end solve→write→reload、
+  レンダ tag→on_frame の検出/gate_reason、`extrinsics_json` 内容、ループバック実 HTTP で
+  `/api/excal/*` + 静的配信 (collect/scene)。
+- **未** (実機 or 大掛かりで保留): Windows sender の controller 送出、per-camera ライブ**映像**
+  オーバーレイ (検出ステータスはテキスト表示済、映像配信は別途)、M4 live solver 重畳、M3 BA
+  (閉形式が合成厳密復元 + 動機が M0 実測待ちのため保留)、M0 実測。収集制御は headless 既定 +
+  WebUI/API 手動制御。
+→ [design/pose-3d-controller-marker-extrinsic.md](../design/pose-3d-controller-marker-extrinsic.md)
+
 ### 2026-05-24〜25 — roll 品質詰め + WebUI tracker 可視化 + per-tracker stats
 「観察基盤を先に作る → データで仮説確定 → 構造修正」の順で立位伸展時の 90° roll を解消。
 `SlimeTrackerBus` + `TrackerExtractor` を新設し publisher を consumer に refactor。

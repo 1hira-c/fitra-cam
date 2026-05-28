@@ -4,6 +4,8 @@
 add_library(fitra_lift STATIC
     lift/calib_io.cpp
     lift/triangulator.cpp
+    lift/extrinsic_solver.cpp
+    lift/apriltag_marker.cpp
     lift/kalman.cpp
     lift/ik.cpp
     lift/subject_profile.cpp
@@ -18,6 +20,8 @@ target_include_directories(fitra_lift PUBLIC
 target_link_libraries(fitra_lift PUBLIC
     opencv_core
     opencv_calib3d
+    opencv_imgproc      # apriltag_marker: cvtColor
+    opencv_objdetect    # apriltag_marker: cv::aruco AprilTag detector
 )
 
 # Inference library (TRT engine wrapper, ONNX -> engine builder, YOLOX, RTMPose).
@@ -66,6 +70,7 @@ add_library(fitra_pipeline STATIC
     pipeline/multi_pipeline.cpp
     pipeline/snapshot.cpp
     pipeline/calibration_session.cpp
+    pipeline/extrinsic_calib_session.cpp
 )
 
 target_link_libraries(fitra_pipeline PUBLIC
@@ -104,6 +109,7 @@ add_library(fitra_vmt STATIC
     vmt/vmt_protocol.cpp
     vmt/vmt_publisher.cpp
     vmt/hmd_pose_receiver.cpp
+    vmt/controller_pose_receiver.cpp
     vmt/auto_alignment.cpp
 )
 

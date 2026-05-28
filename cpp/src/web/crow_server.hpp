@@ -22,6 +22,10 @@
 #include "pipeline/calibration_session.hpp"
 #include "pipeline/snapshot.hpp"
 
+namespace fitra::pipeline {
+class ExtrinsicCalibSession;   // fwd decl; full header included in crow_server.cpp
+}
+
 namespace fitra::slimevr {
 class NativePublisher;   // fwd decl; full header included only in crow_server.cpp
 class SlimeTrackerBus;   // tracker snapshot bus for /ws3d viz
@@ -45,6 +49,11 @@ struct ServerOptions {
     // When non-empty (and a CalibrationSession is attached) /calib serves
     // the wizard frontend and /api/calib/* exposes the orchestrator.
     std::string calib_static_dir;
+
+    // Directory that contains web/extrinsic_calibration/{index.html,app.js,...}.
+    // When non-empty (and an ExtrinsicCalibSession is attached) /extrinsic-calib
+    // serves the collection frontend; /api/excal/* exposes the session.
+    std::string excal_static_dir;
 };
 
 class CrowServer {
@@ -63,6 +72,11 @@ public:
     // Must be called before start().
     void set_calibration_session(pipeline::CalibrationSession* session,
                                  pipeline::CalibPreflight defaults);
+
+    // Attach the controller-marker extrinsic calibration session so /api/excal/*
+    // exposes its state + start/stop/solve controls. Caller retains ownership;
+    // the pointer must outlive the CrowServer. Must be called before start().
+    void set_extrinsic_calib_session(pipeline::ExtrinsicCalibSession* session);
 
     // Attach the SlimeVR native publisher so /stats3d includes its send
     // counters. Caller retains ownership; the pointer must outlive the
@@ -96,6 +110,7 @@ public:
 private:
     void publisher_loop();
     void register_calibration_routes_();
+    void register_extrinsic_calib_routes_();
 
     pipeline::SnapshotBus& bus_;
     pipeline::Skeleton3DBus* bus3d_ = nullptr;
@@ -106,6 +121,7 @@ private:
 
     pipeline::CalibrationSession*  calib_session_   = nullptr;
     pipeline::CalibPreflight       calib_defaults_;
+    pipeline::ExtrinsicCalibSession* excal_session_ = nullptr;
     slimevr::NativePublisher*      native_publisher_ = nullptr;
     slimevr::SlimeTrackerBus*      tracker_bus_     = nullptr;
     vmt::VmtPublisher*             vmt_publisher_   = nullptr;

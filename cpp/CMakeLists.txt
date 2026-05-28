@@ -28,8 +28,9 @@ find_package(CUDAToolkit REQUIRED)
 find_package(TensorRT REQUIRED)
 
 # OpenCV (apt: libopencv-dev). The correctness/dump tools need
-# imgproc + imgcodecs + videoio; the hot pipeline avoids OpenCV.
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio calib3d)
+# imgproc + imgcodecs + videoio; the hot pipeline avoids OpenCV. objdetect
+# carries the AprilTag/ArUco detector used by the extrinsic calibration.
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio calib3d objdetect)
 
 # Threads
 find_package(Threads REQUIRED)

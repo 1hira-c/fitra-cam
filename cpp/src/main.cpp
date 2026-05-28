@@ -38,6 +38,7 @@
 #include "lift/subject_profile.hpp"
 #include "lift/triangulator.hpp"
 #include "pipeline/calibration_session.hpp"
+#include "pipeline/extrinsic_calib_session.hpp"
 #include "pipeline/multi_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
 #include "slimevr/native_publisher.hpp"
@@ -47,6 +48,7 @@
 #include "util/logging.hpp"
 #include "vmt/vmt_publisher.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
+#include "vmt/controller_pose_receiver.hpp"
 #include "web/crow_server.hpp"
 
 namespace {
@@ -143,6 +145,21 @@ void print_help() {
         "  --calib-dump-tool PATH      override dump_keypoints_3d path used by analysis\n"
         "  --subjects-dir DIR          subject profile root (also used by --calibrate)\n"
         "\n"
+        "Controller-marker extrinsic calibration (mutually exclusive with --calibrate;\n"
+        "see docs/design/pose-3d-controller-marker-extrinsic.md):\n"
+        "  --extrinsic-calib           collect controller-marker samples; solve+write at exit\n"
+        "  --excal-intrinsics PATH     intrinsics-only calibration YAML (else reuses --calib)\n"
+        "  --excal-out PATH            output extrinsics YAML (default calibrations/extrinsics.yaml)\n"
+        "  --excal-faces \"0,1,2\"       AprilTag 36h11 face IDs on the marker\n"
+        "  --excal-tag-size-m F        physical tag side length, metres (default 0.10)\n"
+        "  --excal-lin-vel-max F       motion gate, m/s (default 0.03)\n"
+        "  --excal-ang-vel-max F       motion gate, deg/s (default 8)\n"
+        "  --excal-burst-min N         frames averaged per accepted pose (default 5)\n"
+        "  --excal-min-samples N       min samples per (cam,face) for the solve (default 8)\n"
+        "  --excal-controller-port N   controller pose UDP port (default 39572)\n"
+        "  --excal-controller-bind ADDR  bind address (default 0.0.0.0)\n"
+        "  --excal-controller-stale-ms F  controller pose staleness threshold (default 200)\n"
+        "\n"
         "  --config PATH             runtime YAML config (see docs/backlog-main-yaml-config.md).\n"
         "                            Precedence (low -> high): code defaults < --config < CLI flags.\n"
         "                            CLI flags on the same invocation always override the YAML value.\n"
@@ -185,6 +202,12 @@ std::filesystem::path guess_subject_calib_static_dir() {
     return repo / "web" / "subject_calibration";
 }
 
+std::filesystem::path guess_extrinsic_calib_static_dir() {
+    auto exe = std::filesystem::canonical("/proc/self/exe");
+    auto repo = exe.parent_path().parent_path().parent_path();
+    return repo / "web" / "extrinsic_calibration";
+}
+
 std::filesystem::path guess_dump_tool_path() {
     auto exe = std::filesystem::canonical("/proc/self/exe");
     // main is at <repo>/cpp/build/main; dump tool is <repo>/cpp/build/tools/dump_keypoints_3d
@@ -197,6 +220,24 @@ std::vector<std::string> expected_camera_ids(std::size_t count) {
     ids.reserve(count);
     for (std::size_t i = 0; i < count; ++i) ids.push_back("cam" + std::to_string(i));
     return ids;
+}
+
+// Split a comma-separated list, trimming surrounding ASCII whitespace from
+// each token. Used to parse --excal-faces "0, 1, 2".
+std::vector<std::string> split_csv(const std::string& s) {
+    std::vector<std::string> out;
+    std::size_t start = 0;
+    while (start <= s.size()) {
+        std::size_t comma = s.find(',', start);
+        std::size_t end = (comma == std::string::npos) ? s.size() : comma;
+        std::size_t b = start, e = end;
+        while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
+        while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) --e;
+        out.push_back(s.substr(b, e - b));
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    return out;
 }
 
 std::atomic<bool> g_stop{false};
@@ -457,24 +498,17 @@ int main(int argc, char** argv) {
         }
         driver->start();
 
-        // Stop the driver worker on any scope exit (early return, exception,
-        // normal end). Calibration taps capture raw pointers into
-        // `calib_session`, which is declared below and therefore destroyed
-        // *before* `driver` on unwind. Without this guard, an early return
-        // after the taps are wired would let the still-running driver call
-        // into a freed CalibrationSession.
-        struct DriverStop {
-            fitra::pipeline::MultiCameraDriver* d;
-            ~DriverStop() { if (d) d->stop(); }
-        } driver_stop{driver.get()};
-
         // Subject calibration session: only set up when 3D is enabled AND
         // exactly 2 cameras are attached. The session orchestrator and
         // dump_keypoints_3d both assume cam0/cam1; refuse to attach for 1-
         // or 3-camera runs rather than silently dropping cam2.
         std::unique_ptr<fitra::pipeline::CalibrationSession> calib_session;
         fitra::pipeline::CalibPreflight calib_defaults;
-        const bool calib_available = enable_3d && n_cams == 2;
+        // The subject wizard and the extrinsic-calib collector both claim the
+        // single frame tap; --extrinsic-calib (gated mutually exclusive with
+        // --calibrate in validate_options) takes the tap, so suppress the
+        // subject wizard entirely while extrinsic calibration is active.
+        const bool calib_available = enable_3d && n_cams == 2 && !opts.excal_enabled;
         if (calibrate_on_boot && !calib_available) {
             std::fprintf(stderr,
                 "--calibrate currently requires exactly 2 cameras (got %zu)\n",
@@ -535,6 +569,83 @@ int main(int argc, char** argv) {
                     s->on_skeleton3d(skel, drift);
                 });
         }
+
+        // Controller-marker extrinsic calibration (parallel to the subject
+        // wizard; mutually exclusive with it). Receives the VR controller pose
+        // on its own UDP channel, taps camera frames into the collection
+        // session, and solves + writes extrinsics at shutdown.
+        // See docs/design/pose-3d-controller-marker-extrinsic.md.
+        auto controller_pose_bus = std::make_unique<fitra::vmt::ControllerPoseBus>();
+        std::unique_ptr<fitra::vmt::ControllerPoseReceiver> controller_pose_recv;
+        std::unique_ptr<fitra::pipeline::ExtrinsicCalibSession> excal_session;
+        if (opts.excal_enabled) {
+            const std::string intr_path = opts.excal_intrinsics.empty()
+                                          ? opts.calib : opts.excal_intrinsics;
+            FITRA_LOG_INFO("extrinsic-calib: loading intrinsics from {}", intr_path);
+            fitra::pipeline::ExtrinsicCalibConfig ec;
+            ec.intrinsics = fitra::lift::load_calibration(intr_path);
+            if (ec.intrinsics.cameras.size() < n_cams) {
+                std::fprintf(stderr,
+                    "extrinsic-calib: intrinsics file has %zu cameras, need >= %zu\n",
+                    ec.intrinsics.cameras.size(), n_cams);
+                return EXIT_FAILURE;
+            }
+            // Parse "0,1,2" face ids; uniform tag size for the skeleton.
+            for (const auto& tok : split_csv(opts.excal_faces)) {
+                if (tok.empty()) continue;
+                fitra::lift::MarkerFace f;
+                f.face_id = std::atoi(tok.c_str());
+                f.tag_size_m = opts.excal_tag_size_m;
+                ec.board.faces.push_back(f);
+            }
+            ec.lin_vel_max_mps        = opts.excal_lin_vel_max;
+            ec.ang_vel_max_dps        = opts.excal_ang_vel_max;
+            ec.burst_min              = opts.excal_burst_min;
+            ec.min_samples_per_group  = opts.excal_min_samples;
+            ec.out_path               = opts.excal_out;
+            excal_session = std::make_unique<fitra::pipeline::ExtrinsicCalibSession>(
+                std::move(ec));
+
+            fitra::vmt::ControllerPoseReceiverOptions copts;
+            copts.bind     = opts.excal_controller_bind;
+            copts.port     = static_cast<std::uint16_t>(opts.excal_controller_port);
+            copts.stale_ms = opts.excal_controller_stale_ms;
+            controller_pose_recv = std::make_unique<fitra::vmt::ControllerPoseReceiver>(
+                *controller_pose_bus, copts);
+            if (!controller_pose_recv->start()) {
+                controller_pose_recv.reset();  // keep collecting; pose just stays absent
+            }
+
+            const double stale_ms = opts.excal_controller_stale_ms;
+            driver->set_frame_tap(
+                [s = excal_session.get(), bus = controller_pose_bus.get(), stale_ms]
+                (std::size_t cam, const cv::Mat& bgr, double ts) {
+                    auto snap = bus->snapshot(stale_ms);
+                    fitra::pipeline::ControllerObservation c;
+                    c.running_ok = !snap.stale && snap.pose.running_ok();
+                    c.x = snap.pose.x; c.y = snap.pose.y; c.z = snap.pose.z;
+                    c.qx = snap.pose.qx; c.qy = snap.pose.qy;
+                    c.qz = snap.pose.qz; c.qw = snap.pose.qw;
+                    c.ts_ms = ts;
+                    s->on_frame(cam, bgr, c);
+                });
+            excal_session->start();
+            FITRA_LOG_INFO("extrinsic-calib: collecting (faces={}, out={}). "
+                           "Stop the process to solve + write.",
+                           opts.excal_faces, opts.excal_out);
+        }
+
+        // Stop the driver worker before any session it taps into goes out of
+        // scope. Declared *after* both calib_session and excal_session so that
+        // on unwind (early return / exception path) this destructor — which
+        // calls driver->stop() — runs first, quiescing the frame-tap callbacks
+        // before the session objects they reference are destroyed. Normal
+        // shutdown calls driver->stop() explicitly below; this guard handles
+        // the exception path.
+        struct DriverStop {
+            fitra::pipeline::MultiCameraDriver* d;
+            ~DriverStop() { if (d) d->stop(); }
+        } driver_stop{driver.get()};
 
         // Start the TrackerExtractor before any consumer so the SlimeVR
         // Firmware UDP publisher and the WebUI both see the same smoothed
@@ -645,10 +756,14 @@ int main(int argc, char** argv) {
             sopts.calib_static_dir = calib_static_dir.empty()
                                 ? guess_subject_calib_static_dir().string()
                                 : calib_static_dir;
+            sopts.excal_static_dir = guess_extrinsic_calib_static_dir().string();
             server = std::make_unique<fitra::web::CrowServer>(
                 bus, enable_3d ? bus3d.get() : nullptr, sopts);
             if (calib_session) {
                 server->set_calibration_session(calib_session.get(), calib_defaults);
+            }
+            if (excal_session) {
+                server->set_extrinsic_calib_session(excal_session.get());
             }
             if (slime_pub) {
                 server->set_native_publisher(slime_pub.get());
@@ -712,7 +827,19 @@ int main(int argc, char** argv) {
 
         if (server) server->stop();
         if (slime_pub) slime_pub->stop();   // explicit stop; SlimeStop guard is the fallback
-        driver->stop();
+        driver->stop();   // taps quiesce here — safe to read/solve the session
+
+        if (excal_session) {
+            if (controller_pose_recv) controller_pose_recv->stop();
+            FITRA_LOG_INFO("extrinsic-calib: collected {} samples; solving...",
+                           excal_session->sample_count());
+            std::string err;
+            if (excal_session->solve_and_write(err)) {
+                FITRA_LOG_INFO("extrinsic-calib: wrote extrinsics to {}", opts.excal_out);
+            } else {
+                FITRA_LOG_ERROR("extrinsic-calib: solve/write failed: {}", err);
+            }
+        }
         return EXIT_SUCCESS;
     } catch (const std::exception& e) {
         FITRA_LOG_ERROR("fatal: {}", e.what());

@@ -108,7 +108,28 @@ slimevr:
   rate_hz: 60.0
   quat_smooth: 0.5
   preview_no_reset: false
+
+# コントローラ固定 AprilTag による多カメラ extrinsic キャリブ。
+# `enabled: true` のとき `--calibrate` と排他、かつ `intrinsics`
+# (または `three_d.calib`) が必須 (validate_options で同じチェック)。
+# 詳細は docs/design/pose-3d-controller-marker-extrinsic.md。
+extrinsic_calib:
+  enabled: false
+  intrinsics: ""            # intrinsics-only YAML; 空なら three_d.calib を流用
+  out: calibrations/extrinsics.yaml
+  faces: "0,1,2"            # AprilTag 36h11 face ID (カンマ区切り)
+  tag_size_m: 0.10
+  lin_vel_max: 0.03         # モーションゲート m/s
+  ang_vel_max: 8.0          # モーションゲート deg/s
+  burst_min: 5              # 1 サンプルに平均するフレーム数
+  min_samples: 8            # (cam,face) グループあたりの最小サンプル数
+  controller_port: 39572    # コントローラ pose UDP ポート (HMD は 39571)
+  controller_bind: 0.0.0.0
+  controller_stale_ms: 200.0
 ```
+
+> 注: 実装には他に `vmt:` セクション (VMT publisher + `hmd_listen_*`) もあるが、
+> この例には未掲載。キー一覧は `cpp/src/config/main_config.cpp` の各 `load_*` を正とする。
 
 ルール:
 

@@ -332,6 +332,51 @@ void test_apply_unknown_flag_throws() {
     check(threw, "apply_cli_overrides must reject unknown flags");
 }
 
+void test_extrinsic_calib_yaml_cli_and_validate() {
+    auto p = write_tmp("excal.yaml", R"(schema: fitra_main_config_v1
+extrinsic_calib:
+  enabled: true
+  intrinsics: /tmp/intr.yaml
+  faces: "3,4,5"
+  tag_size_m: 0.08
+  min_samples: 10
+  controller_port: 40000
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(opts.excal_enabled, "extrinsic_calib.enabled loads");
+    check(opts.excal_intrinsics == "/tmp/intr.yaml", "extrinsic_calib.intrinsics loads");
+    check(opts.excal_faces == "3,4,5", "extrinsic_calib.faces loads");
+    check(opts.excal_min_samples == 10, "extrinsic_calib.min_samples loads");
+    check(opts.excal_controller_port == 40000, "extrinsic_calib.controller_port loads");
+
+    std::vector<std::string> argv_buf{"--excal-tag-size-m", "0.12", "--excal-faces", "0,1"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(opts.excal_faces == "0,1", "--excal-faces CLI overrides YAML");
+
+    // Valid: has intrinsics. Required cam0/engines must be present too.
+    opts.cam_paths[0] = "/tmp/a";
+    opts.det_engine   = "/tmp/y";
+    opts.pose_engine  = "/tmp/r";
+    validate_options(opts);
+
+    // Mutually exclusive with --calibrate. Satisfy --calibrate's own
+    // prerequisites so validation reaches the exclusivity check.
+    opts.calibrate = true;
+    opts.enable_3d = true;
+    opts.calib = "/tmp/cam.yaml";
+    opts.calib_subject_id = "subj";
+    opts.calib_subject_height_m = 1.7;
+    bool threw = false;
+    try { validate_options(opts); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--extrinsic-calib", "excal+calibrate exclusivity msg");
+    }
+    check(threw, "--extrinsic-calib + --calibrate must throw");
+}
+
 struct TestCase {
     const char* name;
     void (*fn)();
@@ -348,6 +393,7 @@ const TestCase kTests[] = {
     {"negated_three_d_keys_invert_bools",      test_negated_three_d_keys_invert_runtime_bools},
     {"slimevr_preview_no_reset_yaml_and_cli",  test_slimevr_preview_no_reset_yaml_and_cli},
     {"vmt_index_base_yaml_cli_and_validate",   test_vmt_index_base_yaml_cli_and_validate},
+    {"extrinsic_calib_yaml_cli_and_validate",  test_extrinsic_calib_yaml_cli_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},
     {"validate_slimevr_requires_halpe26",      test_validate_slimevr_requires_halpe26},

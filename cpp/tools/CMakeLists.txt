@@ -111,6 +111,79 @@ set_target_properties(fitra_test_triangulator PROPERTIES
 
 add_test(NAME test_triangulator COMMAND fitra_test_triangulator)
 
+# Controller-marker extrinsic hand-eye solver — synthetic AX=ZB recovery,
+# relative-extrinsic identity, noisy robustness, under-sampled handling.
+add_executable(fitra_test_extrinsic_solver
+    test_extrinsic_solver.cpp
+)
+
+target_link_libraries(fitra_test_extrinsic_solver PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_extrinsic_solver PROPERTIES
+    OUTPUT_NAME "test_extrinsic_solver"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_extrinsic_solver COMMAND fitra_test_extrinsic_solver)
+
+# AprilTag marker detection + per-face PnP — pure PnP recovery and a real
+# render→detect→pose round-trip through cv::aruco.
+add_executable(fitra_test_apriltag_marker
+    test_apriltag_marker.cpp
+)
+
+target_link_libraries(fitra_test_apriltag_marker PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_apriltag_marker PROPERTIES
+    OUTPUT_NAME "test_apriltag_marker"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_apriltag_marker COMMAND fitra_test_apriltag_marker)
+
+# Extrinsic calibration collection loop — motion gate / burst mechanics,
+# end-to-end solve+write+reload, and calib_io write round-trip.
+add_executable(fitra_test_extrinsic_calib_session
+    test_extrinsic_calib_session.cpp
+)
+
+target_link_libraries(fitra_test_extrinsic_calib_session PRIVATE
+    fitra_pipeline
+)
+
+set_target_properties(fitra_test_extrinsic_calib_session PROPERTIES
+    OUTPUT_NAME "test_extrinsic_calib_session"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_extrinsic_calib_session COMMAND fitra_test_extrinsic_calib_session)
+
+# Integration smoke test for the /api/excal/* Crow routes (live loopback server).
+add_executable(fitra_test_crow_excal
+    test_crow_excal.cpp
+)
+
+target_link_libraries(fitra_test_crow_excal PRIVATE
+    fitra_web
+    fitra_pipeline
+)
+
+# CMAKE_SOURCE_DIR is the cpp/ tree; the web assets live at <repo>/web.
+target_compile_definitions(fitra_test_crow_excal PRIVATE
+    FITRA_EXCAL_WEB_DIR="${CMAKE_SOURCE_DIR}/../web/extrinsic_calibration"
+)
+
+set_target_properties(fitra_test_crow_excal PROPERTIES
+    OUTPUT_NAME "test_crow_excal"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_crow_excal COMMAND fitra_test_crow_excal)
+
 # SlimeVR Firmware UDP wire-format byte-level golden test. Verifies
 # handshake / sensor_info / rotation_data / ping_reply layouts and the MAC
 # derivation. No SlimeVR server needed.
@@ -194,6 +267,23 @@ set_target_properties(fitra_test_hmd_pose_receiver PROPERTIES
 )
 
 add_test(NAME test_hmd_pose_receiver COMMAND fitra_test_hmd_pose_receiver)
+
+# Controller pose UDP receiver — wire-format parser (incl. eTrackingResult),
+# running_ok gate, and bus stale logic.
+add_executable(fitra_test_controller_pose_receiver
+    test_controller_pose_receiver.cpp
+)
+
+target_link_libraries(fitra_test_controller_pose_receiver PRIVATE
+    fitra_vmt
+)
+
+set_target_properties(fitra_test_controller_pose_receiver PROPERTIES
+    OUTPUT_NAME "test_controller_pose_receiver"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_controller_pose_receiver COMMAND fitra_test_controller_pose_receiver)
 
 # VmtAlignment auto solver — T-pose + 2D Procrustes motion mode.
 add_executable(fitra_test_auto_alignment

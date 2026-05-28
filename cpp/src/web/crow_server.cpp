@@ -14,6 +14,7 @@
 #define CROW_MAIN
 #include <crow.h>
 
+#include "pipeline/extrinsic_calib_session.hpp"
 #include "slimevr/native_publisher.hpp"
 #include "slimevr/slime_tracker_bus.hpp"
 #include "vmt/vmt_publisher.hpp"
@@ -284,6 +285,10 @@ void CrowServer::set_calibration_session(pipeline::CalibrationSession* session,
                                           pipeline::CalibPreflight defaults) {
     calib_session_  = session;
     calib_defaults_ = std::move(defaults);
+}
+
+void CrowServer::set_extrinsic_calib_session(pipeline::ExtrinsicCalibSession* session) {
+    excal_session_ = session;
 }
 
 void CrowServer::set_native_publisher(slimevr::NativePublisher* publisher) {
@@ -762,6 +767,7 @@ void CrowServer::start() {
     // /api/calib/* and /artifacts/<path> are not shadowed by the static
     // handler below.
     register_calibration_routes_();
+    register_extrinsic_calib_routes_();
 
     // Static files under opts_.static_dir
     std::filesystem::path static_root{opts_.static_dir};
@@ -941,6 +947,85 @@ void CrowServer::register_calibration_routes_() {
         std::ostringstream o;
         o << "{\"ok\":" << (ok ? "true" : "false")
           << ",\"err\":\"" << err << "\"}";
+        crow::response r{o.str()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+}
+
+void CrowServer::register_extrinsic_calib_routes_() {
+    if (!excal_session_) return;
+    auto& app = impl_->app;
+    auto* session = excal_session_;
+
+    std::filesystem::path excal_root{opts_.excal_static_dir};
+    CROW_ROUTE(app, "/extrinsic-calib")
+    ([excal_root]() {
+        auto body = read_file(excal_root / "index.html");
+        if (body.empty()) return crow::response{404, "extrinsic-calib UI not installed"};
+        crow::response r{body};
+        r.set_header("Content-Type", "text/html; charset=utf-8");
+        return r;
+    });
+    CROW_ROUTE(app, "/extrinsic-calib/<path>")
+    ([excal_root](const std::string& sub) {
+        std::filesystem::path req = excal_root / sub;
+        auto canon_req  = std::filesystem::weakly_canonical(req);
+        auto canon_root = std::filesystem::weakly_canonical(excal_root);
+        if (canon_req.string().rfind(canon_root.string(), 0) != 0) {
+            return crow::response{403, "forbidden"};
+        }
+        if (!std::filesystem::is_regular_file(canon_req)) {
+            return crow::response{404, "not found"};
+        }
+        crow::response r{read_file(canon_req)};
+        r.set_header("Content-Type", guess_content_type(canon_req));
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/excal/state")
+    ([session]() {
+        crow::response r{session->state_json()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/excal/extrinsics")
+    ([session]() {
+        crow::response r{session->extrinsics_json()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/excal/start").methods(crow::HTTPMethod::POST)
+    ([session](const crow::request& /*req*/) {
+        session->start();
+        crow::response r{"{\"ok\":true,\"state\":\""
+                         + std::string(pipeline::extrinsic_calib_state_name(session->state()))
+                         + "\"}"};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/excal/stop").methods(crow::HTTPMethod::POST)
+    ([session](const crow::request& /*req*/) {
+        session->stop_collecting();
+        crow::response r{"{\"ok\":true,\"samples\":"
+                         + std::to_string(session->sample_count()) + "}"};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/excal/solve").methods(crow::HTTPMethod::POST)
+    ([session](const crow::request& /*req*/) {
+        std::string err;
+        bool ok = session->solve_and_write(err);
+        std::ostringstream o;
+        // err can carry paths / OpenCV exception text → JSON-escape so a `"`
+        // or backslash from `write failed: …` doesn't break the response body.
+        o << "{\"ok\":" << (ok ? "true" : "false")
+          << ",\"err\":\"" << json_escape(err) << "\""
+          << ",\"state\":\"" << pipeline::extrinsic_calib_state_name(session->state()) << "\"}";
         crow::response r{o.str()};
         r.set_header("Content-Type", "application/json; charset=utf-8");
         return r;
