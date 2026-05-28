@@ -27,6 +27,7 @@ namespace {
 
 constexpr float kEps = 1.0e-5f;
 
+using fitra::slimevr::PosSmoothingContext;
 using fitra::slimevr::SlimeTracker;
 using fitra::slimevr::TrackerRole;
 using fitra::slimevr::apply_pos_smoothing;
@@ -138,6 +139,111 @@ void test_dropout_recovery() {
     check_close(prev[0][0], 1.1875f, "dropout.phase3.prev recovers from held");
 }
 
+// ---------- ctx-aware overload (hip-relative hold + velocity gate) -------
+
+// pose-3d/locomotion-stability M1:
+// Seed prev_pos to a known foot position 0.5 m in front of and below the hip.
+// Move the hip 1 m to the right while marking the tracker invalid. The held
+// position must follow the hip (i.e. tracker.pos[0] increases by ~1 m),
+// not stay at the original world coordinates.
+void test_hip_relative_hold_on_invalid() {
+    std::array<cv::Vec3f, kTrackerCount> prev{};
+    PosSmoothingContext ctx;
+
+    // Seed: hip at (0,0,1), tracker idx 8 (LeftFoot) at (0.1, 0.3, 0.05).
+    ctx.current_hip_pos = cv::Vec3f{0.0f, 0.0f, 1.0f};
+    ctx.hip_valid       = true;
+    {
+        // First call with a valid tracker so prev_pos[8] gets initialized.
+        auto ts = make_trackers({0.1f, 0.3f, 0.05f}, /*valid=*/true);
+        apply_pos_smoothing(ts, prev, ctx, /*base_alpha=*/1.0f);
+    }
+    check_close(prev[8][0], 0.1f, "hip-rel.seed.prev[8].x");
+    check(ctx.prev_hip_valid, "hip-rel.seed.prev_hip_valid");
+    check_close(ctx.prev_hip_pos[2], 1.0f, "hip-rel.seed.prev_hip.z");
+
+    // Second call: hip moves to (1, 0, 1), tracker is invalid.
+    ctx.current_hip_pos = cv::Vec3f{1.0f, 0.0f, 1.0f};
+    ctx.hip_valid       = true;
+    {
+        auto ts = make_trackers({999.0f, 999.0f, 999.0f}, /*valid=*/false);
+        apply_pos_smoothing(ts, prev, ctx, /*base_alpha=*/0.5f);
+        // offset = (0.1, 0.3, 0.05) - (0, 0, 1) = (0.1, 0.3, -0.95)
+        // new world = (1, 0, 1) + (0.1, 0.3, -0.95) = (1.1, 0.3, 0.05)
+        check_vec3(ts[8].pos, {1.1f, 0.3f, 0.05f}, "hip-rel.hold.curr[8]");
+    }
+    check_vec3(prev[8], {1.1f, 0.3f, 0.05f}, "hip-rel.hold.prev[8]");
+}
+
+// First-frame-after-init must NOT trigger the velocity gate. prev starts at
+// (0,0,0); a real first measurement at (0.3, 0.5, 1.0) is ~70 m/s in a 16 ms
+// tick, well above the gate threshold. The initialized[] flag should
+// suppress the gate so prev converges normally.
+void test_first_valid_frame_skips_velocity_gate() {
+    std::array<cv::Vec3f, kTrackerCount> prev{};
+    PosSmoothingContext ctx;
+    ctx.dt_s = 1.0f / 60.0f;
+
+    auto ts = make_trackers({0.3f, 0.5f, 1.0f}, /*valid=*/true);
+    apply_pos_smoothing(ts, prev, ctx, /*base_alpha=*/0.5f);
+
+    // alpha=0.5 from (0,0,0) toward (0.3, 0.5, 1.0) → prev = (0.15, 0.25, 0.5)
+    check_close(prev[0][0], 0.15f, "first-frame.prev.x");
+    check_close(prev[0][1], 0.25f, "first-frame.prev.y");
+    check_close(prev[0][2], 0.50f, "first-frame.prev.z");
+    check(ctx.has_last_raw[0], "first-frame.has_last_raw");
+}
+
+// After a few valid frames have initialized the per-tracker state, an
+// extreme jump must collapse the alpha. With prev settled around (1, 0, 0)
+// and curr at (6, 0, 0) in one 16 ms tick (~300 m/s), prev must barely move.
+void test_velocity_gate_attenuates_jump() {
+    std::array<cv::Vec3f, kTrackerCount> prev{};
+    PosSmoothingContext ctx;
+    ctx.dt_s = 1.0f / 60.0f;
+
+    // Converge prev to (1, 0, 0).
+    for (int f = 0; f < 6; ++f) {
+        auto ts = make_trackers({1.0f, 0.0f, 0.0f}, /*valid=*/true);
+        apply_pos_smoothing(ts, prev, ctx, /*base_alpha=*/0.5f);
+    }
+    const float pre_x = prev[0][0];
+    check(pre_x > 0.95f, "vel-gate.pre.converged");
+
+    // 5 m jump in one tick → ~300 m/s, far above the 16 m/s gate ceiling.
+    auto ts = make_trackers({6.0f, 0.0f, 0.0f}, /*valid=*/true);
+    apply_pos_smoothing(ts, prev, ctx, /*base_alpha=*/0.5f);
+
+    // prev should barely move (gate ~ 1, effective alpha ~ 0).
+    const float delta = prev[0][0] - pre_x;
+    check(delta < 0.05f,
+          "vel-gate.attenuates: delta=" + std::to_string(delta) +
+              " (want < 0.05 m for ~300 m/s spike)");
+}
+
+// Plausible 5 m/s motion (vigorous walking / jogging) must pass through the
+// velocity gate without attenuation. With prev at (1,0,0) and curr at
+// (1.083, 0, 0) in 16 ms ≈ 5 m/s, the EMA should converge normally.
+void test_velocity_gate_passes_plausible_motion() {
+    std::array<cv::Vec3f, kTrackerCount> prev{};
+    PosSmoothingContext ctx;
+    ctx.dt_s = 1.0f / 60.0f;
+
+    // Settle prev.
+    for (int f = 0; f < 6; ++f) {
+        auto ts = make_trackers({1.0f, 0.0f, 0.0f}, /*valid=*/true);
+        apply_pos_smoothing(ts, prev, ctx, /*base_alpha=*/0.5f);
+    }
+
+    // 5 m/s motion = 5 / 60 ≈ 0.083 m per tick. Should not be gated.
+    auto ts = make_trackers({1.083f, 0.0f, 0.0f}, /*valid=*/true);
+    apply_pos_smoothing(ts, prev, ctx, /*base_alpha=*/0.5f);
+    // alpha=0.5 → prev = pre + 0.5 * (curr - pre)
+    const float want = prev[0][0];  // capture; should be near halfway
+    check(want > 1.03f && want < 1.05f,
+          "vel-gate.passes.normal: prev=" + std::to_string(want));
+}
+
 }  // namespace
 
 int main() {
@@ -146,6 +252,10 @@ int main() {
         test_smooth_convergence();
         test_invalid_holds_prev();
         test_dropout_recovery();
+        test_hip_relative_hold_on_invalid();
+        test_first_valid_frame_skips_velocity_gate();
+        test_velocity_gate_attenuates_jump();
+        test_velocity_gate_passes_plausible_motion();
         std::puts("test_tracker_extract_pos ok");
         return 0;
     } catch (const std::exception& e) {

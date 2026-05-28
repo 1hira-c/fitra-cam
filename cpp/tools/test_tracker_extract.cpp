@@ -768,6 +768,75 @@ void test_smoothing_freezes_under_low_confidence() {
     }
 }
 
+// pose-3d/locomotion-stability M1:
+// FK fallback for foot trackers. With ctx and an anchor seeded from a good
+// frame, dropping ankle (and/or toe) on the next frame must still produce a
+// valid foot tracker — synthesized via knee + dir·length. Without ctx (or
+// with no anchor) the same drop yields invalid (preserves old behavior).
+void test_foot_fk_fallback_uses_last_anchor() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    fitra::slimevr::ExtractContext ctx{};
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+
+    // Frame 1: fully measured T-pose seeds the anchor.
+    auto skel1 = make_t_pose();
+    auto t1 = fitra::slimevr::extract_trackers(skel1, &ctx);
+    check(t1[idx(R::LeftFoot)].valid,  "fk-fallback.seed.left.valid");
+    check(t1[idx(R::RightFoot)].valid, "fk-fallback.seed.right.valid");
+    check(ctx.foot_anchors[0].valid,   "fk-fallback.seed.anchor[0]");
+    check(ctx.foot_anchors[0].tibia_len_m > 1.0e-4f, "fk-fallback.seed.tibia_len > 0");
+    check(ctx.foot_anchors[0].foot_len_m  > 1.0e-4f, "fk-fallback.seed.foot_len > 0");
+
+    const cv::Vec3f anchor_pos_before = ctx.foot_anchors[0].knee_to_ankle_dir;
+    const float     tibia_before      = ctx.foot_anchors[0].tibia_len_m;
+
+    // Frame 2: hip + knee + toe valid, but ankle dropped on left. With
+    // ctx the foot must still produce a valid tracker via FK; without ctx
+    // it would early-return.
+    auto skel2 = make_t_pose();
+    skel2.joints[15].valid = false;  // l_ankle dropped
+    auto t2 = fitra::slimevr::extract_trackers(skel2, &ctx);
+    check(t2[idx(R::LeftFoot)].valid,
+          "fk-fallback.left foot valid via FK when ankle dropped");
+    // Confidence weight drops to the FK-mode value (0.15) when synthesized.
+    if (t2[idx(R::LeftFoot)].roll_confidence > 0.20f) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+            "fk-fallback.left foot weight got=%.3f want ≤ 0.20 (FK mode)",
+            t2[idx(R::LeftFoot)].roll_confidence);
+        throw std::runtime_error(buf);
+    }
+    // Anchor must NOT be updated from a synthesized frame.
+    check_vec3_close(ctx.foot_anchors[0].knee_to_ankle_dir,
+                     anchor_pos_before,
+                     "fk-fallback.anchor.dir unchanged on synth frame");
+    check(std::abs(ctx.foot_anchors[0].tibia_len_m - tibia_before) < 1.0e-6f,
+          "fk-fallback.anchor.tibia_len unchanged on synth frame");
+
+    // Without ctx the same drop yields invalid (old behavior preserved).
+    auto t2_noctx = fitra::slimevr::extract_trackers(skel2);
+    check(!t2_noctx[idx(R::LeftFoot)].valid,
+          "fk-fallback.no-ctx: ankle drop must produce invalid foot");
+}
+
+// Without a seeded anchor (first frame, ankle already invalid), FK fallback
+// has no data to draw on → foot tracker invalid, matching the old behavior.
+void test_foot_fk_fallback_needs_seed() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    fitra::slimevr::ExtractContext ctx{};
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+
+    auto skel = make_t_pose();
+    skel.joints[15].valid = false;  // l_ankle dropped on the very first frame
+    auto t = fitra::slimevr::extract_trackers(skel, &ctx);
+    check(!t[idx(R::LeftFoot)].valid,
+          "fk-fallback.unseeded: must not invent an anchor from nothing");
+    check(!ctx.foot_anchors[0].valid,
+          "fk-fallback.unseeded: anchor stays invalid");
+}
+
 void test_keypoint_format_assert() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Coco17);
     auto skel = make_t_pose();
@@ -805,6 +874,8 @@ int main() {
         test_thigh_standing_knee_straight();      std::printf("[ok] thigh: standing knee straight (立位)\n");
         test_thigh_lateral_ankle_uses_primary();  std::printf("[ok] thigh: lateral ankle activates primary (足首横ずれ)\n");
         test_thigh_seated_extended_straight_knee(); std::printf("[ok] thigh: 直座り — primary degenerate freezes (no world-Z rescue)\n");
+        test_foot_fk_fallback_uses_last_anchor(); std::printf("[ok] foot: FK fallback synthesizes ankle/toe from last anchor\n");
+        test_foot_fk_fallback_needs_seed();       std::printf("[ok] foot: FK fallback requires a seeded anchor\n");
         test_keypoint_format_assert();            std::printf("[ok] Halpe26 keypoint-format assertion\n");
         std::puts("test_tracker_extract ok");
         return 0;

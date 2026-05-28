@@ -74,9 +74,20 @@ private:
     std::array<cv::Vec4f, kTrackerCount> prev_quat_{};
 
     // Position EMA history. Same single-history invariant as prev_quat_.
-    // Initialized to (0,0,0) in the ctor; first valid frame converges to the
-    // real position within a few frames at pos_smooth=0.5.
+    // Initialized to (0,0,0) in the ctor; first valid frame snaps to the
+    // real position (the velocity gate in apply_pos_smoothing is suppressed
+    // until pos_ctx_.initialized[i] flips).
     std::array<cv::Vec3f, kTrackerCount> prev_pos_{};
+
+    // FK fallback state for extract_trackers. Holds per-foot anchors
+    // (knee→ankle direction + tibia length, ankle→toe direction + foot
+    // length) learned from fully measured frames; foot trackers fall back
+    // to the anchor when the KP drops in a single frame.
+    ExtractContext extract_ctx_{};
+
+    // Hip cache + per-tracker initialization flags + frame dt for the
+    // position smoother. See PosSmoothingContext docstring.
+    PosSmoothingContext pos_ctx_{};
 
     // Per-tracker rolling stats state.
     //

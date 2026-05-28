@@ -78,13 +78,42 @@ struct SlimeTracker {
     float       roll_confidence = 1.0f;
 };
 
+// Per-foot anchor used by extract_trackers to reconstruct ankle / big_toe via
+// short-chain FK when the keypoint goes invalid for a frame. The anchor is
+// learned from successful (ankle/toe both valid) frames and held across
+// invalid ones — bone length + last-known direction; the FK reconstruction is
+// knee + dir · length and ankle + dir · length respectively. Without this,
+// foot trackers `valid=false` for the whole frame and the position freeze
+// kicks in (which used to be world-absolute and looked like "foot stuck on
+// the ground while the body slides past").
+struct FootAnchor {
+    cv::Vec3f knee_to_ankle_dir{0.0f, 0.0f, -1.0f};
+    float     tibia_len_m = 0.0f;
+    cv::Vec3f ankle_to_toe_dir{0.0f, 1.0f, 0.0f};
+    float     foot_len_m = 0.0f;
+    bool      valid = false;
+};
+
+// Carries inter-frame state for extract_trackers. Optional: passing nullptr
+// disables FK fallback (preserves the old early-return behavior).
+struct ExtractContext {
+    // [0] = left foot, [1] = right foot.
+    std::array<FootAnchor, 2> foot_anchors{};
+};
+
 // Extract 10 trackers from a Halpe26 3D skeleton. Degenerate joints (invalid
 // landmarks or near-parallel forward/up hints) produce `valid=false` +
 // identity quaternion; the publisher skips those.
 //
 // `kp_format` must be Halpe26 — call sites assert this before invoking.
+//
+// When `ctx` is non-null, foot trackers attempt a short-chain FK fallback
+// using the per-foot anchors before giving up. Successful (ankle+toe both
+// real) frames update the anchor; FK-synthesized frames leave it unchanged
+// so the next valid frame re-references the last real measurement.
 std::array<SlimeTracker, kTrackerCount>
-extract_trackers(const infer::Skeleton3D& skel);
+extract_trackers(const infer::Skeleton3D& skel,
+                 ExtractContext* ctx = nullptr);
 
 // Per-tracker quaternion exponential smoothing via slerp.
 //   effective_alpha_i = base_alpha · curr_i.roll_confidence
@@ -98,20 +127,72 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           float base_alpha);
 
+// Inter-frame state for the position smoothing path. Pass-by-ref so the
+// extractor can hold one of these per loop; default-constructed value is
+// safe (the first call falls back to world-absolute hold).
+//
+// hip_valid + prev_hip_valid together gate the hip-relative hold for
+// `valid=false` trackers. When both are true and the tracker held a real
+// position last frame, the world-absolute prev is reanchored via
+//     offset = prev_pos[i] - prev_hip_pos
+//     new world = current_hip_pos + offset
+// so a hip translation drags the held tracker along. Without this, the
+// extended-leg locomotion case in pose-3d/locomotion-stability sees the
+// foot freeze in world coordinates while the body slides past.
+//
+// dt_s is the publish period (seconds); used by the velocity gate so a
+// jitter spike >> human-plausible speed attenuates the EMA alpha instead
+// of latching the smoothed history to the outlier.
+struct PosSmoothingContext {
+    cv::Vec3f current_hip_pos{0.0f, 0.0f, 0.0f};
+    bool      hip_valid       = false;
+    cv::Vec3f prev_hip_pos{0.0f, 0.0f, 0.0f};
+    bool      prev_hip_valid  = false;
+    // Per-tracker "last raw curr.pos that we saw valid" + a paired flag.
+    // The velocity gate consults this rather than prev_pos so an EMA that
+    // has not yet converged (prev still lagging the real position) doesn't
+    // read as inflated motion. The flag also doubles as "tracker has been
+    // valid at least once" — gates the hip-relative hold on the first
+    // invalid frame after init, and prevents the very first valid frame
+    // from being misread as a 70 m/s outlier off the (0,0,0) sentinel.
+    std::array<cv::Vec3f, kTrackerCount> last_raw_pos{};
+    std::array<bool,      kTrackerCount> has_last_raw{};
+    float     dt_s = 1.0f / 60.0f;
+};
+
 // Per-tracker position exponential moving average.
-//   curr_i.pos ← prev_pos_i + base_alpha · (curr_i.pos − prev_pos_i)
+//   curr_i.pos ← prev_pos_i + α · (curr_i.pos − prev_pos_i)
+//   α = base_alpha · (1 − smoothstep(velocity, 8 m/s, 16 m/s))
 // base_alpha ∈ [0, 1]. 0 = freeze (prev forever), 1 = no smoothing.
 //
 // Unlike apply_quat_smoothing, this does NOT modulate the alpha by
 // roll_confidence — pos noise (camera triangulation reprojection error /
-// keypoint score) is independent of roll observability. Invalid trackers
-// keep prev_pos unchanged (curr.pos is replaced by prev_pos so the publisher
-// can still see a stable position).
+// keypoint score) is independent of roll observability. Instead the alpha
+// is attenuated when the prev→curr displacement exceeds human-plausible
+// velocity, so a single bad triangulation frame (5 m jump in one tick)
+// does not snap the history to the outlier.
+//
+// Invalid trackers fall into the hold branch: with a valid hip reference
+// (ctx.hip_valid && ctx.prev_hip_valid) the held position re-anchors to
+// the current hip (`hip-relative hold`); otherwise it falls back to
+// world-absolute hold. The waist tracker has prev_pos ≡ hip_center by
+// construction, so hip-relative collapses to "follow hip" — no special
+// case needed.
+//
+// The 1-arg overload preserves the original world-absolute-hold behavior
+// for tests and any callers that don't track hip context yet.
 //
 // Wired into TrackerExtractor::run_loop directly after apply_quat_smoothing
 // so the VMT publisher (which sends pos on the wire) and the WebUI viz
 // (which renders pos via AxesHelper) both see one shared smoothed history —
 // same architectural invariant as the quat path.
+void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+                         std::array<cv::Vec3f, kTrackerCount>& prev_pos,
+                         PosSmoothingContext& ctx,
+                         float base_alpha);
+
+// Legacy 1-arg form: world-absolute hold, no velocity gate, no hip
+// re-anchor. Kept for existing tests that don't pass a context.
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          float base_alpha);

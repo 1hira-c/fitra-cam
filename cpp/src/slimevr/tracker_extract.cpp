@@ -69,6 +69,21 @@ constexpr float kRollSinHigh = 0.30f;  // sin 17.5°: full-confidence ceiling
 //   base_alpha 0.5 × 0.3 = 0.15 → τ ≈ 6 frames at 60 Hz
 constexpr float kFootSmoothingWeight = 0.3f;
 
+// When the foot tracker falls back to FK (ankle or toe synthesized from the
+// anchor instead of measured), drop the smoothing weight further so the
+// quaternion EMA leans even more on prev_quat. The synthesized direction is
+// only as accurate as the last real frame's anchor, so we want to bias
+// strongly toward continuity until a real KP returns.
+constexpr float kFootFkSmoothingWeight = 0.15f;
+
+// Position-EMA velocity gate (m/s). Inputs are the magnitude of the prev →
+// curr displacement divided by dt_s. The gate widens via smoothstep so a
+// 5 m jitter spike across a 16 ms tick (≈ 300 m/s, far above sprint top
+// speed ~12 m/s) collapses the effective alpha to 0; nominal motion
+// (walking ~1.5 m/s, vigorous gestures ~5 m/s) passes through unattenuated.
+constexpr float kPosVelGateLow_mps  = 8.0f;
+constexpr float kPosVelGateHigh_mps = 16.0f;
+
 bool joints_valid(const infer::Skeleton3D& s, std::initializer_list<std::size_t> idxs) {
     for (auto i : idxs) {
         if (!s.joints[i].valid) return false;
@@ -248,7 +263,7 @@ bool build_tracker(TrackerRole role,
 }  // namespace
 
 std::array<SlimeTracker, kTrackerCount>
-extract_trackers(const infer::Skeleton3D& skel) {
+extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx) {
     if (lift::active_keypoint_format() != lift::KeypointFormat::Halpe26) {
         throw std::runtime_error(
             "extract_trackers requires --keypoint-format=halpe26");
@@ -395,19 +410,80 @@ extract_trackers(const infer::Skeleton3D& skel) {
     // only quantity needed for in-place foot direction in SlimeVR IK — stays
     // free of heel noise. A strong smoothing throttle (kFootSmoothingWeight)
     // further damps residual ankle/toe jitter via apply_quat_smoothing.
+    //
+    // FK fallback: when ctx is non-null and the anchor has been seeded by a
+    // previous good frame, an invalid ankle/toe is reconstructed via
+    //   ankle = knee + dir · tibia_len  /  toe = ankle + dir · foot_len
+    // This is the workaround for the extended-leg locomotion freeze: under
+    // motion blur or self-occlusion the ankle/toe KPs often drop together
+    // exactly when the body is sliding past, so without FK the foot tracker
+    // gives up for the whole frame and the position freeze (now hip-relative
+    // via apply_pos_smoothing) drags it along but the rotation stays stale.
+    // With FK, we get a plausible orientation as well so the foot keeps
+    // pointing the right way while it follows the hip.
     auto foot_tracker = [&](TrackerRole role, std::size_t knee, std::size_t ankle,
-                            std::size_t toe, std::size_t out_idx) {
-        if (!joints_valid(skel, {knee, ankle, toe})) return;
+                            std::size_t toe, std::size_t out_idx,
+                            std::size_t anchor_idx) {
+        if (!skel.joints[knee].valid) return;
         cv::Vec3f kp = to_vec3f(skel.joints[knee]);
-        cv::Vec3f ap = to_vec3f(skel.joints[ankle]);
-        cv::Vec3f tp = to_vec3f(skel.joints[toe]);
+
+        // Resolve ankle: real KP when valid, else FK from anchor.
+        cv::Vec3f ap;
+        bool ap_synth = false;
+        if (skel.joints[ankle].valid) {
+            ap = to_vec3f(skel.joints[ankle]);
+        } else if (ctx != nullptr && ctx->foot_anchors[anchor_idx].valid) {
+            const auto& a = ctx->foot_anchors[anchor_idx];
+            ap = cv::Vec3f{kp[0] + a.knee_to_ankle_dir[0] * a.tibia_len_m,
+                           kp[1] + a.knee_to_ankle_dir[1] * a.tibia_len_m,
+                           kp[2] + a.knee_to_ankle_dir[2] * a.tibia_len_m};
+            ap_synth = true;
+        } else {
+            return;
+        }
+
+        // Resolve toe: real KP when valid, else FK from anchor (ankle + dir·len).
+        cv::Vec3f tp;
+        bool tp_synth = false;
+        if (skel.joints[toe].valid) {
+            tp = to_vec3f(skel.joints[toe]);
+        } else if (ctx != nullptr && ctx->foot_anchors[anchor_idx].valid) {
+            const auto& a = ctx->foot_anchors[anchor_idx];
+            tp = cv::Vec3f{ap[0] + a.ankle_to_toe_dir[0] * a.foot_len_m,
+                           ap[1] + a.ankle_to_toe_dir[1] * a.foot_len_m,
+                           ap[2] + a.ankle_to_toe_dir[2] * a.foot_len_m};
+            tp_synth = true;
+        } else {
+            return;
+        }
+
         cv::Vec3f pos = (ap + tp) * 0.5f;
         cv::Vec3f fwd = tp - ap;
         cv::Vec3f up  = kp - ap;            // tibia axis (ankle → knee)
-        build_tracker(role, pos, fwd, up, out[out_idx], kFootSmoothingWeight);
+        const float weight = (ap_synth || tp_synth)
+                                 ? kFootFkSmoothingWeight
+                                 : kFootSmoothingWeight;
+        build_tracker(role, pos, fwd, up, out[out_idx], weight);
+
+        // Only re-anchor from a fully measured frame; an FK-synthesized
+        // direction would otherwise drift on itself if a real KP never returns.
+        if (ctx != nullptr && !ap_synth && !tp_synth) {
+            auto& a = ctx->foot_anchors[anchor_idx];
+            cv::Vec3f ka{ap[0] - kp[0], ap[1] - kp[1], ap[2] - kp[2]};
+            float ka_len = norm(ka);
+            cv::Vec3f at{tp[0] - ap[0], tp[1] - ap[1], tp[2] - ap[2]};
+            float at_len = norm(at);
+            if (ka_len > 1.0e-4f && at_len > 1.0e-4f) {
+                a.knee_to_ankle_dir = cv::Vec3f{ka[0] / ka_len, ka[1] / ka_len, ka[2] / ka_len};
+                a.tibia_len_m       = ka_len;
+                a.ankle_to_toe_dir  = cv::Vec3f{at[0] / at_len, at[1] / at_len, at[2] / at_len};
+                a.foot_len_m        = at_len;
+                a.valid             = true;
+            }
+        }
     };
-    foot_tracker(TrackerRole::LeftFoot,  kLKnee, kLAnkle, kLBigToe, 8);
-    foot_tracker(TrackerRole::RightFoot, kRKnee, kRAnkle, kRBigToe, 9);
+    foot_tracker(TrackerRole::LeftFoot,  kLKnee, kLAnkle, kLBigToe, 8, 0);
+    foot_tracker(TrackerRole::RightFoot, kRKnee, kRAnkle, kRBigToe, 9, 1);
 
     return out;
 }
@@ -466,13 +542,77 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
 
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
+                         PosSmoothingContext& ctx,
+                         float base_alpha) {
+    base_alpha = std::clamp(base_alpha, 0.0f, 1.0f);
+    const float dt = std::max(1.0e-3f, ctx.dt_s);
+    const bool  can_hip_relative = ctx.hip_valid && ctx.prev_hip_valid;
+
+    for (std::size_t i = 0; i < kTrackerCount; ++i) {
+        cv::Vec3f& p = prev_pos[i];
+
+        if (!curr[i].valid) {
+            // Hold branch. With a valid hip reference (both current and
+            // previous), re-anchor the held position so it travels with
+            // the hip. The waist tracker has prev_pos ≡ hip_center by
+            // construction, so offset ≈ 0 and the hip-relative hold
+            // collapses to "snap to current hip" — exactly what we want.
+            if (can_hip_relative && ctx.has_last_raw[i]) {
+                cv::Vec3f offset{p[0] - ctx.prev_hip_pos[0],
+                                 p[1] - ctx.prev_hip_pos[1],
+                                 p[2] - ctx.prev_hip_pos[2]};
+                cv::Vec3f world{ctx.current_hip_pos[0] + offset[0],
+                                ctx.current_hip_pos[1] + offset[1],
+                                ctx.current_hip_pos[2] + offset[2]};
+                curr[i].pos = world;
+                p = world;
+            } else {
+                curr[i].pos = p;
+            }
+            continue;
+        }
+
+        const cv::Vec3f q = curr[i].pos;
+
+        // Velocity gate: consecutive raw (pre-smoothing) measurement deltas
+        // are the right outlier signal — prev_pos lags due to EMA, so
+        // prev→curr distance can look inflated during convergence even
+        // when the actual measurement stream is steady. With last_raw_pos,
+        // a single triangulation glitch (curr jumps several meters relative
+        // to the previous valid frame) collapses the alpha; nominal motion
+        // (walking, gestures) passes through.
+        float alpha = base_alpha;
+        if (ctx.has_last_raw[i]) {
+            float dx = q[0] - ctx.last_raw_pos[i][0];
+            float dy = q[1] - ctx.last_raw_pos[i][1];
+            float dz = q[2] - ctx.last_raw_pos[i][2];
+            float dist  = std::sqrt(dx*dx + dy*dy + dz*dz);
+            float v_mps = dist / dt;
+            float gate  = smoothstep01(v_mps, kPosVelGateLow_mps, kPosVelGateHigh_mps);
+            alpha = base_alpha * (1.0f - gate);
+        }
+
+        p[0] += alpha * (q[0] - p[0]);
+        p[1] += alpha * (q[1] - p[1]);
+        p[2] += alpha * (q[2] - p[2]);
+        curr[i].pos = p;
+        ctx.last_raw_pos[i] = q;
+        ctx.has_last_raw[i] = true;
+    }
+
+    // Cache the hip position for the next call's hip-relative hold.
+    if (ctx.hip_valid) {
+        ctx.prev_hip_pos    = ctx.current_hip_pos;
+        ctx.prev_hip_valid  = true;
+    }
+}
+
+void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+                         std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          float base_alpha) {
     base_alpha = std::clamp(base_alpha, 0.0f, 1.0f);
     for (std::size_t i = 0; i < kTrackerCount; ++i) {
         if (!curr[i].valid) {
-            // Hold previous position: publisher sees prev via curr, and
-            // prev_pos itself is left untouched so a tracker can recover
-            // from a dropped frame without snapping back through (0,0,0).
             curr[i].pos = prev_pos[i];
             continue;
         }
