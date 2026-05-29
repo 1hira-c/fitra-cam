@@ -82,9 +82,10 @@ private:
     std::array<cv::Vec4f, kTrackerCount> prev_quat_{};
 
     // Position EMA history. Same single-history invariant as prev_quat_.
-    // Initialized to (0,0,0) in the ctor; first valid frame snaps to the
-    // real position (the velocity gate in apply_pos_smoothing is suppressed
-    // until pos_ctx_.initialized[i] flips).
+    // Initialized to (0,0,0) in the ctor and converges toward the real
+    // position via the standard EMA step (no first-frame snap). The velocity
+    // gate in apply_pos_smoothing stays disabled until pos_ctx_.has_last_raw[i]
+    // flips on the first valid frame, so the initial convergence is ungated.
     std::array<cv::Vec3f, kTrackerCount> prev_pos_{};
 
     // FK fallback state for extract_trackers. Holds per-foot anchors

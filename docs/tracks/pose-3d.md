@@ -67,6 +67,20 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — locomotion-stability PR の AI レビュー対応
+PR #21 の Gemini / Copilot レビュー指摘を反映。(1) parent-yaw transport の
+**オーバーシュート修正** — transport delta は親の全変化 (prev smoothed → curr raw)
+だが参照 tracker 自身は `alpha_rate` ずつしか収束しないため、毎フレーム全量を乗せると
+持続旋回で held 肢が `Θ/alpha` まで回り続ける (alpha=0.5 で 2× オーバーシュート)。
+transport を `alpha_rate` でスケールし親と同速で収束させる (alpha=1 では no-op = M5
+テストはビット同一)。(2) `PosSmoothingContext::prev_hip_valid` を毎 tick 反映 —
+hip dropout を跨いだ stale な `prev_hip_pos` での re-anchor を防止。(3) `SkeletonKalman`
+の防御的バウンズチェック (`i` をループ先頭で検査 / `parent` の範囲検査 / `ensure_topology`
+の `kMaxKeypoints` 超過で throw)。回帰テスト 2 件追加
+(`test_pelvis_yaw_transport_no_overshoot` / `test_hip_dropout_clears_prev_hip_valid`)。
+ctest 全 10 スイート通過。
+→ [design/pose-3d-locomotion-stability.md](../design/pose-3d-locomotion-stability.md) M5
+
 ### 2026-05-29 — parent-yaw transport (横向き時の伸展肢 roll 追従)
 M4 (roll-only hold) 後の実機報告「伸展状態で xyz 移動は OK だが回転がだめ、特に横を向いたとき」に
 対応。立位伸展で bone forward が鉛直になると体 yaw が bone 軸まわり回転 = roll に一致し、world 絶対

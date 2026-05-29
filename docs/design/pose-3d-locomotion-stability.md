@@ -255,6 +255,16 @@ ctest --test-dir cpp/build --output-on-failure
   - child measurement で offset 補正
   - long missing → reset → 再 init
   - 親未初期化の child は skip
+- PR #21 AI レビュー対応で 2 ケース追加 + 防御的修正、全通過
+  - `test_pelvis_yaw_transport_no_overshoot` (`test_tracker_extract`): waist を一定 +30° yaw に
+    保ち `alpha=0.5` で 24 フレーム → held 脚 up が `Θ`(30°) に収束し `2Θ`(60°) へオーバー
+    シュートしないことを `min_dot=0.999` で検証。M5 の単フレームテストは `alpha=1` のため
+    transport を `alpha_rate` でスケールしない回帰 (`Θ/alpha` まで回る) を見逃す。
+  - `test_hip_dropout_clears_prev_hip_valid` (`test_tracker_extract_pos`): hip dropout 後の
+    valid-hip フレームで stale な `prev_hip_pos` を使った re-anchor が起きないこと
+    (`prev_hip_valid` を毎 tick 反映) を検証。
+  - `SkeletonKalman` の防御的バウンズチェック (`i` をループ先頭で検査 / `parent` の範囲検査 /
+    `ensure_topology` の `kMaxKeypoints` 超過で throw)。
 
 ### 実機検証 (未実施 — Jetson + Windows 環境必要)
 

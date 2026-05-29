@@ -702,7 +702,16 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
             is_arm ? (have_chest_delta ? chest_delta : waist_delta) : waist_delta;
         if (have_ref && std::abs(sa - ta) >= 1.0e-6f) {
             const float carry = std::clamp(1.0f - (ta / std::max(sa, 1.0e-6f)), 0.0f, 1.0f);
-            const cv::Vec4f d = quat_slerp(quat_identity(), ref_delta, carry);
+            // `ref_delta` is the FULL parent change (prev smoothed → curr raw),
+            // but the reference tracker itself only converges toward that raw by
+            // `alpha_rate` per step. Riding the full delta every frame makes the
+            // held limb lead — and, for a sustained turn, overshoot — the parent
+            // (each frame re-adds the still-open prev→raw gap). Scale the
+            // transport by `alpha_rate` so the limb's roll converges in lockstep
+            // with the parent. At alpha_rate == 1 (fixed-rate, full-trust path)
+            // this is a no-op, so the M5 tests stay bit-identical.
+            const float transport_t = std::clamp(carry * alpha_rate, 0.0f, 1.0f);
+            const cv::Vec4f d = quat_slerp(quat_identity(), ref_delta, transport_t);
             p = quat_normalize(quat_mul(d, p));
         }
 
@@ -808,11 +817,15 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
         ctx.invalid_ticks_since_last_raw[i] = 0;
     }
 
-    // Cache the hip position for the next call's hip-relative hold.
+    // Cache the hip position for the next call's hip-relative hold. Reflect
+    // the hip validity every tick (not just set-true): otherwise a hip dropout
+    // leaves prev_hip_valid stuck true with a stale prev_hip_pos, and the next
+    // valid frame would re-anchor across the gap — violating the "previous
+    // frame's hip was also valid" invariant in the hold branch above.
     if (ctx.hip_valid) {
-        ctx.prev_hip_pos    = ctx.current_hip_pos;
-        ctx.prev_hip_valid  = true;
+        ctx.prev_hip_pos = ctx.current_hip_pos;
     }
+    ctx.prev_hip_valid = ctx.hip_valid;
 }
 
 // World-absolute hold form: no hip re-anchor, no velocity gate. Frame-rate

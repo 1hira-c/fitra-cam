@@ -1,6 +1,7 @@
 #include "lift/kalman.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 
 namespace fitra::lift {
 
@@ -48,6 +49,14 @@ void SkeletonKalman::ensure_topology() {
 
     const auto& def     = active_skeleton_def();
     const auto& parents = def.parents;
+
+    // The BFS scratch arrays below are stack-allocated at kMaxKeypoints. A
+    // future custom skeleton with more joints would overflow them silently;
+    // fail loudly instead.
+    if (parents.size() > infer::kMaxKeypoints) {
+        throw std::runtime_error(
+            "Active skeleton keypoint count exceeds kMaxKeypoints");
+    }
 
     // Find the root (the joint whose parent == -1). There must be exactly
     // one — both Coco17 and Halpe26 satisfy this — but we just take the
@@ -113,6 +122,12 @@ infer::Skeleton3D SkeletonKalman::update(const infer::Skeleton3D& measurement,
 
     for (std::size_t order_idx = 0; order_idx < topo_count_; ++order_idx) {
         const int   i        = topo_order_[order_idx];
+        // Guard before any indexing: `i` drives states_/measurement.joints
+        // below. By construction topo_order_ only holds valid indices, but
+        // keep the bounds check at the top so a malformed topology can never
+        // produce an out-of-bounds access.
+        if (i < 0 || static_cast<std::size_t>(i) >= kp_count) continue;
+
         const bool  is_root  = (i == root_idx_);
         const int   parent   = is_root ? -1 : parents[static_cast<std::size_t>(i)];
         auto&       s        = states_[static_cast<std::size_t>(i)];
@@ -124,7 +139,7 @@ infer::Skeleton3D SkeletonKalman::update(const infer::Skeleton3D& measurement,
         // already-initialized child's missing counter so a long parent
         // dropout drops the stale offset instead of resurrecting it once
         // the parent reappears.
-        if (!is_root && (parent < 0 ||
+        if (!is_root && (parent < 0 || static_cast<std::size_t>(parent) >= kp_count ||
                          !states_[static_cast<std::size_t>(parent)].initialized)) {
             if (s.initialized) {
                 s.missing += 1;
@@ -185,7 +200,6 @@ infer::Skeleton3D SkeletonKalman::update(const infer::Skeleton3D& measurement,
             }
         }
 
-        if (i < 0 || static_cast<std::size_t>(i) >= kp_count) continue;
         auto& out_j = out.joints[static_cast<std::size_t>(i)];
         out_j.x = static_cast<float>(s.world_pos[0]);
         out_j.y = static_cast<float>(s.world_pos[1]);

@@ -1016,6 +1016,58 @@ void test_arm_chest_leg_waist_transport() {
                                "leg rides waist yaw (-40°)", 0.99f);
 }
 
+// pose-3d/locomotion-stability M5: the held-roll transport must converge to
+// the parent's yaw, not overshoot it. The transport delta is the FULL parent
+// change (prev smoothed → curr raw), but with base_alpha < 1 the parent only
+// moves alpha per step; riding the full delta every frame re-adds the still-
+// open gap and the held limb converges to Θ/alpha (a 2× overshoot at alpha=0.5)
+// instead of Θ. Drive a constant +Θ waist yaw at alpha=0.5 for many frames and
+// confirm the held leg lands at Θ (the M5 single-frame tests run at alpha=1, so
+// they cannot catch this).
+void test_pelvis_yaw_transport_no_overshoot() {
+    namespace sv = fitra::slimevr;
+    using sv::SlimeTracker;
+    using sv::kTrackerCount;
+    constexpr std::size_t kWaist = static_cast<std::size_t>(sv::TrackerRole::Waist);
+    constexpr std::size_t kLeg   = static_cast<std::size_t>(sv::TrackerRole::LeftUpperLeg);
+    const float pi = 3.14159265358979f;
+    const float th = 30.0f * pi / 180.0f;  // sustained pelvis yaw target
+
+    cv::Vec4f Pleg;  // prev leg: vertical forward (-Z), up = +Y
+    check(sv::detail::quat_from_forward_up(cv::Vec3f{0, 0, -1}, cv::Vec3f{0, 1, 0}, Pleg),
+          "no-overshoot: build prev leg");
+    cv::Vec4f Qleg;  // curr leg: same vertical forward, arbitrary roll → held
+    check(sv::detail::quat_from_forward_up(cv::Vec3f{0, 0, -1}, cv::Vec3f{1, 0, 0}, Qleg),
+          "no-overshoot: build curr leg");
+
+    std::array<SlimeTracker, kTrackerCount> curr{};
+    std::array<cv::Vec4f, kTrackerCount> prev{};
+    prev[kLeg]   = Pleg;
+    prev[kWaist] = cv::Vec4f{1, 0, 0, 0};  // waist starts facing world-forward
+
+    // Waist holds a constant +th yaw (raw measurement) every frame; the leg
+    // keeps its held vertical forward with unobservable roll.
+    for (int f = 0; f < 24; ++f) {
+        curr[kLeg].valid            = true;
+        curr[kLeg].quat_wxyz        = Qleg;
+        curr[kLeg].roll_confidence  = 0.0f;
+        curr[kLeg].swing_confidence = 1.0f;
+        curr[kWaist].valid            = true;
+        curr[kWaist].quat_wxyz        = cv::Vec4f{std::cos(th * 0.5f), 0, 0, std::sin(th * 0.5f)};
+        curr[kWaist].roll_confidence  = 1.0f;
+        curr[kWaist].swing_confidence = 1.0f;
+        sv::apply_quat_smoothing(curr, prev, 0.5f);
+    }
+
+    // Leg up must converge to the +th yaw: (-sin th, cos th, 0). A min_dot of
+    // 0.999 (≈ 2.6° tolerance) excludes the buggy 2·th = 60° overshoot, whose
+    // dot with the th target is cos(30°) ≈ 0.866.
+    check_tracker_forward(curr[kLeg], cv::Vec3f{0, 0, -1},
+                          "no-overshoot: forward still vertical", 1e-3f);
+    check_tracker_up_direction(curr[kLeg], cv::Vec3f{-std::sin(th), std::cos(th), 0.0f},
+                               "no-overshoot: up converges to waist yaw (not 2×)", 0.999f);
+}
+
 void test_keypoint_format_assert() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Coco17);
     auto skel = make_t_pose();
@@ -1046,6 +1098,7 @@ int main() {
         test_roll_hold_keeps_swing();             std::printf("[ok] smoothing: roll-only hold keeps swing (M3)\n");
         test_pelvis_yaw_transport_held_roll();    std::printf("[ok] smoothing: pelvis-yaw transport rides held roll (M5)\n");
         test_arm_chest_leg_waist_transport();     std::printf("[ok] smoothing: arm→chest / leg→waist transport (M5)\n");
+        test_pelvis_yaw_transport_no_overshoot(); std::printf("[ok] smoothing: pelvis-yaw transport converges, no overshoot (M5)\n");
         test_upper_arm_forward_raised();          std::printf("[ok] upper arm: forward-raised (前方挙上)\n");
         test_upper_arm_overhead_bent_elbow();     std::printf("[ok] upper arm: overhead + bent elbow (頭上挙上)\n");
         test_foot_toe_stance();                   std::printf("[ok] foot: toe stance (つま先立ち)\n");

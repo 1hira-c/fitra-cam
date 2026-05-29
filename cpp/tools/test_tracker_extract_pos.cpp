@@ -175,6 +175,49 @@ void test_hip_relative_hold_on_invalid() {
     check_vec3(prev[8], {1.1f, 0.3f, 0.05f}, "hip-rel.hold.prev[8]");
 }
 
+// Regression: a hip dropout must clear prev_hip_valid so the next valid-hip
+// frame does NOT re-anchor a held tracker across the gap using a stale
+// prev_hip_pos. The hip-relative hold's invariant is "previous frame's hip
+// was also valid"; without resetting prev_hip_valid every tick it stays stuck
+// true and a held limb teleports by the across-gap hip displacement.
+void test_hip_dropout_clears_prev_hip_valid() {
+    std::array<cv::Vec3f, kTrackerCount> prev{};
+    PosSmoothingContext ctx;
+
+    // Frame 1: hip at (0,0,1), tracker 8 valid at (0.1, 0.3, 0.05).
+    ctx.current_hip_pos = cv::Vec3f{0.0f, 0.0f, 1.0f};
+    ctx.hip_valid       = true;
+    {
+        auto ts = make_trackers({0.1f, 0.3f, 0.05f}, /*valid=*/true);
+        apply_pos_smoothing(ts, prev, ctx, /*base_alpha=*/1.0f);
+    }
+    check(ctx.prev_hip_valid, "hip-dropout.frame1.prev_hip_valid set");
+
+    // Frame 2: hip drops out (and tracker too). prev_hip_valid must clear.
+    ctx.current_hip_pos = cv::Vec3f{0.0f, 0.0f, 1.0f};
+    ctx.hip_valid       = false;
+    {
+        auto ts = make_trackers({999.0f, 999.0f, 999.0f}, /*valid=*/false);
+        apply_pos_smoothing(ts, prev, ctx, /*base_alpha=*/0.5f);
+    }
+    check(!ctx.prev_hip_valid, "hip-dropout.frame2.prev_hip_valid cleared");
+
+    // Frame 3: hip reappears 2 m away; tracker still invalid (held). Because
+    // the previous frame's hip was invalid, the held tracker must NOT be
+    // re-anchored — it holds its prev position. (With the bug it would
+    // teleport to ~(2.1, 0.3, 0.05) via the stale prev_hip_pos.)
+    ctx.current_hip_pos = cv::Vec3f{2.0f, 0.0f, 1.0f};
+    ctx.hip_valid       = true;
+    {
+        auto ts = make_trackers({999.0f, 999.0f, 999.0f}, /*valid=*/false);
+        apply_pos_smoothing(ts, prev, ctx, /*base_alpha=*/0.5f);
+        check_vec3(ts[8].pos, {0.1f, 0.3f, 0.05f},
+                   "hip-dropout.frame3.no re-anchor across gap");
+    }
+    // And prev_hip is now armed again for the next (both-valid) frame.
+    check(ctx.prev_hip_valid, "hip-dropout.frame3.prev_hip_valid re-armed");
+}
+
 // First-frame-after-init must NOT trigger the velocity gate. prev starts at
 // (0,0,0); a real first measurement at (0.3, 0.5, 1.0) is ~70 m/s in a 16 ms
 // tick, well above the gate threshold. The initialized[] flag should
@@ -347,6 +390,7 @@ int main() {
         test_invalid_holds_prev();
         test_dropout_recovery();
         test_hip_relative_hold_on_invalid();
+        test_hip_dropout_clears_prev_hip_valid();
         test_first_valid_frame_skips_velocity_gate();
         test_velocity_gate_attenuates_jump();
         test_velocity_gate_handles_multi_frame_dropout_recovery();
