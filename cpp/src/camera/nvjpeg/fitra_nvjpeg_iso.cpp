@@ -155,6 +155,9 @@ extern "C" int fitra_nvjpeg_preprocess_launch(
     const double* M_inv6, int out_w, int out_h,
     const float* mean_bgr, const float* inv_std_bgr,
     float* dst_chw_dev, void* stream);
+extern "C" int fitra_nvjpeg_preprocess_yolox_launch(
+    const void* rgba_dev, int in_w, int in_h, int in_pitch_bytes,
+    int target, float pad, float* dst_chw_dev, void* stream, float* out_r);
 
 extern "C" {
 
@@ -281,6 +284,22 @@ int fitra_nvjpeg_preprocess_from_last(void* handle,
                                        dst_chw_dev, nullptr) != 0)
         return -1;
     return (cudaStreamSynchronize(nullptr) == cudaSuccess) ? 0 : -1;
+}
+
+// Run the YOLOX letterbox preprocess from the handle's LAST decode RGBA output
+// into `dst_chw_dev` (device, target*target*3 floats). Unlike the RTMPose
+// preprocess this does NOT synchronize: YOLOX runs on the per-camera worker's
+// own TRT stream, and the caller launches this on that same stream so the
+// kernel and the TRT enqueue are ordered without an explicit sync. Writes the
+// letterbox scale to *out_r. Returns 0 on success.
+__attribute__((visibility("default")))
+int fitra_nvjpeg_preprocess_yolox_from_last(void* handle, int target, float pad,
+                                            float* dst_chw_dev, void* stream,
+                                            float* out_r) {
+    Handle* hd = static_cast<Handle*>(handle);
+    if (!hd || !hd->egl_registered || !hd->dev_ptr || !dst_chw_dev) return -1;
+    return fitra_nvjpeg_preprocess_yolox_launch(hd->dev_ptr, hd->w, hd->h, hd->dev_pitch,
+                                                target, pad, dst_chw_dev, stream, out_r);
 }
 
 // Decode `jpeg` and expose only the RGBA CUDA device pointer (no CPU map / no

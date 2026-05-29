@@ -39,11 +39,13 @@
 #include "infer/rtmpose.hpp"
 #include "infer/trt_engine.hpp"
 #include "infer/types.hpp"
+#include "infer/yolox.hpp"
 #include "util/logging.hpp"
 
 using fitra::infer::Bbox;
 using fitra::infer::Person;
 using fitra::infer::RtmPose;
+using fitra::infer::Yolox;
 
 namespace {
 
@@ -56,6 +58,8 @@ using PreprocHostFn = int (*)(const unsigned char*, int, int, int,
 using PreprocLaunchFn = int (*)(const void*, int, int, int,
                                 const double*, int, int,
                                 const float*, const float*, float*, void*);
+using YoloxLaunchFn = int (*)(const void*, int, int, int,
+                              int, float, float*, void*, float*);
 
 class TrtLogger : public nvinfer1::ILogger {
 public:
@@ -230,6 +234,90 @@ int run_keypoint_check(const std::string& video, const std::string& pose_engine)
     return fail ? 1 : 0;
 }
 
+double iou(const Bbox& a, const Bbox& b) {
+    float ix1 = std::max(a.x1, b.x1), iy1 = std::max(a.y1, b.y1);
+    float ix2 = std::min(a.x2, b.x2), iy2 = std::min(a.y2, b.y2);
+    float iw = std::max(0.f, ix2 - ix1), ih = std::max(0.f, iy2 - iy1);
+    float inter = iw * ih;
+    float ua = (a.x2 - a.x1) * (a.y2 - a.y1) + (b.x2 - b.x1) * (b.y2 - b.y1) - inter;
+    return ua > 0 ? inter / ua : 0.0;
+}
+
+// Mode 3: YOLOX bboxes host path vs device path (full M3 YOLOX device).
+int run_bbox_check(const std::string& video, const std::string& det_engine) {
+    YoloxLaunchFn launch = load_sym<YoloxLaunchFn>("fitra_nvjpeg_preprocess_yolox_launch");
+    if (!launch) { std::fprintf(stderr, "no yolox_launch symbol\n"); return 2; }
+
+    TrtLogger tlog;
+    std::unique_ptr<nvinfer1::IRuntime> runtime{nvinfer1::createInferRuntime(tlog)};
+    if (!runtime) { std::fprintf(stderr, "createInferRuntime failed\n"); return 2; }
+    auto engine = fitra::infer::TrtEngine::from_file(*runtime, det_engine, tlog);
+    Yolox yolox{*engine};
+    const int S = yolox.input_size();
+
+    cv::VideoCapture cap(video);
+    if (!cap.isOpened()) { std::fprintf(stderr, "cannot open %s\n", video.c_str()); return 2; }
+
+    float* d_rgba = nullptr; std::size_t rgba_cap = 0;
+    double worst = 0, sum = 0; int matched = 0, mism = 0, fail = 0, fidx = 0;
+    const int total = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
+    const int step = (total > 0) ? std::max(1, total / 8) : 100;
+    cv::Mat frame, rgba;
+    while (cap.read(frame) && !frame.empty()) {
+        if (fidx % step == 0) {
+            cv::cvtColor(frame, rgba, cv::COLOR_BGR2RGBA);
+            const std::size_t rb = static_cast<std::size_t>(rgba.cols) * 4 * rgba.rows;
+            if (rb > rgba_cap) {
+                if (d_rgba) cudaFree(d_rgba);
+                if (cudaMalloc(reinterpret_cast<void**>(&d_rgba), rb) != cudaSuccess) {
+                    std::fprintf(stderr, "cudaMalloc d_rgba failed\n"); return 2;
+                }
+                rgba_cap = rb;
+            }
+            cudaMemcpy(d_rgba, rgba.data, rb, cudaMemcpyHostToDevice);
+            const int rw = rgba.cols, rh = rgba.rows;
+            // Device FIRST (before any host infer fills the shared engine input),
+            // so a silently-failed kernel cannot trivially "match" by reading
+            // stale host input. Assert the launch actually ran.
+            std::vector<Bbox> dp = yolox.infer_device(
+                [&](float* dst, cudaStream_t st) {
+                    float r = 1.f;
+                    if (launch(d_rgba, rw, rh, rw * 4, S, 114.f, dst, st, &r) != 0)
+                        std::fprintf(stderr, "yolox launch FAILED frame %d\n", fidx);
+                    return r;
+                });
+            std::vector<Bbox> hp = yolox.infer(frame);
+            // Greedy IoU match; compare matched corners, count mismatches.
+            std::vector<bool> used(dp.size(), false);
+            for (const auto& h : hp) {
+                int best = -1; double bj = 0.5;
+                for (std::size_t j = 0; j < dp.size(); ++j) {
+                    if (used[j]) continue;
+                    double j2 = iou(h, dp[j]);
+                    if (j2 > bj) { bj = j2; best = static_cast<int>(j); }
+                }
+                if (best < 0) { ++mism; continue; }
+                used[best] = true;
+                const Bbox& d = dp[best];
+                double cd = std::max(std::max(std::fabs(h.x1 - d.x1), std::fabs(h.y1 - d.y1)),
+                                     std::max(std::fabs(h.x2 - d.x2), std::fabs(h.y2 - d.y2)));
+                worst = std::max(worst, cd); sum += cd; ++matched;
+                if (cd > 2.0) ++fail;  // corner agreement (px)
+            }
+            for (bool u : used) if (!u) ++mism;
+        }
+        ++fidx;
+    }
+    if (d_rgba) cudaFree(d_rgba);
+    if (!matched) { std::fprintf(stderr, "no matched boxes\n"); return 2; }
+    std::printf("bbox check: %d matched, %d unmatched (%d frames @ step %d), engine=%s\n",
+                matched, mism, fidx, step, det_engine.c_str());
+    std::printf("  worst corner abs = %.4f px | avg = %.4f px\n", worst, sum / matched);
+    std::printf("  result: %s (threshold corner<2px, unmatched==0)\n",
+                (fail || mism) ? "FAIL" : "PASS");
+    return (fail || mism) ? 1 : 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -237,9 +325,13 @@ int main(int argc, char** argv) {
         ? argv[1]
         : "outputs/recorded_rtmpose/20260515_064342/raw_cam0.mp4";
     int rc = run_chw_check(video);
-    if (rc == 0 && argc > 2) {
+    if (rc == 0 && argc > 2 && std::string(argv[2]) != "-") {
         std::printf("---\n");
         rc = run_keypoint_check(video, argv[2]);
+    }
+    if (rc == 0 && argc > 3) {
+        std::printf("---\n");
+        rc = run_bbox_check(video, argv[3]);
     }
     if (g_lib) ::dlclose(g_lib);
     return rc;

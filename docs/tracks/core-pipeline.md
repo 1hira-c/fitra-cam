@@ -33,6 +33,16 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — 全 GPU フロントエンド M3 Step A: YOLOX 前処理 CUDA カーネル
+YOLOX letterbox 前処理 (resize+HWC→CHW, 正規化なし, 114 pad) を GPU カーネル化。`cv::resize` の
+half-pixel convention + edge clamp を再現。`Yolox::infer_device(fill)` で engine 入力 device バッファを
+カーネル直書き (静的 shape, H2D なし, kernel と enqueue を同一 stream で順序付け)。YOLOX は per-camera
+worker の TRT context なので cross-thread なし。loader に `decode_to_device`/`preprocess_yolox_into`/
+`yolox_device_capable`。`gpu_preprocess_check` に bbox モード追加 (host `infer` vs device、IoU マッチ +
+corner L2)。実機 **bbox corner L2 = 0.0px (8/8 matched)** — letterbox 微差を FP16 が量子化吸収
+(device-first で stale false-pass 排除)。ctest 9/9。Step B で frame_source 統合 + full-frame cvtColor 撤去。
+→ [design/core-pipeline-gpu-frontend.md](../design/core-pipeline-gpu-frontend.md)
+
 ### 2026-05-29 — 全 GPU フロントエンド M2 Step B: device CHW を TRT 入力直結
 前処理カーネル出力を host を介さず TRT 入力に渡す配線。`TrtEngine::copy_input_region_from_device`
 (D2D, offset 対応) + `RtmPose::PrebakedRequest.chw_dev` で `run_one_prebaked` を device バッチ経路化

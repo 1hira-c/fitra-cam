@@ -66,6 +66,55 @@ __global__ void preprocess_rtmpose_kernel(
     chw[2 * npx + idx] = (R - mr) * ir;  // channel 2 = R
 }
 
+// cv::resize INTER_LINEAR half-pixel coordinate mapping with edge clamping,
+// matching OpenCV exactly: src = (dst+0.5)*scale - 0.5, then clamp the integer
+// index to [0, srcdim-1] zeroing the fraction at the borders.
+__device__ __forceinline__ void resize_map1d(int dst, float scale, int srcdim,
+                                              int& i0, int& i1, float& f) {
+    float s = (dst + 0.5f) * scale - 0.5f;
+    int ix = static_cast<int>(floorf(s));
+    f = s - ix;
+    if (ix < 0) { ix = 0; f = 0.f; }
+    if (ix >= srcdim - 1) { ix = srcdim - 1; f = 0.f; }
+    i0 = ix;
+    i1 = (ix + 1 < srcdim) ? ix + 1 : srcdim - 1;
+}
+
+// YOLOX letterbox preprocess: resize the whole frame into the top-left nw x nh
+// region of a target x target canvas (INTER_LINEAR, edge-clamped), pad the rest
+// with `pad` (114), and write HWC->CHW with NO normalization, BGR channel order
+// (matches yolox.cpp letterbox + hwc_uint8_to_chw_float). One output px/thread.
+__global__ void preprocess_yolox_kernel(
+    const uchar4* __restrict__ rgba, int in_w, int in_h, int in_pitch_px,
+    int nw, int nh, float scale_x, float scale_y,
+    int target, float pad,
+    float* __restrict__ chw) {
+    const int ox = blockIdx.x * blockDim.x + threadIdx.x;
+    const int oy = blockIdx.y * blockDim.y + threadIdx.y;
+    if (ox >= target || oy >= target) return;
+
+    float B = pad, G = pad, R = pad;
+    if (ox < nw && oy < nh) {
+        int x0, x1, y0, y1; float fx, fy;
+        resize_map1d(ox, scale_x, in_w, x0, x1, fx);
+        resize_map1d(oy, scale_y, in_h, y0, y1, fy);
+        const uchar4 p00 = rgba[static_cast<size_t>(y0) * in_pitch_px + x0];
+        const uchar4 p01 = rgba[static_cast<size_t>(y0) * in_pitch_px + x1];
+        const uchar4 p10 = rgba[static_cast<size_t>(y1) * in_pitch_px + x0];
+        const uchar4 p11 = rgba[static_cast<size_t>(y1) * in_pitch_px + x1];
+        const float w00 = (1.f - fx) * (1.f - fy), w01 = fx * (1.f - fy);
+        const float w10 = (1.f - fx) * fy,         w11 = fx * fy;
+        R = w00 * p00.x + w01 * p01.x + w10 * p10.x + w11 * p11.x;
+        G = w00 * p00.y + w01 * p01.y + w10 * p10.y + w11 * p11.y;
+        B = w00 * p00.z + w01 * p01.z + w10 * p10.z + w11 * p11.z;
+    }
+    const int npx = target * target;
+    const int idx = oy * target + ox;
+    chw[0 * npx + idx] = B;  // channel 0 = B
+    chw[1 * npx + idx] = G;  // channel 1 = G
+    chw[2 * npx + idx] = R;  // channel 2 = R
+}
+
 }  // namespace
 
 extern "C" {
@@ -97,6 +146,65 @@ int fitra_nvjpeg_preprocess_launch(
         inv_std_bgr[0], inv_std_bgr[1], inv_std_bgr[2],
         dst_chw_dev);
     return (cudaGetLastError() == cudaSuccess) ? 0 : -1;
+}
+
+// Launch the YOLOX letterbox preprocess on a device RGBA buffer, writing the
+// CHW float tensor (target*target*3, BGR, unnormalized) to `dst_chw_dev`.
+// Computes the letterbox geometry (scale r, nw, nh) from in_w/in_h/target,
+// returns r in *out_r (out_x = in_x * r) for unscaling boxes. Runs on `stream`
+// (0 = default); does NOT synchronize. Returns 0 on success, -1 on error.
+__attribute__((visibility("default")))
+int fitra_nvjpeg_preprocess_yolox_launch(
+    const void* rgba_dev, int in_w, int in_h, int in_pitch_bytes,
+    int target, float pad, float* dst_chw_dev, void* stream, float* out_r) {
+    if (!rgba_dev || !dst_chw_dev) return -1;
+    if (in_w <= 0 || in_h <= 0 || target <= 0 || (in_pitch_bytes & 3)) return -1;
+
+    const float rh = static_cast<float>(target) / static_cast<float>(in_h);
+    const float rw = static_cast<float>(target) / static_cast<float>(in_w);
+    const float r  = rh < rw ? rh : rw;
+    const int nh = static_cast<int>(lroundf(in_h * r));
+    const int nw = static_cast<int>(lroundf(in_w * r));
+    if (nw <= 0 || nh <= 0) return -1;
+    const float scale_x = static_cast<float>(in_w) / nw;  // cv::resize src/dst
+    const float scale_y = static_cast<float>(in_h) / nh;
+
+    const dim3 block(16, 16);
+    const dim3 grid((target + block.x - 1) / block.x, (target + block.y - 1) / block.y);
+    preprocess_yolox_kernel<<<grid, block, 0, static_cast<cudaStream_t>(stream)>>>(
+        static_cast<const uchar4*>(rgba_dev), in_w, in_h, in_pitch_bytes / 4,
+        nw, nh, scale_x, scale_y, target, pad, dst_chw_dev);
+    if (cudaGetLastError() != cudaSuccess) return -1;
+    if (out_r) *out_r = r;
+    return 0;
+}
+
+// Correctness/bench entry for the YOLOX kernel: run on a HOST RGBA image,
+// allocating/freeing its own device buffers; copies the CHW result back.
+__attribute__((visibility("default")))
+int fitra_nvjpeg_preprocess_yolox_host(
+    const unsigned char* rgba, int in_w, int in_h, int in_pitch_bytes,
+    int target, float pad, float* out_chw_host, float* out_r) {
+    if (!rgba || !out_chw_host) return -1;
+    const size_t in_bytes   = static_cast<size_t>(in_pitch_bytes) * in_h;
+    const size_t out_floats = static_cast<size_t>(3) * target * target;
+    void*  d_rgba = nullptr;
+    float* d_chw  = nullptr;
+    int rc = -1;
+    do {
+        if (cudaMalloc(&d_rgba, in_bytes) != cudaSuccess) break;
+        if (cudaMalloc(&d_chw, out_floats * sizeof(float)) != cudaSuccess) break;
+        if (cudaMemcpy(d_rgba, rgba, in_bytes, cudaMemcpyHostToDevice) != cudaSuccess) break;
+        if (fitra_nvjpeg_preprocess_yolox_launch(d_rgba, in_w, in_h, in_pitch_bytes,
+                                                 target, pad, d_chw, nullptr, out_r) != 0) break;
+        if (cudaDeviceSynchronize() != cudaSuccess) break;
+        if (cudaMemcpy(out_chw_host, d_chw, out_floats * sizeof(float),
+                       cudaMemcpyDeviceToHost) != cudaSuccess) break;
+        rc = 0;
+    } while (false);
+    if (d_rgba) cudaFree(d_rgba);
+    if (d_chw)  cudaFree(d_chw);
+    return rc;
 }
 
 // Correctness/bench entry: run the real kernel on a HOST RGBA image. Uploads

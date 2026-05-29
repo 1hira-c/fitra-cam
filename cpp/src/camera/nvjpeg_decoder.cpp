@@ -79,6 +79,12 @@ NvJpegHwDecoder::NvJpegHwDecoder() {
     preprocess_from_last_ = reinterpret_cast<int (*)(
         void*, const double*, int, int, const float*, const float*, float*)>(
         ::dlsym(lib_, "fitra_nvjpeg_preprocess_from_last"));
+    decode_to_device_ = reinterpret_cast<int (*)(
+        void*, const unsigned char*, unsigned long, int*, int*, int*, void**)>(
+        ::dlsym(lib_, "fitra_nvjpeg_decode_to_device"));
+    preprocess_yolox_from_last_ = reinterpret_cast<int (*)(
+        void*, int, float, float*, void*, float*)>(
+        ::dlsym(lib_, "fitra_nvjpeg_preprocess_yolox_from_last"));
     if (const char* e = std::getenv("FITRA_NVJPEG_EGL"); e && *e && std::string(e) != "0") {
         if (decode_cuda_) {
             egl_mode_ = true;
@@ -171,6 +177,23 @@ bool NvJpegHwDecoder::preprocess_into(const double* M_inv6, int out_w, int out_h
     if (!handle_ || !preprocess_from_last_) return false;
     return preprocess_from_last_(handle_, M_inv6, out_w, out_h,
                                  mean_bgr, inv_std_bgr, dst_chw_dev) == 0;
+}
+
+bool NvJpegHwDecoder::decode_to_device(const std::uint8_t* jpeg, std::size_t bytes,
+                                       int& w, int& h) {
+    if (!handle_ || !decode_to_device_ || !jpeg || bytes == 0) return false;
+    int dev_pitch = 0;
+    void* dev = nullptr;
+    if (decode_to_device_(handle_, jpeg, static_cast<unsigned long>(bytes),
+                          &w, &h, &dev_pitch, &dev) != 0)
+        return false;
+    return dev != nullptr && w > 0 && h > 0;
+}
+
+bool NvJpegHwDecoder::preprocess_yolox_into(int target, float pad, float* dst_chw_dev,
+                                            void* stream, float* out_r) {
+    if (!handle_ || !preprocess_yolox_from_last_) return false;
+    return preprocess_yolox_from_last_(handle_, target, pad, dst_chw_dev, stream, out_r) == 0;
 }
 
 }  // namespace fitra::camera

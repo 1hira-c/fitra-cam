@@ -47,6 +47,24 @@ public:
     // exports the EGL/CUDA device entry points, so the per-camera worker can
     // feed the RTMPose input straight from device memory.
     bool device_capable() const { return decode_cuda_ && preprocess_from_last_; }
+    // M3: the .so also exposes the YOLOX letterbox preprocess + pure device
+    // decode (no host map), so the full front-end can run on the GPU.
+    bool yolox_device_capable() const {
+        return decode_to_device_ && preprocess_yolox_from_last_;
+    }
+
+    // Pure device decode: HW NVJPEG -> VIC RGBA -> EGL CUDA ptr, no CPU map / no
+    // RGBA->BGR. Use when the BGR host image is not needed (YOLOX + RTMPose both
+    // on the GPU path). Sets w/h; the RGBA dev ptr is retained for the
+    // following preprocess_into / preprocess_yolox_into. Returns true on success.
+    bool decode_to_device(const std::uint8_t* jpeg, std::size_t bytes, int& w, int& h);
+
+    // Run the YOLOX letterbox preprocess from the LAST decode into `dst_chw_dev`
+    // (device, target*target*3 floats) on `stream` (the YOLOX engine's stream).
+    // Does NOT synchronize (caller enqueues on the same stream). Writes the
+    // letterbox scale to *out_r. Returns true on success.
+    bool preprocess_yolox_into(int target, float pad, float* dst_chw_dev,
+                               void* stream, float* out_r);
 
     // Decode into `out_bgr` (for YOLOX / calibration) AND retain the RGBA CUDA
     // device buffer of the same frame so preprocess_into() can run the GPU
@@ -78,6 +96,10 @@ private:
     // Run preprocess kernel from the last decode into a device CHW buffer.
     int (*preprocess_from_last_)(void*, const double*, int, int,
                                  const float*, const float*, float*)         = nullptr;
+    // M3: pure device decode + YOLOX letterbox preprocess.
+    int (*decode_to_device_)(void*, const unsigned char*, unsigned long,
+                             int*, int*, int*, void**)                       = nullptr;
+    int (*preprocess_yolox_from_last_)(void*, int, float, float*, void*, float*) = nullptr;
     void (*destroy_)(void*)                                                  = nullptr;
 
     bool          egl_mode_   = false;  // FITRA_NVJPEG_EGL=1 and decode_cuda_ present

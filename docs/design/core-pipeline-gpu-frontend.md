@@ -153,7 +153,24 @@ MJPEG ─VIC/NVJPEG decodeToFd─▶ NvBufSurface(YUV422,NVMM)
         `hw_decoder_.reset()` は driver shutdown と競合してクラッシュ。`~FrameSource` (main スレッド) での
         破棄が clean —— main は TRT 経由で CUDA primary context を持ち、shutdown 後の単一スレッド地点で
         走るため。SIGINT を 2 回とも rc=0 / 0.42s で確認。teardown は destructor のままとする。
-- **M3**: **YOLOX 前処理 CUDA カーネル** (letterbox+normalize+HWC→CHW) 同様に device 直結。
+- **M3**: **YOLOX 前処理 CUDA カーネル** (letterbox+HWC→CHW, 正規化なし) 同様に device 直結。
+  YOLOX は per-camera worker の TRT context で動く (RTMPose と違い cross-thread なし) ので、カーネルを
+  worker の TRT stream 上で engine 入力 device バッファに直書きし enqueue → 明示 sync 不要。
+  - **Step A ✅ (2026-05-29)**: `preprocess_yolox_kernel` (letterbox: `cv::resize` の half-pixel
+    convention `(dst+0.5)*scale-0.5` を再現・edge clamp、114 パディング、正規化なし、BGR CHW)。
+    launch `fitra_nvjpeg_preprocess_yolox_launch` (CPU 側で r/nw/nh 算出、`out_r` 返す) +
+    `_from_last` (worker stream で非同期) + host test API。`Yolox::infer_device(fill)` —
+    `fill` が engine 入力 device バッファ (静的 shape, 構築時に確保・bind 済) を充填し r を返す、
+    H2D なし・kernel と enqueue は同一 stream で順序付け。loader に `decode_to_device` (host map なし) /
+    `preprocess_yolox_into` / `yolox_device_capable`。`gpu_preprocess_check` に bbox モード追加
+    (host `infer` vs device `infer_device`、IoU マッチ + corner L2)。**実機: bbox corner L2 = 0.0px
+    (8/8 matched, 0 unmatched)** — CPU-fixed-point vs GPU-float letterbox の微差を FP16 network が
+    量子化で吸収 (device-first 順で stale 入力 false-pass を排除して確認)。CHW 0.0028 / keypoint
+    0.34px も維持、ctest 9/9。
+  - **Step B (次)**: frame_source 統合 — device 経路を `decode_to_device` (host map / cvtColor なし) に
+    切替え、検出フレームで YOLOX device kernel、calib/retain_bgr 時のみ `decode_keep_device`。これで
+    **full-frame RGBA→BGR cvtColor を撤去** (残っていた最後の per-frame CPU フルパス)。2cam 90fps@VGA で
+    CPU 再測。
 - **M4**: アーキ移行 — Phase 6b の per-cam CPU 前処理を撤去し GPU 経路へ。EGL/CUDA context の
   スレッド親和性、register ライフサイクル、multi-cam の resource キャッシュを整理。
 - **M5 (任意)**: SimCC argmax + inverse-affine を GPU 化し host 転送を keypoint のみに最小化。
