@@ -37,6 +37,13 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — OSC パディングの単一 insert 化 + gate 定数の static_assert (挙動不変)
+(1) `OscWriter::emit_osc_string` の 4-byte 境界パディングを `push_back` ループから単一
+`insert(end, 1 + pad4(...), '\0')` に置換。出力バイト列は同一 (`test_vmt_osc_writer` golden 通過)。
+(2) `tracker_extract.cpp` の smoothstep gate 定数 (`kRollSin*` / `kPosVelGate*` / `kPelvisYawGate*`)
+に `low < high` を固定する `static_assert` を追加 — 将来の境界反転がコンパイル時に弾かれる。
+値は不変。微最適化のため design doc なし (changelog のみ)。
+
 ### 2026-05-29 — 出力レイテンシ M1: frame-rate 非依存 smoothing (キーストーン)
 GPU フロントエンドでパイプラインが詰まった後、E2E の支配項は VR 出力の 60Hz×2 ホップ
 (avg +16.7ms / worst ~33ms)。e2e-latency M4 で hop1 をイベント駆動 (opt-in) にしたが、
