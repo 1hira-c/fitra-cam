@@ -67,6 +67,14 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — Triangulator のスクラッチバッファ再利用 (挙動不変リファクタ)
+`Triangulator::triangulate()` / `triangulate_joint()` が per-keypoint・per-view で
+確保していた `std::vector` (`views` / `undistortPoints` の入出力 1 要素ベクタ /
+`indices` / `kept`) を `mutable` メンバスクラッチへ移し `clear()` 再利用。Halpe26 × 2cam で
+1 三角測量フレームあたり ~100 個の小ヒープ確保を除去。`triangulate()` は central loop 単一
+スレッドからのみ呼ばれるため `mutable` 共有スクラッチは競合なし。出力はビット同一
+(`test_triangulator` golden 通過)。微最適化のため design doc なし (changelog のみ)。
+
 ### 2026-05-29 — locomotion-stability PR の AI レビュー対応
 PR #21 の Gemini / Copilot レビュー指摘を反映。(1) parent-yaw transport の
 **オーバーシュート修正** — transport delta は親の全変化 (prev smoothed → curr raw)

@@ -91,7 +91,7 @@ TriangulatedSkeleton Triangulator::triangulate(
     out.skeleton.kp_count = static_cast<std::uint8_t>(kp_count);
 
     for (std::size_t k = 0; k < kp_count; ++k) {
-        std::vector<JointView> views;
+        views_scratch_.clear();
         for (const auto& obs : observations) {
             if (!obs.person || obs.cam_index < 0 ||
                 static_cast<std::size_t>(obs.cam_index) >= cameras_.size()) {
@@ -101,22 +101,21 @@ TriangulatedSkeleton Triangulator::triangulate(
             if (kp.score < opts_.kp_conf_thresh) continue;
 
             const auto& cam = cameras_[static_cast<std::size_t>(obs.cam_index)];
-            std::vector<cv::Point2f> src{{kp.x, kp.y}};
-            std::vector<cv::Point2f> undist;
-            cv::undistortPoints(src, undist, cam.K, cam.dist);
-            if (undist.empty()) continue;
+            undist_src_.assign(1, cv::Point2f(kp.x, kp.y));
+            cv::undistortPoints(undist_src_, undist_dst_, cam.K, cam.dist);
+            if (undist_dst_.empty()) continue;
 
             JointView v;
             v.cam_index = obs.cam_index;
-            v.norm = cv::Point2d(undist[0].x, undist[0].y);
+            v.norm = cv::Point2d(undist_dst_[0].x, undist_dst_[0].y);
             v.pixel = cv::Point2f(kp.x, kp.y);
             v.score = kp.score;
-            views.push_back(v);
+            views_scratch_.push_back(v);
         }
 
         float err = 0.0f;
         int used = 0;
-        if (triangulate_joint(views, out.skeleton.joints[k], err, used)) {
+        if (triangulate_joint(views_scratch_, out.skeleton.joints[k], err, used)) {
             out.reproj_error_px[k] = err;
             out.view_count[k] = used;
             out.valid_joints += 1;
@@ -134,37 +133,37 @@ bool Triangulator::triangulate_joint(const std::vector<JointView>& views,
                                      int& used_views) const {
     if (views.size() < 2) return false;
 
-    std::vector<int> indices(views.size());
-    std::iota(indices.begin(), indices.end(), 0);
+    indices_scratch_.resize(views.size());
+    std::iota(indices_scratch_.begin(), indices_scratch_.end(), 0);
 
     cv::Point3d point;
-    if (!solve_dlt(views, indices, point)) return false;
+    if (!solve_dlt(views, indices_scratch_, point)) return false;
 
     if (views.size() > 2) {
-        std::vector<int> kept;
-        kept.reserve(indices.size());
-        for (int idx : indices) {
+        kept_scratch_.clear();
+        kept_scratch_.reserve(indices_scratch_.size());
+        for (int idx : indices_scratch_) {
             if (reproj_error_px(views[static_cast<std::size_t>(idx)], point) <= opts_.max_reproj_px) {
-                kept.push_back(idx);
+                kept_scratch_.push_back(idx);
             }
         }
-        if (kept.size() >= 2 && kept.size() < indices.size()) {
+        if (kept_scratch_.size() >= 2 && kept_scratch_.size() < indices_scratch_.size()) {
             cv::Point3d refined;
-            if (solve_dlt(views, kept, refined)) {
+            if (solve_dlt(views, kept_scratch_, refined)) {
                 point = refined;
-                indices = std::move(kept);
+                indices_scratch_ = kept_scratch_;
             }
         }
     }
 
     double err_sum = 0.0;
     double score_sum = 0.0;
-    for (int idx : indices) {
+    for (int idx : indices_scratch_) {
         const auto& view = views[static_cast<std::size_t>(idx)];
         err_sum += reproj_error_px(view, point);
         score_sum += view.score;
     }
-    used_views = static_cast<int>(indices.size());
+    used_views = static_cast<int>(indices_scratch_.size());
     mean_reproj = static_cast<float>(err_sum / std::max(1, used_views));
     joint.x = static_cast<float>(point.x);
     joint.y = static_cast<float>(point.y);
