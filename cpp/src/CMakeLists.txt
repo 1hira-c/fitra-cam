@@ -97,6 +97,9 @@ if(EXISTS "${FITRA_MMAPI_DIR}/include/NvJpegDecoder.h")
     )
     target_link_libraries(fitra_nvjpeg PRIVATE
         nvjpeg nvbufsurface nvbufsurftransform Threads::Threads
+        # EGL->CUDA bridge (all-GPU front-end M1): driver API for
+        # cuGraphicsEGLRegisterImage, runtime for cudaMemcpy2D.
+        CUDA::cudart CUDA::cuda_driver
     )
     # Hide everything but the extern "C" API; silence third-party MMAPI warnings.
     target_compile_options(fitra_nvjpeg PRIVATE -fvisibility=hidden -w)

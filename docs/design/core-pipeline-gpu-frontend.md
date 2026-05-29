@@ -80,8 +80,17 @@ MJPEG ─VIC/NVJPEG decodeToFd─▶ NvBufSurface(YUV422,NVMM)
   decode+register+kernel を回すなら、そのスレッドで CUDA context を current にする。
 
 ## Milestone
-- **M1**: EGL→CUDA interop を .so に常設化 (register キャッシュ)。decode→device CUeglFrame を取得し、
+- **M1 ✅ (2026-05-29)**: EGL→CUDA interop を .so に常設化 (register キャッシュ)。decode→device CUeglFrame を取得し、
   まず **既存 CPU 経路と並行**して device→host で取り出し画素一致を回帰確認 (足場)。
+  - 実装: `fitra_nvjpeg_iso.cpp` に `ensure_egl`(=`NvBufSurfaceMapEglImage`→`cuGraphicsEGLRegisterImage`→
+    `GetMappedEglFrame`、`cudaFree(0)` で primary context をデコードスレッドに bind、確保時 1 回 register・
+    解像度変更時のみ `release_egl`) + 新 C API `fitra_nvjpeg_decode_cuda` (device ptr + host map + check 用
+    R-mean を返す)。`decode_rgba` 本番経路は不変。loader 側は `FITRA_NVJPEG_EGL=1` で opt-in、300 フレーム
+    ごとに device↔CPU の R-mean を回帰ログ。.so は `CUDA::cudart`/`CUDA::cuda_driver` をリンク。
+  - 実機検証 (単一カメラ 640×480@30, nvjpeg): device ptr 安定 (register キャッシュ確認)、
+    **device→host R-mean が CPU map と完全一致 (diff=0)** を毎チェックで確認。30fps 維持、SIGINT 0.42s で
+    rc=0 のクリーン終了 (EGL teardown ハングなし)、既定 mjpeg(CPU) 経路は無影響、ctest 9/9 green。
+  - M1 時点では BGR 出力は依然 host map から生成 (足場)。M2 で device ptr を直接消費し host を落とす。
 - **M2**: **RTMPose 前処理 CUDA カーネル** (crop+resize+normalize+HWC→CHW)。出力 device バッファを
   TRT 入力直結 (`trt_engine` の device-input モード)。keypoint L2 を CPU 参照と照合。H2D 消滅を確認。
 - **M3**: **YOLOX 前処理 CUDA カーネル** (letterbox+normalize+HWC→CHW) 同様に device 直結。

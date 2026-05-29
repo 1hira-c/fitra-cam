@@ -33,6 +33,18 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — 全 GPU フロントエンド M1: EGL→CUDA ブリッジ常設化
+スパイクで実証した EGL→CUDA 経路を隔離 .so (`libfitra_nvjpeg.so`) に常設化。`ensure_egl`
+(`NvBufSurfaceMapEglImage`→`cuGraphicsEGLRegisterImage`→`GetMappedEglFrame`) で RGBA decode 出力を
+**確保時 1 回だけ** CUDA device ptr に register・キャッシュ (`cudaFree(0)` で primary context を
+デコードスレッドに bind、解像度変更時のみ teardown)。新 C API `fitra_nvjpeg_decode_cuda` を追加
+(`decode_rgba` 本番経路は不変)。loader は `FITRA_NVJPEG_EGL=1` で opt-in し 300 フレームごとに
+device↔CPU map の R-mean を回帰ログ。.so に `CUDA::cudart`/`CUDA::cuda_driver` をリンク。実機
+(単一カメラ 640×480@30, nvjpeg): **device→host R-mean が CPU map と完全一致 (diff=0)**、device ptr 安定、
+30fps 維持、SIGINT 0.42s クリーン終了、既定 mjpeg 経路無影響、ctest 9/9。M1 は足場 (BGR は host map から)、
+M2 で device ptr 直結。
+→ [design/core-pipeline-gpu-frontend.md](../design/core-pipeline-gpu-frontend.md)
+
 ### 2026-05-29 — (設計) 全 GPU フロントエンドを起票 + EGL→CUDA ブリッジ実証
 nvjpeg の「高 fps では CPU 色変換が床」知見を受け、decode→前処理→TRT を host 経由なしで回す設計を
 起票。make-or-break の **EGL→CUDA interop をスパイクで実証** (NvBufSurfaceMapEglImage→
