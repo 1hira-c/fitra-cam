@@ -1,12 +1,19 @@
 # vmt_hmd_pose_sender
 
-Phase 15 M1 — Windows-side SteamVR overlay app that publishes the HMD pose
-over OSC/UDP to a fitra-cam Jetson.
+> **Superseded.** This standalone overlay app was folded into the VMT fork's
+> `vmt_manager` (HMD pose relay + registration arming + auto-launch) on
+> 2026-05-27 — see the vr-output track changelog
+> (`docs/tracks/vr-output.md`, "VMT 登録ゲート + sender の Manager 統合").
+> This directory is kept only as a record of the `/fitra/hmd_pose` wire format
+> documented below; you no longer build or run it for the live setup.
+
+Windows-side SteamVR overlay app that publishes the HMD pose over OSC/UDP to a
+fitra-cam Jetson.
 
 The Jetson side (`HmdPoseReceiver` in `cpp/src/vmt/hmd_pose_receiver.cpp`)
 listens on UDP port `39571` by default and feeds the pose into the auto
-alignment solver. See `docs/phase15-vmt-hmd-auto-align.md` for the full
-end-to-end story.
+alignment solver. See `docs/archive/phase15-vmt-hmd-auto-align.md` for the
+original end-to-end story.
 
 ## Wire format
 
