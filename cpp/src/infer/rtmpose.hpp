@@ -47,9 +47,10 @@ public:
     struct PrebakedRequest {
         const float* chw     = nullptr;  // 3*H*W floats (host); CPU prebake path
         // All-GPU front-end: 3*H*W floats already on the device (preprocess
-        // kernel output). When set, the batch is fed to TRT via device->device
-        // copy and `chw` is ignored. A batch must be homogeneous (all host or
-        // all device).
+        // kernel output). When set, this item is fed to TRT via device->device
+        // copy and `chw` is ignored. Items are copied independently, so a batch
+        // may freely mix device items and host (`chw`) items — e.g. one camera
+        // on the GPU path and another fallen back to CPU.
         const float* chw_dev = nullptr;
         cv::Mat      M_inv;              // 2x3 CV_64F inverse affine
         Bbox         bbox{};             // for downstream Person.bbox

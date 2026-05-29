@@ -101,6 +101,9 @@ std::vector<Bbox> Yolox::infer_device(
     // engine stream) and we enqueue on the same stream — no H2D, no extra sync.
     const auto& bin = engine_.binding(opts_.input_name);
     float r = fill(static_cast<float*>(bin.device_ptr), engine_.stream());
+    // fill returns r<=0 to signal a preprocess failure. Do NOT enqueue then —
+    // the engine input would hold stale/garbage data and yield bogus boxes.
+    if (!(r > 0.0f)) return {};
     engine_.enqueue();
     engine_.synchronize();
     return decode_dets(r);

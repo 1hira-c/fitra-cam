@@ -325,7 +325,8 @@ void TrtEngine::copy_input_region_from_device(const std::string& name,
     if (!b.is_input) {
         throw std::runtime_error("binding '" + name + "' is not an input");
     }
-    if (dst_offset_bytes + bytes > b.bytes) {
+    // Overflow-safe bounds (avoid wrap in dst_offset_bytes + bytes).
+    if (bytes > b.bytes || dst_offset_bytes > b.bytes - bytes) {
         std::ostringstream oss;
         oss << "input '" << name << "' device region overruns buffer: offset="
             << dst_offset_bytes << " bytes=" << bytes << " device=" << b.bytes;
@@ -342,7 +343,8 @@ void TrtEngine::copy_input_region_from_host(const std::string& name,
     if (!b.is_input) {
         throw std::runtime_error("binding '" + name + "' is not an input");
     }
-    if (dst_offset_bytes + bytes > b.bytes) {
+    // Overflow-safe bounds (avoid wrap in dst_offset_bytes + bytes).
+    if (bytes > b.bytes || dst_offset_bytes > b.bytes - bytes) {
         std::ostringstream oss;
         oss << "input '" << name << "' host region overruns buffer: offset="
             << dst_offset_bytes << " bytes=" << bytes << " device=" << b.bytes;

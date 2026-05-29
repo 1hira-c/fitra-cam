@@ -35,17 +35,31 @@ std::shared_ptr<DeviceChwBuf> DeviceChwPool::acquire(std::size_t floats) {
             if (it->capacity >= floats) { buf = *it; state_->free.erase(it); break; }
         }
     }
+    bool newly_allocated = false;
     if (!buf.ptr) {
         if (cudaMalloc(reinterpret_cast<void**>(&buf.ptr),
                        floats * sizeof(float)) != cudaSuccess)
             return nullptr;
         buf.capacity = floats;
+        newly_allocated = true;
     }
     auto st = state_;  // keep pool state alive as long as any buffer is out
-    return std::shared_ptr<DeviceChwBuf>(new DeviceChwBuf(buf), [st](DeviceChwBuf* b) {
-        { std::lock_guard<std::mutex> lk{st->mu}; st->free.push_back(*b); }
-        delete b;
-    });
+    try {
+        return std::shared_ptr<DeviceChwBuf>(new DeviceChwBuf(buf), [st](DeviceChwBuf* b) {
+            { std::lock_guard<std::mutex> lk{st->mu}; st->free.push_back(*b); }
+            delete b;
+        });
+    } catch (...) {
+        // The control-block/DeviceChwBuf allocation threw: don't leak the device
+        // buffer — free a freshly-cudaMalloc'd one, or recycle a pooled one.
+        if (newly_allocated) {
+            cudaFree(buf.ptr);
+        } else {
+            std::lock_guard<std::mutex> lk{state_->mu};
+            state_->free.push_back(buf);
+        }
+        throw;
+    }
 }
 
 FrameSource::FrameSource(std::unique_ptr<V4l2Capture> capture,
@@ -191,9 +205,11 @@ void FrameSource::decode_loop() {
                     dets = yolox_->infer_device([&](float* dst, cudaStream_t st) {
                         float r = 1.0f;
                         if (!hw_decoder_->preprocess_yolox_into(
-                                yolox_->input_size(), 114.0f, dst, st, &r))
+                                yolox_->input_size(), 114.0f, dst, st, &r)) {
                             FITRA_LOG_WARN("frame_source: GPU YOLOX preprocess failed seq={}",
                                            raw.seq);
+                            return -1.0f;  // tell infer_device to skip the enqueue
+                        }
                         return r;
                     });
                 } else {

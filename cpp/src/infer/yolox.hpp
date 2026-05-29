@@ -53,7 +53,9 @@ public:
     // the engine's input device buffer (on the engine's stream, passed in) and
     // returns the letterbox scale r (out_x = in_x * r). No host preprocess / no
     // H2D. The kernel and the TRT enqueue share the engine stream, so they are
-    // ordered without an explicit sync. Returns person bboxes in source pixels.
+    // ordered without an explicit sync. `fill` must return r<=0 on failure, in
+    // which case inference is skipped (no enqueue on stale input) and {} is
+    // returned. Returns person bboxes in source pixels.
     std::vector<Bbox> infer_device(
         const std::function<float(float* dst_dev, cudaStream_t stream)>& fill);
 
