@@ -95,6 +95,13 @@ constexpr float kPosVelGateHigh_mps = 16.0f;
 constexpr float kPelvisYawGateLow_rps  = 8.0f;
 constexpr float kPelvisYawGateHigh_rps = 16.0f;
 
+// smoothstep01 requires low < high for every gate it drives; pin the invariant
+// so a future tweak that inverts a bound fails to compile rather than silently
+// turning the gate into a step / NaN at runtime.
+static_assert(kRollSinLow         < kRollSinHigh,         "roll sin gate: low < high");
+static_assert(kPosVelGateLow_mps  < kPosVelGateHigh_mps,  "pos vel gate: low < high");
+static_assert(kPelvisYawGateLow_rps < kPelvisYawGateHigh_rps, "pelvis yaw gate: low < high");
+
 bool joints_valid(const infer::Skeleton3D& s, std::initializer_list<std::size_t> idxs) {
     for (auto i : idxs) {
         if (!s.joints[i].valid) return false;
