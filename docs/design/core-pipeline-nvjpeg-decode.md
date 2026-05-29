@@ -57,19 +57,58 @@ research/multi-camera-ingest.md の当初構想。GStreamer 依存を丸ごと�
 - 「CUDA nvJPEG (`nvjpeg.h`) で簡単に GPU decode」→ **ヘッダ未搭載で不可**（上記調査）。
   migration-plan の当該記述は正しかった。MMAPI 経由が必須。
 
-## 採用方針 (暫定)
+## 実装スパイク所見 (2026-05-29, /tmp で検証・リポジトリ未変更)
 
-**B を M1 で入れて HW decode の効果を計測 → A を M2 で狙う**（warpAffine 回転有無を確認した上で）。
-段階導入により、NvBuffer ライフサイクルや correctness の問題を小さく切り分けられる。
-`pixel_format` に 3 つ目の選択肢 `nvjpeg` (= MJPEG + HW decode) を足すのが自然
-（`mjpeg`=CPU decode / `yuyv`=非圧縮 / `nvjpeg`=HW decode）。`JpegDecoder` を
-インターフェース化し CPU/HW 実装を差し替える。
+実カメラの 640×480 MJPEG フレーム 1 枚で MMAPI `NvJPEGDecoder` を直接叩いて検証した。
 
-## Milestone (案)
-- **M1**: CMake に MMAPI common-class ソース取り込み + `NvJpegDecoder` ラッパ。
-  `--pixel-format nvjpeg` で decodeToFd→CPU cvtColor→既存 prebake。`cap→dec` を計測比較、
-  correctness を CPU decode と照合。
-- **M2**: NvBufSurfTransform で GPU 色変換+リサイズ。可能なら prebake warpAffine を吸収。
+1. **ビルド recipe 確定・動作**: MMAPI common-class ソース
+   (`NvJpegDecoder.cpp`/`NvElement.cpp`/`NvElementProfiler.cpp`/`NvLogging.cpp`/`NvBuffer.cpp`) を
+   `-I.../include -I.../include/libjpeg-8b` でコンパイル、`-lnvjpeg -lnvbufsurface` リンクで HW decode
+   成功。
+2. **レイテンシ実測 (640×480)**: `decodeToFd` = **0.9ms** だが出力は **NVMM (block-linear, CPU 直
+   map 不可)** → CPU アクセスには NvBufSurfTransform が必須。`decodeToBuffer` = **2.0ms** で
+   CPU アクセス可 (sw メモリ)。いずれも CPU `cv::imdecode` (~5ms) より速い。出力フォーマットは
+   `'YM16'` = **YUV422M (3 面プレーナ 4:2:2、Y=640×480 / U,V=320×480)**。
+3. **★最大の制約: libjpeg ABI 衝突**。`libnvjpeg.so` は **無バージョンの `jpeg_*` をグローバル
+   export**、一方 OpenCV imgcodecs は `jpeg_*@LIBJPEG_8.0` (system libjpeg-turbo) を要求。
+   `NvJpegDecoder.cpp` を本体に直リンクすると **`cv::imdecode` (= 既定の MJPEG CPU 経路) が破綻**
+   (空画像 / struct size mismatch 656 vs 776 / segfault)。
+   - **解決策 (検証済み)**: NvJPEG 機能を **独立 .so に隔離**し、本体から
+     `dlopen(..., RTLD_NOW|RTLD_LOCAL|RTLD_DEEPBIND)` で読む。`RTLD_DEEPBIND` が肝で、.so 内の
+     `jpeg_*` 解決を自前依存 (libnvjpeg) 優先にし、本体の libjpeg-turbo と分離する。これで
+     **nvjpeg decode と `cv::imdecode` が同一プロセスで両立**することを実証。
+     (`RTLD_LOCAL` 単独では未定義シンボルがグローバルへ解決され不可。)
+4. **色変換の罠**: HW decode の **輝度 Y は CPU decode と完全一致 (meanAbsDiff 0.01)** = decode
+   自体は正しい。しかしプレーナ YUV422 → BGR の手動変換が CPU decode と合わない (meanAbsDiff ~57)。
+   full-range/studio-range、U/V 入替を試しても解消せず、チロマ実値が中立シーンで ~64 (本来 ~128)
+   と読める。プレーン意味論/レンジが噛み合わず**手動 CPU 変換は脆い**。
+
+### 方針見直し
+上記 3・4 より、当初の案 B (decodeToBuffer + 手動 CPU cvtColor) は (a) decodeToFd より遅く
+(2.0 vs 0.9ms)、(b) 色変換が脆い、ため**非推奨**に格下げ。**`decodeToFd` (0.9ms, NVMM) +
+NvBufSurfTransform で GPU 色変換 (YUV422→RGBA/BGR)** が、色も正しく速いため本命 (旧案 A)。
+NvBufSurfTransform は crop+scale も担えるので prebake warpAffine 吸収 (det→bake 削減) も射程。
+
+## 採用方針 (改訂)
+
+`pixel_format` に 3 つ目 `nvjpeg` (= MJPEG capture + HW decode) を追加。capture fourcc は MJPEG の
+まま、FrameSource の decode 分岐のみ差し替える。実装構造:
+- **隔離 .so (`libfitra_nvjpeg.so`)**: `NvJPEGDecoder` + NvBufSurface + NvBufSurfTransform を内包し、
+  `-fvisibility=hidden` で C API (`fitra_nvjpeg_create/decode_bgr/destroy`) のみ export。
+  本体は `dlopen(RTLD_DEEPBIND|RTLD_LOCAL)` で読む。これにより既定の MJPEG CPU 経路 (cv::imdecode)
+  を一切壊さない。
+- **decodeToFd → NvBufSurfTransform → BGR(or RGBA) pitch-linear → map → cv::Mat** で色を正しく取得。
+- `JpegDecoder` をインターフェース化し CPU / HW(.so) 実装を差し替え。
+
+## Milestone (改訂)
+- **M0 (完了, スパイク)**: 実機で HW decode 動作・レイテンシ・libjpeg ABI 衝突と
+  `RTLD_DEEPBIND` 隔離・Y 一致を検証。recipe 確定。
+- **M1**: 隔離 .so (`libfitra_nvjpeg.so`) を CMake 別ターゲット化 (MMAPI common-class ソース取り込み +
+  `-fvisibility=hidden` + C API)。decodeToFd → NvBufSurfTransform → BGR を .so 内で完結。
+  本体に dlopen ローダ (`RTLD_DEEPBIND|RTLD_LOCAL`) と `JpegDecoder` HW 実装を追加、
+  `--pixel-format nvjpeg` 配線。**既定 MJPEG CPU 経路 (cv::imdecode) が壊れないことを必ず確認**。
+  `cap→dec` を CPU/YUYV と比較、RTMPose keypoint を CPU decode と照合。
+- **M2**: NvBufSurfTransform の crop+scale で prebake warpAffine 吸収を狙う (回転有無を要確認)。
   `det→bake` も含めた短縮を計測。
 - **M3**: NvBuffer プール化 + バッチ（複数カメラ同時 decode）で multi-cam スループット確認。
 
@@ -81,8 +120,10 @@ research/multi-camera-ingest.md の当初構想。GStreamer 依存を丸ごと�
   CPU MJPEG / YUYV / HW nvjpeg の 3 者比較表を作る。
 
 ## 残課題 / リスク
-- NvBuffer / DMA-buf FD のライフサイクルと SPSC slot (size 1, drop-old) の整合
-  （FD をいつ閉じるか、コピーするか）。
-- RTMPose prebake の warpAffine が回転を含むか（含むと案 A の NvBufSurfTransform 吸収が不可）。
+- **dlopen 隔離の本体組み込み**: `.so` を CMake で別ターゲット化し、本体は実行時 dlopen。
+  ビルド時はリンクしない (NEEDED にすると libnvjpeg がグローバル scope に入り cv::imdecode 破綻)。
+- NvBuffer / DMA-buf FD のライフサイクルと SPSC slot (size 1, drop-old) の整合（いつ閉じる/コピー）。
+- RTMPose prebake の warpAffine が回転を含むか（含むと NvBufSurfTransform 吸収が不可）。
 - HW NVJPEG ブロックは 1 基。複数カメラで decode が直列化しないか（バッチ/並列度の確認）。
-- correctness: HW decode の色再現が libjpeg-turbo と微妙に異なる可能性（keypoint への影響を計測）。
+- 色変換は **GPU NvBufSurfTransform に寄せる**（手動 CPU 変換はプレーン意味論/レンジで脆いと判明）。
+- 非 Jetson 環境ではこの .so をビルド対象から外すガードが要る（MMAPI 前提）。
