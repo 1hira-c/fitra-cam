@@ -185,9 +185,26 @@ MJPEG ─VIC/NVJPEG decodeToFd─▶ NvBufSurface(YUV422,NVMM)
       YOLOX CPU 前処理の撤去分。SIGINT rc=0/0.32s、ctest 9/9、CHW/keypoint/bbox correctness 維持。
     - **残**: 後段 (capture + YOLOX/RTMPose 推論 + SimCC argmax) が残 CPU。M4 でアーキ整合・multi-cam
       スループット (170fps) 再計測、M5 で SimCC argmax GPU 化 (host 転送を keypoint のみに)。
-- **M4**: アーキ移行 — Phase 6b の per-cam CPU 前処理を撤去し GPU 経路へ。EGL/CUDA context の
-  スレッド親和性、register ライフサイクル、multi-cam の resource キャッシュを整理。
-- **M5 (任意)**: SimCC argmax + inverse-affine を GPU 化し host 転送を keypoint のみに最小化。
+- **M4 ✅ (2026-05-29)**: アーキ移行の確認 + multi-cam 集約スループット再計測。per-cam CPU 前処理の
+  GPU 化は M2/M3 で完了済みのため、M4 は整合確認と実測が主。
+  - **アーキ**: 各 `FrameSource` (per-camera worker) が独立に `hw_decoder_` (NvJPEGDecoder + EGL register
+    + `DeviceChwPool`) を所有し、各 worker スレッドが `cudaFree(0)` で**共有 primary context** に bind。
+    カメラ間で EGL image / CUgraphicsResource / device バッファの共有はなく、register は確保時 1 回・
+    解像度変更時のみ teardown。teardown は `~FrameSource` (main スレッド) で実施 (worker teardown は
+    shutdown と競合し segfault するため、M2 Step B で確定)。multi-cam の EGL/context 独立性は M3 の
+    2cam device 実機で実証済。
+  - **multi-cam 集約スループット実測** (2cam 90fps@VGA, nvjpeg, full-GPU):
+    recv **88.3 fps × 2 = 176fps 集約**を CPU **1.01 cores** で維持、recent_pose ≈ recv (定常で frame
+    drop なし)。central RTMPose は `rtm=4.84ms/iter` (batch ~1.1 person) で **GPU 推論律速**。
+    → 旧 aggregate 170fps 目標を 2cam で超過 (176fps) しつつ大幅な CPU 余力。3cam 計測は接続カメラ 2 台
+    のため不可だが、CPU 余力 (1 コア) から 3cam でも capture+前処理は収まる見込み。
+  - **SimCC decode コスト確認 (M5 要否判断材料)**: `rtm=4.84ms` の大半は RTMPose FP16 推論 + sync。
+    SimCC の D2H (~61KB/person = K17×(Wx384+Wy512)) と CPU argmax (~46K 比較/person) は sub-ms で、
+    残 1.0 コアの律速 (capture + TRT enqueue + V4L2) ではない。→ **M5 の便益は限定的**。
+- **M5 (任意・保留)**: SimCC argmax + inverse-affine を GPU 化し host 転送を keypoint のみに最小化。
+  M4 実測より便益は小 (<0.5ms / 数 MB/s D2H 削減、CPU argmax は元々非ボトルネック) かつ CUDA を
+  fitra_infer に持ち込む (or 別 gated lib + cross-module kernel) ビルド複雑化を伴う。**現状は見送り**、
+  将来 SimCC decode が律速化した場合 (高 person 数 / 多カメラ) に再評価。
 
 ## 検証
 - correctness: 同一フレームで GPU 前処理経路 vs 現行 CPU 経路の RTMPose keypoint L2 (許容内)。

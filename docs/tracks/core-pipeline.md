@@ -33,6 +33,16 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — 全 GPU フロントエンド M4: アーキ整合 + multi-cam 集約スループット実測
+per-cam CPU 前処理の GPU 化は M2/M3 で完了済のため M4 は整合確認 + 実測。各 `FrameSource` は独立に
+`hw_decoder_` (NvJPEGDecoder + EGL register + `DeviceChwPool`) を所有し各 worker が共有 primary context に
+bind、カメラ間で EGL/CUDA リソース共有なし (multi-cam 独立性は M3 2cam 実機で実証)。**2cam 90fps@VGA で
+recv 88.3×2 = 176fps 集約を CPU 1.01 cores で維持** (recent_pose ≈ recv、定常 drop なし)、central RTMPose
+は `rtm=4.84ms/iter` で GPU 推論律速 → 旧 170fps 目標を 2cam で超過しつつ大幅 CPU 余力。**M5 (SimCC
+argmax GPU 化) は実測より便益小と判明し見送り**: SimCC の D2H (~61KB/person) + CPU argmax は sub-ms で
+残 1 コアの律速 (capture + TRT enqueue + V4L2) ではない。将来 SimCC decode が律速化したら再評価。
+→ [design/core-pipeline-gpu-frontend.md](../design/core-pipeline-gpu-frontend.md)
+
 ### 2026-05-29 — 全 GPU フロントエンド M3 Step B: frame_source 統合 + cvtColor 撤去
 device 経路を `decode_to_device` (host map / RGBA→BGR cvtColor なし) に切替え、検出フレームで
 `Yolox::infer_device`、calib/retain_bgr 時のみ `decode_keep_device`。**残っていた最後の per-frame
