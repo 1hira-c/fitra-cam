@@ -368,9 +368,15 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         }
         skel = kalman_.update(skel, dt_s);
     }
-    double drift = ik_.locked() ? ik_.bone_drift_pct(skel) : 0.0;
+    // bone_drift_pct() takes ik_ 's mutex and walks every bone, so compute it
+    // exactly once on the skeleton that is actually published. With IK enabled
+    // the post-IK value is what we report, so the pre-IK computation the old
+    // ternary did was always discarded -- skip it.
+    double drift = 0.0;
     if (threed_.ik_enabled) {
         skel = ik_.update(skel);
+        drift = ik_.bone_drift_pct(skel);
+    } else if (ik_.locked()) {
         drift = ik_.bone_drift_pct(skel);
     }
 
