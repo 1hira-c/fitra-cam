@@ -33,6 +33,16 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — 全 GPU フロントエンド M2 Step A: RTMPose 前処理 CUDA カーネル
+前処理 (crop+resize+normalize+HWC→CHW) を GPU 化する `.cu` カーネルを隔離 .so 内に追加
+(`enable_language(CUDA)` を Jetson 分岐で有効化、Orin sm_87)。幾何は CPU が算出する `M_inv` を
+カーネルに渡し `cv::warpAffine` と完全一致 (`getAffineTransform` device 再実装不要)。RGBA→正規化 BGR を
+CHW=[B,G,R] に出力、per-neighbor ゼロ境界。correctness ツール `tools/gpu_preprocess_check` で録画動画
+raw_cam0.mp4 を CPU `preprocess_to_blob` と CHW 比較: **mean abs 0.0028 / L2 0.0046 / worst max 0.058**
+(OpenCV 固定小数補間 1/32 量子化の床 ≈0.07 以内、カーネルの方が高精度)。ctest 9/9。Step B で TRT 入力
+device 直結 + prebake 配線 + H2D 消滅。
+→ [design/core-pipeline-gpu-frontend.md](../design/core-pipeline-gpu-frontend.md)
+
 ### 2026-05-29 — 全 GPU フロントエンド M1: EGL→CUDA ブリッジ常設化
 スパイクで実証した EGL→CUDA 経路を隔離 .so (`libfitra_nvjpeg.so`) に常設化。`ensure_egl`
 (`NvBufSurfaceMapEglImage`→`cuGraphicsEGLRegisterImage`→`GetMappedEglFrame`) で RGBA decode 出力を

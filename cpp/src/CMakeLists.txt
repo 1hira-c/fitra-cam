@@ -71,8 +71,13 @@ target_link_libraries(fitra_camera PUBLIC
 set(FITRA_MMAPI_DIR "/usr/src/jetson_multimedia_api")
 if(EXISTS "${FITRA_MMAPI_DIR}/include/NvJpegDecoder.h")
     set(_mm_classes "${FITRA_MMAPI_DIR}/samples/common/classes")
+    # All-GPU front-end (M2) ships a .cu preprocess kernel, so enable the CUDA
+    # language here (Jetson-only branch; nvcc is present on the device). The
+    # top-level project() stays CXX-only so non-Jetson / no-nvcc builds work.
+    enable_language(CUDA)
     add_library(fitra_nvjpeg SHARED
         camera/nvjpeg/fitra_nvjpeg_iso.cpp
+        camera/nvjpeg/fitra_nvjpeg_kernels.cu
         "${_mm_classes}/NvJpegDecoder.cpp"
         "${_mm_classes}/NvElement.cpp"
         "${_mm_classes}/NvElementProfiler.cpp"
@@ -82,6 +87,8 @@ if(EXISTS "${FITRA_MMAPI_DIR}/include/NvJpegDecoder.h")
     )
     set_target_properties(fitra_nvjpeg PROPERTIES
         CXX_STANDARD 17                       # MMAPI sample sources target C++11/14
+        CUDA_STANDARD 17
+        CUDA_ARCHITECTURES 87                 # Orin (sm_87)
         OUTPUT_NAME fitra_nvjpeg
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"   # land next to `main`
         BUILD_RPATH   "/usr/lib/aarch64-linux-gnu/nvidia;/usr/lib/aarch64-linux-gnu/tegra"
@@ -102,7 +109,12 @@ if(EXISTS "${FITRA_MMAPI_DIR}/include/NvJpegDecoder.h")
         CUDA::cudart CUDA::cuda_driver
     )
     # Hide everything but the extern "C" API; silence third-party MMAPI warnings.
-    target_compile_options(fitra_nvjpeg PRIVATE -fvisibility=hidden -w)
+    # Gate per-language: nvcc rejects bare -fvisibility, so route it via
+    # -Xcompiler for CUDA TUs.
+    target_compile_options(fitra_nvjpeg PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-fvisibility=hidden -w>
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fvisibility=hidden -w>
+    )
     set(FITRA_HAVE_NVJPEG ON CACHE INTERNAL "HW NVJPEG decoder available")
     message(STATUS "  HW NVJPEG decoder  = ON (libfitra_nvjpeg.so)")
 else()

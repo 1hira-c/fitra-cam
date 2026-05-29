@@ -93,6 +93,24 @@ MJPEG ─VIC/NVJPEG decodeToFd─▶ NvBufSurface(YUV422,NVMM)
   - M1 時点では BGR 出力は依然 host map から生成 (足場)。M2 で device ptr を直接消費し host を落とす。
 - **M2**: **RTMPose 前処理 CUDA カーネル** (crop+resize+normalize+HWC→CHW)。出力 device バッファを
   TRT 入力直結 (`trt_engine` の device-input モード)。keypoint L2 を CPU 参照と照合。H2D 消滅を確認。
+  - **決定 (2026-05-29)**: カーネルは **隔離 .so 内に `.cu` で実装** (nvcc 有効化)。EGL image・CUDA context が
+    既に .so 内にあり親和性が自然、libjpeg 隔離の dlopen 境界も維持。幾何は **CPU が算出する `M_inv`
+    (逆アフィン 2×3) をそのままカーネルに渡す** — `cv::warpAffine` は dst 画素 (ox,oy) を src の
+    `M_inv·(ox,oy,1)` からサンプルするので、同じ `M_inv` を渡せば OpenCV と幾何が完全一致。`getAffineTransform`
+    の device 再実装が不要。回転なし(crop+scale)だが一般 2×3 で書けるため将来の回転にもそのまま対応。
+  - **Step A ✅ (2026-05-29)**: `fitra_nvjpeg_kernels.cu` に `preprocess_rtmpose_kernel`
+    (1 出力画素 1 スレッド、float bilinear、per-neighbor ゼロ境界 = `cv::warpAffine` の BORDER_CONSTANT 相当、
+    RGBA→正規化 BGR を CHW=[B,G,R] に出力)。launch C API `fitra_nvjpeg_preprocess_launch` (stream 受け、
+    同期なし) + テスト用 host API `fitra_nvjpeg_preprocess_rgba_host`。CMake で Jetson 分岐に
+    `enable_language(CUDA)` + `CUDA_ARCHITECTURES 87`、`-fvisibility` は `$<COMPILE_LANGUAGE:CUDA>` で
+    `-Xcompiler` 経由。correctness ツール `tools/gpu_preprocess_check` (録画動画 raw_cam0.mp4 を 8 分割サンプル
+    × 5 bbox、CPU `preprocess_to_blob` と CHW を比較)。**実測: mean abs 0.0028 / mean L2 0.0046 / worst max
+    0.058** — worst は OpenCV の固定小数補間 (INTER_BITS=5, 重み 1/32 量子化) の床
+    (255·(1/64)/std ≈ 0.07) 以内で、本 float カーネルの方がむしろ高精度。channel order / 幾何バグなら
+    diff は 1〜4 オーダーになるので 0.1 を閾値に。ctest 9/9。
+  - **Step B (次)**: `decode_cuda` の device RGBA ptr → カーネル → TRT 入力 device 直結
+    (`trt_engine` に device-input モード追加、batch 各 item を engine 入力バッファ offset へ書く or
+    `setTensorAddress`)。per-cam prebake 経路を device CHW に切替。keypoint L2 を実機/録画で照合し H2D 消滅を確認。
 - **M3**: **YOLOX 前処理 CUDA カーネル** (letterbox+normalize+HWC→CHW) 同様に device 直結。
 - **M4**: アーキ移行 — Phase 6b の per-cam CPU 前処理を撤去し GPU 経路へ。EGL/CUDA context の
   スレッド親和性、register ライフサイクル、multi-cam の resource キャッシュを整理。
