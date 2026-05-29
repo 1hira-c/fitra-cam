@@ -69,6 +69,32 @@ constexpr float kRollSinHigh = 0.30f;  // sin 17.5°: full-confidence ceiling
 //   base_alpha 0.5 × 0.3 = 0.15 → τ ≈ 6 frames at 60 Hz
 constexpr float kFootSmoothingWeight = 0.3f;
 
+// When the foot tracker falls back to FK (ankle or toe synthesized from the
+// anchor instead of measured), drop the smoothing weight further so the
+// quaternion EMA leans even more on prev_quat. The synthesized direction is
+// only as accurate as the last real frame's anchor, so we want to bias
+// strongly toward continuity until a real KP returns.
+constexpr float kFootFkSmoothingWeight = 0.15f;
+
+// Position-EMA velocity gate (m/s). Inputs are the magnitude of the prev →
+// curr displacement divided by dt_s. The gate widens via smoothstep so a
+// 5 m jitter spike across a 16 ms tick (≈ 300 m/s, far above sprint top
+// speed ~12 m/s) collapses the effective alpha to 0; nominal motion
+// (walking ~1.5 m/s, vigorous gestures ~5 m/s) passes through unattenuated.
+constexpr float kPosVelGateLow_mps  = 8.0f;
+constexpr float kPosVelGateHigh_mps = 16.0f;
+
+// Pelvis-yaw transport gate (rad/s). apply_quat_smoothing rides a held roll
+// (extended limb, roll_confidence → 0) along with the *change* in the waist
+// tracker's orientation so a body yaw still turns the limb. A wild pelvis delta
+// — triangulation glitch, or hip_axis collapsing onto the camera depth axis
+// when the subject is side-on — would inject bogus roll, so the transport is
+// attenuated toward identity as the per-second pelvis turn rate climbs. 8 rad/s
+// ≈ 458°/s is past a brisk human turn; beyond 16 rad/s it is certainly a glitch
+// and the transport is dropped (held roll falls back to world-absolute hold).
+constexpr float kPelvisYawGateLow_rps  = 8.0f;
+constexpr float kPelvisYawGateHigh_rps = 16.0f;
+
 bool joints_valid(const infer::Skeleton3D& s, std::initializer_list<std::size_t> idxs) {
     for (auto i : idxs) {
         if (!s.joints[i].valid) return false;
@@ -82,6 +108,67 @@ inline float smoothstep01(float x, float low, float high) {
     if (x >= high) return 1.0f;
     float t = (x - low) / (high - low);
     return t * t * (3.0f - 2.0f * t);
+}
+
+// ---- Quaternion (wxyz) helpers for apply_quat_smoothing -------------------
+inline cv::Vec4f quat_normalize(const cv::Vec4f& q) {
+    float n = std::sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+    if (n < 1.0e-9f) return cv::Vec4f{1, 0, 0, 0};
+    return cv::Vec4f{q[0]/n, q[1]/n, q[2]/n, q[3]/n};
+}
+
+inline cv::Vec4f quat_conj(const cv::Vec4f& q) {
+    return cv::Vec4f{q[0], -q[1], -q[2], -q[3]};
+}
+
+// Hamilton product a·b (wxyz).
+inline cv::Vec4f quat_mul(const cv::Vec4f& a, const cv::Vec4f& b) {
+    return cv::Vec4f{
+        a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],
+        a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],
+        a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],
+        a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0]};
+}
+
+// slerp from p to q with parameter t ∈ [0, 1]. Handles the q · -q double cover
+// (shorter arc) and falls back to normalized lerp for near-aligned inputs.
+cv::Vec4f quat_slerp(const cv::Vec4f& p, cv::Vec4f q, float t) {
+    float d = p[0]*q[0] + p[1]*q[1] + p[2]*q[2] + p[3]*q[3];
+    if (d < 0.0f) { q = cv::Vec4f{-q[0], -q[1], -q[2], -q[3]}; d = -d; }
+    cv::Vec4f r;
+    if (d > 0.9995f) {
+        r = cv::Vec4f{p[0] + t * (q[0] - p[0]),
+                      p[1] + t * (q[1] - p[1]),
+                      p[2] + t * (q[2] - p[2]),
+                      p[3] + t * (q[3] - p[3])};
+    } else {
+        float theta = std::acos(std::clamp(d, -1.0f, 1.0f));
+        float sin_t = std::sin(theta);
+        float wa = std::sin((1.0f - t) * theta) / sin_t;
+        float wb = std::sin(t * theta) / sin_t;
+        r = cv::Vec4f{wa*p[0] + wb*q[0], wa*p[1] + wb*q[1],
+                      wa*p[2] + wb*q[2], wa*p[3] + wb*q[3]};
+    }
+    return quat_normalize(r);
+}
+
+inline cv::Vec4f quat_identity() { return cv::Vec4f{1, 0, 0, 0}; }
+
+// Swing/twist decomposition of `delta` about the local +Z axis (the bone
+// forward in quat_from_forward_up's [right|up|fwd] basis): delta = swing·twist
+// where twist is a rotation about Z (roll) and swing carries Z elsewhere
+// (pitch/yaw). Caller passes a w ≥ 0 (canonicalized) delta. Degenerates to
+// twist = identity for a ~180° swing about an axis in the XY plane.
+void swing_twist_about_z(const cv::Vec4f& delta, cv::Vec4f& swing, cv::Vec4f& twist) {
+    cv::Vec4f t_raw{delta[0], 0.0f, 0.0f, delta[3]};  // project onto z-axis
+    float n = std::sqrt(t_raw[0]*t_raw[0] + t_raw[3]*t_raw[3]);
+    if (n < 1.0e-6f) {
+        twist = quat_identity();
+        swing = delta;
+        return;
+    }
+    twist = cv::Vec4f{t_raw[0]/n, 0.0f, 0.0f, t_raw[3]/n};
+    swing = quat_mul(delta, quat_conj(twist));  // swing = delta · twist⁻¹
 }
 
 // Pick the first up hint whose sin θ to forward is above kRollSinLow (i.e. not
@@ -225,30 +312,66 @@ bool quat_from_forward_up(const cv::Vec3f& forward_raw,
 
 namespace {
 
+// Pick a world axis that is safely non-parallel to `fwd`, to seed a
+// forward-only orientation when the real up hint degenerates. The resulting
+// roll is arbitrary, but apply_quat_smoothing's twist gate (roll_confidence=0)
+// discards it and holds the previous roll, so only the axis choice's validity
+// matters — never its roll value.
+cv::Vec3f fallback_up_for(const cv::Vec3f& fwd) {
+    cv::Vec3f f = normalize_or_zero(fwd);
+    // World Z unless fwd is too close to it; then world Y.
+    if (std::abs(f[2]) < 0.9f) return cv::Vec3f{0, 0, 1};
+    return cv::Vec3f{0, 1, 0};
+}
+
 // Try to build a SlimeTracker for one role from a position joint, a forward
-// hint and an up hint. Updates `out` in place; valid=false on degeneracy.
-// `roll_confidence` defaults to 1.0 for rigid-pin bones (chest/waist/shin/foot);
-// upper arm / thigh pass their smoothstep-derived value.
+// hint and an up hint. Updates `out` in place.
+//   * forward degenerate (no bone direction)      → valid=false (publisher skips)
+//   * forward valid, up valid                      → valid=true, roll_confidence as passed
+//   * forward valid, up degenerate (extended limb) → valid=true, roll_confidence=0,
+//        forward-only orientation (roll held by smoothing, swing keeps tracking)
+// `roll_confidence` defaults to 1.0 for rigid-pin bones (chest/waist/shin);
+// upper arm / thigh pass their smoothstep-derived value. `swing_confidence`
+// defaults to 1.0; the foot passes kFootSmoothingWeight for an overall low-pass.
 bool build_tracker(TrackerRole role,
                    const cv::Vec3f& world_pos,
                    const cv::Vec3f& forward,
                    const cv::Vec3f& up,
                    SlimeTracker& out,
-                   float roll_confidence = 1.0f) {
+                   float roll_confidence = 1.0f,
+                   float swing_confidence = 1.0f) {
     out.role = role;
     out.pos  = world_pos;
-    out.roll_confidence = roll_confidence;
+    out.swing_confidence = swing_confidence;
     cv::Vec4f q_wxyz;
-    bool ok = detail::quat_from_forward_up(forward, up, q_wxyz);
-    out.quat_wxyz = q_wxyz;
-    out.valid = ok;
-    return ok;
+    if (detail::quat_from_forward_up(forward, up, q_wxyz)) {
+        out.quat_wxyz = q_wxyz;
+        out.roll_confidence = roll_confidence;
+        out.valid = true;
+        return true;
+    }
+    // quat_from_forward_up failed. Distinguish a missing forward (true dropout)
+    // from a degenerate roll (forward fine, up ∥ forward): the latter should
+    // still emit the bone direction with the roll held.
+    if (norm(forward) >= 1.0e-6f) {
+        cv::Vec4f q_fwd;
+        if (detail::quat_from_forward_up(forward, fallback_up_for(forward), q_fwd)) {
+            out.quat_wxyz = q_fwd;
+            out.roll_confidence = 0.0f;  // hold roll; swing still tracks
+            out.valid = true;
+            return true;
+        }
+    }
+    out.quat_wxyz = q_wxyz;  // identity from the failed call
+    out.roll_confidence = roll_confidence;
+    out.valid = false;
+    return false;
 }
 
 }  // namespace
 
 std::array<SlimeTracker, kTrackerCount>
-extract_trackers(const infer::Skeleton3D& skel) {
+extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx) {
     if (lift::active_keypoint_format() != lift::KeypointFormat::Halpe26) {
         throw std::runtime_error(
             "extract_trackers requires --keypoint-format=halpe26");
@@ -395,19 +518,84 @@ extract_trackers(const infer::Skeleton3D& skel) {
     // only quantity needed for in-place foot direction in SlimeVR IK — stays
     // free of heel noise. A strong smoothing throttle (kFootSmoothingWeight)
     // further damps residual ankle/toe jitter via apply_quat_smoothing.
+    //
+    // FK fallback: when ctx is non-null and the anchor has been seeded by a
+    // previous good frame, an invalid ankle/toe is reconstructed via
+    //   ankle = knee + dir · tibia_len  /  toe = ankle + dir · foot_len
+    // This is the workaround for the extended-leg locomotion freeze: under
+    // motion blur or self-occlusion the ankle/toe KPs often drop together
+    // exactly when the body is sliding past, so without FK the foot tracker
+    // gives up for the whole frame and the position freeze (now hip-relative
+    // via apply_pos_smoothing) drags it along but the rotation stays stale.
+    // With FK, we get a plausible orientation as well so the foot keeps
+    // pointing the right way while it follows the hip.
     auto foot_tracker = [&](TrackerRole role, std::size_t knee, std::size_t ankle,
-                            std::size_t toe, std::size_t out_idx) {
-        if (!joints_valid(skel, {knee, ankle, toe})) return;
+                            std::size_t toe, std::size_t out_idx,
+                            std::size_t anchor_idx) {
+        if (!skel.joints[knee].valid) return;
         cv::Vec3f kp = to_vec3f(skel.joints[knee]);
-        cv::Vec3f ap = to_vec3f(skel.joints[ankle]);
-        cv::Vec3f tp = to_vec3f(skel.joints[toe]);
+
+        // Resolve ankle: real KP when valid, else FK from anchor.
+        cv::Vec3f ap;
+        bool ap_synth = false;
+        if (skel.joints[ankle].valid) {
+            ap = to_vec3f(skel.joints[ankle]);
+        } else if (ctx != nullptr && ctx->foot_anchors[anchor_idx].valid) {
+            const auto& a = ctx->foot_anchors[anchor_idx];
+            ap = cv::Vec3f{kp[0] + a.knee_to_ankle_dir[0] * a.tibia_len_m,
+                           kp[1] + a.knee_to_ankle_dir[1] * a.tibia_len_m,
+                           kp[2] + a.knee_to_ankle_dir[2] * a.tibia_len_m};
+            ap_synth = true;
+        } else {
+            return;
+        }
+
+        // Resolve toe: real KP when valid, else FK from anchor (ankle + dir·len).
+        cv::Vec3f tp;
+        bool tp_synth = false;
+        if (skel.joints[toe].valid) {
+            tp = to_vec3f(skel.joints[toe]);
+        } else if (ctx != nullptr && ctx->foot_anchors[anchor_idx].valid) {
+            const auto& a = ctx->foot_anchors[anchor_idx];
+            tp = cv::Vec3f{ap[0] + a.ankle_to_toe_dir[0] * a.foot_len_m,
+                           ap[1] + a.ankle_to_toe_dir[1] * a.foot_len_m,
+                           ap[2] + a.ankle_to_toe_dir[2] * a.foot_len_m};
+            tp_synth = true;
+        } else {
+            return;
+        }
+
         cv::Vec3f pos = (ap + tp) * 0.5f;
         cv::Vec3f fwd = tp - ap;
         cv::Vec3f up  = kp - ap;            // tibia axis (ankle → knee)
-        build_tracker(role, pos, fwd, up, out[out_idx], kFootSmoothingWeight);
+        const float weight = (ap_synth || tp_synth)
+                                 ? kFootFkSmoothingWeight
+                                 : kFootSmoothingWeight;
+        // Foot has no roll observation by design (tibia-aligned up resolves
+        // yaw only); the low weight is an overall low-pass, so apply it to BOTH
+        // swing and twist. Equal confidences keep the foot on the single-slerp
+        // fast path, identical to the pre-split behavior.
+        build_tracker(role, pos, fwd, up, out[out_idx], weight, weight);
+
+        // Only re-anchor from a fully measured frame; an FK-synthesized
+        // direction would otherwise drift on itself if a real KP never returns.
+        if (ctx != nullptr && !ap_synth && !tp_synth) {
+            auto& a = ctx->foot_anchors[anchor_idx];
+            cv::Vec3f ka{ap[0] - kp[0], ap[1] - kp[1], ap[2] - kp[2]};
+            float ka_len = norm(ka);
+            cv::Vec3f at{tp[0] - ap[0], tp[1] - ap[1], tp[2] - ap[2]};
+            float at_len = norm(at);
+            if (ka_len > 1.0e-4f && at_len > 1.0e-4f) {
+                a.knee_to_ankle_dir = cv::Vec3f{ka[0] / ka_len, ka[1] / ka_len, ka[2] / ka_len};
+                a.tibia_len_m       = ka_len;
+                a.ankle_to_toe_dir  = cv::Vec3f{at[0] / at_len, at[1] / at_len, at[2] / at_len};
+                a.foot_len_m        = at_len;
+                a.valid             = true;
+            }
+        }
     };
-    foot_tracker(TrackerRole::LeftFoot,  kLKnee, kLAnkle, kLBigToe, 8);
-    foot_tracker(TrackerRole::RightFoot, kRKnee, kRAnkle, kRBigToe, 9);
+    foot_tracker(TrackerRole::LeftFoot,  kLKnee, kLAnkle, kLBigToe, 8, 0);
+    foot_tracker(TrackerRole::RightFoot, kRKnee, kRAnkle, kRBigToe, 9, 1);
 
     return out;
 }
@@ -441,6 +629,46 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           float base_alpha, float dt_s, float nominal_dt_s) {
     const float alpha_rate = rate_adjust_alpha(base_alpha, dt_s, nominal_dt_s);
+
+    // ---- Pelvis-yaw transport for held-roll bones -------------------------
+    // An extended limb's roll is unobservable (roll_confidence → 0), so it is
+    // held frame-to-frame. For a near-vertical limb (standing, legs/arms down)
+    // a body yaw is a rotation about the bone's own forward axis — i.e. pure
+    // roll — so a held roll freezes the limb's facing when the subject turns
+    // sideways. A parent tracker carries an observable, reliable orientation;
+    // ride the held roll along with the *change* in that orientation so a yaw
+    // still turns the limb. swing reconciles the observed forward afterward, so
+    // only the forward-axis component (the yaw, for a vertical bone) survives as
+    // roll; a parent pitch/roll is absorbed by swing. This is the rotational
+    // analogue of the M1 hip-relative position hold: a delta coupling that
+    // preserves the relative roll offset, NOT the rejected absolute parent pin.
+    //
+    // Reference per limb: arms ride the CHEST (shoulder girdle), legs ride the
+    // WAIST (pelvis). The pelvis can yaw independently of the chest via spine
+    // twist, so using the pelvis for arms would mis-track a torso rotation; the
+    // chest is the anatomically correct parent for the humerus. Each delta is
+    // computed once up front from the PREVIOUS parent quat (before the loop
+    // overwrites prev_quat) and this frame's raw parent measurement.
+    auto make_transport_delta = [&](std::size_t ref, cv::Vec4f& out) -> bool {
+        if (!curr[ref].valid) return false;
+        const cv::Vec4f rp = quat_normalize(prev_quat[ref]);
+        const cv::Vec4f rc = quat_normalize(curr[ref].quat_wxyz);
+        cv::Vec4f d = quat_mul(rc, quat_conj(rp));  // world-frame: maps rp → rc
+        if (d[0] < 0.0f) d = cv::Vec4f{-d[0], -d[1], -d[2], -d[3]};  // shorter arc
+        const float ang  = 2.0f * std::acos(std::clamp(d[0], -1.0f, 1.0f));  // [0, π]
+        const float step = (dt_s > 0.0f) ? dt_s : nominal_dt_s;
+        const float rate = (step > 0.0f) ? ang / step : 0.0f;
+        const float scale =
+            1.0f - smoothstep01(rate, kPelvisYawGateLow_rps, kPelvisYawGateHigh_rps);
+        out = quat_slerp(quat_identity(), d, scale);
+        return true;
+    };
+    constexpr std::size_t kWaistIdx = static_cast<std::size_t>(TrackerRole::Waist);
+    constexpr std::size_t kChestIdx = static_cast<std::size_t>(TrackerRole::Chest);
+    cv::Vec4f waist_delta = quat_identity(), chest_delta = quat_identity();
+    const bool have_waist_delta = make_transport_delta(kWaistIdx, waist_delta);
+    const bool have_chest_delta = make_transport_delta(kChestIdx, chest_delta);
+
     for (std::size_t i = 0; i < kTrackerCount; ++i) {
         if (!curr[i].valid) {
             // Hold previous orientation: publisher will see prev via curr, and
@@ -449,40 +677,64 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
             curr[i].quat_wxyz = prev_quat[i];
             continue;
         }
-        float effective_alpha = std::clamp(
-            alpha_rate * curr[i].roll_confidence, 0.0f, 1.0f);
-        if (effective_alpha <= 0.0f) {
-            // Fully frozen: keep prev. Don't touch prev_quat.
-            curr[i].quat_wxyz = prev_quat[i];
-            continue;
+        // Rate-adjusted per-step weight, then split by swing/twist confidence.
+        const float sa = std::clamp(alpha_rate * curr[i].swing_confidence, 0.0f, 1.0f);
+        const float ta = std::clamp(alpha_rate * curr[i].roll_confidence,  0.0f, 1.0f);
+        cv::Vec4f p = quat_normalize(prev_quat[i]);
+        const cv::Vec4f q = quat_normalize(curr[i].quat_wxyz);
+
+        // Transport the held-roll reference by the parent delta. Gated to the
+        // split branch (sa != ta) so rigid fast-path bones, the foot, and the
+        // chest/waist references themselves stay bit-identical to the
+        // pre-transport behavior. Arms ride the chest; legs ride the waist
+        // (arms fall back to the waist only if the chest is unobservable, since
+        // a frozen arm is worse than a slightly-off one). `carry`
+        // complementary-blends the parent-yaw prior against the bone's own roll
+        // measurement: a fully held roll (ta = 0) rides the full parent delta
+        // (carry = 1, the prior is all we have); as the roll becomes observable
+        // (ta → sa) carry → 0 and the twist slerp toward q takes over, so a limb
+        // twisting relative to its parent is not forced to follow it.
+        const bool is_arm = (i == static_cast<std::size_t>(TrackerRole::LeftUpperArm) ||
+                             i == static_cast<std::size_t>(TrackerRole::RightUpperArm));
+        const bool  have_ref  = is_arm ? (have_chest_delta || have_waist_delta)
+                                       : have_waist_delta;
+        const cv::Vec4f& ref_delta =
+            is_arm ? (have_chest_delta ? chest_delta : waist_delta) : waist_delta;
+        if (have_ref && std::abs(sa - ta) >= 1.0e-6f) {
+            const float carry = std::clamp(1.0f - (ta / std::max(sa, 1.0e-6f)), 0.0f, 1.0f);
+            // `ref_delta` is the FULL parent change (prev smoothed → curr raw),
+            // but the reference tracker itself only converges toward that raw by
+            // `alpha_rate` per step. Riding the full delta every frame makes the
+            // held limb lead — and, for a sustained turn, overshoot — the parent
+            // (each frame re-adds the still-open prev→raw gap). Scale the
+            // transport by `alpha_rate` so the limb's roll converges in lockstep
+            // with the parent. At alpha_rate == 1 (fixed-rate, full-trust path)
+            // this is a no-op, so the M5 tests stay bit-identical.
+            const float transport_t = std::clamp(carry * alpha_rate, 0.0f, 1.0f);
+            const cv::Vec4f d = quat_slerp(quat_identity(), ref_delta, transport_t);
+            p = quat_normalize(quat_mul(d, p));
         }
-        const cv::Vec4f& p = prev_quat[i];
-        cv::Vec4f q = curr[i].quat_wxyz;
-        // Shorter arc via flip if p·q < 0.
-        float d = p[0]*q[0] + p[1]*q[1] + p[2]*q[2] + p[3]*q[3];
-        if (d < 0.0f) { q = cv::Vec4f{-q[0], -q[1], -q[2], -q[3]}; d = -d; }
+
         cv::Vec4f r;
-        if (d > 0.9995f) {
-            // nlerp fallback for small angles.
-            r = cv::Vec4f{p[0] + effective_alpha * (q[0] - p[0]),
-                          p[1] + effective_alpha * (q[1] - p[1]),
-                          p[2] + effective_alpha * (q[2] - p[2]),
-                          p[3] + effective_alpha * (q[3] - p[3])};
+        if (std::abs(sa - ta) < 1.0e-6f) {
+            // Fast path: equal gates → single slerp, bit-identical to the
+            // pre-split behavior (rigid bones at 1.0, foot at its weight). Also
+            // covers sa == ta == 0 (fully frozen).
+            r = (sa <= 0.0f) ? p : quat_slerp(p, q, sa);
         } else {
-            float theta = std::acos(std::clamp(d, -1.0f, 1.0f));
-            float sin_t = std::sin(theta);
-            float wa = std::sin((1.0f - effective_alpha) * theta) / sin_t;
-            float wb = std::sin(effective_alpha * theta) / sin_t;
-            r = cv::Vec4f{wa * p[0] + wb * q[0],
-                          wa * p[1] + wb * q[1],
-                          wa * p[2] + wb * q[2],
-                          wa * p[3] + wb * q[3]};
-        }
-        float n = std::sqrt(r[0]*r[0] + r[1]*r[1] + r[2]*r[2] + r[3]*r[3]);
-        if (n > 1.0e-9f) {
-            r = cv::Vec4f{r[0]/n, r[1]/n, r[2]/n, r[3]/n};
-        } else {
-            r = cv::Vec4f{1, 0, 0, 0};
+            // Swing/twist split: decompose the relative rotation about the
+            // bone forward (+Z) and interpolate roll and pitch/yaw with
+            // independent gates. ta = 0 holds the roll while sa keeps the bone
+            // direction tracking — the extended-limb case the publisher needs.
+            cv::Vec4f delta = quat_mul(quat_conj(p), q);
+            if (delta[0] < 0.0f) {  // canonicalize to w ≥ 0 (shorter arc)
+                delta = cv::Vec4f{-delta[0], -delta[1], -delta[2], -delta[3]};
+            }
+            cv::Vec4f swing, twist;
+            swing_twist_about_z(delta, swing, twist);
+            cv::Vec4f swing_step = quat_slerp(quat_identity(), swing, sa);
+            cv::Vec4f twist_step = quat_slerp(quat_identity(), twist, ta);
+            r = quat_normalize(quat_mul(quat_mul(p, swing_step), twist_step));
         }
         curr[i].quat_wxyz = r;
         prev_quat[i] = r;
@@ -491,13 +743,99 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
 
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
+                         PosSmoothingContext& ctx,
+                         float base_alpha, float nominal_dt_s) {
+    // Frame-rate-independent per-step weight; the velocity gate scales this.
+    const float alpha_rate = rate_adjust_alpha(base_alpha, ctx.dt_s, nominal_dt_s);
+    const float dt = std::max(1.0e-3f, ctx.dt_s);
+    const bool  can_hip_relative = ctx.hip_valid && ctx.prev_hip_valid;
+
+    for (std::size_t i = 0; i < kTrackerCount; ++i) {
+        cv::Vec3f& p = prev_pos[i];
+
+        if (!curr[i].valid) {
+            // Hold branch. With a valid hip reference (both current and
+            // previous), re-anchor the held position so it travels with
+            // the hip. The waist tracker has prev_pos ≡ hip_center by
+            // construction, so offset ≈ 0 and the hip-relative hold
+            // collapses to "snap to current hip" — exactly what we want.
+            if (can_hip_relative && ctx.has_last_raw[i]) {
+                cv::Vec3f offset{p[0] - ctx.prev_hip_pos[0],
+                                 p[1] - ctx.prev_hip_pos[1],
+                                 p[2] - ctx.prev_hip_pos[2]};
+                cv::Vec3f world{ctx.current_hip_pos[0] + offset[0],
+                                ctx.current_hip_pos[1] + offset[1],
+                                ctx.current_hip_pos[2] + offset[2]};
+                curr[i].pos = world;
+                p = world;
+            } else {
+                curr[i].pos = p;
+            }
+            // Saturate at uint32 so a tracker that's been invalid since
+            // process start doesn't wrap; once large, the gate effectively
+            // collapses to "no gate" anyway because elapsed → ∞.
+            if (ctx.invalid_ticks_since_last_raw[i] < 0xFFFFFFFFu) {
+                ctx.invalid_ticks_since_last_raw[i] += 1;
+            }
+            continue;
+        }
+
+        const cv::Vec3f q = curr[i].pos;
+
+        // Velocity gate: consecutive raw (pre-smoothing) measurement deltas
+        // are the right outlier signal — prev_pos lags due to EMA, so
+        // prev→curr distance can look inflated during convergence even
+        // when the actual measurement stream is steady. With last_raw_pos,
+        // a single triangulation glitch (curr jumps several meters relative
+        // to the previous valid frame) collapses the alpha; nominal motion
+        // (walking, gestures) passes through.
+        //
+        // After an N-frame dropout, the real elapsed time between
+        // last_raw_pos and q is (1 + N) · dt_s, not a single tick — without
+        // this correction a recovery frame would divide a normal
+        // displacement by a single tick and collapse the alpha, leaving
+        // the smoother stuck on the held position.
+        float alpha = alpha_rate;
+        if (ctx.has_last_raw[i]) {
+            float dx = q[0] - ctx.last_raw_pos[i][0];
+            float dy = q[1] - ctx.last_raw_pos[i][1];
+            float dz = q[2] - ctx.last_raw_pos[i][2];
+            float dist     = std::sqrt(dx*dx + dy*dy + dz*dz);
+            float elapsed  = dt * static_cast<float>(
+                                       1u + ctx.invalid_ticks_since_last_raw[i]);
+            float v_mps    = dist / elapsed;
+            float gate     = smoothstep01(v_mps, kPosVelGateLow_mps, kPosVelGateHigh_mps);
+            alpha = alpha_rate * (1.0f - gate);
+        }
+
+        p[0] += alpha * (q[0] - p[0]);
+        p[1] += alpha * (q[1] - p[1]);
+        p[2] += alpha * (q[2] - p[2]);
+        curr[i].pos = p;
+        ctx.last_raw_pos[i] = q;
+        ctx.has_last_raw[i] = true;
+        ctx.invalid_ticks_since_last_raw[i] = 0;
+    }
+
+    // Cache the hip position for the next call's hip-relative hold. Reflect
+    // the hip validity every tick (not just set-true): otherwise a hip dropout
+    // leaves prev_hip_valid stuck true with a stale prev_hip_pos, and the next
+    // valid frame would re-anchor across the gap — violating the "previous
+    // frame's hip was also valid" invariant in the hold branch above.
+    if (ctx.hip_valid) {
+        ctx.prev_hip_pos = ctx.current_hip_pos;
+    }
+    ctx.prev_hip_valid = ctx.hip_valid;
+}
+
+// World-absolute hold form: no hip re-anchor, no velocity gate. Frame-rate
+// independent via dt_s/nominal_dt_s. Kept for tests and context-less callers.
+void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+                         std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          float base_alpha, float dt_s, float nominal_dt_s) {
     const float alpha = rate_adjust_alpha(base_alpha, dt_s, nominal_dt_s);
     for (std::size_t i = 0; i < kTrackerCount; ++i) {
         if (!curr[i].valid) {
-            // Hold previous position: publisher sees prev via curr, and
-            // prev_pos itself is left untouched so a tracker can recover
-            // from a dropped frame without snapping back through (0,0,0).
             curr[i].pos = prev_pos[i];
             continue;
         }

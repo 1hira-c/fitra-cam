@@ -64,63 +64,177 @@ struct SlimeTracker {
     // wxyz storage; the publisher converts to SlimeVR's xyzw Y-up wire frame.
     cv::Vec4f   quat_wxyz = {1.0f, 0.0f, 0.0f, 0.0f};
     bool        valid = false;
-    // [0, 1] per-tracker smoothing weight used by apply_quat_smoothing as
-    // effective_alpha = base_alpha · roll_confidence.
-    //   * chest / waist / shin: rigid anatomical pin, stays at 1.0.
+    // [0, 1] per-tracker gate for the TWIST (roll, rotation about the bone's
+    // forward axis) component of apply_quat_smoothing: twist_alpha =
+    // base_alpha · roll_confidence. The SWING (pitch/yaw, where the bone
+    // points) is gated separately by swing_confidence, so a degenerate roll
+    // measurement holds only the previous roll while the bone direction keeps
+    // tracking.
+    //   * chest / waist / shin (non-degenerate): rigid anatomical pin, 1.0.
     //   * upper arm / thigh: dynamic via smoothstep on the up-vector's sin θ
     //     to forward — full at sin θ ≥ kRollSinHigh, zero at sin θ ≤
-    //     kRollSinLow (so a degenerate roll measurement holds the previous
-    //     quat instead of injecting noise).
-    //   * foot: fixed low value kFootSmoothingWeight, not because roll is
-    //     uncertain (foot has no roll observation by design — tibia-aligned
-    //     up only resolves yaw) but as a strong low-pass against ankle/toe
-    //     KP jitter.
+    //     kRollSinLow. At 0 the roll is held (twist_alpha = 0) but swing still
+    //     follows the new forward.
+    //   * any roll-bearing bone whose up hint degenerates (e.g. shin with the
+    //     leg fully extended): build_tracker forces roll_confidence = 0 with a
+    //     forward-only orientation, so roll holds and swing tracks.
+    //   * foot: fixed low value kFootSmoothingWeight as a strong low-pass
+    //     against ankle/toe KP jitter (matched by swing_confidence so the foot
+    //     gets the same overall damping it had before the swing/twist split).
     float       roll_confidence = 1.0f;
+    // [0, 1] per-tracker gate for the SWING (pitch/yaw) component:
+    // swing_alpha = base_alpha · swing_confidence. 1.0 for every bone except
+    // the foot (kFootSmoothingWeight). When swing_confidence == roll_confidence
+    // apply_quat_smoothing takes a single-slerp fast path identical to the
+    // pre-split behavior (zero regression for rigid bones and the foot).
+    float       swing_confidence = 1.0f;
 };
 
-// Extract 10 trackers from a Halpe26 3D skeleton. Degenerate joints (invalid
-// landmarks or near-parallel forward/up hints) produce `valid=false` +
-// identity quaternion; the publisher skips those.
+// Per-foot anchor used by extract_trackers to reconstruct ankle / big_toe via
+// short-chain FK when the keypoint goes invalid for a frame. The anchor is
+// learned from successful (ankle/toe both valid) frames and held across
+// invalid ones — bone length + last-known direction; the FK reconstruction is
+// knee + dir · length and ankle + dir · length respectively. Without this,
+// foot trackers `valid=false` for the whole frame and the position freeze
+// kicks in (which used to be world-absolute and looked like "foot stuck on
+// the ground while the body slides past").
+struct FootAnchor {
+    cv::Vec3f knee_to_ankle_dir{0.0f, 0.0f, -1.0f};
+    float     tibia_len_m = 0.0f;
+    cv::Vec3f ankle_to_toe_dir{0.0f, 1.0f, 0.0f};
+    float     foot_len_m = 0.0f;
+    bool      valid = false;
+};
+
+// Carries inter-frame state for extract_trackers. Optional: passing nullptr
+// disables FK fallback (preserves the old early-return behavior).
+struct ExtractContext {
+    // [0] = left foot, [1] = right foot.
+    std::array<FootAnchor, 2> foot_anchors{};
+};
+
+// Extract 10 trackers from a Halpe26 3D skeleton. A missing forward hint
+// (invalid landmarks) produces `valid=false` + identity quaternion; the
+// publisher skips those. A degenerate roll (near-parallel forward/up, e.g. an
+// extended limb) instead stays `valid=true` with roll_confidence=0 and a
+// forward-only orientation, so smoothing holds the roll but tracks the swing.
 //
 // `kp_format` must be Halpe26 — call sites assert this before invoking.
+//
+// When `ctx` is non-null, foot trackers attempt a short-chain FK fallback
+// using the per-foot anchors before giving up. Successful (ankle+toe both
+// real) frames update the anchor; FK-synthesized frames leave it unchanged
+// so the next valid frame re-references the last real measurement.
 std::array<SlimeTracker, kTrackerCount>
-extract_trackers(const infer::Skeleton3D& skel);
+extract_trackers(const infer::Skeleton3D& skel,
+                 ExtractContext* ctx = nullptr);
 
-// Per-tracker quaternion exponential smoothing via slerp.
-//   alpha_rate       = 1 - (1-base_alpha)^(dt_s/nominal_dt_s)   (frame-rate indep.)
-//   effective_alpha_i = alpha_rate · curr_i.roll_confidence
-//   curr_i ← slerp(prev_i, curr_i, effective_alpha_i)
-// base_alpha ∈ [0, 1] is the per-step weight tuned at the nominal cadence
-// (nominal_dt_s = 1/extract_rate_hz). The dt_s/nominal_dt_s exponent makes the
-// wall-clock smoothing time constant independent of the actual frame rate, so
-// the event-driven extractor (variable source rate) neither over- nor
-// under-smooths vs the fixed-rate path. When dt_s == nominal_dt_s (or either is
-// <= 0, the default) alpha_rate == base_alpha, i.e. the fixed-rate behavior is
-// unchanged. Confidence < 1 throttles the update so a low-confidence roll
-// measurement decays toward prev instead of injecting noise. Invalid trackers
-// keep prev unchanged. Updates `prev_quat` in place with the smoothed values.
+// Per-tracker quaternion exponential smoothing with independent swing/twist
+// gates and frame-rate-independent step weighting. First the per-step weight is
+// rate-adjusted:
+//   alpha_rate = 1 - (1-base_alpha)^(dt_s/nominal_dt_s)   (frame-rate indep.)
+// then the relative rotation prev⁻¹·curr is decomposed about the bone's local
+// forward axis (+Z) into swing (pitch/yaw) and twist (roll):
+//   swing_alpha_i = alpha_rate · curr_i.swing_confidence
+//   twist_alpha_i = alpha_rate · curr_i.roll_confidence
+//   curr_i ← prev_i · slerp(I, swing, swing_alpha) · slerp(I, twist, twist_alpha)
+// When swing_confidence == roll_confidence this collapses to the single slerp
+// slerp(prev, curr, alpha_rate·conf) (fast path, bit-identical to the previous
+// behavior). roll_confidence = 0 holds the previous roll while swing keeps
+// tracking the new forward — this is how a fully-extended limb keeps moving
+// without its (unobservable) roll snapping around. base_alpha ∈ [0, 1] is the
+// per-step weight tuned at the nominal cadence (nominal_dt_s = 1/extract_rate_hz);
+// the dt_s/nominal_dt_s exponent makes the wall-clock time constant independent
+// of the actual frame rate, so the event-driven extractor (variable source rate)
+// neither over- nor under-smooths vs the fixed-rate path. When dt_s == nominal_dt_s
+// (or either is <= 0, the default) alpha_rate == base_alpha, i.e. the fixed-rate
+// behavior is unchanged. Invalid trackers keep prev unchanged (curr is replaced
+// by prev so the publisher can still see a stable quat). Updates `prev_quat` in
+// place with the smoothed values.
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           float base_alpha,
                           float dt_s = 0.0f, float nominal_dt_s = 0.0f);
 
+// Inter-frame state for the position smoothing path. Pass-by-ref so the
+// extractor can hold one of these per loop; default-constructed value is
+// safe (the first call falls back to world-absolute hold).
+//
+// hip_valid + prev_hip_valid together gate the hip-relative hold for
+// `valid=false` trackers. When both are true and the tracker held a real
+// position last frame, the world-absolute prev is reanchored via
+//     offset = prev_pos[i] - prev_hip_pos
+//     new world = current_hip_pos + offset
+// so a hip translation drags the held tracker along. Without this, the
+// extended-leg locomotion case in pose-3d/locomotion-stability sees the
+// foot freeze in world coordinates while the body slides past.
+//
+// dt_s is the publish period (seconds); used by the velocity gate so a
+// jitter spike >> human-plausible speed attenuates the EMA alpha instead
+// of latching the smoothed history to the outlier.
+struct PosSmoothingContext {
+    cv::Vec3f current_hip_pos{0.0f, 0.0f, 0.0f};
+    bool      hip_valid       = false;
+    cv::Vec3f prev_hip_pos{0.0f, 0.0f, 0.0f};
+    bool      prev_hip_valid  = false;
+    // Per-tracker "last raw curr.pos that we saw valid" + a paired flag.
+    // The velocity gate consults this rather than prev_pos so an EMA that
+    // has not yet converged (prev still lagging the real position) doesn't
+    // read as inflated motion. The flag also doubles as "tracker has been
+    // valid at least once" — gates the hip-relative hold on the first
+    // invalid frame after init, and prevents the very first valid frame
+    // from being misread as a 70 m/s outlier off the (0,0,0) sentinel.
+    //
+    // `invalid_ticks_since_last_raw` counts publish ticks where the tracker
+    // came in invalid (last_raw_pos held). On the recovery frame the
+    // velocity gate divides the prev→curr distance by (1 + invalid_ticks)
+    // · dt_s so a several-frame dropout doesn't read as a single-tick spike
+    // and erroneously gate the recovery into freeze-at-stale-position.
+    std::array<cv::Vec3f,    kTrackerCount> last_raw_pos{};
+    std::array<bool,         kTrackerCount> has_last_raw{};
+    std::array<std::uint32_t, kTrackerCount> invalid_ticks_since_last_raw{};
+    float     dt_s = 1.0f / 60.0f;
+};
+
 // Per-tracker position exponential moving average.
-//   alpha = 1 - (1-base_alpha)^(dt_s/nominal_dt_s)   (frame-rate independent)
-//   curr_i.pos ← prev_pos_i + alpha · (curr_i.pos − prev_pos_i)
+//   alpha_rate = 1 - (1-base_alpha)^(dt_s/nominal_dt_s)   (frame-rate independent)
+//   α = alpha_rate · (1 − smoothstep(velocity, 8 m/s, 16 m/s))
+//   curr_i.pos ← prev_pos_i + α · (curr_i.pos − prev_pos_i)
 // base_alpha ∈ [0, 1]. 0 = freeze (prev forever), 1 = no smoothing. dt_s /
 // nominal_dt_s make the time constant rate-independent (see apply_quat_smoothing);
-// defaults (<=0) reduce to plain base_alpha for the fixed-rate path.
+// the ctx overload reads dt_s from ctx.dt_s and takes nominal_dt_s as an arg,
+// while defaults (<=0) reduce to plain base_alpha for the fixed-rate path.
 //
 // Unlike apply_quat_smoothing, this does NOT modulate the alpha by
 // roll_confidence — pos noise (camera triangulation reprojection error /
-// keypoint score) is independent of roll observability. Invalid trackers
-// keep prev_pos unchanged (curr.pos is replaced by prev_pos so the publisher
-// can still see a stable position).
+// keypoint score) is independent of roll observability. Instead the alpha
+// is attenuated when the prev→curr displacement exceeds human-plausible
+// velocity, so a single bad triangulation frame (5 m jump in one tick)
+// does not snap the history to the outlier.
+//
+// Invalid trackers fall into the hold branch: with a valid hip reference
+// (ctx.hip_valid && ctx.prev_hip_valid) the held position re-anchors to
+// the current hip (`hip-relative hold`); otherwise it falls back to
+// world-absolute hold. The waist tracker has prev_pos ≡ hip_center by
+// construction, so hip-relative collapses to "follow hip" — no special
+// case needed.
+//
+// The 1-arg overload preserves the original world-absolute-hold behavior
+// for tests and any callers that don't track hip context yet.
 //
 // Wired into TrackerExtractor::run_loop directly after apply_quat_smoothing
 // so the VMT publisher (which sends pos on the wire) and the WebUI viz
 // (which renders pos via AxesHelper) both see one shared smoothed history —
 // same architectural invariant as the quat path.
+void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+                         std::array<cv::Vec3f, kTrackerCount>& prev_pos,
+                         PosSmoothingContext& ctx,
+                         float base_alpha,
+                         float nominal_dt_s = 0.0f);
+
+// World-absolute hold form: no hip re-anchor, no velocity gate. Frame-rate
+// independent via dt_s/nominal_dt_s (defaults <=0 reduce to plain base_alpha).
+// Kept for existing tests and callers that don't track hip context.
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          float base_alpha,
