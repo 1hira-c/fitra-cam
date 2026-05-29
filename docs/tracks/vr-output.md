@@ -3,7 +3,7 @@
 カメラ由来の 3D pose / tracker を **VR (SlimeVR Server / SteamVR) に流す経路**。
 現状最もアクティブなトラック。
 
-## 現状 (2026-05-27)
+## 現状 (2026-05-29)
 
 2 つの出力経路が **同時 enable 可能**で、いずれも pose-3d トラックの `TrackerExtractor`
 (単一 producer) を read-only consumer として共有する:
@@ -22,8 +22,11 @@
   SteamVR 起動中の `\\.\pipe\SlimeVRInput` 排他 + 座標系整合の不安定。位置を VR に流す要求は
   VMT 経路で解決済み。実装一式は `archive/botsu-phase12-bridge-relay` ブランチに凍結。
 - **座標変換**: `world_*_to_vmt` は SteamVR Y-up RH frame target。archive Bridge と完全同型。
-- **VMT alignment**: HMD pose (SteamVR) を取り込み chest tracker との 2D Procrustes で yaw+xyz を
-  自動算出。Y (HMD 頭頂 vs chest 胴体中心の個人差 0.35–0.55m) のみ手動 slider 運用。
+- **VMT alignment**: HMD pose (SteamVR) を取り込み 2D Procrustes で yaw+xz を自動算出。
+  単発(T ポーズ / 3 秒歩行、chest 対応)に加え、**常時バックグラウンドの `ContinuousAligner`**
+  が頭部優先・chest フォールバックで継続サンプリング → reservoir → clamped EMA で半継続追従。
+  サンプル品質は脊椎/首ボーンの垂直性で重み付け。Y (HMD 頭頂 vs chest 中心の個人差 0.35–0.55m)
+  のみ手動 slider 運用。
 - **VMT 登録タイミング**: Quest 接続前に VMT が登録されると SteamVR コントローラを奪う。Driver の
   `WaitForHmd=true` で HMD+両コントローラ検知まで `RegisterToVRSystem` を arm 保留。
 - **VMT フォーク側の実装**: Driver ゲート / Manager / HMD pose sender は VMT フォーク
@@ -31,11 +34,20 @@
 
 ### 検証
 
-`ctest -R 'vmt|firmware_protocol|tracker_extract|hmd_pose|auto_alignment'` +
+`ctest -R 'vmt|firmware_protocol|tracker_extract|hmd_pose|auto_alignment|continuous_aligner'` +
 Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 詳細な合格基準は [`cpp-migration-plan.md` 検証戦略表](../cpp-migration-plan.md) の旧 Phase 11/14/15/15.5 行。
 
 ## Changelog (新しい順)
+
+### 2026-05-29 — 自動・半継続 HMD キャリブレーション
+Phase 15 の単発 alignment を常時バックグラウンド化。起動時から HMD と「信頼性高く
+報告された頭部(不安定時は chest 中点にフォールバック)」を継続サンプリングし、空間
+reservoir に代表値を蓄積 → 定期 `solve_motion` → clamped EMA で alignment を自動収束・
+追従(Y は手動 slider 維持)。サンプル品質の主要因に**脊椎/首ボーンの垂直性**(直立ほど
+高得点)を採用。新規 `ContinuousAligner`(`fitra_vmt`)、`--vmt-continuous-align`(既定 ON)、
+`/api/vmt/alignment/auto/continuous/*` + `/stats3d` ブロック。
+→ [design/vr-output-continuous-hmd-calibration.md](../design/vr-output-continuous-hmd-calibration.md)
 
 ### 2026-05-27 — VMT 登録ゲート + sender の Manager 統合
 Driver `WaitForHmd` ハードゲートで Quest 接続前の登録レースを解消 (コントローラ奪取回避)。

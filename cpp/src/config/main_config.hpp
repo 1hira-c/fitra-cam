@@ -102,6 +102,14 @@ struct MainOptions {
     int         hmd_listen_port    = 39571;
     std::string hmd_listen_bind    = "0.0.0.0";
     double      hmd_stale_ms       = 200.0;
+
+    // Continuous (always-on) HMD-driven alignment refinement. Requires vmt_out
+    // + hmd_listen_enabled + enable_3d to do anything; silently inert otherwise.
+    // Defaults on so the rig self-aligns from start-up without a manual T-pose.
+    bool   vmt_continuous_align     = true;
+    double vmt_continuous_sample_hz = 15.0;
+    double vmt_continuous_resolve_s = 2.0;
+    double vmt_continuous_blend     = 0.2;   // EMA weight per resolve, in (0, 1]
 };
 
 // Schema version embedded in every YAML config. Bump only when a
