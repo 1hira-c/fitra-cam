@@ -49,6 +49,16 @@ dt の 1 ステップ 他)、ctest 9/9。実機 judder / e2e 数値検証 + イ�
 被写体 (`ik_locked`)+SteamVR 要のため M2 送り。
 → [design/vr-output-latency.md](../design/vr-output-latency.md)
 
+### 2026-05-29 — 出力レイテンシ M2: 被写体実測 — VR ペーシングは lever でない (負の結果)
+被写体 in view + calib + subject02 で `e2e_capture_to_send_ms` を A/B 実測。**extractor を event-driven に
+しても publisher を 60→120Hz にしても e2e は不動 (~34-35ms)** — 理論「60Hz×2 = +16-33ms」は実機では
+非該当 (extractor は三角測量にほぼ同期、hop2 も支配項でない)。一方 **nvjpeg 全 GPU フロントエンドで
+cap→pub 21→13ms、e2e 34→26ms (−8ms)**。photon→send を削るのはパイプラインのみと確定。残 VR 側 ~13ms は
+`sync_window=15ms` + 処理で rate 非依存。よって VR ペーシングのレイテンシ目的変更は見送り (M1 smoothing は
+過平滑バグ correctness 修正として維持)。`configs/medium_3d.yaml` を `pixel_format: nvjpeg` に切替 (−8ms 即効)。
+judder の体感比較は HMD 主観評価として残課題。
+→ [design/vr-output-latency.md](../design/vr-output-latency.md)
+
 ### 2026-05-27 — VMT 登録ゲート + sender の Manager 統合
 Driver `WaitForHmd` ハードゲートで Quest 接続前の登録レースを解消 (コントローラ奪取回避)。
 `vmt_hmd_pose_sender` を廃止し `vmt_manager` に吸収 (HMD pose 中継 + 登録 arm + auto-launch)。

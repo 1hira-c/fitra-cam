@@ -60,9 +60,30 @@ frame-rate 非依存 smoothing が入った後の follow-up とする。
     ① dt=nominal/2 の 2 ステップ == dt=nominal の 1 ステップ (EMA の厳密性質、float 一致)、
     ② dt==nominal == legacy default、③ 高レート単発ステップは full ステップより under-shoot。ctest 9/9。
 
-- **M2 (follow-up, 被写体要)**: イベント駆動 extractor を既定化 or 推奨化 + 必要なら publisher レート
-  引き上げ/event-driven (hop2)。`e2e_capture_to_send_ms` で実 photon→send を計測し judder を確認。
-  M1 で smoothing がレート非依存になったので、ここでレートを上げても過平滑にならない。
+- **M2 ✅ (2026-05-29, 被写体あり実測)**: **VR ペーシングは e2e の lever ではないと実測判明 (負の結果)**。
+  被写体 in view + calib (`measure_session`) + subject02 で `e2e_capture_to_send_ms` を A/B 計測:
+
+  | 構成 (2cam 60fps, 被写体 in view) | e2e_cap→send | cap→pub |
+  |---|---|---|
+  | mjpeg + 固定 60Hz extractor (既定) | **34ms** | 21ms |
+  | mjpeg + event-driven extractor | 35ms | 21ms |
+  | mjpeg + event-driven + publisher 120Hz | 35ms | 21ms |
+  | **nvjpeg 全 GPU フロントエンド + 既定 VR** | **26ms** | 13ms |
+
+  - **extractor を event-driven にしても、publisher を 60→120Hz にしても e2e は不動** (~34-35ms)。
+    理論見積り「60Hz×2 ホップ = avg +16.7ms / worst ~33ms」は**実機では非該当** — 固定 60Hz extractor は
+    三角測量 ~58Hz とほぼ同期で hop1 の cadence 遅延は元々小さく、hop2 を倍速にしても支配項でないため
+    動かない。VR ペーシングは削れる遅延ではなかった。
+  - **photon→send を実際に削るのはパイプライン (GPU フロントエンド)**: nvjpeg 経路で cap→pub 21→13ms、
+    e2e **34→26ms (−8ms / −24%)**。これは core-pipeline M1–M4 で既出の lever。
+  - 残 VR 側 ~13ms (e2e 26 − cap→pub 13) は rate 非依存。内訳は `sync_window=15ms` (t_capture_oldest は
+    2 カメラの古い方 → 平均 ~7ms 寄与) + extractor/publisher 処理で、レートでは縮まない。sync 短縮は
+    pose-3d トラック領域。
+  - **結論**: M1 (frame-rate 非依存 smoothing) は**過平滑バグの correctness 修正として有効・維持**
+    (event-driven が高 fps で過平滑する潜在バグを解消)。ただし**レイテンシ目的の VR ペーシング変更
+    (既定化・レート上げ) は実測で無効と確定し見送り**。VR レイテンシを下げたいなら 3D 設定を nvjpeg
+    全 GPU フロントエンドにするのが唯一効く手 (本コミットで `medium_3d.yaml` を nvjpeg に切替)。
+    judder の体感比較 (event-driven vs fixed) は被写体 + HMD 装着の主観評価として残す。
 
 ## 検証
 
