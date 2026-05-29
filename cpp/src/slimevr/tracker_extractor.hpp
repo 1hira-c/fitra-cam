@@ -40,6 +40,14 @@ struct TrackerExtractorOptions {
     // 120 frames ≈ 2 s at 60 Hz — long enough to catch a sustained drift but
     // short enough to react to scene changes.
     int    stats_window      = 120;
+    // Event-driven mode: instead of producing at a fixed `extract_rate_hz`,
+    // block on the Skeleton3DBus and react to each new triangulation result
+    // (one smoothing step per real 3D frame). Removes the extractor's fixed-
+    // cadence latency hop. A timeout fallback (extract_rate_hz period) still
+    // fires so stale trackers are cleared when the 3D bus goes quiet. Default
+    // off to preserve the validated fixed-rate behavior; opt in for minimum
+    // capture->send latency.
+    bool   event_driven      = false;
 };
 
 class TrackerExtractor {

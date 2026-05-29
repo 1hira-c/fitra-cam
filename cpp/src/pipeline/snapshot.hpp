@@ -6,7 +6,9 @@
 // The bundle JSON schema must match python/scripts/dual_rtmpose_web.py
 // so that web/dual_rtmpose/app.js works unchanged.
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -75,6 +77,11 @@ struct Skeleton3DStats {
 struct Skeleton3DSnapshot {
     std::uint64_t seq = 0;
     std::chrono::system_clock::time_point ts{};
+    // steady_clock capture time of the OLDEST contributing camera frame
+    // (min over the synced cameras). Lets VR publishers measure end-to-end
+    // capture->send latency. Default (epoch) means "no valid capture time";
+    // consumers must guard against it before computing a delta.
+    std::chrono::steady_clock::time_point t_capture_oldest{};
     std::vector<infer::Skeleton3D> persons;
     Skeleton3DStats stats;
 };
@@ -98,10 +105,30 @@ public:
     // on the snapshot before serializing.
     Skeleton3DSnapshot snapshot() const;
 
+    // Block until update() is called (i.e. a new triangulation result, valid
+    // or sync-miss), `consumer_stop` is set, or `timeout` elapses. `last_seen`
+    // is the caller's last-observed internal update counter; it is refreshed to
+    // the current value on return. Returns true if a genuinely new update was
+    // observed (false on timeout/stop). Lets the SlimeVR/VMT extractor react to
+    // each 3D frame instead of polling at a fixed cadence -- removing the
+    // extractor's contribution to capture->send latency.
+    bool wait_for_update(std::uint64_t& last_seen,
+                         std::atomic<bool>& consumer_stop,
+                         std::chrono::milliseconds timeout);
+
+    // Wake any thread parked in wait_for_update (so a consumer stop flag is
+    // observed immediately). Notifies under the bus lock.
+    void wake();
+
 private:
     mutable std::mutex mu_;
+    std::condition_variable cv_;
     Skeleton3DSnapshot snapshot_;
     std::uint64_t bundle_seq_ = 0;
+    // Monotonic counter bumped on every update(); used by wait_for_update to
+    // detect new data without relying on snapshot_.seq (which is 0 for
+    // sync-miss snapshots and would alias).
+    std::uint64_t update_seq_ = 0;
 };
 
 std::string make_disabled_3d_json();

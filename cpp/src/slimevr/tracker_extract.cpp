@@ -589,10 +589,35 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx) {
     return out;
 }
 
+namespace {
+// Frame-rate-independent EMA alpha. `base_alpha` is the per-step weight tuned at
+// `nominal_dt_s` (= 1/extract_rate_hz). For an actual step of `dt_s` the
+// effective weight is 1 - (1-base_alpha)^(dt_s/nominal_dt_s), so the wall-clock
+// response (time constant) is the same regardless of how fast frames arrive.
+//   * dt_s == nominal_dt_s  -> returns base_alpha exactly (fixed-rate path is
+//     byte-for-byte unchanged).
+//   * higher rate (dt_s < nominal) -> smaller per-step alpha (more, gentler
+//     steps) so the event-driven path no longer over-smooths at high fps.
+//   * a long post-idle gap (dt_s >> nominal) -> alpha -> 1 (snap to current,
+//     don't keep trusting a stale prev).
+float rate_adjust_alpha(float base_alpha, float dt_s, float nominal_dt_s) {
+    base_alpha = std::clamp(base_alpha, 0.0f, 1.0f);
+    if (base_alpha <= 0.0f) return 0.0f;
+    if (base_alpha >= 1.0f) return 1.0f;
+    if (!(nominal_dt_s > 0.0f) || !(dt_s > 0.0f)) return base_alpha;
+    // Fixed-rate path (run_loop passes dt_s = nominal_dt_s): return base_alpha
+    // exactly, skipping std::pow so the behavior is byte-for-byte unchanged
+    // (std::pow(x, 1) is not guaranteed bit-exact) and the hot path pays nothing.
+    if (dt_s == nominal_dt_s) return base_alpha;
+    const float ratio = dt_s / nominal_dt_s;
+    return 1.0f - std::pow(1.0f - base_alpha, ratio);
+}
+}  // namespace
+
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
-                          float base_alpha) {
-    base_alpha = std::clamp(base_alpha, 0.0f, 1.0f);
+                          float base_alpha, float dt_s, float nominal_dt_s) {
+    const float alpha_rate = rate_adjust_alpha(base_alpha, dt_s, nominal_dt_s);
     for (std::size_t i = 0; i < kTrackerCount; ++i) {
         if (!curr[i].valid) {
             // Hold previous orientation: publisher will see prev via curr, and
@@ -601,8 +626,9 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
             curr[i].quat_wxyz = prev_quat[i];
             continue;
         }
-        const float sa = std::clamp(base_alpha * curr[i].swing_confidence, 0.0f, 1.0f);
-        const float ta = std::clamp(base_alpha * curr[i].roll_confidence,  0.0f, 1.0f);
+        // Rate-adjusted per-step weight, then split by swing/twist confidence.
+        const float sa = std::clamp(alpha_rate * curr[i].swing_confidence, 0.0f, 1.0f);
+        const float ta = std::clamp(alpha_rate * curr[i].roll_confidence,  0.0f, 1.0f);
         const cv::Vec4f p = quat_normalize(prev_quat[i]);
         const cv::Vec4f q = quat_normalize(curr[i].quat_wxyz);
 
@@ -635,8 +661,9 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          PosSmoothingContext& ctx,
-                         float base_alpha) {
-    base_alpha = std::clamp(base_alpha, 0.0f, 1.0f);
+                         float base_alpha, float nominal_dt_s) {
+    // Frame-rate-independent per-step weight; the velocity gate scales this.
+    const float alpha_rate = rate_adjust_alpha(base_alpha, ctx.dt_s, nominal_dt_s);
     const float dt = std::max(1.0e-3f, ctx.dt_s);
     const bool  can_hip_relative = ctx.hip_valid && ctx.prev_hip_valid;
 
@@ -685,7 +712,7 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
         // this correction a recovery frame would divide a normal
         // displacement by a single tick and collapse the alpha, leaving
         // the smoother stuck on the held position.
-        float alpha = base_alpha;
+        float alpha = alpha_rate;
         if (ctx.has_last_raw[i]) {
             float dx = q[0] - ctx.last_raw_pos[i][0];
             float dy = q[1] - ctx.last_raw_pos[i][1];
@@ -695,7 +722,7 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                                        1u + ctx.invalid_ticks_since_last_raw[i]);
             float v_mps    = dist / elapsed;
             float gate     = smoothstep01(v_mps, kPosVelGateLow_mps, kPosVelGateHigh_mps);
-            alpha = base_alpha * (1.0f - gate);
+            alpha = alpha_rate * (1.0f - gate);
         }
 
         p[0] += alpha * (q[0] - p[0]);
@@ -714,10 +741,12 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
     }
 }
 
+// World-absolute hold form: no hip re-anchor, no velocity gate. Frame-rate
+// independent via dt_s/nominal_dt_s. Kept for tests and context-less callers.
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
-                         float base_alpha) {
-    base_alpha = std::clamp(base_alpha, 0.0f, 1.0f);
+                         float base_alpha, float dt_s, float nominal_dt_s) {
+    const float alpha = rate_adjust_alpha(base_alpha, dt_s, nominal_dt_s);
     for (std::size_t i = 0; i < kTrackerCount; ++i) {
         if (!curr[i].valid) {
             curr[i].pos = prev_pos[i];
@@ -725,9 +754,9 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
         }
         cv::Vec3f& p = prev_pos[i];
         const cv::Vec3f q = curr[i].pos;
-        p[0] += base_alpha * (q[0] - p[0]);
-        p[1] += base_alpha * (q[1] - p[1]);
-        p[2] += base_alpha * (q[2] - p[2]);
+        p[0] += alpha * (q[0] - p[0]);
+        p[1] += alpha * (q[1] - p[1]);
+        p[2] += alpha * (q[2] - p[2]);
         curr[i].pos = p;
     }
 }

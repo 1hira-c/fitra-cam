@@ -290,6 +290,54 @@ void test_velocity_gate_passes_plausible_motion() {
           "vel-gate.passes.normal: prev=" + std::to_string(want));
 }
 
+void test_rate_independent_smoothing() {
+    // Frame-rate independence: smoothing toward a constant target over the same
+    // wall-clock time must land at the same place regardless of how many steps
+    // it is split into. For the EMA this holds exactly — two dt=nominal/2 steps
+    // equal one dt=nominal step (remaining factor (1-a)^0.5 squared = (1-a)).
+    const cv::Vec3f target{4.0f, 0.0f, 0.0f};
+    const float a = 0.5f, nom = 1.0f / 60.0f;
+
+    // (a) one full-nominal step.
+    std::array<cv::Vec3f, kTrackerCount> prev_full{};
+    {
+        auto ts = make_trackers(target, true);
+        apply_pos_smoothing(ts, prev_full, a, nom, nom);
+    }
+    // (b) two half-nominal steps (same total wall time).
+    std::array<cv::Vec3f, kTrackerCount> prev_half{};
+    for (int s = 0; s < 2; ++s) {
+        auto ts = make_trackers(target, true);
+        apply_pos_smoothing(ts, prev_half, a, nom * 0.5f, nom);
+    }
+    for (std::size_t i = 0; i < kTrackerCount; ++i)
+        check_close(prev_half[i][0], prev_full[i][0],
+                    "rate-indep.half==full[" + std::to_string(i) + "]");
+
+    // (c) dt == nominal must equal the legacy (dt defaulted) path exactly, so
+    // the fixed-rate behavior is unchanged by the dt-aware generalization.
+    std::array<cv::Vec3f, kTrackerCount> prev_dt{}, prev_legacy{};
+    for (int f = 0; f < 4; ++f) {
+        auto t1 = make_trackers(target, true);
+        apply_pos_smoothing(t1, prev_dt, a, nom, nom);
+        auto t2 = make_trackers(target, true);
+        apply_pos_smoothing(t2, prev_legacy, a);  // default dt -> base_alpha
+    }
+    for (std::size_t i = 0; i < kTrackerCount; ++i)
+        check_close(prev_dt[i][0], prev_legacy[i][0],
+                    "rate-indep.dt==legacy[" + std::to_string(i) + "]");
+
+    // (d) a higher rate (smaller dt) must take a smaller per-step alpha: after
+    // ONE dt=nominal/2 step we should be less converged than one full step.
+    std::array<cv::Vec3f, kTrackerCount> prev_one_half{};
+    {
+        auto ts = make_trackers(target, true);
+        apply_pos_smoothing(ts, prev_one_half, a, nom * 0.5f, nom);
+    }
+    check(prev_one_half[0][0] < prev_full[0][0],
+          "rate-indep: single half-dt step should under-shoot the full step");
+}
+
 }  // namespace
 
 int main() {
@@ -303,6 +351,7 @@ int main() {
         test_velocity_gate_attenuates_jump();
         test_velocity_gate_handles_multi_frame_dropout_recovery();
         test_velocity_gate_passes_plausible_motion();
+        test_rate_independent_smoothing();
         std::puts("test_tracker_extract_pos ok");
         return 0;
     } catch (const std::exception& e) {

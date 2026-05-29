@@ -130,21 +130,31 @@ extract_trackers(const infer::Skeleton3D& skel,
                  ExtractContext* ctx = nullptr);
 
 // Per-tracker quaternion exponential smoothing with independent swing/twist
-// gates. The relative rotation prev⁻¹·curr is decomposed about the bone's
-// local forward axis (+Z) into swing (pitch/yaw) and twist (roll):
-//   swing_alpha_i = base_alpha · curr_i.swing_confidence
-//   twist_alpha_i = base_alpha · curr_i.roll_confidence
+// gates and frame-rate-independent step weighting. First the per-step weight is
+// rate-adjusted:
+//   alpha_rate = 1 - (1-base_alpha)^(dt_s/nominal_dt_s)   (frame-rate indep.)
+// then the relative rotation prev⁻¹·curr is decomposed about the bone's local
+// forward axis (+Z) into swing (pitch/yaw) and twist (roll):
+//   swing_alpha_i = alpha_rate · curr_i.swing_confidence
+//   twist_alpha_i = alpha_rate · curr_i.roll_confidence
 //   curr_i ← prev_i · slerp(I, swing, swing_alpha) · slerp(I, twist, twist_alpha)
 // When swing_confidence == roll_confidence this collapses to the single slerp
-// slerp(prev, curr, base_alpha·conf) (fast path, bit-identical to the previous
+// slerp(prev, curr, alpha_rate·conf) (fast path, bit-identical to the previous
 // behavior). roll_confidence = 0 holds the previous roll while swing keeps
 // tracking the new forward — this is how a fully-extended limb keeps moving
-// without its (unobservable) roll snapping around. base_alpha ∈ [0, 1].
-// Invalid trackers keep prev unchanged (curr is replaced by prev so the
-// publisher can still see a stable quat). Updates `prev_quat` in place.
+// without its (unobservable) roll snapping around. base_alpha ∈ [0, 1] is the
+// per-step weight tuned at the nominal cadence (nominal_dt_s = 1/extract_rate_hz);
+// the dt_s/nominal_dt_s exponent makes the wall-clock time constant independent
+// of the actual frame rate, so the event-driven extractor (variable source rate)
+// neither over- nor under-smooths vs the fixed-rate path. When dt_s == nominal_dt_s
+// (or either is <= 0, the default) alpha_rate == base_alpha, i.e. the fixed-rate
+// behavior is unchanged. Invalid trackers keep prev unchanged (curr is replaced
+// by prev so the publisher can still see a stable quat). Updates `prev_quat` in
+// place with the smoothed values.
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
-                          float base_alpha);
+                          float base_alpha,
+                          float dt_s = 0.0f, float nominal_dt_s = 0.0f);
 
 // Inter-frame state for the position smoothing path. Pass-by-ref so the
 // extractor can hold one of these per loop; default-constructed value is
@@ -187,9 +197,13 @@ struct PosSmoothingContext {
 };
 
 // Per-tracker position exponential moving average.
+//   alpha_rate = 1 - (1-base_alpha)^(dt_s/nominal_dt_s)   (frame-rate independent)
+//   α = alpha_rate · (1 − smoothstep(velocity, 8 m/s, 16 m/s))
 //   curr_i.pos ← prev_pos_i + α · (curr_i.pos − prev_pos_i)
-//   α = base_alpha · (1 − smoothstep(velocity, 8 m/s, 16 m/s))
-// base_alpha ∈ [0, 1]. 0 = freeze (prev forever), 1 = no smoothing.
+// base_alpha ∈ [0, 1]. 0 = freeze (prev forever), 1 = no smoothing. dt_s /
+// nominal_dt_s make the time constant rate-independent (see apply_quat_smoothing);
+// the ctx overload reads dt_s from ctx.dt_s and takes nominal_dt_s as an arg,
+// while defaults (<=0) reduce to plain base_alpha for the fixed-rate path.
 //
 // Unlike apply_quat_smoothing, this does NOT modulate the alpha by
 // roll_confidence — pos noise (camera triangulation reprojection error /
@@ -215,13 +229,16 @@ struct PosSmoothingContext {
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          PosSmoothingContext& ctx,
-                         float base_alpha);
+                         float base_alpha,
+                         float nominal_dt_s = 0.0f);
 
-// Legacy 1-arg form: world-absolute hold, no velocity gate, no hip
-// re-anchor. Kept for existing tests that don't pass a context.
+// World-absolute hold form: no hip re-anchor, no velocity gate. Frame-rate
+// independent via dt_s/nominal_dt_s (defaults <=0 reduce to plain base_alpha).
+// Kept for existing tests and callers that don't track hip context.
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
-                         float base_alpha);
+                         float base_alpha,
+                         float dt_s = 0.0f, float nominal_dt_s = 0.0f);
 
 namespace detail {
 // Build a (right, up, forward) → wxyz quaternion via Shoemake's matrix-to-quat.
