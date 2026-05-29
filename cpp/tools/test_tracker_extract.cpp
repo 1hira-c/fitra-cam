@@ -904,6 +904,118 @@ void test_roll_hold_keeps_swing() {
           "roll-hold contrast: full roll confidence must track roll (results differ)");
 }
 
+// pose-3d/locomotion-stability M5: pelvis-yaw transport for a held roll.
+// A standing extended leg has a near-vertical forward, so a body yaw is a
+// rotation about the bone's own forward axis — pure roll, which is held
+// (roll_confidence=0) and would otherwise freeze the limb's facing when the
+// subject turns sideways. With the waist tracker yawing between frames, the
+// held roll must ride along; without an observable waist it must stay put.
+void test_pelvis_yaw_transport_held_roll() {
+    namespace sv = fitra::slimevr;
+    using sv::SlimeTracker;
+    using sv::kTrackerCount;
+    constexpr std::size_t kWaist = static_cast<std::size_t>(sv::TrackerRole::Waist);
+    constexpr std::size_t kLeg   = static_cast<std::size_t>(sv::TrackerRole::LeftUpperLeg);
+    const float pi = 3.14159265358979f;
+    const float th = 30.0f * pi / 180.0f;  // pelvis yaw between frames
+
+    // Vertical bone forward (-Z). prev leg basis: up = +Y.
+    cv::Vec4f Pleg;
+    check(sv::detail::quat_from_forward_up(cv::Vec3f{0, 0, -1}, cv::Vec3f{0, 1, 0}, Pleg),
+          "pelvis-yaw: build prev leg");
+
+    auto run = [&](bool waist_valid) {
+        std::array<SlimeTracker, kTrackerCount> curr{};
+        std::array<cv::Vec4f, kTrackerCount> prev{};
+        prev[kLeg]   = Pleg;
+        prev[kWaist] = cv::Vec4f{1, 0, 0, 0};  // waist faces world-forward last frame
+        // Leg: same vertical forward, arbitrary roll (up hint +X), roll held.
+        cv::Vec4f Qleg;
+        check(sv::detail::quat_from_forward_up(cv::Vec3f{0, 0, -1}, cv::Vec3f{1, 0, 0}, Qleg),
+              "pelvis-yaw: build curr leg");
+        curr[kLeg].valid           = true;
+        curr[kLeg].quat_wxyz       = Qleg;
+        curr[kLeg].roll_confidence  = 0.0f;   // roll unobservable → held
+        curr[kLeg].swing_confidence = 1.0f;
+        // Waist yaws +th about world Z this frame (rigid: fast path, untouched).
+        curr[kWaist].valid           = waist_valid;
+        curr[kWaist].quat_wxyz       = cv::Vec4f{std::cos(th * 0.5f), 0, 0, std::sin(th * 0.5f)};
+        curr[kWaist].roll_confidence  = 1.0f;
+        curr[kWaist].swing_confidence = 1.0f;
+        sv::apply_quat_smoothing(curr, prev, 1.0f);  // base_alpha=1, default dt → gate open
+        return curr[kLeg];
+    };
+
+    // Waist valid → held roll rides the +th pelvis yaw: prev up (+Y) rotates
+    // about Z to (-sin th, cos th, 0). Forward stays vertical (Z unaffected).
+    SlimeTracker tr = run(/*waist_valid=*/true);
+    check_tracker_forward(tr, cv::Vec3f{0, 0, -1},
+                          "pelvis-yaw: forward still vertical", 1e-3f);
+    check_tracker_up_direction(tr, cv::Vec3f{-std::sin(th), std::cos(th), 0.0f},
+                               "pelvis-yaw: up rides pelvis yaw", 0.99f);
+
+    // Control: waist invalid → no transport → held roll stays at prev up (+Y).
+    SlimeTracker tr0 = run(/*waist_valid=*/false);
+    check_tracker_up_direction(tr0, cv::Vec3f{0, 1, 0},
+                               "pelvis-yaw: no transport without waist (held)", 0.99f);
+}
+
+// pose-3d/locomotion-stability M5: arms ride the chest, legs ride the waist.
+// The pelvis can yaw independently of the chest (spine twist), so the parent
+// reference must be per-limb. Yaw the chest and waist in OPPOSITE directions in
+// one frame and confirm a held-roll arm follows the chest while a held-roll leg
+// follows the waist.
+void test_arm_chest_leg_waist_transport() {
+    namespace sv = fitra::slimevr;
+    using sv::SlimeTracker;
+    using sv::kTrackerCount;
+    constexpr std::size_t kChest = static_cast<std::size_t>(sv::TrackerRole::Chest);
+    constexpr std::size_t kWaist = static_cast<std::size_t>(sv::TrackerRole::Waist);
+    constexpr std::size_t kArm   = static_cast<std::size_t>(sv::TrackerRole::LeftUpperArm);
+    constexpr std::size_t kLeg   = static_cast<std::size_t>(sv::TrackerRole::LeftUpperLeg);
+    const float pi = 3.14159265358979f;
+    const float tc =  30.0f * pi / 180.0f;  // chest yaws +30°
+    const float tw = -40.0f * pi / 180.0f;  // waist yaws -40°
+
+    // Vertical bone forward (-Z), prev up = +Y, for both limbs.
+    cv::Vec4f Plimb;
+    check(sv::detail::quat_from_forward_up(cv::Vec3f{0, 0, -1}, cv::Vec3f{0, 1, 0}, Plimb),
+          "arm/leg: build prev limb");
+    cv::Vec4f Qlimb;  // same vertical forward, arbitrary roll (up +X) → roll held
+    check(sv::detail::quat_from_forward_up(cv::Vec3f{0, 0, -1}, cv::Vec3f{1, 0, 0}, Qlimb),
+          "arm/leg: build curr limb");
+
+    std::array<SlimeTracker, kTrackerCount> curr{};
+    std::array<cv::Vec4f, kTrackerCount> prev{};
+    auto set_held_limb = [&](std::size_t i) {
+        prev[i] = Plimb;
+        curr[i].valid           = true;
+        curr[i].quat_wxyz       = Qlimb;
+        curr[i].roll_confidence  = 0.0f;
+        curr[i].swing_confidence = 1.0f;
+    };
+    set_held_limb(kArm);
+    set_held_limb(kLeg);
+    auto set_parent = [&](std::size_t i, float th) {
+        prev[i] = cv::Vec4f{1, 0, 0, 0};
+        curr[i].valid           = true;
+        curr[i].quat_wxyz       = cv::Vec4f{std::cos(th * 0.5f), 0, 0, std::sin(th * 0.5f)};
+        curr[i].roll_confidence  = 1.0f;
+        curr[i].swing_confidence = 1.0f;
+    };
+    set_parent(kChest, tc);
+    set_parent(kWaist, tw);
+
+    sv::apply_quat_smoothing(curr, prev, 1.0f);
+
+    // Arm rides the chest (+30°): up → (-sin tc, cos tc, 0).
+    check_tracker_up_direction(curr[kArm], cv::Vec3f{-std::sin(tc), std::cos(tc), 0.0f},
+                               "arm rides chest yaw (+30°)", 0.99f);
+    // Leg rides the waist (-40°): up → (-sin tw, cos tw, 0).
+    check_tracker_up_direction(curr[kLeg], cv::Vec3f{-std::sin(tw), std::cos(tw), 0.0f},
+                               "leg rides waist yaw (-40°)", 0.99f);
+}
+
 void test_keypoint_format_assert() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Coco17);
     auto skel = make_t_pose();
@@ -932,6 +1044,8 @@ int main() {
         test_upper_arm_confidence_smoothstep_midrange(); std::printf("[ok] confidence: smoothstep midrange ≈ 0.5\n");
         test_smoothing_freezes_under_low_confidence();   std::printf("[ok] smoothing: both gates zero freezes update\n");
         test_roll_hold_keeps_swing();             std::printf("[ok] smoothing: roll-only hold keeps swing (M3)\n");
+        test_pelvis_yaw_transport_held_roll();    std::printf("[ok] smoothing: pelvis-yaw transport rides held roll (M5)\n");
+        test_arm_chest_leg_waist_transport();     std::printf("[ok] smoothing: arm→chest / leg→waist transport (M5)\n");
         test_upper_arm_forward_raised();          std::printf("[ok] upper arm: forward-raised (前方挙上)\n");
         test_upper_arm_overhead_bent_elbow();     std::printf("[ok] upper arm: overhead + bent elbow (頭上挙上)\n");
         test_foot_toe_stance();                   std::printf("[ok] foot: toe stance (つま先立ち)\n");

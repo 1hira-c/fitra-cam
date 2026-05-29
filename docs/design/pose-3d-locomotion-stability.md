@@ -157,12 +157,60 @@ state 設計を変えるので tuning パラメータ (q_pos_offset / q_vel_offs
 - `roll_confidence=0` かつ `swing_confidence=1` で「roll hold + 向き追従」。
   両者 0 で完全 freeze (従来の `valid=false` hold 相当)。
 
+### M5: parent-yaw transport による held roll の横向き追従 (2026-05-29)
+
+**残った症状**: M4 で伸展肢の*向き* (swing) は追従するようになったが、実機で
+「伸展状態で xyz 移動は問題ないが**回転がだめ、特に横を向いたとき**」という報告。
+
+**直接原因**: 立位で脚・腕を伸ばすと bone forward (`knee-hip` / `ankle-knee` /
+`elbow-shoulder`) が**ほぼ鉛直**になる。この configuration で「横を向く」= 鉛直軸まわりの
+yaw 回転は、**bone forward 軸まわりの回転 = まさに twist (roll)** に一致する。M4 は roll を
+world 絶対で hold するので、伸展肢が鉛直なときの体 yaw がちょうど hold 軸に乗り、bone の
+向きが最初の yaw で固まる。swing は forward (鉛直) が変わらないので恒等のまま。膝/肘を曲げると
+roll が観測でき症状が出ない = 「特に横向き (= 鉛直肢) で」の報告と一致する。
+
+**検討した案**:
+- **①rigid pelvis pin の復活** (roll を骨盤 yaw に confidence 1.0 で絶対結合) — 却下。
+  M4 / upper_leg で潰した「捏造 roll を全幅で書く」アンチパターンそのもの。
+- **②parent-yaw transport (採用)**: M1 が*位置*でやった「world 絶対 hold → hip 相対 hold」の
+  **回転版**。観測可能な親 tracker の orientation 変化 `D = P_curr·P_prev⁻¹` を、roll を
+  hold している split-branch tracker の prev に**左から**掛けて transport する。swing が
+  forward を観測値に再整合するので、bone forward 軸まわりの成分 (鉛直肢では yaw) だけが roll
+  として残り、親の pitch/roll は swing が吸収する → yaw だけを明示抽出する必要がない。
+  これは絶対 pin ではなく**差分 (delta) 結合**: 相対 roll オフセットは保存され、変化量だけ
+  乗る。M1 が「足 = hip」ではなく「hip の移動量だけ足を動かす」だったのと同じ構図。
+  **参照は肢ごと**: 腕は **chest** (肩甲帯)、脚は **waist** (骨盤) に乗る。骨盤は脊椎の捻りで
+  胸とは独立に yaw できるので、腕に骨盤を使うと体幹回旋を誤追従する。腕は chest が観測できない
+  ときのみ waist に fallback (固まるよりマシ)。
+
+**変更ファイル**:
+- `cpp/src/slimevr/tracker_extract.cpp`:
+  - `apply_quat_smoothing`: ループ前に waist / chest それぞれ (`prev_quat[ref]` × 当該フレーム
+    raw `curr[ref]`) から transport delta を一度ずつ計算 (`make_transport_delta` lambda)。
+    split branch (`sa != ta`) の `p` に、肢に応じた参照 (腕→chest / 脚→waist) の delta を
+    `carry`-blend して左から掛ける。fast path (rigid bone / foot / chest・waist 自身) は
+    不変 → ビット同一。
+  - **`carry = 1 - ta/sa`**: parent-yaw prior と bone 自身の roll 観測の相補ブレンド。
+    完全 hold (`ta=0`) は full transport、roll が観測可能になるほど (`ta→sa`) transport を
+    弱め、親に対して相対回転する肢を強制追従させない。
+  - **magnitude gate** `kPelvisYawGateLow_rps=8 / High=16` (rad/s): 横向き時に `hip_axis` が
+    カメラ depth 軸に乗って骨盤 yaw 推定が暴れる / 三角測量 glitch の局面で、暴れた delta を
+    identity に向けて減衰。位置 velocity gate と同じ思想。
+
+**不変条件**:
+- transport delta は loop 前に確定 (chest / waist の prev が上書きされる前に capture) →
+  tracker 処理順に非依存。
+- 参照する親が当該フレーム invalid なら transport 無効 → M4 の world 絶対 hold に degrade
+  (腕は chest→waist の fallback あり)。
+- split branch 限定なので rigid bone / foot / chest・waist は回帰ゼロ (fast path 不変)。
+
 ## Milestone
 
 - **M1** (commit `6c419fc`): tracker_extract に hip 相対 hold + velocity gate + FK fallback
 - **M2** (commit `fc5a3d6`): Kalman を hip 起点の kinematic chain に再構築
 - **M3** (commit `9c31811`): design doc + track changelog
-- **M4** (このコミット): swing/twist 分離による roll-only hold (脚・腕が向きに追従)
+- **M4** (commit `f49cc0b`): swing/twist 分離による roll-only hold (脚・腕が向きに追従)
+- **M5** (このコミット): parent-yaw transport で held roll を横向きに追従させる (腕→chest / 脚→waist)
 
 各 M は単独で意味のあるユニット (M1 だけマージしても症状の半分は消える)。
 
@@ -195,6 +243,13 @@ ctest --test-dir cpp/build --output-on-failure
     `confidence_zero_all_degenerate`) を `valid=false` → `valid=true` +
     `roll_confidence=0` + forward 追従に更新。
   - `test_smoothing_freezes_under_low_confidence` を「両ゲート 0 で完全 freeze」に更新。
+- `test_tracker_extract` — M5 で 2 ケース追加、全通過
+  - `test_pelvis_yaw_transport_held_roll` (新規): 鉛直 forward の held-roll 脚 +
+    waist が +30° yaw → 脚 up が pelvis yaw に乗って回る (`up → (-sin30, cos30, 0)`、
+    forward は鉛直のまま)。waist invalid の control では transport 無効で prev roll 保持。
+  - `test_arm_chest_leg_waist_transport` (新規): chest を +30°、waist を -40° と逆向きに
+    yaw → held-roll の腕は chest (+30°)、脚は waist (-40°) にそれぞれ追従。参照が肢ごとに
+    独立していることを検証。
 - `test_kalman_chain` — M2 で新規、4 ケース全通過
   - root motion が unobserved child に伝播
   - child measurement で offset 補正

@@ -84,6 +84,17 @@ constexpr float kFootFkSmoothingWeight = 0.15f;
 constexpr float kPosVelGateLow_mps  = 8.0f;
 constexpr float kPosVelGateHigh_mps = 16.0f;
 
+// Pelvis-yaw transport gate (rad/s). apply_quat_smoothing rides a held roll
+// (extended limb, roll_confidence → 0) along with the *change* in the waist
+// tracker's orientation so a body yaw still turns the limb. A wild pelvis delta
+// — triangulation glitch, or hip_axis collapsing onto the camera depth axis
+// when the subject is side-on — would inject bogus roll, so the transport is
+// attenuated toward identity as the per-second pelvis turn rate climbs. 8 rad/s
+// ≈ 458°/s is past a brisk human turn; beyond 16 rad/s it is certainly a glitch
+// and the transport is dropped (held roll falls back to world-absolute hold).
+constexpr float kPelvisYawGateLow_rps  = 8.0f;
+constexpr float kPelvisYawGateHigh_rps = 16.0f;
+
 bool joints_valid(const infer::Skeleton3D& s, std::initializer_list<std::size_t> idxs) {
     for (auto i : idxs) {
         if (!s.joints[i].valid) return false;
@@ -618,6 +629,46 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           float base_alpha, float dt_s, float nominal_dt_s) {
     const float alpha_rate = rate_adjust_alpha(base_alpha, dt_s, nominal_dt_s);
+
+    // ---- Pelvis-yaw transport for held-roll bones -------------------------
+    // An extended limb's roll is unobservable (roll_confidence → 0), so it is
+    // held frame-to-frame. For a near-vertical limb (standing, legs/arms down)
+    // a body yaw is a rotation about the bone's own forward axis — i.e. pure
+    // roll — so a held roll freezes the limb's facing when the subject turns
+    // sideways. A parent tracker carries an observable, reliable orientation;
+    // ride the held roll along with the *change* in that orientation so a yaw
+    // still turns the limb. swing reconciles the observed forward afterward, so
+    // only the forward-axis component (the yaw, for a vertical bone) survives as
+    // roll; a parent pitch/roll is absorbed by swing. This is the rotational
+    // analogue of the M1 hip-relative position hold: a delta coupling that
+    // preserves the relative roll offset, NOT the rejected absolute parent pin.
+    //
+    // Reference per limb: arms ride the CHEST (shoulder girdle), legs ride the
+    // WAIST (pelvis). The pelvis can yaw independently of the chest via spine
+    // twist, so using the pelvis for arms would mis-track a torso rotation; the
+    // chest is the anatomically correct parent for the humerus. Each delta is
+    // computed once up front from the PREVIOUS parent quat (before the loop
+    // overwrites prev_quat) and this frame's raw parent measurement.
+    auto make_transport_delta = [&](std::size_t ref, cv::Vec4f& out) -> bool {
+        if (!curr[ref].valid) return false;
+        const cv::Vec4f rp = quat_normalize(prev_quat[ref]);
+        const cv::Vec4f rc = quat_normalize(curr[ref].quat_wxyz);
+        cv::Vec4f d = quat_mul(rc, quat_conj(rp));  // world-frame: maps rp → rc
+        if (d[0] < 0.0f) d = cv::Vec4f{-d[0], -d[1], -d[2], -d[3]};  // shorter arc
+        const float ang  = 2.0f * std::acos(std::clamp(d[0], -1.0f, 1.0f));  // [0, π]
+        const float step = (dt_s > 0.0f) ? dt_s : nominal_dt_s;
+        const float rate = (step > 0.0f) ? ang / step : 0.0f;
+        const float scale =
+            1.0f - smoothstep01(rate, kPelvisYawGateLow_rps, kPelvisYawGateHigh_rps);
+        out = quat_slerp(quat_identity(), d, scale);
+        return true;
+    };
+    constexpr std::size_t kWaistIdx = static_cast<std::size_t>(TrackerRole::Waist);
+    constexpr std::size_t kChestIdx = static_cast<std::size_t>(TrackerRole::Chest);
+    cv::Vec4f waist_delta = quat_identity(), chest_delta = quat_identity();
+    const bool have_waist_delta = make_transport_delta(kWaistIdx, waist_delta);
+    const bool have_chest_delta = make_transport_delta(kChestIdx, chest_delta);
+
     for (std::size_t i = 0; i < kTrackerCount; ++i) {
         if (!curr[i].valid) {
             // Hold previous orientation: publisher will see prev via curr, and
@@ -629,8 +680,31 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
         // Rate-adjusted per-step weight, then split by swing/twist confidence.
         const float sa = std::clamp(alpha_rate * curr[i].swing_confidence, 0.0f, 1.0f);
         const float ta = std::clamp(alpha_rate * curr[i].roll_confidence,  0.0f, 1.0f);
-        const cv::Vec4f p = quat_normalize(prev_quat[i]);
+        cv::Vec4f p = quat_normalize(prev_quat[i]);
         const cv::Vec4f q = quat_normalize(curr[i].quat_wxyz);
+
+        // Transport the held-roll reference by the parent delta. Gated to the
+        // split branch (sa != ta) so rigid fast-path bones, the foot, and the
+        // chest/waist references themselves stay bit-identical to the
+        // pre-transport behavior. Arms ride the chest; legs ride the waist
+        // (arms fall back to the waist only if the chest is unobservable, since
+        // a frozen arm is worse than a slightly-off one). `carry`
+        // complementary-blends the parent-yaw prior against the bone's own roll
+        // measurement: a fully held roll (ta = 0) rides the full parent delta
+        // (carry = 1, the prior is all we have); as the roll becomes observable
+        // (ta → sa) carry → 0 and the twist slerp toward q takes over, so a limb
+        // twisting relative to its parent is not forced to follow it.
+        const bool is_arm = (i == static_cast<std::size_t>(TrackerRole::LeftUpperArm) ||
+                             i == static_cast<std::size_t>(TrackerRole::RightUpperArm));
+        const bool  have_ref  = is_arm ? (have_chest_delta || have_waist_delta)
+                                       : have_waist_delta;
+        const cv::Vec4f& ref_delta =
+            is_arm ? (have_chest_delta ? chest_delta : waist_delta) : waist_delta;
+        if (have_ref && std::abs(sa - ta) >= 1.0e-6f) {
+            const float carry = std::clamp(1.0f - (ta / std::max(sa, 1.0e-6f)), 0.0f, 1.0f);
+            const cv::Vec4f d = quat_slerp(quat_identity(), ref_delta, carry);
+            p = quat_normalize(quat_mul(d, p));
+        }
 
         cv::Vec4f r;
         if (std::abs(sa - ta) < 1.0e-6f) {

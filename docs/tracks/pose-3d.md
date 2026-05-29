@@ -29,6 +29,15 @@ Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有す�
   world-Z で roll を代用する案は「膝裏が天井向き」の捏造 roll を生むため不採用。
 - **smoothing の state 所有は TrackerExtractor に集約**: 回転 (`prev_quat_`) も位置 EMA
   (`apply_pos_smoothing`) も同じ場所で持つ。publisher 側に smoothing state を分散させない。
+- **held roll は parent-yaw transport**: roll を hold 中の伸展肢 (split branch) は、観測可能な
+  親 tracker の orientation 変化 `D=P_curr·P_prev⁻¹` を prev に左から掛けて transport する。
+  立位伸展で bone forward が鉛直のとき体 yaw は bone 軸まわり回転 = roll に一致し、world 絶対
+  hold だと「横を向くと向きが固まる」。swing が forward を観測値に再整合するので forward 軸成分
+  (鉛直肢では yaw) だけが roll に残る。これは**差分結合** (M1 hip 相対 hold の回転版) で、却下した
+  rigid parent pin (絶対結合) とは別。**参照は肢ごと**: 腕は chest (肩甲帯)、脚は waist (骨盤)。
+  骨盤は脊椎の捻りで胸と独立に yaw するので腕に骨盤は使わない (腕は chest 不在時のみ waist へ
+  fallback)。`carry=1-ta/sa` で観測と prior を相補ブレンド、`kPelvisYawGate 8–16 rad/s` で親の
+  yaw 推定が暴れる横向き局面の暴走 delta を減衰。
 - **位置 hold は hip 相対**: `valid=false` の tracker は world 絶対値で freeze せず、
   hip_center 相対 offset を保って current hip にプロジェクトする。立位伸展で 2D 検出が
   motion blur で落ちても足が世界座標に取り残されない。Waist は `prev_pos ≡ hip_center` で
@@ -51,12 +60,24 @@ Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有す�
 
 ### 検証
 
-`ctest -R 'tracker_extract|firmware_protocol|kalman'` (27 ケース) + 実機目視 (WebUI の
+`ctest -R 'tracker_extract|firmware_protocol|kalman'` (29 ケース) + 実機目視 (WebUI の
 per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)。
 合格基準は [`cpp-migration-plan.md` 検証戦略表](../cpp-migration-plan.md) の旧 Phase 13 行に
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-05-29 — parent-yaw transport (横向き時の伸展肢 roll 追従)
+M4 (roll-only hold) 後の実機報告「伸展状態で xyz 移動は OK だが回転がだめ、特に横を向いたとき」に
+対応。立位伸展で bone forward が鉛直になると体 yaw が bone 軸まわり回転 = roll に一致し、world 絶対
+hold だと横向きで向きが固まる。`apply_quat_smoothing` のループ前に親 tracker の orientation 変化を
+計算し、roll を hold 中の split-branch tracker の prev に左から transport (M1 hip 相対 hold の
+回転版 = 差分結合)。swing が forward を再整合するので親の pitch/roll は吸収され yaw 成分だけが
+roll に残る。**参照は肢ごと** — 腕は chest (肩甲帯)、脚は waist (骨盤)。骨盤は脊椎の捻りで胸と
+独立に yaw するので腕に骨盤は使わない。`carry=1-ta/sa` で観測との相補ブレンド、
+`kPelvisYawGate 8–16 rad/s` で横向き時の親 yaw 推定暴走を減衰。fast path (rigid bone / foot /
+chest・waist) はビット同一で回帰ゼロ。
+→ [design/pose-3d-locomotion-stability.md](../design/pose-3d-locomotion-stability.md) M5
 
 ### 2026-05-29 — roll-only hold (脚・腕が向きに追従)
 M1 の hip 相対 hold で足の*位置*は hip 追従するようになったが、立位伸展で足先は動くのに
