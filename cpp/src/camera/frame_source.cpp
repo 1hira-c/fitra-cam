@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <string>
 #include <utility>
 
 #include <cuda_runtime_api.h>
@@ -96,6 +98,12 @@ void FrameSource::decode_loop() {
         // no H2D for the pose input). Falls back per-frame if a buffer can't be
         // acquired.
         device_pose_ = rtmpose_enabled_ && hw_decoder_->device_capable();
+        // Bench A/B: force the CPU prebake path even when the GPU one is
+        // available, to compare CPU load / latency of the two front-ends.
+        if (const char* e = std::getenv("FITRA_DISABLE_GPU_PREPROCESS");
+            e && *e && std::string(e) != "0") {
+            device_pose_ = false;
+        }
         if (device_pose_)
             FITRA_LOG_INFO("frame_source: all-GPU RTMPose preprocess enabled");
     }

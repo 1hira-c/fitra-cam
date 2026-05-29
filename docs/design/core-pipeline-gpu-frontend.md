@@ -129,6 +129,18 @@ MJPEG ─VIC/NVJPEG decodeToFd─▶ NvBufSurface(YUV422,NVMM)
       `det→bake` **4.1→1.1ms**、`cap→pub` **~20→~15ms** (per-person CPU warp/normalize と pose H2D が消滅)、
       30fps 維持、SIGINT 0.52s クリーン終了、ctest 9/9。BGR は YOLOX/calib 用に host map から維持
       (full-frame RGBA→BGR cvtColor は残置、M3/M4 で除去)。
+    - **2cam 90fps@VGA A/B** (env `FITRA_DISABLE_GPU_PREPROCESS=1` で CPU prebake を強制し同一手法比較):
+      GPU フロントエンドが nvjpeg の **~1.8 コア床を初めて割った**。
+
+      | 経路 (2 cam @90fps, nvjpeg) | プロセス CPU | det→bake | cap→pub |
+      |---|---|---|---|
+      | mjpeg (CPU 参考) | 1.83 cores | 2.9ms | 16.7ms |
+      | CPU prebake | 1.77 cores | 3.5ms | 16.4ms |
+      | **GPU フロントエンド** | **1.28 cores** | **0.5ms** | **12.8ms** |
+
+      CPU **−28% (vs nvjpeg-CPU) / −30% (vs mjpeg)**、E2E −3.7ms。nvjpeg doc が「高 fps では色変換が床で
+      CPU 得≈0」と結論した点に対し、**per-person warp/normalize の GPU 移行が高 fps の CPU を解放する**ことを
+      実証 (nvjpeg doc の表に追記)。残り 1.28 コアは full-frame cvtColor + YOLOX + capture が律速 → M3/M4。
 - **M3**: **YOLOX 前処理 CUDA カーネル** (letterbox+normalize+HWC→CHW) 同様に device 直結。
 - **M4**: アーキ移行 — Phase 6b の per-cam CPU 前処理を撤去し GPU 経路へ。EGL/CUDA context の
   スレッド親和性、register ライフサイクル、multi-cam の resource キャッシュを整理。

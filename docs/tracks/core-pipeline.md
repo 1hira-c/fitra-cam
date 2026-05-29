@@ -43,6 +43,9 @@ per-camera `DeviceChwPool` (`shared_ptr<DeviceChwBuf>` deleter がプールを�
 `gpu_preprocess_check` の keypoint モードで host `infer` vs device `infer_prebaked` を照合、confident
 keypoint L2 **avg 0.34px / worst 1.18px** (低スコアは FP16 既知の argmax 不安定で除外)。実機 (単一カメラ
 nvjpeg fake-bbox): **det→bake 4.1→1.1ms / cap→pub ~20→~15ms**、30fps 維持、SIGINT 0.52s、ctest 9/9。
+**2cam 90fps@VGA A/B** (`FITRA_DISABLE_GPU_PREPROCESS=1` で CPU prebake 強制比較): GPU フロントエンドが
+**nvjpeg の ~1.8 コア床を初めて割った** — CPU 1.77→**1.28 cores (−28%)**、cap→pub 16.4→**12.8ms**。
+「高 fps では色変換が床」とした nvjpeg doc 結論に対し per-person warp/normalize の GPU 移行が効くと実証。
 BGR は YOLOX/calib 用に残置 (full-frame cvtColor 除去は M3/M4)。
 → [design/core-pipeline-gpu-frontend.md](../design/core-pipeline-gpu-frontend.md)
 

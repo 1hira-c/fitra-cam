@@ -181,6 +181,22 @@ full-frame CPU 変換が消せず**、90fps の CPU 床は変わらなかった�
 これは Phase 6 GPU 前処理として M3 送り。実運用は RTMPose が ~30–80fps なので中 fps 帯の CPU 余力が
 そのまま効く。当初の「fps が上がるほど一方的に有利」想定は実測が覆した。
 
+**追記 (2026-05-29, GPU フロントエンド M2 後)**: 上記「GPU 前処理が必須」を
+[`core-pipeline-gpu-frontend.md`](core-pipeline-gpu-frontend.md) M2 で実装し実測確認。RTMPose 前処理
+(per-person warp+normalize) を GPU カーネルに移し pose 入力を device 直結 (H2D 消滅) した結果、
+**90fps×2 で初めて ~1.8 コアの床を割った**:
+
+| 経路 (2 cam @90fps, 同一手法) | プロセス CPU | det→bake | cap→pub |
+|---|---|---|---|
+| mjpeg (CPU) | 1.83 cores | 2.9ms | 16.7ms |
+| nvjpeg CPU prebake | 1.77 cores | 3.5ms | 16.4ms |
+| **nvjpeg GPU フロントエンド (M2)** | **1.28 cores** | **0.5ms** | **12.8ms** |
+
+GPU 前処理で **−30% (vs mjpeg) / −28% (vs nvjpeg-CPU)**、E2E `cap→pub` −3.7ms。これは「色変換が床」
+だった nvjpeg 単体に対し、**per-person warp/normalize の GPU 移行**こそが高 fps の CPU を解放すると
+裏付けた。残り 1.28 コアは full-frame RGBA→BGR cvtColor (YOLOX/calib 用に残置) + YOLOX + capture が
+律速で、M3 (YOLOX 前処理 GPU 化) / M4 で削る。
+
 ## 残課題 / リスク
 - **dlopen 隔離の本体組み込み**: `.so` を CMake で別ターゲット化し、本体は実行時 dlopen。
   ビルド時はリンクしない (NEEDED にすると libnvjpeg がグローバル scope に入り cv::imdecode 破綻)。
