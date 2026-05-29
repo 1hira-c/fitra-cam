@@ -136,8 +136,21 @@ correctness: 同一 640×480 フレームで HW decode(decodeToFd+NvBufSurfTrans
 
 **所見**: 単一カメラの E2E 短縮は mjpeg-CPU 比 −1.8ms と中庸 (HW decode 0.9ms 自体は速いが、
 NvBufSurfTransform + map sync + RGBA→BGR の CPU repack が乗る; cap→dec はさらに slot 待ちを含む)。
-**真の価値は CPU オフロード** (entropy decode が HW ブロックへ) で、複数カメラ時に CPU 余力として効く
-見込み。純レイテンシ最小は単一カメラなら依然 YUYV。
+**真の価値は CPU オフロード** (entropy decode が HW ブロックへ)。純レイテンシ最小は単一カメラなら依然 YUYV。
+
+**multi-cam 実測 (2 カメラ /dev/video0+video2, 640×480@30, 6 コア機, プロセス CPU を
+/proc/PID/stat で計測)**:
+
+| 経路 (2 cam) | プロセス CPU | recv/cam | recent_pose/cam | cap→dec | cap→pub |
+|---|---|---|---|---|---|
+| mjpeg (CPU) | **0.90 cores** | 30.0 | ~30 | 7.4ms | 26.9ms |
+| nvjpeg (HW) | **0.72 cores** | 30.0 | ~30 | 5.1ms | 24.8ms |
+
+2 カメラで **CPU −0.18 cores (約 20%)**、両 cam 30fps 維持・E2E も −2ms。CPU オフロードが実測で
+確認できた。削減幅が控えめなのは RGBA→BGR の **CPU repack が 2×残る**ため (M2 で除去すれば拡大の
+見込み)。カメラ台数・解像度が上がるほど libjpeg-turbo の CPU decode は線形増だが HW ブロックは
+据え置きなので、差は広がる方向。
+(注: `jetson_clocks` 未設定の素の状態での相対比較。)
 
 ## 残課題 / リスク
 - **dlopen 隔離の本体組み込み**: `.so` を CMake で別ターゲット化し、本体は実行時 dlopen。
