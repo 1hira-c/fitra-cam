@@ -147,10 +147,21 @@ NvBufSurfTransform + map sync + RGBA→BGR の CPU repack が乗る; cap→dec �
 | nvjpeg (HW) | **0.72 cores** | 30.0 | ~30 | 5.1ms | 24.8ms |
 
 2 カメラで **CPU −0.18 cores (約 20%)**、両 cam 30fps 維持・E2E も −2ms。CPU オフロードが実測で
-確認できた。削減幅が控えめなのは RGBA→BGR の **CPU repack が 2×残る**ため (M2 で除去すれば拡大の
-見込み)。カメラ台数・解像度が上がるほど libjpeg-turbo の CPU decode は線形増だが HW ブロックは
-据え置きなので、差は広がる方向。
+確認できた。削減幅が控えめなのは RGBA→BGR の **CPU repack が 2×残る**ため。
 (注: `jetson_clocks` 未設定の素の状態での相対比較。)
+
+**高 fps (90fps×2) では CPU 差がほぼ消える (要注意の知見)**:
+
+| 経路 (2 cam @90fps) | プロセス CPU | recv/cam | recent_pose/cam | cap→pub |
+|---|---|---|---|---|
+| mjpeg (CPU) | 1.81 cores | 88 | ~83 | 16.7ms |
+| nvjpeg (HW) | 1.78 cores | 88 | ~81 | 17.5ms |
+
+30fps で −0.18 cores だった差が 90fps では **ほぼゼロ**。処理フレームが ~166/s に増えると、
+libjpeg decode の CPU 増加分を **nvjpeg 側の RGBA→BGR repack (166×307k px/s) が相殺**し、かつ全体 CPU
+が RTMPose prebake 支配になりデコード差の比率が縮むため。**結論: 現状の nvjpeg は低 fps でのみ CPU
+得、高スループットでは CPU repack が相殺する。M2 (repack 除去) が高 fps で nvjpeg を活かす前提条件。**
+これは当初想定 (台数/解像度が上がるほど一方的に有利) を実測が覆した重要な訂正。
 
 ## 残課題 / リスク
 - **dlopen 隔離の本体組み込み**: `.so` を CMake で別ターゲット化し、本体は実行時 dlopen。
