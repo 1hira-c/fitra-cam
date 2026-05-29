@@ -428,6 +428,10 @@ float rate_adjust_alpha(float base_alpha, float dt_s, float nominal_dt_s) {
     if (base_alpha <= 0.0f) return 0.0f;
     if (base_alpha >= 1.0f) return 1.0f;
     if (!(nominal_dt_s > 0.0f) || !(dt_s > 0.0f)) return base_alpha;
+    // Fixed-rate path (run_loop passes dt_s = nominal_dt_s): return base_alpha
+    // exactly, skipping std::pow so the behavior is byte-for-byte unchanged
+    // (std::pow(x, 1) is not guaranteed bit-exact) and the hot path pays nothing.
+    if (dt_s == nominal_dt_s) return base_alpha;
     const float ratio = dt_s / nominal_dt_s;
     return 1.0f - std::pow(1.0f - base_alpha, ratio);
 }

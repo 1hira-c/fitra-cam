@@ -55,7 +55,8 @@ dt の 1 ステップ 他)、ctest 9/9。実機 judder / e2e 数値検証 + イ�
 非該当 (extractor は三角測量にほぼ同期、hop2 も支配項でない)。一方 **nvjpeg 全 GPU フロントエンドで
 cap→pub 21→13ms、e2e 34→26ms (−8ms)**。photon→send を削るのはパイプラインのみと確定。残 VR 側 ~13ms は
 `sync_window=15ms` + 処理で rate 非依存。よって VR ペーシングのレイテンシ目的変更は見送り (M1 smoothing は
-過平滑バグ correctness 修正として維持)。`configs/medium_3d.yaml` を `pixel_format: nvjpeg` に切替 (−8ms 即効)。
+過平滑バグ correctness 修正として維持)。VR レイテンシを下げる手は 3D 設定の `cameras.pixel_format: nvjpeg`
+(per-machine config は gitignored、雛形 `configs/live_2cam_3d.yaml.example` に既定記載 / CLI `--pixel-format nvjpeg`)。
 judder の体感比較は HMD 主観評価として残課題。
 → [design/vr-output-latency.md](../design/vr-output-latency.md)
 

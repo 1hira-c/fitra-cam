@@ -24,6 +24,12 @@ schema: fitra_main_config_v1
 cameras:
   cam0: /dev/v4l/by-path/usb-cam-A-video-index0
   cam1: /dev/v4l/by-path/usb-cam-B-video-index0
+  # Decode/preprocess path. On Jetson, `nvjpeg` runs the full GPU front-end
+  # (HW NVJPEG decode + EGL->CUDA + GPU YOLOX/RTMPose preprocess, no host
+  # round-trip). Subject-in-view measurement: photon->VR-send e2e 34->26ms vs
+  # the default `mjpeg` (CPU). `yuyv` is uncompressed (no decode, more USB BW).
+  # Equivalent CLI: --pixel-format {mjpeg|yuyv|nvjpeg}.
+  pixel_format: nvjpeg
 
 inference:
   det_engine: outputs/tensorrt_engines/yolox_tiny.fp16.engine

@@ -84,6 +84,9 @@ frame-rate 非依存 smoothing が入った後の follow-up とする。
     (既定化・レート上げ) は実測で無効と確定し見送り**。VR レイテンシを下げたいなら 3D 設定を nvjpeg
     全 GPU フロントエンドにするのが唯一効く手 (本コミットで `medium_3d.yaml` を nvjpeg に切替)。
     judder の体感比較 (event-driven vs fixed) は被写体 + HMD 装着の主観評価として残す。
+    - **設定方法**: per-machine config (`configs/*.yaml` は gitignored) の `cameras.pixel_format: nvjpeg`、
+      または CLI `--pixel-format nvjpeg`。tracked な雛形 `configs/live_2cam_3d.yaml.example` に既定として
+      記載済み (コピーして使う)。
 
 ## 検証
 
