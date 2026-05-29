@@ -90,8 +90,17 @@ TriangulatedSkeleton Triangulator::triangulate(
     const std::size_t kp_count = active_kp_count();
     out.skeleton.kp_count = static_cast<std::uint8_t>(kp_count);
 
+    // Per-call scratch reused across keypoints/views to avoid per-keypoint and
+    // per-view heap allocations. thread_local (not mutable members) keeps the
+    // const contract intact: triangulate() touches no shared state, so it stays
+    // thread-safe even if the pipeline later triangulates frames in parallel,
+    // and Triangulator remains cheap to copy/move.
+    static thread_local std::vector<JointView>   views;
+    static thread_local std::vector<cv::Point2f> undist_src;
+    static thread_local std::vector<cv::Point2f> undist_dst;
+
     for (std::size_t k = 0; k < kp_count; ++k) {
-        views_scratch_.clear();
+        views.clear();
         for (const auto& obs : observations) {
             if (!obs.person || obs.cam_index < 0 ||
                 static_cast<std::size_t>(obs.cam_index) >= cameras_.size()) {
@@ -101,21 +110,21 @@ TriangulatedSkeleton Triangulator::triangulate(
             if (kp.score < opts_.kp_conf_thresh) continue;
 
             const auto& cam = cameras_[static_cast<std::size_t>(obs.cam_index)];
-            undist_src_.assign(1, cv::Point2f(kp.x, kp.y));
-            cv::undistortPoints(undist_src_, undist_dst_, cam.K, cam.dist);
-            if (undist_dst_.empty()) continue;
+            undist_src.assign(1, cv::Point2f(kp.x, kp.y));
+            cv::undistortPoints(undist_src, undist_dst, cam.K, cam.dist);
+            if (undist_dst.empty()) continue;
 
             JointView v;
             v.cam_index = obs.cam_index;
-            v.norm = cv::Point2d(undist_dst_[0].x, undist_dst_[0].y);
+            v.norm = cv::Point2d(undist_dst[0].x, undist_dst[0].y);
             v.pixel = cv::Point2f(kp.x, kp.y);
             v.score = kp.score;
-            views_scratch_.push_back(v);
+            views.push_back(v);
         }
 
         float err = 0.0f;
         int used = 0;
-        if (triangulate_joint(views_scratch_, out.skeleton.joints[k], err, used)) {
+        if (triangulate_joint(views, out.skeleton.joints[k], err, used)) {
             out.reproj_error_px[k] = err;
             out.view_count[k] = used;
             out.valid_joints += 1;
@@ -133,37 +142,42 @@ bool Triangulator::triangulate_joint(const std::vector<JointView>& views,
                                      int& used_views) const {
     if (views.size() < 2) return false;
 
-    indices_scratch_.resize(views.size());
-    std::iota(indices_scratch_.begin(), indices_scratch_.end(), 0);
+    // thread_local scratch (see triangulate()): allocation-free across calls,
+    // const-safe, no shared mutable members.
+    static thread_local std::vector<int> indices;
+    static thread_local std::vector<int> kept;
+
+    indices.resize(views.size());
+    std::iota(indices.begin(), indices.end(), 0);
 
     cv::Point3d point;
-    if (!solve_dlt(views, indices_scratch_, point)) return false;
+    if (!solve_dlt(views, indices, point)) return false;
 
     if (views.size() > 2) {
-        kept_scratch_.clear();
-        kept_scratch_.reserve(indices_scratch_.size());
-        for (int idx : indices_scratch_) {
+        kept.clear();
+        kept.reserve(indices.size());
+        for (int idx : indices) {
             if (reproj_error_px(views[static_cast<std::size_t>(idx)], point) <= opts_.max_reproj_px) {
-                kept_scratch_.push_back(idx);
+                kept.push_back(idx);
             }
         }
-        if (kept_scratch_.size() >= 2 && kept_scratch_.size() < indices_scratch_.size()) {
+        if (kept.size() >= 2 && kept.size() < indices.size()) {
             cv::Point3d refined;
-            if (solve_dlt(views, kept_scratch_, refined)) {
+            if (solve_dlt(views, kept, refined)) {
                 point = refined;
-                indices_scratch_ = kept_scratch_;
+                indices = kept;
             }
         }
     }
 
     double err_sum = 0.0;
     double score_sum = 0.0;
-    for (int idx : indices_scratch_) {
+    for (int idx : indices) {
         const auto& view = views[static_cast<std::size_t>(idx)];
         err_sum += reproj_error_px(view, point);
         score_sum += view.score;
     }
-    used_views = static_cast<int>(indices_scratch_.size());
+    used_views = static_cast<int>(indices.size());
     mean_reproj = static_cast<float>(err_sum / std::max(1, used_views));
     joint.x = static_cast<float>(point.x);
     joint.y = static_cast<float>(point.y);

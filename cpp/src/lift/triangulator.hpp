@@ -71,16 +71,6 @@ private:
 
     std::vector<CameraModel> cameras_;
     Options opts_;
-
-    // Per-frame scratch buffers reused across triangulate() calls to avoid
-    // per-keypoint / per-view heap allocations. triangulate() and its helpers
-    // run on the single central-loop thread only, so mutable shared scratch is
-    // race-free.
-    mutable std::vector<JointView>   views_scratch_;
-    mutable std::vector<cv::Point2f> undist_src_;
-    mutable std::vector<cv::Point2f> undist_dst_;
-    mutable std::vector<int>         indices_scratch_;
-    mutable std::vector<int>         kept_scratch_;
 };
 
 }  // namespace fitra::lift
