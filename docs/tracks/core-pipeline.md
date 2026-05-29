@@ -33,6 +33,17 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — E2E レイテンシ計測基盤 + YUYV 切替 + sleep 除去 + VR イベント駆動
+ステージ別レイテンシ TS を `DecodedFrame`/`Skeleton3DSnapshot` に inline 化し、central loop の
+3 秒 breakdown を `cap→dec/dec→det/det→bake/bake→pose/pose→pub` 拡張、VR 側に
+`e2e_capture_to_send_ms` を追加。`--pixel-format {mjpeg,yuyv}` / `--n-buffers` を CLI/YAML 化
+(`Frame.jpeg`→`data`、YUYV は `cv::cvtColor` 経路)。capture/decode/central の 2ms poll sleep を
+condition_variable に置換 (単一カメラ)。`--vr-extract-event-driven` で TrackerExtractor を
+三角測量フレーム駆動に (opt-in, default off)。実機計測: 単一カメラ 640×480@30 で
+**YUYV は MJPEG 比 cap→pub −5.5ms** (cap→dec 6.7→0.95ms、decode 消滅) かつ 30fps 維持。
+M4 VR e2e は被写体 (`ik_locked`) 要のため残課題。
+→ [design/core-pipeline-e2e-latency.md](../design/core-pipeline-e2e-latency.md)
+
 ### 2026-05-20 — COCO17 → Halpe26 keypoint 移行
 `--keypoint-format {coco17,halpe26}` で CLI 切替。`SkeletonDef` active format singleton
 (`cpp/src/lift/keypoint_format.hpp`)。subject profile v1/v2 を厳格分離。

@@ -45,16 +45,19 @@ void V4l2Capture::start() {
     fd_ = ::open(opts_.device_path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (fd_ < 0) throw_errno("open(" + opts_.device_path + ")");
 
-    // Set MJPEG format.
+    // Set pixel format (MJPEG or YUYV).
+    const bool want_yuyv = (opts_.pixel_format == PixFmt::Yuyv);
+    const __u32 want_fourcc = want_yuyv ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
+    const char* fmt_name    = want_yuyv ? "YUYV" : "MJPG";
     v4l2_format fmt{};
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     fmt.fmt.pix.width       = opts_.width;
     fmt.fmt.pix.height      = opts_.height;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
+    fmt.fmt.pix.pixelformat = want_fourcc;
     fmt.fmt.pix.field       = V4L2_FIELD_NONE;
     if (xioctl(fd_, VIDIOC_S_FMT, &fmt) < 0) throw_errno("VIDIOC_S_FMT");
-    if (fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_MJPEG) {
-        throw std::runtime_error("driver did not accept MJPEG format");
+    if (fmt.fmt.pix.pixelformat != want_fourcc) {
+        throw std::runtime_error(std::string("driver did not accept ") + fmt_name + " format");
     }
     if (static_cast<int>(fmt.fmt.pix.width)  != opts_.width
      || static_cast<int>(fmt.fmt.pix.height) != opts_.height) {
@@ -111,9 +114,9 @@ void V4l2Capture::start() {
     v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (xioctl(fd_, VIDIOC_STREAMON, &type) < 0) throw_errno("VIDIOC_STREAMON");
 
-    FITRA_LOG_INFO("v4l2: {} opened ({}x{}, MJPG, {} buffers, requested {} fps)",
+    FITRA_LOG_INFO("v4l2: {} opened ({}x{}, {}, {} buffers, requested {} fps)",
                    opts_.device_path, opts_.width, opts_.height,
-                   bufs_.size(), opts_.fps);
+                   fmt_name, bufs_.size(), opts_.fps);
 
     stop_.store(false);
     worker_ = std::thread{&V4l2Capture::worker_loop, this};
@@ -166,9 +169,13 @@ void V4l2Capture::worker_loop() {
         std::uint64_t seq = total_received_.fetch_add(1) + 1;
 
         // Copy out so we can re-queue the V4L2 buffer immediately.
+        // YUYV is fixed-size; some drivers report bytesused=0 for uncompressed
+        // formats, so fall back to the full mmap buffer length in that case.
+        std::size_t nbytes = buf.bytesused;
+        if (nbytes == 0) nbytes = bufs_[buf.index].length;
         Frame f;
-        f.jpeg.assign(static_cast<std::uint8_t*>(bufs_[buf.index].ptr),
-                      static_cast<std::uint8_t*>(bufs_[buf.index].ptr) + buf.bytesused);
+        f.data.assign(static_cast<std::uint8_t*>(bufs_[buf.index].ptr),
+                      static_cast<std::uint8_t*>(bufs_[buf.index].ptr) + nbytes);
         f.seq         = seq;
         f.captured_at = now;
 
@@ -185,6 +192,7 @@ void V4l2Capture::worker_loop() {
         {
             std::lock_guard<std::mutex> lk{slot_mu_};
             latest_ = std::move(f);
+            slot_cv_.notify_one();  // wake a consumer parked in wait_pop_latest
         }
         update_recv_fps(now);
     }
@@ -209,6 +217,24 @@ bool V4l2Capture::try_pop_latest(Frame& out) {
     last_returned_seq_ = latest_->seq;
     out = *latest_;
     return true;
+}
+
+bool V4l2Capture::wait_pop_latest(Frame& out, std::atomic<bool>& consumer_stop,
+                                  std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lk{slot_mu_};
+    slot_cv_.wait_for(lk, timeout, [&] {
+        return consumer_stop.load(std::memory_order_relaxed)
+            || (latest_ && latest_->seq != last_returned_seq_);
+    });
+    if (!latest_ || latest_->seq == last_returned_seq_) return false;
+    last_returned_seq_ = latest_->seq;
+    out = *latest_;
+    return true;
+}
+
+void V4l2Capture::wake() {
+    std::lock_guard<std::mutex> lk{slot_mu_};
+    slot_cv_.notify_all();
 }
 
 }  // namespace fitra::camera

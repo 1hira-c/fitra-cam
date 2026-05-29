@@ -4,6 +4,8 @@
 #include <chrono>
 #include <utility>
 
+#include <opencv2/imgproc.hpp>
+
 #include "util/logging.hpp"
 
 namespace fitra::camera {
@@ -34,24 +36,41 @@ void FrameSource::start() {
 void FrameSource::stop() {
     if (!worker_.joinable() && !capture_) return;
     stop_.store(true);
+    // decode_loop may be parked in capture_->wait_pop_latest; wake it so it
+    // observes stop_ without waiting out the timeout. Order: flag -> wake -> join.
+    if (capture_) capture_->wake();
     if (worker_.joinable()) worker_.join();
     if (capture_) capture_->stop();
 }
 
 void FrameSource::decode_loop() {
-    std::uint64_t last_seq = 0;
     cv::Mat scratch;
     while (!stop_.load()) {
         Frame raw;
-        if (!capture_->try_pop_latest(raw) || raw.seq == last_seq) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        // Event-driven: block until the capture worker publishes a new frame
+        // (or stop_ is set, or the 100ms safety timeout fires). Replaces the
+        // old 2ms poll-sleep; wait_pop_latest already dedups on seq.
+        if (!capture_->wait_pop_latest(raw, stop_, std::chrono::milliseconds(100))) {
             continue;
         }
-        last_seq = raw.seq;
-        if (!decoder_.decode(raw.jpeg, scratch)) {
-            FITRA_LOG_WARN("frame_source: jpeg decode failed for seq={}", raw.seq);
-            continue;
+        if (capture_->options().pixel_format == PixFmt::Yuyv) {
+            // Packed YUV422 -> BGR. No entropy decode; just a color convert.
+            const auto& o = capture_->options();
+            if (static_cast<int>(raw.data.size()) < o.width * o.height * 2) {
+                FITRA_LOG_WARN("frame_source: short YUYV frame for seq={} ({} bytes)",
+                               raw.seq, raw.data.size());
+                continue;
+            }
+            cv::Mat yuy2(o.height, o.width, CV_8UC2,
+                         const_cast<std::uint8_t*>(raw.data.data()));
+            cv::cvtColor(yuy2, scratch, cv::COLOR_YUV2BGR_YUYV);
+        } else {
+            if (!decoder_.decode(raw.data, scratch)) {
+                FITRA_LOG_WARN("frame_source: jpeg decode failed for seq={}", raw.seq);
+                continue;
+            }
         }
+        auto t_decode = std::chrono::steady_clock::now();
 
         const bool calib_recording =
             opts_.calib_recording_flag
@@ -81,6 +100,7 @@ void FrameSource::decode_loop() {
                 cached_bboxes_ = std::move(dets);
             }
         }
+        auto t_detect = std::chrono::steady_clock::now();
 
         if (opts_.fake_bbox_if_empty && cached_bboxes_.empty()) {
             infer::Bbox fake{};
@@ -97,6 +117,8 @@ void FrameSource::decode_loop() {
         DecodedFrame df;
         df.seq         = raw.seq;
         df.captured_at = raw.captured_at;
+        df.t_decode    = t_decode;
+        df.t_detect    = t_detect;
         // During calib recording we drop bboxes too — the central thread sees
         // bboxes.empty() and naturally skips RTMPose. (Without this the
         // "missing prebake" warning would spam.)
@@ -119,6 +141,10 @@ void FrameSource::decode_loop() {
                     df.M_invs[i]);
             }
         }
+        // t_prebake closes the per-camera CPU stage. When the prebake block
+        // above was skipped (no bbox / no RTMPose) this equals t_detect so the
+        // det->bake delta is 0 rather than a garbage epoch-based value.
+        df.t_prebake = std::chrono::steady_clock::now();
         if (!rtmpose_enabled_ || opts_.retain_bgr || calib_recording) {
             df.bgr = scratch.clone();
         }
@@ -126,6 +152,7 @@ void FrameSource::decode_loop() {
         {
             std::lock_guard<std::mutex> lk{slot_mu_};
             latest_ = std::move(df);
+            slot_cv_.notify_one();  // wake the central loop if parked in wait_available
         }
         ++frame_idx_;
     }
@@ -138,6 +165,21 @@ bool FrameSource::try_pop_latest_decoded(DecodedFrame& out) {
     last_returned_seq_ = latest_->seq;
     out = *latest_;
     return true;
+}
+
+bool FrameSource::wait_available(std::atomic<bool>& consumer_stop,
+                                 std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lk{slot_mu_};
+    slot_cv_.wait_for(lk, timeout, [&] {
+        return consumer_stop.load(std::memory_order_relaxed)
+            || (latest_ && latest_->seq != last_returned_seq_);
+    });
+    return latest_ && latest_->seq != last_returned_seq_;
+}
+
+void FrameSource::wake() {
+    std::lock_guard<std::mutex> lk{slot_mu_};
+    slot_cv_.notify_all();
 }
 
 }  // namespace fitra::camera

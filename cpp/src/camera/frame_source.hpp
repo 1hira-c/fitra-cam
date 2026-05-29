@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -43,7 +44,14 @@ struct DecodedFrame {
     // when Options::retain_bgr is enabled (calibration recording tap).
     cv::Mat                              bgr;
     std::uint64_t                        seq{0};
-    std::chrono::steady_clock::time_point captured_at{};
+    std::chrono::steady_clock::time_point captured_at{};  // t_capture (V4L2 DQBUF)
+    // Per-stage latency timestamps (steady_clock), set on the per-camera
+    // worker as each stage completes. Skipped stages are filled with the
+    // previous stage's value so deltas stay 0 (never default/epoch, which
+    // would poison the rolling average downstream).
+    std::chrono::steady_clock::time_point t_decode{};   // after JPEG/YUYV -> BGR
+    std::chrono::steady_clock::time_point t_detect{};   // after YOLOX block
+    std::chrono::steady_clock::time_point t_prebake{};  // after RTMPose prebake
     std::vector<infer::Bbox>             bboxes;  // empty if no Yolox or no person
     // Pre-baked RTMPose inputs aligned 1:1 with `bboxes`. The chw buffer is a
     // single contiguous block of bboxes.size() * 3*input_h*input_w floats.
@@ -100,6 +108,18 @@ public:
 
     bool try_pop_latest_decoded(DecodedFrame& out);
 
+    // Block until a new decoded frame is available (without consuming it),
+    // `consumer_stop` is set, or `timeout` elapses. Returns true if a fresh
+    // frame is waiting. The caller then consumes it via try_pop_latest_decoded
+    // -- splitting wait-from-consume keeps the central loop's existing Pass-1
+    // poll structure intact. Used by the single-camera event-driven path.
+    bool wait_available(std::atomic<bool>& consumer_stop,
+                        std::chrono::milliseconds timeout);
+
+    // Wake any thread parked in wait_available so a consumer stop flag is
+    // observed immediately. Notifies under the slot lock.
+    void wake();
+
     V4l2Capture&  capture()             { return *capture_; }
     const V4l2Options& options() const  { return capture_->options(); }
     double recv_fps() const             { return capture_->recv_fps(); }
@@ -124,6 +144,7 @@ private:
     std::vector<infer::Bbox> cached_bboxes_;
 
     mutable std::mutex          slot_mu_;
+    std::condition_variable     slot_cv_;
     std::optional<DecodedFrame> latest_;
     std::uint64_t               last_returned_seq_ = 0;
 };

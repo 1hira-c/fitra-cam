@@ -74,6 +74,9 @@ void MultiCameraDriver::set_skeleton3d_tap(Skeleton3DTapFn fn) {
 void MultiCameraDriver::stop() {
     if (!worker_.joinable() && sources_.empty()) return;
     stop_.store(true);
+    // The loop may be parked in sources_[0]->wait_available; wake it so stop_
+    // is observed without waiting out the timeout. Order: flag -> wake -> join.
+    for (auto& s : sources_) if (s) s->wake();
     if (worker_.joinable()) worker_.join();
     for (auto& s : sources_) s->stop();
 }
@@ -91,6 +94,12 @@ void MultiCameraDriver::loop() {
     int    iter_count = 0;
     double sum_poll_ms = 0.0, sum_rtm_ms = 0.0, sum_snap_ms = 0.0;
     int    sum_reqs = 0;
+    // E2E per-stage frame-age accumulators (capture-relative, summed per
+    // pending camera-frame; divided by sum_frames at flush). Distinct from
+    // the central thread's own poll/rtm/snap wall time above.
+    double sum_cap_dec = 0.0, sum_dec_det = 0.0, sum_det_bake = 0.0;
+    double sum_bake_pose = 0.0, sum_pose_pub = 0.0, sum_cap_pub = 0.0;
+    long   sum_frames = 0;
     auto   stats_anchor = std::chrono::steady_clock::now();
     std::vector<bool> warned_missing_prebake(sources_.size(), false);
     const std::size_t rtmpose_per_item =
@@ -159,7 +168,17 @@ void MultiCameraDriver::loop() {
         }
 
         if (pending.empty()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            // Single-camera: block until the sole source publishes a new
+            // decoded frame (event-driven; removes the fixed 2ms poll tax and
+            // its jitter). wait_available doesn't consume -- the next Pass-1
+            // iteration picks it up via try_pop_latest_decoded.
+            // Multi-camera keeps the short poll: a shared wakeup across N
+            // sources is left as a follow-up (see design doc).
+            if (sources_.size() == 1) {
+                sources_[0]->wait_available(stop_, std::chrono::milliseconds(100));
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
             continue;
         }
         auto t_after_poll = std::chrono::steady_clock::now();
@@ -180,6 +199,17 @@ void MultiCameraDriver::loop() {
             auto& cs       = per_cam_[pc.idx];
             const auto& df = latest_per_cam_[pc.idx];
             update_stats(cs, now, df.captured_at);
+
+            // E2E per-stage deltas for this frame. t_pose = t_after_rtm (batched
+            // RTMPose finished), t_publish = now. bake->pose folds in the slot
+            // wait + central poll, which is exactly the inter-thread latency.
+            sum_cap_dec   += std::chrono::duration<double, std::milli>(df.t_decode  - df.captured_at).count();
+            sum_dec_det   += std::chrono::duration<double, std::milli>(df.t_detect  - df.t_decode).count();
+            sum_det_bake  += std::chrono::duration<double, std::milli>(df.t_prebake - df.t_detect).count();
+            sum_bake_pose += std::chrono::duration<double, std::milli>(t_after_rtm  - df.t_prebake).count();
+            sum_pose_pub  += std::chrono::duration<double, std::milli>(now          - t_after_rtm).count();
+            sum_cap_pub   += std::chrono::duration<double, std::milli>(now          - df.captured_at).count();
+            ++sum_frames;
 
             CameraSnapshot snap;
             snap.id  = static_cast<int>(pc.idx);
@@ -227,9 +257,22 @@ void MultiCameraDriver::loop() {
                           static_cast<double>(sum_reqs) / iter_count,
                           sum_snap_ms / iter_count);
             FITRA_LOG_INFO("{}", buf);
+            if (sum_frames > 0) {
+                double n = static_cast<double>(sum_frames);
+                char ebuf[256];
+                std::snprintf(ebuf, sizeof(ebuf),
+                              "e2e_ms cap->dec=%.2f dec->det=%.2f det->bake=%.2f "
+                              "bake->pose=%.2f pose->pub=%.2f | cap->pub=%.2f",
+                              sum_cap_dec / n, sum_dec_det / n, sum_det_bake / n,
+                              sum_bake_pose / n, sum_pose_pub / n, sum_cap_pub / n);
+                FITRA_LOG_INFO("{}", ebuf);
+            }
             iter_count = 0;
             sum_poll_ms = sum_rtm_ms = sum_snap_ms = 0.0;
             sum_reqs = 0;
+            sum_cap_dec = sum_dec_det = sum_det_bake = 0.0;
+            sum_bake_pose = sum_pose_pub = sum_cap_pub = 0.0;
+            sum_frames = 0;
             stats_anchor = t_after_snap;
         }
     }
@@ -349,6 +392,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     Skeleton3DSnapshot out;
     out.seq = tri_processed_;
     out.ts = wall_now;
+    out.t_capture_oldest = min_ts;
     if (tri.valid_joints > 0) {
         out.persons.push_back(skel);
     }
