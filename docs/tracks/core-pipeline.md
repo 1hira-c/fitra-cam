@@ -33,6 +33,13 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — (設計) MJPEG GPU デコード (HW NVJPEG) を新目標化
+E2E レイテンシ調査中に「MJPEG の CPU decode (~6.7ms) を GPU に逃がす」目標が派生。実機調査で
+CUDA `nvjpeg.h` は未搭載・**Jetson MMAPI `NvJPEGDecoder` が唯一の HW 経路**と確定（出力は YUV、
+MMAPI common-class ソースの取り込みが要）。`--pixel-format nvjpeg` 追加で段階導入する設計を起票。
+実装は未着手 (別コミット予定)。
+→ [design/core-pipeline-nvjpeg-decode.md](../design/core-pipeline-nvjpeg-decode.md)
+
 ### 2026-05-29 — E2E レイテンシ計測基盤 + YUYV 切替 + sleep 除去 + VR イベント駆動
 ステージ別レイテンシ TS を `DecodedFrame`/`Skeleton3DSnapshot` に inline 化し、central loop の
 3 秒 breakdown を `cap→dec/dec→det/det→bake/bake→pose/pose→pub` 拡張、VR 側に
