@@ -151,9 +151,14 @@ void TrackerExtractor::run_loop() {
             raw_valid[i] = raw_trackers[i].valid;
         }
 
+        // Frame-rate-independent smoothing: pass the real step dt and the
+        // nominal cadence so the time constant is constant regardless of source
+        // rate. Fixed-rate mode passes dt_s == nominal_dt_s (behavior unchanged);
+        // event-driven mode passes the measured interval so high-fps frames get
+        // proportionally gentler per-step smoothing instead of over-damping.
         auto trackers = raw_trackers;
-        apply_quat_smoothing(trackers, prev_quat_, opts_.quat_smooth);
-        apply_pos_smoothing (trackers, prev_pos_,  opts_.pos_smooth);
+        apply_quat_smoothing(trackers, prev_quat_, opts_.quat_smooth, dt_s, nominal_dt_s);
+        apply_pos_smoothing (trackers, prev_pos_,  opts_.pos_smooth,  dt_s, nominal_dt_s);
 
         // ------ Per-tracker rolling stats ------------------------------
         SlimeTrackerStats stats_out{};

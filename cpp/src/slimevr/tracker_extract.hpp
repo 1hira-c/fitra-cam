@@ -87,20 +87,29 @@ std::array<SlimeTracker, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel);
 
 // Per-tracker quaternion exponential smoothing via slerp.
-//   effective_alpha_i = base_alpha · curr_i.roll_confidence
+//   alpha_rate       = 1 - (1-base_alpha)^(dt_s/nominal_dt_s)   (frame-rate indep.)
+//   effective_alpha_i = alpha_rate · curr_i.roll_confidence
 //   curr_i ← slerp(prev_i, curr_i, effective_alpha_i)
-// base_alpha ∈ [0, 1]. 0 = use prev, 1 = use curr. Confidence < 1 throttles the
-// update, so a low-confidence roll measurement decays toward the previous
-// orientation instead of injecting noise. Invalid trackers keep prev unchanged
-// (curr is replaced by prev so the publisher can still see a stable quat).
-// Updates `prev_quat` in place with the smoothed values.
+// base_alpha ∈ [0, 1] is the per-step weight tuned at the nominal cadence
+// (nominal_dt_s = 1/extract_rate_hz). The dt_s/nominal_dt_s exponent makes the
+// wall-clock smoothing time constant independent of the actual frame rate, so
+// the event-driven extractor (variable source rate) neither over- nor
+// under-smooths vs the fixed-rate path. When dt_s == nominal_dt_s (or either is
+// <= 0, the default) alpha_rate == base_alpha, i.e. the fixed-rate behavior is
+// unchanged. Confidence < 1 throttles the update so a low-confidence roll
+// measurement decays toward prev instead of injecting noise. Invalid trackers
+// keep prev unchanged. Updates `prev_quat` in place with the smoothed values.
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
-                          float base_alpha);
+                          float base_alpha,
+                          float dt_s = 0.0f, float nominal_dt_s = 0.0f);
 
 // Per-tracker position exponential moving average.
-//   curr_i.pos ← prev_pos_i + base_alpha · (curr_i.pos − prev_pos_i)
-// base_alpha ∈ [0, 1]. 0 = freeze (prev forever), 1 = no smoothing.
+//   alpha = 1 - (1-base_alpha)^(dt_s/nominal_dt_s)   (frame-rate independent)
+//   curr_i.pos ← prev_pos_i + alpha · (curr_i.pos − prev_pos_i)
+// base_alpha ∈ [0, 1]. 0 = freeze (prev forever), 1 = no smoothing. dt_s /
+// nominal_dt_s make the time constant rate-independent (see apply_quat_smoothing);
+// defaults (<=0) reduce to plain base_alpha for the fixed-rate path.
 //
 // Unlike apply_quat_smoothing, this does NOT modulate the alpha by
 // roll_confidence — pos noise (camera triangulation reprojection error /
@@ -114,7 +123,8 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
 // same architectural invariant as the quat path.
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
-                         float base_alpha);
+                         float base_alpha,
+                         float dt_s = 0.0f, float nominal_dt_s = 0.0f);
 
 namespace detail {
 // Build a (right, up, forward) → wxyz quaternion via Shoemake's matrix-to-quat.
