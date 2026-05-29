@@ -412,10 +412,31 @@ extract_trackers(const infer::Skeleton3D& skel) {
     return out;
 }
 
+namespace {
+// Frame-rate-independent EMA alpha. `base_alpha` is the per-step weight tuned at
+// `nominal_dt_s` (= 1/extract_rate_hz). For an actual step of `dt_s` the
+// effective weight is 1 - (1-base_alpha)^(dt_s/nominal_dt_s), so the wall-clock
+// response (time constant) is the same regardless of how fast frames arrive.
+//   * dt_s == nominal_dt_s  -> returns base_alpha exactly (fixed-rate path is
+//     byte-for-byte unchanged).
+//   * higher rate (dt_s < nominal) -> smaller per-step alpha (more, gentler
+//     steps) so the event-driven path no longer over-smooths at high fps.
+//   * a long post-idle gap (dt_s >> nominal) -> alpha -> 1 (snap to current,
+//     don't keep trusting a stale prev).
+float rate_adjust_alpha(float base_alpha, float dt_s, float nominal_dt_s) {
+    base_alpha = std::clamp(base_alpha, 0.0f, 1.0f);
+    if (base_alpha <= 0.0f) return 0.0f;
+    if (base_alpha >= 1.0f) return 1.0f;
+    if (!(nominal_dt_s > 0.0f) || !(dt_s > 0.0f)) return base_alpha;
+    const float ratio = dt_s / nominal_dt_s;
+    return 1.0f - std::pow(1.0f - base_alpha, ratio);
+}
+}  // namespace
+
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
-                          float base_alpha) {
-    base_alpha = std::clamp(base_alpha, 0.0f, 1.0f);
+                          float base_alpha, float dt_s, float nominal_dt_s) {
+    const float alpha_rate = rate_adjust_alpha(base_alpha, dt_s, nominal_dt_s);
     for (std::size_t i = 0; i < kTrackerCount; ++i) {
         if (!curr[i].valid) {
             // Hold previous orientation: publisher will see prev via curr, and
@@ -425,7 +446,7 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
             continue;
         }
         float effective_alpha = std::clamp(
-            base_alpha * curr[i].roll_confidence, 0.0f, 1.0f);
+            alpha_rate * curr[i].roll_confidence, 0.0f, 1.0f);
         if (effective_alpha <= 0.0f) {
             // Fully frozen: keep prev. Don't touch prev_quat.
             curr[i].quat_wxyz = prev_quat[i];
@@ -466,8 +487,8 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
 
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
-                         float base_alpha) {
-    base_alpha = std::clamp(base_alpha, 0.0f, 1.0f);
+                         float base_alpha, float dt_s, float nominal_dt_s) {
+    const float alpha = rate_adjust_alpha(base_alpha, dt_s, nominal_dt_s);
     for (std::size_t i = 0; i < kTrackerCount; ++i) {
         if (!curr[i].valid) {
             // Hold previous position: publisher sees prev via curr, and
@@ -478,9 +499,9 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
         }
         cv::Vec3f& p = prev_pos[i];
         const cv::Vec3f q = curr[i].pos;
-        p[0] += base_alpha * (q[0] - p[0]);
-        p[1] += base_alpha * (q[1] - p[1]);
-        p[2] += base_alpha * (q[2] - p[2]);
+        p[0] += alpha * (q[0] - p[0]);
+        p[1] += alpha * (q[1] - p[1]);
+        p[2] += alpha * (q[2] - p[2]);
         curr[i].pos = p;
     }
 }

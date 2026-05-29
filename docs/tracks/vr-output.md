@@ -37,6 +37,18 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — 出力レイテンシ M1: frame-rate 非依存 smoothing (キーストーン)
+GPU フロントエンドでパイプラインが詰まった後、E2E の支配項は VR 出力の 60Hz×2 ホップ
+(avg +16.7ms / worst ~33ms)。e2e-latency M4 で hop1 をイベント駆動 (opt-in) にしたが、
+smoothing が **dt 非依存の固定 alpha** のままで、ソースレート同期だと高 fps で過平滑になる潜在バグが
+あった。`apply_quat_smoothing`/`apply_pos_smoothing` を `alpha_eff = 1-(1-base_alpha)^(dt/nominal)` の
+frame-rate 非依存形に一般化 (`run_loop` の実測 dt / nominal dt を配線)。固定レート (`dt==nominal`) は
+従来と完全一致 (既定ゼロリスク)、イベント駆動は過平滑解消。これがレート引き上げ・イベント駆動を
+安全にするキーストーン。`test_tracker_extract_pos` に rate-independence テスト追加 (dt/2 の 2 ステップ ==
+dt の 1 ステップ 他)、ctest 9/9。実機 judder / e2e 数値検証 + イベント駆動既定化 + publisher hop2 は
+被写体 (`ik_locked`)+SteamVR 要のため M2 送り。
+→ [design/vr-output-latency.md](../design/vr-output-latency.md)
+
 ### 2026-05-27 — VMT 登録ゲート + sender の Manager 統合
 Driver `WaitForHmd` ハードゲートで Quest 接続前の登録レースを解消 (コントローラ奪取回避)。
 `vmt_hmd_pose_sender` を廃止し `vmt_manager` に吸収 (HMD pose 中継 + 登録 arm + auto-launch)。
