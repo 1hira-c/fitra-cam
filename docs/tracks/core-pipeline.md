@@ -33,6 +33,14 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — (設計) 全 GPU フロントエンドを起票 + EGL→CUDA ブリッジ実証
+nvjpeg の「高 fps では CPU 色変換が床」知見を受け、decode→前処理→TRT を host 経由なしで回す設計を
+起票。make-or-break の **EGL→CUDA interop をスパイクで実証** (NvBufSurfaceMapEglImage→
+cuGraphicsEGLRegisterImage→CUeglFrame の pitch-linear device ptr、cudaMemcpy2D で CPU マップと画素
+一致)。VIC の CUDA メモリ直出力は非対応と確認し EGL 経路採用。RTMPose 前処理は回転なし(crop+scale)で
+CUDA bilinear 吸収可。実装は未着手 (M1〜)。
+→ [design/core-pipeline-gpu-frontend.md](../design/core-pipeline-gpu-frontend.md)
+
 ### 2026-05-29 — MJPEG HW デコード (`--pixel-format nvjpeg`) M1 実装
 Jetson HW NVJPEG ブロックで MJPEG をデコード。libnvjpeg の無バージョン jpeg_* が OpenCV の
 libjpeg-turbo と衝突するため、`NvJPEGDecoder` + `NvBufSurfTransform` を**独立 .so
