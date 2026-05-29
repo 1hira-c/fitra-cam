@@ -86,7 +86,7 @@ void print_help() {
         "  --no-web                  do not start Crow (driver only, for bench)\n"
         "  --width N / --height N    capture size per camera (default 640x480)\n"
         "  --fps N                   requested capture fps (default 30)\n"
-        "  --pixel-format FMT        v4l2 format: mjpeg (default) | yuyv\n"
+        "  --pixel-format FMT        mjpeg (default,CPU) | yuyv | nvjpeg (Jetson HW decode)\n"
         "  --n-buffers N             v4l2 mmap ring depth (default 4, min 2)\n"
         "  --det-frequency N         run YOLOX every N frames (default 10)\n"
         "  --keypoint-format FMT     pose topology: coco17 (17 kpts, default) or halpe26 (26 kpts).\n"
@@ -371,7 +371,9 @@ int main(int argc, char** argv) {
             o.n_buffers = opts.n_buffers;
             o.pixel_format = (opts.pixel_format == "yuyv")
                                  ? fitra::camera::PixFmt::Yuyv
-                                 : fitra::camera::PixFmt::Mjpeg;
+                                 : (opts.pixel_format == "nvjpeg")
+                                       ? fitra::camera::PixFmt::Nvjpeg
+                                       : fitra::camera::PixFmt::Mjpeg;
             auto cap = std::make_unique<fitra::camera::V4l2Capture>(o);
 
             auto yolox_eng = fitra::infer::TrtEngine::from_shared(yolox_shared);

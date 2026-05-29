@@ -45,6 +45,16 @@ void FrameSource::stop() {
 
 void FrameSource::decode_loop() {
     cv::Mat scratch;
+    const bool use_hw = (capture_->options().pixel_format == PixFmt::Nvjpeg);
+    if (use_hw) {
+        // Construct here so the dlopen + HW init happen on this decode thread.
+        try {
+            hw_decoder_ = std::make_unique<NvJpegHwDecoder>();
+        } catch (const std::exception& e) {
+            FITRA_LOG_ERROR("frame_source: HW NVJPEG decoder unavailable: {}", e.what());
+            return;  // decode thread exits; --pixel-format nvjpeg cannot proceed
+        }
+    }
     while (!stop_.load()) {
         Frame raw;
         // Event-driven: block until the capture worker publishes a new frame
@@ -53,7 +63,14 @@ void FrameSource::decode_loop() {
         if (!capture_->wait_pop_latest(raw, stop_, std::chrono::milliseconds(100))) {
             continue;
         }
-        if (capture_->options().pixel_format == PixFmt::Yuyv) {
+        if (use_hw) {
+            // MJPEG bytes decoded on the Jetson HW NVJPEG block (+ VIC color
+            // convert), off the CPU. See camera/nvjpeg_decoder.hpp.
+            if (!hw_decoder_->decode(raw.data.data(), raw.data.size(), scratch)) {
+                FITRA_LOG_WARN("frame_source: HW nvjpeg decode failed for seq={}", raw.seq);
+                continue;
+            }
+        } else if (capture_->options().pixel_format == PixFmt::Yuyv) {
             // Packed YUV422 -> BGR. No entropy decode; just a color convert.
             const auto& o = capture_->options();
             if (static_cast<int>(raw.data.size()) < o.width * o.height * 2) {

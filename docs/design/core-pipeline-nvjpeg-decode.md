@@ -103,21 +103,41 @@ NvBufSurfTransform は crop+scale も担えるので prebake warpAffine 吸収 (
 ## Milestone (改訂)
 - **M0 (完了, スパイク)**: 実機で HW decode 動作・レイテンシ・libjpeg ABI 衝突と
   `RTLD_DEEPBIND` 隔離・Y 一致を検証。recipe 確定。
-- **M1**: 隔離 .so (`libfitra_nvjpeg.so`) を CMake 別ターゲット化 (MMAPI common-class ソース取り込み +
-  `-fvisibility=hidden` + C API)。decodeToFd → NvBufSurfTransform → BGR を .so 内で完結。
-  本体に dlopen ローダ (`RTLD_DEEPBIND|RTLD_LOCAL`) と `JpegDecoder` HW 実装を追加、
-  `--pixel-format nvjpeg` 配線。**既定 MJPEG CPU 経路 (cv::imdecode) が壊れないことを必ず確認**。
-  `cap→dec` を CPU/YUYV と比較、RTMPose keypoint を CPU decode と照合。
+- **M1 (完了, 2026-05-29)**: 隔離 .so (`libfitra_nvjpeg.so`) を CMake 別ターゲット化
+  (MMAPI common-class ソース取り込み + `-fvisibility=hidden` + C API、RPATH で nvidia/tegra 解決、
+  `main` と同ディレクトリ出力)。decodeToFd → NvBufSurfTransform(RGBA) → BGR を .so 内で完結
+  (`fitra_nvjpeg_iso.cpp`)。本体に dlopen ローダ `NvJpegHwDecoder`
+  (`camera/nvjpeg_decoder.{hpp,cpp}`, `RTLD_DEEPBIND|RTLD_LOCAL`) を追加、`frame_source` decode 分岐
+  + `--pixel-format nvjpeg` 配線 (capture は MJPEG のまま)。下記実測参照。
 - **M2**: NvBufSurfTransform の crop+scale で prebake warpAffine 吸収を狙う (回転有無を要確認)。
   `det→bake` も含めた短縮を計測。
 - **M3**: NvBuffer プール化 + バッチ（複数カメラ同時 decode）で multi-cam スループット確認。
 
-## 検証
-- ビルド: MMAPI ソース取り込み後も `cmake --build` クリーン、既存 ctest 維持。
-- correctness: 同一 MJPEG フレームで HW decode vs CPU `cv::imdecode` の RTMPose keypoint L2 を比較
-  （許容内か）。色変換の YUV サブサンプリング差に注意。
-- レイテンシ: `core-pipeline-e2e-latency.md` の計測基盤 (`cap→dec` / `cap→pub`) で
-  CPU MJPEG / YUYV / HW nvjpeg の 3 者比較表を作る。
+## 検証 (M1 実測, 2026-05-29)
+
+ビルド: `cmake --build` クリーン、ctest 9/9 pass。`libfitra_nvjpeg.so` は `fitra_nvjpeg_*` のみ
+export (jpeg_* 隠蔽確認)、RPATH で依存解決。
+
+**回帰チェック (最重要)**: 同一バイナリで `--pixel-format mjpeg` (cv::imdecode) が decode 失敗 0 件で
+正常動作 → dlopen 隔離が効き既定経路を壊していない。クリーン停止: nvjpeg/mjpeg とも SIGINT で
+~0.3s 終了 (ハングなし)。
+
+correctness: 同一 640×480 フレームで HW decode(decodeToFd+NvBufSurfTransform→BGR) vs CPU
+`cv::imdecode` の **meanAbsDiff B=0.70/G=0.31/R=0.46 (max22)** = 実用上一致 (max22 はチロマ補間の
+丸め差)。
+
+レイテンシ (単一カメラ 640×480@30, `--bench-fake-bbox`, yolox_s.fp16+rtmpose_m.fp16, 定常):
+
+| 経路 | cap→dec | cap→pub | recv fps | 備考 |
+|---|---|---|---|---|
+| mjpeg (CPU libjpeg-turbo) | 6.7ms | 22.5ms | 30 | CPU で entropy decode |
+| yuyv (非圧縮) | 0.95ms | 17.1ms | 30 | decode 不要だが USB 帯域大 |
+| **nvjpeg (HW)** | **4.7ms** | **20.7ms** | 30 | MJPEG 帯域維持・CPU を entropy decode から解放 |
+
+**所見**: 単一カメラの E2E 短縮は mjpeg-CPU 比 −1.8ms と中庸 (HW decode 0.9ms 自体は速いが、
+NvBufSurfTransform + map sync + RGBA→BGR の CPU repack が乗る; cap→dec はさらに slot 待ちを含む)。
+**真の価値は CPU オフロード** (entropy decode が HW ブロックへ) で、複数カメラ時に CPU 余力として効く
+見込み。純レイテンシ最小は単一カメラなら依然 YUYV。
 
 ## 残課題 / リスク
 - **dlopen 隔離の本体組み込み**: `.so` を CMake で別ターゲット化し、本体は実行時 dlopen。
@@ -125,5 +145,8 @@ NvBufSurfTransform は crop+scale も担えるので prebake warpAffine 吸収 (
 - NvBuffer / DMA-buf FD のライフサイクルと SPSC slot (size 1, drop-old) の整合（いつ閉じる/コピー）。
 - RTMPose prebake の warpAffine が回転を含むか（含むと NvBufSurfTransform 吸収が不可）。
 - HW NVJPEG ブロックは 1 基。複数カメラで decode が直列化しないか（バッチ/並列度の確認）。
-- 色変換は **GPU NvBufSurfTransform に寄せる**（手動 CPU 変換はプレーン意味論/レンジで脆いと判明）。
-- 非 Jetson 環境ではこの .so をビルド対象から外すガードが要る（MMAPI 前提）。
+- 色変換は **GPU NvBufSurfTransform に寄せ済み**（手動 CPU 変換はプレーン意味論/レンジで脆いと判明）。
+  ただし最終の **RGBA→BGR repack が CPU** (307k px/frame)。M2 で BGRx 直出し or GPU 完結 or
+  RTMPose 入力を 4ch 化して repack 除去を検討 (cap→dec をさらに削れる)。
+- 非 Jetson 環境ではこの .so をビルド対象から外すガード済み (`EXISTS NvJpegDecoder.h` 判定、
+  CMake `FITRA_HAVE_NVJPEG`)。.so 不在時は dlopen 失敗 → 起動時エラー (既定 mjpeg は無影響)。

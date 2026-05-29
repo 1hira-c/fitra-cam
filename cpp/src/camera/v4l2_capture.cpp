@@ -45,10 +45,12 @@ void V4l2Capture::start() {
     fd_ = ::open(opts_.device_path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (fd_ < 0) throw_errno("open(" + opts_.device_path + ")");
 
-    // Set pixel format (MJPEG or YUYV).
+    // Set pixel format. Nvjpeg captures the same MJPEG stream as Mjpeg; only
+    // the downstream decode differs (HW NVJPEG vs CPU cv::imdecode).
     const bool want_yuyv = (opts_.pixel_format == PixFmt::Yuyv);
     const __u32 want_fourcc = want_yuyv ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
-    const char* fmt_name    = want_yuyv ? "YUYV" : "MJPG";
+    const char* fmt_name    = want_yuyv ? "YUYV"
+                            : (opts_.pixel_format == PixFmt::Nvjpeg ? "MJPG(HW)" : "MJPG");
     v4l2_format fmt{};
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     fmt.fmt.pix.width       = opts_.width;

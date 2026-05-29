@@ -31,8 +31,9 @@ namespace fitra::camera {
 
 // Raw payload encoding of a captured Frame.
 enum class PixFmt {
-    Mjpeg,  // compressed JPEG; decode via cv::imdecode
-    Yuyv,   // packed YUV422 (V4L2_PIX_FMT_YUYV); decode via cv::cvtColor
+    Mjpeg,   // compressed JPEG; decode via cv::imdecode (CPU)
+    Yuyv,    // packed YUV422 (V4L2_PIX_FMT_YUYV); decode via cv::cvtColor
+    Nvjpeg,  // captured as MJPEG, decoded on the Jetson HW NVJPEG block (GPU/VIC)
 };
 
 struct Frame {

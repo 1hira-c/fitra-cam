@@ -33,6 +33,14 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — MJPEG HW デコード (`--pixel-format nvjpeg`) M1 実装
+Jetson HW NVJPEG ブロックで MJPEG をデコード。libnvjpeg の無バージョン jpeg_* が OpenCV の
+libjpeg-turbo と衝突するため、`NvJPEGDecoder` + `NvBufSurfTransform` を**独立 .so
+(`libfitra_nvjpeg.so`)** に隔離し本体から `dlopen(RTLD_DEEPBIND|RTLD_LOCAL)`。既定 mjpeg(CPU) 経路は
+非リンクで無影響。実測 (単一カメラ 640×480@30): cap→pub mjpeg 22.5 / yuyv 17.1 / **nvjpeg 20.7ms**、
+色は CPU decode と meanAbsDiff<1。真価は CPU を entropy decode から解放する点 (multi-cam 向け)。
+→ [design/core-pipeline-nvjpeg-decode.md](../design/core-pipeline-nvjpeg-decode.md)
+
 ### 2026-05-29 — (設計) MJPEG GPU デコード (HW NVJPEG) を新目標化
 E2E レイテンシ調査中に「MJPEG の CPU decode (~6.7ms) を GPU に逃がす」目標が派生。実機調査で
 CUDA `nvjpeg.h` は未搭載・**Jetson MMAPI `NvJPEGDecoder` が唯一の HW 経路**と確定（出力は YUV、

@@ -361,8 +361,9 @@ void validate_options(const MainOptions& opts) {
     if (opts.cam_paths[0].empty() || opts.det_engine.empty() || opts.pose_engine.empty()) {
         fail("missing required option (need --cam0 + --det-engine + --pose-engine)");
     }
-    if (opts.pixel_format != "mjpeg" && opts.pixel_format != "yuyv") {
-        fail("--pixel-format must be \"mjpeg\" or \"yuyv\"");
+    if (opts.pixel_format != "mjpeg" && opts.pixel_format != "yuyv"
+        && opts.pixel_format != "nvjpeg") {
+        fail("--pixel-format must be \"mjpeg\", \"yuyv\", or \"nvjpeg\"");
     }
     if (opts.n_buffers < 2) {
         fail("--n-buffers must be >= 2 (driver needs at least 2 to pipeline)");

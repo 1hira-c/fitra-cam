@@ -32,6 +32,7 @@
 #include <opencv2/core.hpp>
 
 #include "camera/jpeg_decoder.hpp"
+#include "camera/nvjpeg_decoder.hpp"
 #include "camera/v4l2_capture.hpp"
 #include "infer/rtmpose.hpp"
 #include "infer/types.hpp"
@@ -136,6 +137,9 @@ private:
     infer::RtmPose::Options       rtmpose_opts_{};
 
     JpegDecoder            decoder_;
+    // HW NVJPEG decoder, created lazily on the decode thread when the capture
+    // pixel format is Nvjpeg. nullptr for the mjpeg/yuyv paths.
+    std::unique_ptr<NvJpegHwDecoder> hw_decoder_;
     std::thread            worker_;
     std::atomic<bool>      stop_{false};
 
