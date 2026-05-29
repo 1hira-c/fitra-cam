@@ -43,6 +43,24 @@ public:
 
     bool egl_enabled() const { return egl_mode_; }
 
+    // All-GPU front-end (M2). device_capable() is true when the loaded .so
+    // exports the EGL/CUDA device entry points, so the per-camera worker can
+    // feed the RTMPose input straight from device memory.
+    bool device_capable() const { return decode_cuda_ && preprocess_from_last_; }
+
+    // Decode into `out_bgr` (for YOLOX / calibration) AND retain the RGBA CUDA
+    // device buffer of the same frame so preprocess_into() can run the GPU
+    // preprocess without re-decoding. Returns true on success.
+    bool decode_keep_device(const std::uint8_t* jpeg, std::size_t bytes, cv::Mat& out_bgr);
+
+    // Run the RTMPose preprocess kernel from the LAST decode_keep_device frame
+    // into `dst_chw_dev` (device, 3*out_h*out_w floats), using the inverse
+    // affine M_inv6 and BGR ImageNet mean/inv_std (3 each). Returns true on
+    // success. Synchronizes (the buffer is ready on return).
+    bool preprocess_into(const double* M_inv6, int out_w, int out_h,
+                         const float* mean_bgr, const float* inv_std_bgr,
+                         float* dst_chw_dev);
+
 private:
     void* lib_    = nullptr;  // dlopen handle for libfitra_nvjpeg.so
     void* handle_ = nullptr;  // per-thread decoder handle inside the .so
@@ -57,6 +75,9 @@ private:
                         int*, int*, int*, void**,
                         const unsigned char**, int*,
                         int, double*, double*)                               = nullptr;
+    // Run preprocess kernel from the last decode into a device CHW buffer.
+    int (*preprocess_from_last_)(void*, const double*, int, int,
+                                 const float*, const float*, float*)         = nullptr;
     void (*destroy_)(void*)                                                  = nullptr;
 
     bool          egl_mode_   = false;  // FITRA_NVJPEG_EGL=1 and decode_cuda_ present

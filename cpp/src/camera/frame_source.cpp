@@ -4,11 +4,47 @@
 #include <chrono>
 #include <utility>
 
+#include <cuda_runtime_api.h>
 #include <opencv2/imgproc.hpp>
 
 #include "util/logging.hpp"
 
 namespace fitra::camera {
+
+namespace {
+// BGR ImageNet mean / inverse-std for the RTMPose preprocess kernel. Must match
+// the constants in infer/rtmpose.cpp (preprocess_to_blob).
+constexpr float kMeanBgr[3]   = {103.53f, 116.28f, 123.675f};
+constexpr float kInvStdBgr[3] = {1.0f / 57.375f, 1.0f / 57.12f, 1.0f / 58.395f};
+}  // namespace
+
+DeviceChwPool::DeviceChwPool() : state_{std::make_shared<State>()} {}
+
+DeviceChwPool::State::~State() {
+    for (auto& b : free)
+        if (b.ptr) cudaFree(b.ptr);
+}
+
+std::shared_ptr<DeviceChwBuf> DeviceChwPool::acquire(std::size_t floats) {
+    DeviceChwBuf buf;
+    {
+        std::lock_guard<std::mutex> lk{state_->mu};
+        for (auto it = state_->free.begin(); it != state_->free.end(); ++it) {
+            if (it->capacity >= floats) { buf = *it; state_->free.erase(it); break; }
+        }
+    }
+    if (!buf.ptr) {
+        if (cudaMalloc(reinterpret_cast<void**>(&buf.ptr),
+                       floats * sizeof(float)) != cudaSuccess)
+            return nullptr;
+        buf.capacity = floats;
+    }
+    auto st = state_;  // keep pool state alive as long as any buffer is out
+    return std::shared_ptr<DeviceChwBuf>(new DeviceChwBuf(buf), [st](DeviceChwBuf* b) {
+        { std::lock_guard<std::mutex> lk{st->mu}; st->free.push_back(*b); }
+        delete b;
+    });
+}
 
 FrameSource::FrameSource(std::unique_ptr<V4l2Capture> capture,
                          std::unique_ptr<infer::Yolox> yolox,
@@ -54,6 +90,14 @@ void FrameSource::decode_loop() {
             FITRA_LOG_ERROR("frame_source: HW NVJPEG decoder unavailable: {}", e.what());
             return;  // decode thread exits; --pixel-format nvjpeg cannot proceed
         }
+        // All-GPU front-end (M2): when the .so exposes the device entry points
+        // and we are prebaking pose, run the RTMPose preprocess on the GPU
+        // straight from the EGL-bridged decode output (no per-person CPU warp,
+        // no H2D for the pose input). Falls back per-frame if a buffer can't be
+        // acquired.
+        device_pose_ = rtmpose_enabled_ && hw_decoder_->device_capable();
+        if (device_pose_)
+            FITRA_LOG_INFO("frame_source: all-GPU RTMPose preprocess enabled");
     }
     while (!stop_.load()) {
         Frame raw;
@@ -65,8 +109,14 @@ void FrameSource::decode_loop() {
         }
         if (use_hw) {
             // MJPEG bytes decoded on the Jetson HW NVJPEG block (+ VIC color
-            // convert), off the CPU. See camera/nvjpeg_decoder.hpp.
-            if (!hw_decoder_->decode(raw.data.data(), raw.data.size(), scratch)) {
+            // convert), off the CPU. See camera/nvjpeg_decoder.hpp. The device
+            // path additionally retains the RGBA CUDA buffer for the GPU
+            // preprocess below; both produce the same BGR `scratch` (still
+            // needed by YOLOX / calibration).
+            const bool ok = device_pose_
+                ? hw_decoder_->decode_keep_device(raw.data.data(), raw.data.size(), scratch)
+                : hw_decoder_->decode(raw.data.data(), raw.data.size(), scratch);
+            if (!ok) {
                 FITRA_LOG_WARN("frame_source: HW nvjpeg decode failed for seq={}", raw.seq);
                 continue;
             }
@@ -144,18 +194,48 @@ void FrameSource::decode_loop() {
         }
 
         if (rtmpose_enabled_ && !df.bboxes.empty()) {
-            // Preprocess each (frame, bbox) into the contiguous CHW block
-            // here on the per-camera worker thread, shifting the dominant
-            // CPU cost off the central inference thread.
             const std::size_t per_item =
                 infer::RtmPose::blob_floats_per_item(rtmpose_opts_);
-            df.chw_concat.resize(df.bboxes.size() * per_item);
-            df.M_invs.resize(df.bboxes.size());
-            for (std::size_t i = 0; i < df.bboxes.size(); ++i) {
-                infer::RtmPose::preprocess_to_blob(
-                    rtmpose_opts_, scratch, df.bboxes[i],
-                    df.chw_concat.data() + i * per_item,
-                    df.M_invs[i]);
+            const std::size_t nb = df.bboxes.size();
+
+            // All-GPU path: run the preprocess kernel from the retained RGBA
+            // device buffer into a pooled device CHW buffer. The CPU does only
+            // the (cheap) inverse-affine per bbox; no per-person warp/normalize.
+            bool gpu_done = false;
+            if (device_pose_) {
+                if (auto buf = chw_pool_.acquire(nb * per_item)) {
+                    df.M_invs.resize(nb);
+                    bool ok = true;
+                    for (std::size_t i = 0; i < nb; ++i) {
+                        df.M_invs[i] = infer::RtmPose::compute_m_inv(rtmpose_opts_, df.bboxes[i]);
+                        if (!hw_decoder_->preprocess_into(
+                                df.M_invs[i].ptr<double>(),
+                                rtmpose_opts_.input_w, rtmpose_opts_.input_h,
+                                kMeanBgr, kInvStdBgr, buf->ptr + i * per_item)) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if (ok) { df.chw_dev = std::move(buf); gpu_done = true; }
+                }
+                if (!gpu_done) {
+                    FITRA_LOG_WARN("frame_source: GPU preprocess failed seq={}, "
+                                   "falling back to CPU prebake", raw.seq);
+                    df.M_invs.clear();
+                }
+            }
+
+            // CPU prebake (default path, and fallback for the GPU path):
+            // warp + normalize + HWC->CHW on this per-camera worker thread.
+            if (!gpu_done) {
+                df.chw_concat.resize(nb * per_item);
+                df.M_invs.resize(nb);
+                for (std::size_t i = 0; i < nb; ++i) {
+                    infer::RtmPose::preprocess_to_blob(
+                        rtmpose_opts_, scratch, df.bboxes[i],
+                        df.chw_concat.data() + i * per_item,
+                        df.M_invs[i]);
+                }
             }
         }
         // t_prebake closes the per-camera CPU stage. When the prebake block

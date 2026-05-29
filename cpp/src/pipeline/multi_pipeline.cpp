@@ -157,9 +157,16 @@ void MultiCameraDriver::loop() {
                 continue;
             }
             pc.person_count = cam_df.bboxes.size();
+            // All-GPU front-end: when the worker produced a device CHW buffer,
+            // point the request at device memory (TRT is fed via D2D, no H2D);
+            // otherwise use the host CPU-prebake blob.
+            const bool dev = static_cast<bool>(cam_df.chw_dev);
             for (std::size_t bi = 0; bi < cam_df.bboxes.size(); ++bi) {
                 infer::RtmPose::PrebakedRequest pr;
-                pr.chw   = cam_df.chw_concat.data() + bi * rtmpose_per_item;
+                if (dev)
+                    pr.chw_dev = cam_df.chw_dev->ptr + bi * rtmpose_per_item;
+                else
+                    pr.chw     = cam_df.chw_concat.data() + bi * rtmpose_per_item;
                 pr.M_inv = cam_df.M_invs[bi];
                 pr.bbox  = cam_df.bboxes[bi];
                 reqs.push_back(pr);

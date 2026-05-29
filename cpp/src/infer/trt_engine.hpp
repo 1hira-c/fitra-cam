@@ -80,6 +80,13 @@ public:
     // --- IO transfer helpers ---
     void copy_input_from_host(const std::string& name,
                               const void* host, std::size_t bytes);
+    // Device-to-device copy of one item into a sub-region of an input's device
+    // buffer (all-GPU front-end: the preprocess kernel already produced the CHW
+    // tensor on the device, so this stays on-GPU instead of H2D). Call
+    // set_input_shape() first so the buffer is sized for the full batch.
+    void copy_input_region_from_device(const std::string& name,
+                                       std::size_t dst_offset_bytes,
+                                       const void* src_dev, std::size_t bytes);
     void copy_output_to_host(const std::string& name,
                              void* host, std::size_t bytes);
 

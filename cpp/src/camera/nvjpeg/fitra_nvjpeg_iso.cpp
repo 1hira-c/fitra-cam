@@ -125,7 +125,36 @@ bool ensure_dst(Handle* hd, int w, int h) {
     return true;
 }
 
+// Decode `jpeg` on the HW NVJPEG block, VIC-transform YUV->RGBA into the cached
+// dst surface, and ensure the EGL->CUDA registration is live. On success sets
+// dw/dh and leaves hd->dev_ptr / hd->dev_pitch pointing at the RGBA device
+// buffer. Shared by the M1 (decode_cuda) and M2 (preprocess) entry points.
+bool decode_transform_egl(Handle* hd, const unsigned char* jpeg, unsigned long n,
+                          uint32_t& dw, uint32_t& dh) {
+    int src_fd = -1; uint32_t pf = 0;
+    if (hd->dec->decodeToFd(src_fd, const_cast<unsigned char*>(jpeg), n, pf, dw, dh) < 0)
+        return false;
+    if (!ensure_dst(hd, static_cast<int>(dw), static_cast<int>(dh))) return false;
+
+    NvBufSurf::NvCommonTransformParams tp;
+    std::memset(&tp, 0, sizeof(tp));
+    tp.src_width = dw; tp.src_height = dh; tp.src_top = 0; tp.src_left = 0;
+    tp.dst_width = dw; tp.dst_height = dh; tp.dst_top = 0; tp.dst_left = 0;
+    tp.flag   = (NvBufSurfTransform_Transform_Flag)(NVBUFSURF_TRANSFORM_FILTER);
+    tp.flip   = NvBufSurfTransform_None;
+    tp.filter = NvBufSurfTransformInter_Nearest;
+    if (NvBufSurf::NvTransform(&tp, src_fd, hd->dst_fd) != 0) return false;
+    return ensure_egl(hd);
+}
+
 }  // namespace
+
+// Defined in fitra_nvjpeg_kernels.cu (same .so).
+extern "C" int fitra_nvjpeg_preprocess_launch(
+    const void* rgba_dev, int in_w, int in_h, int in_pitch_bytes,
+    const double* M_inv6, int out_w, int out_h,
+    const float* mean_bgr, const float* inv_std_bgr,
+    float* dst_chw_dev, void* stream);
 
 extern "C" {
 
@@ -197,21 +226,8 @@ int fitra_nvjpeg_decode_cuda(void* handle,
     Handle* hd = static_cast<Handle*>(handle);
     if (!hd || !hd->dec || !jpeg || n == 0) return -1;
 
-    int src_fd = -1; uint32_t pf = 0, dw = 0, dh = 0;
-    if (hd->dec->decodeToFd(src_fd, const_cast<unsigned char*>(jpeg), n, pf, dw, dh) < 0)
-        return -1;
-    if (!ensure_dst(hd, static_cast<int>(dw), static_cast<int>(dh))) return -1;
-
-    NvBufSurf::NvCommonTransformParams tp;
-    std::memset(&tp, 0, sizeof(tp));
-    tp.src_width = dw; tp.src_height = dh; tp.src_top = 0; tp.src_left = 0;
-    tp.dst_width = dw; tp.dst_height = dh; tp.dst_top = 0; tp.dst_left = 0;
-    tp.flag   = (NvBufSurfTransform_Transform_Flag)(NVBUFSURF_TRANSFORM_FILTER);
-    tp.flip   = NvBufSurfTransform_None;
-    tp.filter = NvBufSurfTransformInter_Nearest;
-    if (NvBufSurf::NvTransform(&tp, src_fd, hd->dst_fd) != 0) return -1;
-
-    if (!ensure_egl(hd)) return -1;
+    uint32_t dw = 0, dh = 0;
+    if (!decode_transform_egl(hd, jpeg, n, dw, dh)) return -1;
     NvBufSurfaceSyncForCpu(hd->dst_surf, 0, 0);  // M1 reads RGBA on host for BGR
     const auto& s = hd->dst_surf->surfaceList[0];
     *w          = static_cast<int>(dw);
@@ -244,6 +260,42 @@ int fitra_nvjpeg_decode_cuda(void* handle,
             *dev_mean = -1.0;
         }
     }
+    return 0;
+}
+
+// Run the RTMPose preprocess kernel from the handle's LAST decode_cuda /
+// decode_to_device RGBA output into `dst_chw_dev` (device, 3*out_h*out_w
+// floats). Synchronizes so the result is ready when this returns (the per-camera
+// worker hands the buffer to the central inference thread). M_inv6 / mean_bgr /
+// inv_std_bgr as in fitra_nvjpeg_preprocess_launch. Returns 0 on success.
+__attribute__((visibility("default")))
+int fitra_nvjpeg_preprocess_from_last(void* handle,
+                                      const double* M_inv6, int out_w, int out_h,
+                                      const float* mean_bgr, const float* inv_std_bgr,
+                                      float* dst_chw_dev) {
+    Handle* hd = static_cast<Handle*>(handle);
+    if (!hd || !hd->egl_registered || !hd->dev_ptr || !dst_chw_dev) return -1;
+    if (fitra_nvjpeg_preprocess_launch(hd->dev_ptr, hd->w, hd->h, hd->dev_pitch,
+                                       M_inv6, out_w, out_h, mean_bgr, inv_std_bgr,
+                                       dst_chw_dev, nullptr) != 0)
+        return -1;
+    return (cudaStreamSynchronize(nullptr) == cudaSuccess) ? 0 : -1;
+}
+
+// Decode `jpeg` and expose only the RGBA CUDA device pointer (no CPU map / no
+// sync) -- the pure all-GPU path. Use when the BGR host image is not needed
+// (M3+). For now the worker uses decode_cuda (host map for YOLOX/calib) plus
+// preprocess_from_last, so this is provided for completeness/M3.
+__attribute__((visibility("default")))
+int fitra_nvjpeg_decode_to_device(void* handle, const unsigned char* jpeg,
+                                  unsigned long n, int* w, int* h,
+                                  int* dev_pitch, void** dev) {
+    Handle* hd = static_cast<Handle*>(handle);
+    if (!hd || !hd->dec || !jpeg || n == 0) return -1;
+    uint32_t dw = 0, dh = 0;
+    if (!decode_transform_egl(hd, jpeg, n, dw, dh)) return -1;
+    *w = static_cast<int>(dw); *h = static_cast<int>(dh);
+    *dev_pitch = hd->dev_pitch; *dev = hd->dev_ptr;
     return 0;
 }
 

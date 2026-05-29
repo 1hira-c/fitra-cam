@@ -108,9 +108,27 @@ MJPEG ─VIC/NVJPEG decodeToFd─▶ NvBufSurface(YUV422,NVMM)
     0.058** — worst は OpenCV の固定小数補間 (INTER_BITS=5, 重み 1/32 量子化) の床
     (255·(1/64)/std ≈ 0.07) 以内で、本 float カーネルの方がむしろ高精度。channel order / 幾何バグなら
     diff は 1〜4 オーダーになるので 0.1 を閾値に。ctest 9/9。
-  - **Step B (次)**: `decode_cuda` の device RGBA ptr → カーネル → TRT 入力 device 直結
-    (`trt_engine` に device-input モード追加、batch 各 item を engine 入力バッファ offset へ書く or
-    `setTensorAddress`)。per-cam prebake 経路を device CHW に切替。keypoint L2 を実機/録画で照合し H2D 消滅を確認。
+  - **Step B ✅ (2026-05-29)**: device RGBA ptr → カーネル → TRT 入力 device 直結 + prebake 配線。
+    - `TrtEngine::copy_input_region_from_device` (D2D で入力バッファの offset 領域へ、`set_input_shape`
+      でバッチサイズ確定後に各 item を書く)。`RtmPose::PrebakedRequest.chw_dev` を追加、`run_one_prebaked`
+      は batch が device なら set_input_shape → 各 item D2D → enqueue (H2D なし)。`RtmPose::compute_m_inv`
+      で逆アフィンのみ CPU 算出 (per-person warp/normalize は GPU)。
+    - .so: `decode_transform_egl` を抽出し M1/M2 で共有、`fitra_nvjpeg_preprocess_from_last`
+      (直近 decode の RGBA dev → カーネル → 呼び出し側 device CHW、同期して返す)、
+      `fitra_nvjpeg_decode_to_device` (host map なしの純 device decode、M3 用)。loader に
+      `device_capable` / `decode_keep_device` (BGR + RGBA dev 保持) / `preprocess_into`。
+    - **所有権/レース対策**: `DeviceChwPool` (per-camera)。worker が取得→`DecodedFrame.chw_dev`
+      (`shared_ptr<DeviceChwBuf>`) で central へ。deleter がプール state を生かし続けるので、worker は
+      consumer がまだ保持中のバッファを上書き/解放しない (host の copy-on-pop の device 版)。latest-wins
+      lapping でも安全。device 取得失敗時は per-frame で CPU prebake にフォールバック。
+    - **検証**: `tools/gpu_preprocess_check` に keypoint モード追加 (host `infer` vs device
+      `infer_prebaked` を録画動画で照合)。CHW は mean abs 0.0028 / worst 0.058。confident keypoint
+      (score≥0.5) の device-vs-host L2 = **avg 0.34px / worst 1.18px** (PASS, 閾値 2px)。低スコア
+      keypoint は SimCC 平坦部の argmax がサブビンで飛ぶ FP16 既知特性 (実機 track doc) で、device-path の
+      欠陥ではない (offset/stride バグなら 10〜100px オーダー)。実機 (単一カメラ nvjpeg, fake-bbox):
+      `det→bake` **4.1→1.1ms**、`cap→pub` **~20→~15ms** (per-person CPU warp/normalize と pose H2D が消滅)、
+      30fps 維持、SIGINT 0.52s クリーン終了、ctest 9/9。BGR は YOLOX/calib 用に host map から維持
+      (full-frame RGBA→BGR cvtColor は残置、M3/M4 で除去)。
 - **M3**: **YOLOX 前処理 CUDA カーネル** (letterbox+normalize+HWC→CHW) 同様に device 直結。
 - **M4**: アーキ移行 — Phase 6b の per-cam CPU 前処理を撤去し GPU 経路へ。EGL/CUDA context の
   スレッド親和性、register ライフサイクル、multi-cam の resource キャッシュを整理。

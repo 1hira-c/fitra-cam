@@ -40,6 +40,34 @@
 
 namespace fitra::camera {
 
+// Recyclable device CHW buffer for the all-GPU front-end. Holds the RTMPose
+// preprocess kernel's output (device memory) for one frame's batch of persons.
+struct DeviceChwBuf {
+    float*      ptr      = nullptr;  // CUDA device pointer
+    std::size_t capacity = 0;        // floats
+};
+
+// Per-camera pool of device CHW buffers. A buffer is acquired on the decode
+// worker, handed to the central inference thread inside a DecodedFrame, and
+// recycled when the last shared_ptr referencing it drops. Because the deleter
+// holds the pool state alive, the worker never frees or overwrites a buffer a
+// consumer still holds — the device analogue of the host path's copy-on-pop.
+class DeviceChwPool {
+public:
+    DeviceChwPool();
+    // At least `floats` capacity. nullptr on cudaMalloc failure (caller falls
+    // back to the CPU prebake path).
+    std::shared_ptr<DeviceChwBuf> acquire(std::size_t floats);
+
+private:
+    struct State {
+        std::mutex                mu;
+        std::vector<DeviceChwBuf> free;
+        ~State();  // cudaFree all recycled buffers
+    };
+    std::shared_ptr<State> state_;
+};
+
 struct DecodedFrame {
     // Populated for decode-only sources, and for prebaked RTMPose sources
     // when Options::retain_bgr is enabled (calibration recording tap).
@@ -59,12 +87,17 @@ struct DecodedFrame {
     // Populated when the FrameSource was given a non-null rtmpose_opts.
     std::vector<float>                   chw_concat;
     std::vector<cv::Mat>                 M_invs;
+    // All-GPU front-end: per-frame device CHW (preprocess kernel output),
+    // bboxes.size()*per_item floats contiguous. When set, the central thread
+    // feeds TRT from this device buffer (no H2D) instead of chw_concat.
+    std::shared_ptr<DeviceChwBuf>        chw_dev;
 
     bool has_prebaked_pose_inputs(std::size_t per_item) const {
-        return bboxes.empty()
-            || (per_item > 0
-                && chw_concat.size() == bboxes.size() * per_item
-                && M_invs.size() == bboxes.size());
+        if (bboxes.empty()) return true;
+        if (per_item == 0 || M_invs.size() != bboxes.size()) return false;
+        const std::size_t need = bboxes.size() * per_item;
+        if (chw_dev && chw_dev->capacity >= need) return true;  // device path
+        return chw_concat.size() == need;                       // host path
     }
 };
 
@@ -140,6 +173,10 @@ private:
     // HW NVJPEG decoder, created lazily on the decode thread when the capture
     // pixel format is Nvjpeg. nullptr for the mjpeg/yuyv paths.
     std::unique_ptr<NvJpegHwDecoder> hw_decoder_;
+    // All-GPU front-end: true once the HW decoder is up and exposes the EGL/CUDA
+    // device entry points and RTMPose prebaking is enabled. Set on the worker.
+    bool                   device_pose_ = false;
+    DeviceChwPool          chw_pool_;
     std::thread            worker_;
     std::atomic<bool>      stop_{false};
 

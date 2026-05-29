@@ -33,6 +33,19 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — 全 GPU フロントエンド M2 Step B: device CHW を TRT 入力直結
+前処理カーネル出力を host を介さず TRT 入力に渡す配線。`TrtEngine::copy_input_region_from_device`
+(D2D, offset 対応) + `RtmPose::PrebakedRequest.chw_dev` で `run_one_prebaked` を device バッチ経路化
+(H2D 消滅)。逆アフィンのみ `RtmPose::compute_m_inv` で CPU 算出。.so に `fitra_nvjpeg_preprocess_from_last`
+/ `decode_to_device`、loader に `device_capable`/`decode_keep_device`/`preprocess_into`。レース対策に
+per-camera `DeviceChwPool` (`shared_ptr<DeviceChwBuf>` deleter がプールを生かし、worker は consumer 保持中の
+バッファを触らない = host copy-on-pop の device 版)、取得失敗時は CPU prebake フォールバック。検証:
+`gpu_preprocess_check` の keypoint モードで host `infer` vs device `infer_prebaked` を照合、confident
+keypoint L2 **avg 0.34px / worst 1.18px** (低スコアは FP16 既知の argmax 不安定で除外)。実機 (単一カメラ
+nvjpeg fake-bbox): **det→bake 4.1→1.1ms / cap→pub ~20→~15ms**、30fps 維持、SIGINT 0.52s、ctest 9/9。
+BGR は YOLOX/calib 用に残置 (full-frame cvtColor 除去は M3/M4)。
+→ [design/core-pipeline-gpu-frontend.md](../design/core-pipeline-gpu-frontend.md)
+
 ### 2026-05-29 — 全 GPU フロントエンド M2 Step A: RTMPose 前処理 CUDA カーネル
 前処理 (crop+resize+normalize+HWC→CHW) を GPU 化する `.cu` カーネルを隔離 .so 内に追加
 (`enable_language(CUDA)` を Jetson 分岐で有効化、Orin sm_87)。幾何は CPU が算出する `M_inv` を

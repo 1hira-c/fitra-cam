@@ -76,6 +76,9 @@ NvJpegHwDecoder::NvJpegHwDecoder() {
         void*, const unsigned char*, unsigned long, int*, int*, int*, void**,
         const unsigned char**, int*, int, double*, double*)>(
         ::dlsym(lib_, "fitra_nvjpeg_decode_cuda"));
+    preprocess_from_last_ = reinterpret_cast<int (*)(
+        void*, const double*, int, int, const float*, const float*, float*)>(
+        ::dlsym(lib_, "fitra_nvjpeg_preprocess_from_last"));
     if (const char* e = std::getenv("FITRA_NVJPEG_EGL"); e && *e && std::string(e) != "0") {
         if (decode_cuda_) {
             egl_mode_ = true;
@@ -140,6 +143,34 @@ bool NvJpegHwDecoder::decode(const std::uint8_t* jpeg, std::size_t bytes, cv::Ma
                       static_cast<std::size_t>(pitch));
     cv::cvtColor(rgba_view, out_bgr, cv::COLOR_RGBA2BGR);
     return true;
+}
+
+bool NvJpegHwDecoder::decode_keep_device(const std::uint8_t* jpeg, std::size_t bytes,
+                                         cv::Mat& out_bgr) {
+    if (!handle_ || !decode_cuda_ || !jpeg || bytes == 0) return false;
+    int w = 0, h = 0, dev_pitch = 0, host_pitch = 0;
+    void* dev = nullptr;
+    const unsigned char* rgba = nullptr;
+    // check=0: no regression copy. Always maps the host RGBA so we can build the
+    // BGR image YOLOX / calibration still need; the RGBA device pointer is
+    // retained inside the .so for the following preprocess_into() call.
+    if (decode_cuda_(handle_, jpeg, static_cast<unsigned long>(bytes),
+                     &w, &h, &dev_pitch, &dev, &rgba, &host_pitch,
+                     0, nullptr, nullptr) != 0)
+        return false;
+    if (!rgba || !dev || w <= 0 || h <= 0 || host_pitch < w * 4) return false;
+    cv::Mat rgba_view(h, w, CV_8UC4, const_cast<unsigned char*>(rgba),
+                      static_cast<std::size_t>(host_pitch));
+    cv::cvtColor(rgba_view, out_bgr, cv::COLOR_RGBA2BGR);
+    return true;
+}
+
+bool NvJpegHwDecoder::preprocess_into(const double* M_inv6, int out_w, int out_h,
+                                      const float* mean_bgr, const float* inv_std_bgr,
+                                      float* dst_chw_dev) {
+    if (!handle_ || !preprocess_from_last_) return false;
+    return preprocess_from_last_(handle_, M_inv6, out_w, out_h,
+                                 mean_bgr, inv_std_bgr, dst_chw_dev) == 0;
 }
 
 }  // namespace fitra::camera
