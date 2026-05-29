@@ -203,6 +203,16 @@ void VmtPublisher::send_loop() {
         stats_.disabled_count += disabled_this_bundle;
         stats_.last_send_ms = std::chrono::duration<double, std::milli>(
             std::chrono::system_clock::now().time_since_epoch()).count();
+        if (skel_snap.t_capture_oldest.time_since_epoch().count() != 0) {
+            // Age of the freshest 3D skeleton at send time = end-to-end
+            // capture->send latency. EMA so the stat is readable at a glance.
+            double e2e = std::chrono::duration<double, std::milli>(
+                             now - skel_snap.t_capture_oldest).count();
+            stats_.e2e_capture_to_send_ms =
+                stats_.e2e_capture_to_send_ms == 0.0
+                    ? e2e
+                    : 0.9 * stats_.e2e_capture_to_send_ms + 0.1 * e2e;
+        }
     }
 }
 

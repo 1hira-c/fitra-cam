@@ -1,19 +1,22 @@
 #pragma once
 //
-// Raw V4L2 MJPEG capture for a single camera.
+// Raw V4L2 capture for a single camera (MJPEG or YUYV).
 //
-// Bypasses OpenCV's VideoCapture so we can choose buffer count, decode
-// path, and synchronization explicitly:
-//   - 4 mmap buffers (matches the migration plan's ring size)
+// Bypasses OpenCV's VideoCapture so we can choose pixel format, buffer
+// count, decode path, and synchronization explicitly:
+//   - MJPEG (default) or YUYV (uncompressed) per V4l2Options::pixel_format
+//   - configurable mmap ring depth (default 4; min 2)
 //   - blocking VIDIOC_DQBUF in a worker thread
 //   - latest-frame-wins semantics (drop older frames if the consumer is
 //     behind), mirroring python/scripts/pose_pipeline.py::CameraReader
 //
-// The Frame holds a COPY of the JPEG bytes so the V4L2 buffer can be
-// re-queued immediately.
+// The Frame holds a COPY of the raw payload bytes (compressed JPEG for
+// MJPEG, packed YUV422 for YUYV) so the V4L2 buffer can be re-queued
+// immediately. The consumer branches on `pixel_format` to decode.
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -26,8 +29,15 @@
 
 namespace fitra::camera {
 
+// Raw payload encoding of a captured Frame.
+enum class PixFmt {
+    Mjpeg,   // compressed JPEG; decode via cv::imdecode (CPU)
+    Yuyv,    // packed YUV422 (V4L2_PIX_FMT_YUYV); decode via cv::cvtColor
+    Nvjpeg,  // captured as MJPEG, decoded on the Jetson HW NVJPEG block (GPU/VIC)
+};
+
 struct Frame {
-    std::vector<std::uint8_t> jpeg;
+    std::vector<std::uint8_t> data;  // raw payload (JPEG bytes or packed YUYV)
     std::uint64_t seq{0};
     std::chrono::steady_clock::time_point captured_at{};
 };
@@ -38,6 +48,7 @@ struct V4l2Options {
     int height = 480;
     int fps    = 30;
     int n_buffers = 4;
+    PixFmt pixel_format = PixFmt::Mjpeg;
 };
 
 class V4l2Capture {
@@ -58,6 +69,18 @@ public:
     // If a new frame has arrived since the last call, fill `out` and return
     // true. Otherwise return false (no copy). Thread-safe.
     bool try_pop_latest(Frame& out);
+
+    // Block until a new frame arrives (then fill `out` + return true),
+    // `consumer_stop` is set, or `timeout` elapses (return false). Event-driven
+    // replacement for poll-sleep loops; preserves latest-frame-wins semantics.
+    // `consumer_stop` lets the caller's own stop flag break the wait; pair with
+    // wake() so stop() doesn't have to wait out the timeout.
+    bool wait_pop_latest(Frame& out, std::atomic<bool>& consumer_stop,
+                         std::chrono::milliseconds timeout);
+
+    // Wake any thread parked in wait_pop_latest (e.g. so a consumer's stop
+    // flag is observed immediately). Notifies under the slot lock.
+    void wake();
 
     // Receive rate over the last ~60 frames (instantaneous-ish), Hz.
     double recv_fps() const { return recv_fps_.load(); }
@@ -84,6 +107,7 @@ private:
 
     // latest-frame slot
     mutable std::mutex slot_mu_;
+    std::condition_variable slot_cv_;
     std::optional<Frame> latest_;
     std::uint64_t last_returned_seq_ = 0;
     std::atomic<std::uint64_t> total_received_{0};

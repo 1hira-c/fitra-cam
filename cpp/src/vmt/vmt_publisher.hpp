@@ -59,6 +59,9 @@ struct VmtPublisherStats {
     std::uint64_t disabled_count          = 0; // messages sent with enable=0
     std::uint64_t skipped_invalid_bundles = 0; // bundle skipped: !ik_locked or no data
     double        last_send_ms            = 0.0;
+    // End-to-end latency: age (ms) of the freshest 3D skeleton at the moment
+    // of the last sent bundle (capture -> send). EMA-smoothed.
+    double        e2e_capture_to_send_ms  = 0.0;
 };
 
 class VmtPublisher {

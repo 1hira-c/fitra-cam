@@ -91,7 +91,25 @@ std::vector<Bbox> Yolox::infer(const cv::Mat& frame_bgr) {
     engine_.copy_input_from_host(opts_.input_name, input_blob_.data(), bytes);
     engine_.enqueue();
     engine_.synchronize();
+    return decode_dets(r);
+}
 
+std::vector<Bbox> Yolox::infer_device(
+    const std::function<float(float*, cudaStream_t)>& fill) {
+    // The engine's static input buffer is allocated + address-bound at
+    // construction, so `fill` writes the letterbox CHW directly into it (on the
+    // engine stream) and we enqueue on the same stream — no H2D, no extra sync.
+    const auto& bin = engine_.binding(opts_.input_name);
+    float r = fill(static_cast<float*>(bin.device_ptr), engine_.stream());
+    // fill returns r<=0 to signal a preprocess failure. Do NOT enqueue then —
+    // the engine input would hold stale/garbage data and yield bogus boxes.
+    if (!(r > 0.0f)) return {};
+    engine_.enqueue();
+    engine_.synchronize();
+    return decode_dets(r);
+}
+
+std::vector<Bbox> Yolox::decode_dets(float r) {
     auto dets_shape   = engine_.current_shape(opts_.dets_name);    // (1, N, 5)
     auto labels_shape = engine_.current_shape(opts_.labels_name);  // (1, N)
     if (dets_shape.nbDims != 3 || labels_shape.nbDims != 2) {

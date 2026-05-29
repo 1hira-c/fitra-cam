@@ -30,6 +30,27 @@ set_target_properties(fitra_dump_keypoints PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
+# All-GPU front-end (M2): RTMPose preprocess CUDA kernel correctness vs the CPU
+# preprocess_to_blob reference, over a recorded video. dlopen's
+# libfitra_nvjpeg.so at runtime (no link dependency); Jetson-only.
+if(FITRA_HAVE_NVJPEG)
+    add_executable(fitra_gpu_preprocess_check
+        gpu_preprocess_check.cpp
+    )
+    target_link_libraries(fitra_gpu_preprocess_check PRIVATE
+        fitra_infer
+        opencv_videoio
+        opencv_imgproc
+        opencv_core
+        ${CMAKE_DL_LIBS}
+    )
+    set_target_properties(fitra_gpu_preprocess_check PROPERTIES
+        OUTPUT_NAME "gpu_preprocess_check"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+    )
+    add_dependencies(fitra_gpu_preprocess_check fitra_nvjpeg)
+endif()
+
 # YOLOX engine per-frame latency benchmark.
 add_executable(fitra_det_bench
     det_bench.cpp
@@ -243,6 +264,23 @@ set_target_properties(fitra_test_tracker_extract_pos PROPERTIES
 )
 
 add_test(NAME test_tracker_extract_pos COMMAND fitra_test_tracker_extract_pos)
+
+# Kinematic-tree Kalman: root vs offset state, FK propagation, child
+# skipping when parent uninitialized, missing-run reset.
+add_executable(fitra_test_kalman_chain
+    test_kalman_chain.cpp
+)
+
+target_link_libraries(fitra_test_kalman_chain PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_kalman_chain PROPERTIES
+    OUTPUT_NAME "test_kalman_chain"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_kalman_chain COMMAND fitra_test_kalman_chain)
 
 # `--config PATH`: MainOptions YAML loader, CLI overlay precedence,
 # and validate_options() — pure parser + checks, no TensorRT / CUDA / OpenCV.

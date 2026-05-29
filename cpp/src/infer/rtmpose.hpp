@@ -45,7 +45,13 @@ public:
     // normalize + HWC->CHW step on its own thread (typically the per-camera
     // FrameSource worker). RtmPose only batches the GPU inference + decode.
     struct PrebakedRequest {
-        const float* chw     = nullptr;  // 3*H*W floats
+        const float* chw     = nullptr;  // 3*H*W floats (host); CPU prebake path
+        // All-GPU front-end: 3*H*W floats already on the device (preprocess
+        // kernel output). When set, this item is fed to TRT via device->device
+        // copy and `chw` is ignored. Items are copied independently, so a batch
+        // may freely mix device items and host (`chw`) items — e.g. one camera
+        // on the GPU path and another fallen back to CPU.
+        const float* chw_dev = nullptr;
         cv::Mat      M_inv;              // 2x3 CV_64F inverse affine
         Bbox         bbox{};             // for downstream Person.bbox
     };
@@ -76,6 +82,12 @@ public:
     static std::size_t blob_floats_per_item(const Options& opts) {
         return static_cast<std::size_t>(3) * opts.input_h * opts.input_w;
     }
+
+    // The inverse affine (2x3 CV_64F, dst->src) for one bbox, identical to the
+    // M_inv that preprocess_to_blob returns. Lets the all-GPU front-end compute
+    // the warp geometry on the CPU (cheap) and hand it to the CUDA preprocess
+    // kernel, which then matches cv::warpAffine exactly.
+    static cv::Mat compute_m_inv(const Options& opts, const Bbox& bbox);
 
     const Options& options() const { return opts_; }
 

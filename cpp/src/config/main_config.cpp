@@ -47,6 +47,7 @@ void load_cameras(const YAML::Node& section, MainOptions& out) {
     ensure_map(section, "cameras");
     static const std::set<std::string> allowed{
         "cam0", "cam1", "cam2", "width", "height", "fps",
+        "pixel_format", "n_buffers",
     };
     check_keys(section, allowed, "cameras");
     if (section["cam0"])   out.cam_paths[0] = parse_scalar<std::string>(section["cam0"],   "cameras.cam0");
@@ -55,6 +56,8 @@ void load_cameras(const YAML::Node& section, MainOptions& out) {
     if (section["width"])  out.width  = parse_scalar<int>(section["width"],  "cameras.width");
     if (section["height"]) out.height = parse_scalar<int>(section["height"], "cameras.height");
     if (section["fps"])    out.fps    = parse_scalar<int>(section["fps"],    "cameras.fps");
+    if (section["pixel_format"]) out.pixel_format = parse_scalar<std::string>(section["pixel_format"], "cameras.pixel_format");
+    if (section["n_buffers"])    out.n_buffers    = parse_scalar<int>(section["n_buffers"],    "cameras.n_buffers");
 }
 
 void load_inference(const YAML::Node& section, MainOptions& out) {
@@ -90,6 +93,7 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
     static const std::set<std::string> allowed{
         "enable_3d", "calib", "kp_conf_thresh", "max_reproj_px",
         "sync_window_ms", "bone_calib_frames", "no_3d_kalman", "no_3d_ik",
+        "vr_extract_event_driven",
     };
     check_keys(section, allowed, "three_d");
     if (section["enable_3d"])         out.enable_3d         = parse_scalar<bool>(section["enable_3d"],            "three_d.enable_3d");
@@ -105,6 +109,10 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
     }
     if (section["no_3d_ik"]) {
         out.ik_3d = !parse_scalar<bool>(section["no_3d_ik"], "three_d.no_3d_ik");
+    }
+    if (section["vr_extract_event_driven"]) {
+        out.vr_extract_event_driven = parse_scalar<bool>(
+            section["vr_extract_event_driven"], "three_d.vr_extract_event_driven");
     }
 }
 
@@ -299,6 +307,8 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--width")             { out.width  = std::atoi(need(i, "--width")); }
         else if (a == "--height")            { out.height = std::atoi(need(i, "--height")); }
         else if (a == "--fps")               { out.fps    = std::atoi(need(i, "--fps")); }
+        else if (a == "--pixel-format")      { out.pixel_format = need(i, "--pixel-format"); }
+        else if (a == "--n-buffers")         { out.n_buffers = std::atoi(need(i, "--n-buffers")); }
         else if (a == "--det-frequency")     { out.det_frequency = std::atoi(need(i, "--det-frequency")); }
         else if (a == "--keypoint-format")   { out.keypoint_format = need(i, "--keypoint-format"); }
         else if (a == "--multi-person")      { out.multi_person  = true; }
@@ -317,6 +327,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--subject-profile")   { out.subject_profile = need(i, "--subject-profile"); }
         else if (a == "--no-3d-kalman")      { out.kalman_3d = false; }
         else if (a == "--no-3d-ik")          { out.ik_3d = false; }
+        else if (a == "--vr-extract-event-driven") { out.vr_extract_event_driven = true; }
         else if (a == "--slimevr-out")       { out.slimevr_out = true; }
         else if (a == "--slimevr-host")      { out.slimevr_host = need(i, "--slimevr-host"); }
         else if (a == "--slimevr-port")      { out.slimevr_port = std::atoi(need(i, "--slimevr-port")); }
@@ -360,6 +371,13 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
 void validate_options(const MainOptions& opts) {
     if (opts.cam_paths[0].empty() || opts.det_engine.empty() || opts.pose_engine.empty()) {
         fail("missing required option (need --cam0 + --det-engine + --pose-engine)");
+    }
+    if (opts.pixel_format != "mjpeg" && opts.pixel_format != "yuyv"
+        && opts.pixel_format != "nvjpeg") {
+        fail("--pixel-format must be \"mjpeg\", \"yuyv\", or \"nvjpeg\"");
+    }
+    if (opts.n_buffers < 2) {
+        fail("--n-buffers must be >= 2 (driver needs at least 2 to pipeline)");
     }
     if (opts.enable_3d && opts.calib.empty()) {
         fail("--enable-3d requires --calib PATH");

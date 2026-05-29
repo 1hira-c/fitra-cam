@@ -87,6 +87,8 @@ void print_help() {
         "  --no-web                  do not start Crow (driver only, for bench)\n"
         "  --width N / --height N    capture size per camera (default 640x480)\n"
         "  --fps N                   requested capture fps (default 30)\n"
+        "  --pixel-format FMT        mjpeg (default,CPU) | yuyv | nvjpeg (Jetson HW decode)\n"
+        "  --n-buffers N             v4l2 mmap ring depth (default 4, min 2)\n"
         "  --det-frequency N         run YOLOX every N frames (default 10)\n"
         "  --keypoint-format FMT     pose topology: coco17 (17 kpts, default) or halpe26 (26 kpts).\n"
         "                            Must match the K of the supplied --pose-engine.\n"
@@ -106,6 +108,7 @@ void print_help() {
         "  --subject-profile PATH    direct subject profile YAML path for IK\n"
         "  --no-3d-kalman            disable 3D Kalman smoothing\n"
         "  --no-3d-ik                disable 3D IK projection\n"
+        "  --vr-extract-event-driven react to each 3D frame (lower VR latency)\n"
         "\n"
         "SlimeVR native Firmware UDP output (requires --enable-3d + --keypoint-format=halpe26):\n"
         "  --slimevr-out             enable the native Firmware UDP publisher (10 trackers)\n"
@@ -373,6 +376,12 @@ int main(int argc, char** argv) {
             o.width  = width;
             o.height = height;
             o.fps    = fps;
+            o.n_buffers = opts.n_buffers;
+            o.pixel_format = (opts.pixel_format == "yuyv")
+                                 ? fitra::camera::PixFmt::Yuyv
+                                 : (opts.pixel_format == "nvjpeg")
+                                       ? fitra::camera::PixFmt::Nvjpeg
+                                       : fitra::camera::PixFmt::Mjpeg;
             auto cap = std::make_unique<fitra::camera::V4l2Capture>(o);
 
             auto yolox_eng = fitra::infer::TrtEngine::from_shared(yolox_shared);
@@ -558,6 +567,7 @@ int main(int argc, char** argv) {
             // runs regardless of --vmt-out / --slimevr-out toggles — same
             // architecture as quat_smooth.
             tex_opts.pos_smooth      = static_cast<float>(opts.vmt_pos_smooth);
+            tex_opts.event_driven    = opts.vr_extract_event_driven;
             tracker_extractor = std::make_unique<fitra::slimevr::TrackerExtractor>(
                 *bus3d, *slime_tracker_bus, tex_opts);
             tracker_extractor->start();

@@ -48,9 +48,8 @@ void OscWriter::append_bytes(const std::uint8_t* p, std::size_t n) {
 
 void OscWriter::emit_osc_string(std::vector<std::uint8_t>& out, std::string_view s) {
     out.insert(out.end(), s.data(), s.data() + s.size());
-    out.push_back('\0');
-    std::size_t pad = pad4(s.size() + 1);
-    for (std::size_t i = 0; i < pad; ++i) out.push_back('\0');
+    // Null terminator + pad to the next 4-byte boundary (OSC string rule).
+    out.insert(out.end(), 1 + pad4(s.size() + 1), '\0');
 }
 
 void OscWriter::begin_bundle(std::uint64_t osc_timetag_ntp) {

@@ -49,6 +49,36 @@ reservoir に代表値を蓄積 → 定期 `solve_motion` → clamped EMA で al
 `/api/vmt/alignment/auto/continuous/*` + `/stats3d` ブロック。
 → [design/vr-output-continuous-hmd-calibration.md](../design/vr-output-continuous-hmd-calibration.md)
 
+### 2026-05-29 — OSC パディングの単一 insert 化 + gate 定数の static_assert (挙動不変)
+(1) `OscWriter::emit_osc_string` の 4-byte 境界パディングを `push_back` ループから単一
+`insert(end, 1 + pad4(...), '\0')` に置換。出力バイト列は同一 (`test_vmt_osc_writer` golden 通過)。
+(2) `tracker_extract.cpp` の smoothstep gate 定数 (`kRollSin*` / `kPosVelGate*` / `kPelvisYawGate*`)
+に `low < high` を固定する `static_assert` を追加 — 将来の境界反転がコンパイル時に弾かれる。
+値は不変。微最適化のため design doc なし (changelog のみ)。
+
+### 2026-05-29 — 出力レイテンシ M1: frame-rate 非依存 smoothing (キーストーン)
+GPU フロントエンドでパイプラインが詰まった後、E2E の支配項は VR 出力の 60Hz×2 ホップ
+(avg +16.7ms / worst ~33ms)。e2e-latency M4 で hop1 をイベント駆動 (opt-in) にしたが、
+smoothing が **dt 非依存の固定 alpha** のままで、ソースレート同期だと高 fps で過平滑になる潜在バグが
+あった。`apply_quat_smoothing`/`apply_pos_smoothing` を `alpha_eff = 1-(1-base_alpha)^(dt/nominal)` の
+frame-rate 非依存形に一般化 (`run_loop` の実測 dt / nominal dt を配線)。固定レート (`dt==nominal`) は
+従来と完全一致 (既定ゼロリスク)、イベント駆動は過平滑解消。これがレート引き上げ・イベント駆動を
+安全にするキーストーン。`test_tracker_extract_pos` に rate-independence テスト追加 (dt/2 の 2 ステップ ==
+dt の 1 ステップ 他)、ctest 9/9。実機 judder / e2e 数値検証 + イベント駆動既定化 + publisher hop2 は
+被写体 (`ik_locked`)+SteamVR 要のため M2 送り。
+→ [design/vr-output-latency.md](../design/vr-output-latency.md)
+
+### 2026-05-29 — 出力レイテンシ M2: 被写体実測 — VR ペーシングは lever でない (負の結果)
+被写体 in view + calib + subject02 で `e2e_capture_to_send_ms` を A/B 実測。**extractor を event-driven に
+しても publisher を 60→120Hz にしても e2e は不動 (~34-35ms)** — 理論「60Hz×2 = +16-33ms」は実機では
+非該当 (extractor は三角測量にほぼ同期、hop2 も支配項でない)。一方 **nvjpeg 全 GPU フロントエンドで
+cap→pub 21→13ms、e2e 34→26ms (−8ms)**。photon→send を削るのはパイプラインのみと確定。残 VR 側 ~13ms は
+`sync_window=15ms` + 処理で rate 非依存。よって VR ペーシングのレイテンシ目的変更は見送り (M1 smoothing は
+過平滑バグ correctness 修正として維持)。VR レイテンシを下げる手は 3D 設定の `cameras.pixel_format: nvjpeg`
+(per-machine config は gitignored、雛形 `configs/live_2cam_3d.yaml.example` に既定記載 / CLI `--pixel-format nvjpeg`)。
+judder の体感比較は HMD 主観評価として残課題。
+→ [design/vr-output-latency.md](../design/vr-output-latency.md)
+
 ### 2026-05-27 — VMT 登録ゲート + sender の Manager 統合
 Driver `WaitForHmd` ハードゲートで Quest 接続前の登録レースを解消 (コントローラ奪取回避)。
 `vmt_hmd_pose_sender` を廃止し `vmt_manager` に吸収 (HMD pose 中継 + 登録 arm + auto-launch)。
