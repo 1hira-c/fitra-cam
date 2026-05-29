@@ -552,13 +552,12 @@ void test_thigh_walking_knee_60() {
     check_tracker_forward(t, expected_fwd, "Thigh walk60: fwd axis");
 }
 
-// === Thigh: standing (knee straight) — primary degenerate, lateral pin removed ===
-// With the secondary lateral pin (hip - hip_center) gone, primary-degenerate
-// standing falls through to tertiary world Z. The femur axis is vertical (-Z)
-// so world Z is itself parallel to fwd → quat_from_forward_up rejects the
-// basis → valid=false, roll_confidence=0. apply_quat_smoothing then holds the
-// previous quat, which decouples thigh roll from waist yaw (the symptom the
-// lateral pin was causing during walking / shallow bends).
+// === Thigh: standing (knee straight) — roll degenerate, swing still tracks ===
+// With the leg fully extended the up hint (ankle - knee) is colinear with the
+// femur axis, so roll is unobservable. Post swing/twist split: the tracker is
+// VALID with roll_confidence=0 and a forward-only orientation. The bone
+// direction (-Z) is still emitted so apply_quat_smoothing tracks pitch/yaw,
+// while the roll holds at the previous frame (no waist-yaw coupling).
 void test_thigh_standing_knee_straight() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
@@ -572,11 +571,14 @@ void test_thigh_standing_knee_straight() {
     using R = fitra::slimevr::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperLeg)];
-    check(!t.valid, "standing-straight thigh must be invalid (no observable roll)");
+    check(t.valid, "standing-straight thigh stays valid (forward-only orientation)");
+    // forward = knee - hip = (0,0,-0.45) → -Z; swing tracks the bone direction.
+    check_tracker_forward(t, cv::Vec3f{0, 0, -1}, "Thigh standing: fwd is -Z");
     if (t.roll_confidence > 1.0e-3f) {
         char buf[128];
         std::snprintf(buf, sizeof(buf),
-            "standing-straight confidence got=%.4f want 0", t.roll_confidence);
+            "standing-straight roll_confidence got=%.4f want 0 (roll held)",
+            t.roll_confidence);
         throw std::runtime_error(buf);
     }
 }
@@ -621,26 +623,22 @@ void test_thigh_lateral_ankle_uses_primary() {
     }
 }
 
-// === Thigh: 直座り (seated, legs extended forward, knee straight) — primary
-//             degenerate, MUST freeze instead of falling to world Z ============
+// === Thigh: 直座り (seated, legs extended forward, knee straight) — roll
+//             degenerate, MUST hold roll without a world-Z fallback ============
 // Subject is sitting on the floor with the leg extended straight forward
 // (a very common indoor sitting style in Japan: 直座り / 長座 / あぐらからの
 // 脚伸ばし). Thigh axis is horizontal (+Y), and with the knee fully straight
 // the shin axis is also horizontal (+Y), so (ankle - knee) is colinear with
-// the thigh axis → primary is degenerate.
+// the thigh axis → roll is unobservable.
 //
-// Pre-fix behavior (bug): tertiary was world Z, and pick_up_multistage
-// accepted world Z unconditionally at i==2 with confidence = sin(worldZ, fwd)
-// = sin 90° = 1.0. That writes a fabricated "knee faces ceiling" thigh roll
-// with full confidence — the avatar's thigh would lock to a world-Z-aligned
-// roll for the entire duration of the seated pose.
+// Pre-fix bug: tertiary was world Z, accepted unconditionally with confidence
+// = sin(worldZ, fwd) = sin 90° = 1.0 → fabricated "knee faces ceiling" roll
+// locked in with full confidence.
 //
-// Post-fix behavior: tertiary is the zero sentinel → pick_up_multistage
-// returns confidence=0 and zero up → quat_from_forward_up valid=false →
-// apply_quat_smoothing holds the previous thigh quat. Same freeze semantics
-// as test_thigh_standing_knee_straight (which has fwd ∥ worldZ; the freeze
-// there was incidentally correct because cross(worldZ, fwd) = 0). This test
-// covers the non-vertical-thigh case the standing test couldn't.
+// Post-fix (swing/twist split): the up hint degenerates → build_tracker emits a
+// forward-only orientation (fwd = +Y) with roll_confidence=0. The tracker stays
+// VALID so the thigh direction keeps tracking, but the (unobservable) roll is
+// held by apply_quat_smoothing — no fabricated world-Z roll.
 void test_thigh_seated_extended_straight_knee() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
@@ -655,12 +653,14 @@ void test_thigh_seated_extended_straight_knee() {
     using R = fitra::slimevr::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperLeg)];
-    check(!t.valid,
-          "直座り thigh must be invalid (primary degenerate, world-Z must not rescue)");
+    check(t.valid,
+          "直座り thigh stays valid (forward-only orientation, roll held)");
+    // forward = knee - hip = (0,0.4,0) → +Y; swing tracks, no world-Z roll.
+    check_tracker_forward(t, cv::Vec3f{0, 1, 0}, "Thigh 直座り: fwd is +Y");
     if (t.roll_confidence > 1.0e-3f) {
         char buf[160];
         std::snprintf(buf, sizeof(buf),
-            "直座り confidence got=%.4f want 0 (world-Z fallback must not fire)",
+            "直座り roll_confidence got=%.4f want 0 (world-Z fallback must not fire)",
             t.roll_confidence);
         throw std::runtime_error(buf);
     }
@@ -687,7 +687,7 @@ void test_upper_arm_confidence_full_at_90deg_bend() {
     }
 }
 
-// === Confidence B: every up parallel to fwd → confidence = 0 (frozen update) ===
+// === Confidence B: every up parallel to fwd → roll held, swing still tracks ===
 void test_upper_arm_confidence_zero_all_degenerate() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     auto skel = make_modified_t_pose([](fitra::infer::Skeleton3D& s) {
@@ -702,8 +702,11 @@ void test_upper_arm_confidence_zero_all_degenerate() {
     using R = fitra::slimevr::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperArm)];
-    // All three up candidates ∥ fwd → quat_from_forward_up rejects → valid=false.
-    check(!t.valid, "fully colinear arm must be invalid");
+    // up ∥ fwd → roll unobservable. Forward (elbow - shoulder = +Z) is still
+    // valid, so the tracker emits a forward-only orientation with
+    // roll_confidence=0: swing tracks, roll held.
+    check(t.valid, "fully colinear arm stays valid (forward-only orientation)");
+    check_tracker_forward(t, cv::Vec3f{0, 0, 1}, "Arm colinear: fwd is +Z");
     if (t.roll_confidence > 1.0e-3f) {
         char buf[128];
         std::snprintf(buf, sizeof(buf),
@@ -740,15 +743,19 @@ void test_upper_arm_confidence_smoothstep_midrange() {
     }
 }
 
-// === Confidence D: low confidence freezes smoothing across frames ===
-// Set up a tracker with roll_confidence=0; SLERP must be a no-op and the curr
-// quat should track the prev across many frames regardless of curr's raw quat.
+// === Confidence D: both gates zero freezes smoothing across frames ===
+// Set up a tracker with swing_confidence=roll_confidence=0; the smoothing must
+// be a no-op and the curr quat should track the prev across many frames
+// regardless of curr's raw quat. (roll_confidence alone no longer freezes the
+// whole orientation — swing tracks unless swing_confidence is also 0; see
+// test_roll_hold_keeps_swing for the roll-only-hold contract.)
 void test_smoothing_freezes_under_low_confidence() {
     std::array<fitra::slimevr::SlimeTracker, fitra::slimevr::kTrackerCount> curr{};
     std::array<cv::Vec4f, fitra::slimevr::kTrackerCount> prev{};
     // Tracker 0: valid but zero confidence; raw quat is wildly different from prev.
     curr[0].valid = true;
     curr[0].roll_confidence = 0.0f;
+    curr[0].swing_confidence = 0.0f;
     curr[0].quat_wxyz = cv::Vec4f{0, 1, 0, 0};   // 180° about +X
     prev[0] = cv::Vec4f{1, 0, 0, 0};             // identity, last known good
     for (int i = 0; i < 5; ++i) {
@@ -837,6 +844,66 @@ void test_foot_fk_fallback_needs_seed() {
           "fk-fallback.unseeded: anchor stays invalid");
 }
 
+// pose-3d/locomotion-stability M3: roll-only hold via swing/twist split.
+// With roll_confidence=0 but swing_confidence=1, the swing (pitch/yaw = bone
+// forward) must fully track the new measurement while the twist (roll) is held,
+// independent of whatever arbitrary roll the raw curr quat carries. This is the
+// fix that keeps an extended limb's bone direction moving instead of freezing
+// the whole orientation when roll becomes unobservable.
+void test_roll_hold_keeps_swing() {
+    namespace sv = fitra::slimevr;
+    using sv::SlimeTracker;
+    using sv::kTrackerCount;
+
+    // prev orientation: bone pointing +Z, canonical up +Y.
+    cv::Vec4f P;
+    check(sv::detail::quat_from_forward_up(cv::Vec3f{0, 0, 1}, cv::Vec3f{0, 1, 0}, P),
+          "roll-hold: build prev");
+
+    // New forward tilted toward +Y. Two curr quats SHARE this forward but carry
+    // different rolls (different up hints) — i.e. they differ only by a rotation
+    // about the bone axis, exactly what the twist gate should discard.
+    cv::Vec3f f = vec_normalize(cv::Vec3f{0, 0.5f, 1.0f});
+    cv::Vec4f Qa, Qb;
+    check(sv::detail::quat_from_forward_up(f, cv::Vec3f{1, 0, 0}, Qa), "roll-hold: curr_a");
+    check(sv::detail::quat_from_forward_up(f, cv::Vec3f{0, 1, 0.2f}, Qb), "roll-hold: curr_b");
+
+    auto run = [&](const cv::Vec4f& Q, float roll_conf) {
+        std::array<SlimeTracker, kTrackerCount> curr{};
+        std::array<cv::Vec4f, kTrackerCount> prev{};
+        prev[0] = P;
+        curr[0].valid = true;
+        curr[0].quat_wxyz = Q;
+        curr[0].roll_confidence  = roll_conf;
+        curr[0].swing_confidence = 1.0f;
+        sv::apply_quat_smoothing(curr, prev, 1.0f);  // base_alpha=1 → swing fully applied
+        return curr[0];
+    };
+    auto abs_dot = [](const cv::Vec4f& a, const cv::Vec4f& b) {
+        return std::abs(a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3]);
+    };
+
+    // Roll held (roll_confidence=0): swing tracks forward, roll discarded.
+    SlimeTracker ra = run(Qa, 0.0f);
+    SlimeTracker rb = run(Qb, 0.0f);
+    check_tracker_forward(ra, f, "roll-hold: swing tracks new forward (a)", 1e-3f);
+    check_tracker_forward(rb, f, "roll-hold: swing tracks new forward (b)", 1e-3f);
+    float dot_held = abs_dot(ra.quat_wxyz, rb.quat_wxyz);
+    if (dot_held < 0.999f) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+            "roll-hold: results differ across curr rolls (|dot|=%.5f want ≈1) — roll not held",
+            dot_held);
+        throw std::runtime_error(buf);
+    }
+
+    // Contrast: with full roll confidence the roll IS tracked, so the two curr
+    // rolls produce visibly different orientations.
+    float dot_tracked = abs_dot(run(Qa, 1.0f).quat_wxyz, run(Qb, 1.0f).quat_wxyz);
+    check(dot_tracked < 0.999f,
+          "roll-hold contrast: full roll confidence must track roll (results differ)");
+}
+
 void test_keypoint_format_assert() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Coco17);
     auto skel = make_t_pose();
@@ -863,7 +930,8 @@ int main() {
         test_upper_arm_confidence_full_at_90deg_bend(); std::printf("[ok] confidence: 90° elbow bend → 1.0\n");
         test_upper_arm_confidence_zero_all_degenerate(); std::printf("[ok] confidence: all-degenerate → 0\n");
         test_upper_arm_confidence_smoothstep_midrange(); std::printf("[ok] confidence: smoothstep midrange ≈ 0.5\n");
-        test_smoothing_freezes_under_low_confidence();   std::printf("[ok] smoothing: low confidence freezes update\n");
+        test_smoothing_freezes_under_low_confidence();   std::printf("[ok] smoothing: both gates zero freezes update\n");
+        test_roll_hold_keeps_swing();             std::printf("[ok] smoothing: roll-only hold keeps swing (M3)\n");
         test_upper_arm_forward_raised();          std::printf("[ok] upper arm: forward-raised (前方挙上)\n");
         test_upper_arm_overhead_bent_elbow();     std::printf("[ok] upper arm: overhead + bent elbow (頭上挙上)\n");
         test_foot_toe_stance();                   std::printf("[ok] foot: toe stance (つま先立ち)\n");
@@ -873,7 +941,7 @@ int main() {
         test_thigh_walking_knee_60();             std::printf("[ok] thigh: walking knee bent ~60° (歩行片足)\n");
         test_thigh_standing_knee_straight();      std::printf("[ok] thigh: standing knee straight (立位)\n");
         test_thigh_lateral_ankle_uses_primary();  std::printf("[ok] thigh: lateral ankle activates primary (足首横ずれ)\n");
-        test_thigh_seated_extended_straight_knee(); std::printf("[ok] thigh: 直座り — primary degenerate freezes (no world-Z rescue)\n");
+        test_thigh_seated_extended_straight_knee(); std::printf("[ok] thigh: 直座り — roll held, no world-Z rescue (swing tracks)\n");
         test_foot_fk_fallback_uses_last_anchor(); std::printf("[ok] foot: FK fallback synthesizes ankle/toe from last anchor\n");
         test_foot_fk_fallback_needs_seed();       std::printf("[ok] foot: FK fallback requires a seeded anchor\n");
         test_keypoint_format_assert();            std::printf("[ok] Halpe26 keypoint-format assertion\n");

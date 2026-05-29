@@ -3,7 +3,7 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-05-28)
+## 現状 (2026-05-29)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
@@ -13,10 +13,20 @@ Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有す�
 
 - **degeneracy gate は相対しきい**: `quat_from_forward_up` の degeneracy 判定は `sin θ`
   ベース (`kRollSinLow=0.15` / `kRollSinHigh=0.30`)。絶対 norm しきいは使わない。
-  primary が degenerate になる向き (水平腕・伸展脚) では roll を freeze に倒す。
+  primary が degenerate になる向き (水平腕・伸展脚) では **roll (twist) だけ**を hold する
+  (向き = swing は追従させる。下記 swing/twist 分離参照)。
+- **swing/twist 分離スムージング**: `apply_quat_smoothing` は相対回転を bone forward
+  (local +Z) で swing (pitch/yaw) と twist (roll) に分解し、独立 alpha で slerp。roll 縮退時は
+  `roll_confidence=0` で twist を前フレーム保持しつつ swing は満額追従するので、伸展した脚・腕
+  でも bone の向きが freeze しない。`swing_confidence == roll_confidence` の時は単一 slerp の
+  fast path (rigid bone / foot はビット同一)。
+- **roll 縮退は valid=false にしない**: forward が有効で up hint だけ縮退した bone は
+  `build_tracker` が forward-only quat + `roll_confidence=0` で `valid=true` を返す
+  (真の欠損 = forward 縮退のみ `valid=false`)。代用 up の roll 値は twist alpha=0 で捨てられる。
 - **lateral pin anti-pattern**: secondary lateral pin (neck-shoulder 等) で roll を稼ぐ構造は
   「立位伸展で 90° roll が一気に入る」症状の原因。`upper_arm` / `upper_leg` を同型の 1-stage 構造に
-  揃え、tertiary を `Vec3f{0,0,0}` sentinel にして freeze へ倒す経路を確立済み。
+  揃え、tertiary を `Vec3f{0,0,0}` sentinel にして roll hold へ倒す経路を確立済み。
+  world-Z で roll を代用する案は「膝裏が天井向き」の捏造 roll を生むため不採用。
 - **smoothing の state 所有は TrackerExtractor に集約**: 回転 (`prev_quat_`) も位置 EMA
   (`apply_pos_smoothing`) も同じ場所で持つ。publisher 側に smoothing state を分散させない。
 - **位置 hold は hip 相対**: `valid=false` の tracker は world 絶対値で freeze せず、
@@ -47,6 +57,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-05-29 — roll-only hold (脚・腕が向きに追従)
+M1 の hip 相対 hold で足の*位置*は hip 追従するようになったが、立位伸展で足先は動くのに
+太もも・すね・上腕の bone が回らない症状が残っていた。roll 縮退時に bone の向きごと freeze
+していたのが原因。`apply_quat_smoothing` を swing/twist 分離に書き換え、`roll_confidence` を
+twist 専用ゲートに、`swing_confidence` を新設。roll が測れない伸展肢でも swing (pitch/yaw) は
+追従し twist (roll) だけ前フレーム保持する。`swing_confidence==roll_confidence` で従来の単一
+slerp に縮約する fast path で rigid bone / foot は回帰ゼロ。
+→ [design/pose-3d-locomotion-stability.md](../design/pose-3d-locomotion-stability.md) M4
 
 ### 2026-05-28 — locomotion stability (足置き去り解消 + chain Kalman)
 立位伸展で胴体を動かしたときに足 tracker が world に取り残される症状を 3 層 (tracker_extract /

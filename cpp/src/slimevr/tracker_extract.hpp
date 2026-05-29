@@ -64,18 +64,30 @@ struct SlimeTracker {
     // wxyz storage; the publisher converts to SlimeVR's xyzw Y-up wire frame.
     cv::Vec4f   quat_wxyz = {1.0f, 0.0f, 0.0f, 0.0f};
     bool        valid = false;
-    // [0, 1] per-tracker smoothing weight used by apply_quat_smoothing as
-    // effective_alpha = base_alpha · roll_confidence.
-    //   * chest / waist / shin: rigid anatomical pin, stays at 1.0.
+    // [0, 1] per-tracker gate for the TWIST (roll, rotation about the bone's
+    // forward axis) component of apply_quat_smoothing: twist_alpha =
+    // base_alpha · roll_confidence. The SWING (pitch/yaw, where the bone
+    // points) is gated separately by swing_confidence, so a degenerate roll
+    // measurement holds only the previous roll while the bone direction keeps
+    // tracking.
+    //   * chest / waist / shin (non-degenerate): rigid anatomical pin, 1.0.
     //   * upper arm / thigh: dynamic via smoothstep on the up-vector's sin θ
     //     to forward — full at sin θ ≥ kRollSinHigh, zero at sin θ ≤
-    //     kRollSinLow (so a degenerate roll measurement holds the previous
-    //     quat instead of injecting noise).
-    //   * foot: fixed low value kFootSmoothingWeight, not because roll is
-    //     uncertain (foot has no roll observation by design — tibia-aligned
-    //     up only resolves yaw) but as a strong low-pass against ankle/toe
-    //     KP jitter.
+    //     kRollSinLow. At 0 the roll is held (twist_alpha = 0) but swing still
+    //     follows the new forward.
+    //   * any roll-bearing bone whose up hint degenerates (e.g. shin with the
+    //     leg fully extended): build_tracker forces roll_confidence = 0 with a
+    //     forward-only orientation, so roll holds and swing tracks.
+    //   * foot: fixed low value kFootSmoothingWeight as a strong low-pass
+    //     against ankle/toe KP jitter (matched by swing_confidence so the foot
+    //     gets the same overall damping it had before the swing/twist split).
     float       roll_confidence = 1.0f;
+    // [0, 1] per-tracker gate for the SWING (pitch/yaw) component:
+    // swing_alpha = base_alpha · swing_confidence. 1.0 for every bone except
+    // the foot (kFootSmoothingWeight). When swing_confidence == roll_confidence
+    // apply_quat_smoothing takes a single-slerp fast path identical to the
+    // pre-split behavior (zero regression for rigid bones and the foot).
+    float       swing_confidence = 1.0f;
 };
 
 // Per-foot anchor used by extract_trackers to reconstruct ankle / big_toe via
@@ -101,9 +113,11 @@ struct ExtractContext {
     std::array<FootAnchor, 2> foot_anchors{};
 };
 
-// Extract 10 trackers from a Halpe26 3D skeleton. Degenerate joints (invalid
-// landmarks or near-parallel forward/up hints) produce `valid=false` +
-// identity quaternion; the publisher skips those.
+// Extract 10 trackers from a Halpe26 3D skeleton. A missing forward hint
+// (invalid landmarks) produces `valid=false` + identity quaternion; the
+// publisher skips those. A degenerate roll (near-parallel forward/up, e.g. an
+// extended limb) instead stays `valid=true` with roll_confidence=0 and a
+// forward-only orientation, so smoothing holds the roll but tracks the swing.
 //
 // `kp_format` must be Halpe26 — call sites assert this before invoking.
 //
@@ -115,14 +129,19 @@ std::array<SlimeTracker, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel,
                  ExtractContext* ctx = nullptr);
 
-// Per-tracker quaternion exponential smoothing via slerp.
-//   effective_alpha_i = base_alpha · curr_i.roll_confidence
-//   curr_i ← slerp(prev_i, curr_i, effective_alpha_i)
-// base_alpha ∈ [0, 1]. 0 = use prev, 1 = use curr. Confidence < 1 throttles the
-// update, so a low-confidence roll measurement decays toward the previous
-// orientation instead of injecting noise. Invalid trackers keep prev unchanged
-// (curr is replaced by prev so the publisher can still see a stable quat).
-// Updates `prev_quat` in place with the smoothed values.
+// Per-tracker quaternion exponential smoothing with independent swing/twist
+// gates. The relative rotation prev⁻¹·curr is decomposed about the bone's
+// local forward axis (+Z) into swing (pitch/yaw) and twist (roll):
+//   swing_alpha_i = base_alpha · curr_i.swing_confidence
+//   twist_alpha_i = base_alpha · curr_i.roll_confidence
+//   curr_i ← prev_i · slerp(I, swing, swing_alpha) · slerp(I, twist, twist_alpha)
+// When swing_confidence == roll_confidence this collapses to the single slerp
+// slerp(prev, curr, base_alpha·conf) (fast path, bit-identical to the previous
+// behavior). roll_confidence = 0 holds the previous roll while swing keeps
+// tracking the new forward — this is how a fully-extended limb keeps moving
+// without its (unobservable) roll snapping around. base_alpha ∈ [0, 1].
+// Invalid trackers keep prev unchanged (curr is replaced by prev so the
+// publisher can still see a stable quat). Updates `prev_quat` in place.
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           float base_alpha);

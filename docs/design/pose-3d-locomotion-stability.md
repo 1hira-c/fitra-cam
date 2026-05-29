@@ -113,11 +113,56 @@ state 設計を変えるので tuning パラメータ (q_pos_offset / q_vel_offs
 - `SkeletonKalman::update(measurement, dt_s) → Skeleton3D` の signature は不変。
 - `multi_pipeline.cpp` の呼び出しは無変更。
 
+### M4: swing/twist 分離による roll-only hold (2026-05-29)
+
+**残った症状**: M1 (hip 相対 hold) で foot tracker の*位置*は hip に追従するように
+なったが、立位伸展で**足先は動くのに太もも・すね・上腕の bone がまったく回らない**。
+
+**直接原因**: roll 縮退時に bone の*向き*ごと freeze していた。`upper_leg` / `lower_leg`
+/ `upper_arm` は roll を決める up hint (thigh: `ankle-knee`、shin: `hip-knee`、arm:
+`wrist-elbow`) が forward と平行に近づくと縮退し、`quat_from_forward_up()` が sin θ
+ゲートで `false` → `valid=false` → `apply_quat_smoothing` が **quaternion 全体**を前
+フレームで hold。失われるのは roll (bone 軸まわりの twist) だけのはずなのに、pitch/yaw
+(= bone がどこを向くか) まで一緒に止まる。forward (`knee-hip` 等、端点だけで決まる) は
+常に信頼できるのに roll が測れないという理由で向きごと freeze していた。
+
+**検討した案**:
+- **①world-up で roll を代用** (旧 tertiary world Z 相当) — 却下。立位伸展 / 直座りで
+  「膝裏が天井向き」の捏造 roll が confidence 1.0 で書かれる、まさに M1 以前に潰した
+  アンチパターンの復活。
+- **②Euler 分解で roll 軸だけ hold** — 却下。pitch 90° 付近で gimbal lock、特異点処理が
+  煩雑。
+- **③swing/twist 分解 (採用)**: 相対回転 `prev⁻¹·curr` を bone forward (local +Z) 軸で
+  swing (pitch/yaw) と twist (roll) に分解し、独立 alpha で slerp。roll 縮退時は twist
+  alpha を 0 にして roll を前フレーム保持、swing は満額追従。roll は parallel transport
+  で連続。特異点は ~180° swing のみ (twist=identity に縮退して回避)。
+
+**変更ファイル**:
+- `cpp/src/slimevr/tracker_extract.hpp`: `SlimeTracker` に `swing_confidence`
+  (swing ゲート) を追加。`roll_confidence` を twist 専用ゲートに意味変更。
+- `cpp/src/slimevr/tracker_extract.cpp`:
+  - `build_tracker`: forward 縮退 (真の欠損 → `valid=false`) と roll 縮退 (forward 有効
+    → `valid=true` + `roll_confidence=0` + forward-only quat) を区別。`fallback_up_for`
+    で forward と非平行な world 軸を up 代用にする (roll は twist alpha=0 で捨てられるので
+    代用 up の roll 値は出力に無関係)。
+  - `foot_tracker`: `swing_confidence = kFootSmoothingWeight` も渡す (foot は overall
+    low-pass を維持)。
+  - `apply_quat_smoothing`: swing/twist 分解スムージング。`swing_confidence ==
+    roll_confidence` の時は従来どおり単一 slerp の **fast path** (rigid bone と foot は
+    ビット同一 = 回帰ゼロ)。
+
+**不変条件**:
+- swing 成分は curr の roll に不変 (`Q' = Q·Rz(φ)` で swing 不変、twist のみ変化)。
+  よって縮退時に forward-only quat へ入れた任意 roll は twist alpha=0 で完全に捨てられる。
+- `roll_confidence=0` かつ `swing_confidence=1` で「roll hold + 向き追従」。
+  両者 0 で完全 freeze (従来の `valid=false` hold 相当)。
+
 ## Milestone
 
 - **M1** (commit `6c419fc`): tracker_extract に hip 相対 hold + velocity gate + FK fallback
 - **M2** (commit `fc5a3d6`): Kalman を hip 起点の kinematic chain に再構築
-- **M3** (このコミット): design doc + track changelog + 実機検証
+- **M3** (commit `9c31811`): design doc + track changelog
+- **M4** (このコミット): swing/twist 分離による roll-only hold (脚・腕が向きに追従)
 
 各 M は単独で意味のあるユニット (M1 だけマージしても症状の半分は消える)。
 
@@ -142,6 +187,14 @@ ctest --test-dir cpp/build --output-on-failure
   - `test_foot_fk_fallback_uses_last_anchor`: anchor seeded 後、ankle 失点でも foot
     valid (FK 合成)、confidence ≤ 0.20
   - `test_foot_fk_fallback_needs_seed`: 1 フレーム目から ankle 失点だと foot invalid
+- `test_tracker_extract` — M4 で挙動変更 + 1 ケース追加、全通過
+  - `test_roll_hold_keeps_swing` (新規): `roll_confidence=0` / `swing_confidence=1` で
+    swing が新 forward に追従しつつ、curr の roll に依らず結果が一致 (roll hold)。
+    full confidence では roll を追従する対比も検証。
+  - roll 縮退テスト (`test_thigh_standing_knee_straight` / `直座り` /
+    `confidence_zero_all_degenerate`) を `valid=false` → `valid=true` +
+    `roll_confidence=0` + forward 追従に更新。
+  - `test_smoothing_freezes_under_low_confidence` を「両ゲート 0 で完全 freeze」に更新。
 - `test_kalman_chain` — M2 で新規、4 ケース全通過
   - root motion が unobserved child に伝播
   - child measurement で offset 補正
