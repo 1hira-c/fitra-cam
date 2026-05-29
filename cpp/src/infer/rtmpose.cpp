@@ -325,52 +325,41 @@ void RtmPose::run_one_prebaked(const PrebakedRequest* reqs,
 
     std::vector<cv::Mat> M_invs(n);
     std::vector<Bbox> bboxes(n);
-    const bool device_path = (reqs[0].chw_dev != nullptr);
     for (std::size_t i = 0; i < n; ++i) {
         M_invs[i] = reqs[i].M_inv;
         bboxes[i] = reqs[i].bbox;
     }
 
-    if (device_path) {
-        // All-GPU front-end: each item's CHW is already on the device. Size the
-        // input for the batch, then device->device copy each item into place
-        // (no H2D). A batch is homogeneous (all device or all host).
-        int H = opts_.input_h, W = opts_.input_w;
-        nvinfer1::Dims in_dims;
-        in_dims.nbDims = 4;
-        in_dims.d[0] = static_cast<int>(n);
-        in_dims.d[1] = 3; in_dims.d[2] = H; in_dims.d[3] = W;
-        engine_.set_input_shape(opts_.input_name, in_dims);
-        const std::size_t item_bytes = per_item * sizeof(float);
-        for (std::size_t i = 0; i < n; ++i) {
-            if (!reqs[i].chw_dev) {
-                throw std::runtime_error("RTMPose batch mixes device and host CHW inputs");
-            }
-            engine_.copy_input_region_from_device(opts_.input_name,
-                                                  i * item_bytes,
+    // Size the TRT input for the batch, then copy each item into its slot.
+    // Items are copied independently — device items via D2D (all-GPU front-end,
+    // no H2D), host items via per-item H2D — so a single batch may freely mix
+    // GPU-path and CPU-fallback cameras without any homogeneity assumption.
+    int H = opts_.input_h, W = opts_.input_w;
+    nvinfer1::Dims in_dims;
+    in_dims.nbDims = 4;
+    in_dims.d[0] = static_cast<int>(n);
+    in_dims.d[1] = 3; in_dims.d[2] = H; in_dims.d[3] = W;
+    engine_.set_input_shape(opts_.input_name, in_dims);
+    const std::size_t item_bytes = per_item * sizeof(float);
+    for (std::size_t i = 0; i < n; ++i) {
+        if (reqs[i].chw_dev) {
+            engine_.copy_input_region_from_device(opts_.input_name, i * item_bytes,
                                                   reqs[i].chw_dev, item_bytes);
+        } else if (reqs[i].chw) {
+            engine_.copy_input_region_from_host(opts_.input_name, i * item_bytes,
+                                                reqs[i].chw, item_bytes);
+        } else {
+            throw std::runtime_error("RTMPose prebaked request has null CHW buffer");
         }
-        engine_.enqueue();
-        engine_.copy_output_to_host(opts_.simcc_x_name,
-                                    simcc_x_host_.data(),
-                                    simcc_x_host_.size() * sizeof(float));
-        engine_.copy_output_to_host(opts_.simcc_y_name,
-                                    simcc_y_host_.data(),
-                                    simcc_y_host_.size() * sizeof(float));
-        engine_.synchronize();
-    } else {
-        // CPU prebake path: pack the per-item host CHW blobs into the
-        // contiguous batch buffer (cheap memcpy) then H2D.
-        for (std::size_t i = 0; i < n; ++i) {
-            if (!reqs[i].chw) {
-                throw std::runtime_error("RTMPose prebaked request has null CHW buffer");
-            }
-            std::memcpy(input_blob_.data() + i * per_item,
-                        reqs[i].chw,
-                        per_item * sizeof(float));
-        }
-        enqueue_current_input(n);
     }
+    engine_.enqueue();
+    engine_.copy_output_to_host(opts_.simcc_x_name,
+                                simcc_x_host_.data(),
+                                simcc_x_host_.size() * sizeof(float));
+    engine_.copy_output_to_host(opts_.simcc_y_name,
+                                simcc_y_host_.data(),
+                                simcc_y_host_.size() * sizeof(float));
+    engine_.synchronize();
     decode_current_outputs(n, Wx, Wy, bboxes, M_invs, out);
 }
 

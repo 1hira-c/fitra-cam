@@ -335,6 +335,23 @@ void TrtEngine::copy_input_region_from_device(const std::string& name,
                                src_dev, bytes, cudaMemcpyDeviceToDevice, stream_));
 }
 
+void TrtEngine::copy_input_region_from_host(const std::string& name,
+                                            std::size_t dst_offset_bytes,
+                                            const void* host, std::size_t bytes) {
+    auto& b = mut_binding_by_name(bindings_, name);
+    if (!b.is_input) {
+        throw std::runtime_error("binding '" + name + "' is not an input");
+    }
+    if (dst_offset_bytes + bytes > b.bytes) {
+        std::ostringstream oss;
+        oss << "input '" << name << "' host region overruns buffer: offset="
+            << dst_offset_bytes << " bytes=" << bytes << " device=" << b.bytes;
+        throw std::runtime_error(oss.str());
+    }
+    CUDA_CHECK(cudaMemcpyAsync(static_cast<std::uint8_t*>(b.device_ptr) + dst_offset_bytes,
+                               host, bytes, cudaMemcpyHostToDevice, stream_));
+}
+
 void TrtEngine::copy_output_to_host(const std::string& name,
                                     void* host, std::size_t bytes) {
     auto& b = mut_binding_by_name(bindings_, name);

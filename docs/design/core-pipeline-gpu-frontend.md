@@ -141,6 +141,18 @@ MJPEG ─VIC/NVJPEG decodeToFd─▶ NvBufSurface(YUV422,NVMM)
       CPU **−28% (vs nvjpeg-CPU) / −30% (vs mjpeg)**、E2E −3.7ms。nvjpeg doc が「高 fps では色変換が床で
       CPU 得≈0」と結論した点に対し、**per-person warp/normalize の GPU 移行が高 fps の CPU を解放する**ことを
       実証 (nvjpeg doc の表に追記)。残り 1.28 コアは full-frame cvtColor + YOLOX + capture が律速 → M3/M4。
+    - **Codex レビュー対応 (2026-05-29)**:
+      - (critical) host/device 混在 batch で `run_one_prebaked` が throw → central crash になり得た。
+        homogeneity 前提を撤廃し `copy_input_region_from_host` を追加、`run_one_prebaked` は item ごとに
+        device(D2D)/host(H2D) を個別に TRT 入力 offset へコピー。multi-cam で一部カメラが CPU フォールバック
+        しても安全。
+      - (major) device decode 失敗時にフレーム破棄 → 直近 HW decode (BGR) + CPU prebake に
+        フォールバック (`gpu_decode_ok` でゲート)。bridge 不調でも pipeline が止まらない。
+      - (minor) exported C API (`decode_cuda`/`decode_to_device`) の出力ポインタ null チェック追加。
+      - (却下) 「EGL/CUDA teardown を生成スレッド(worker)で」案は**実機で逆に segfault**。worker での
+        `hw_decoder_.reset()` は driver shutdown と競合してクラッシュ。`~FrameSource` (main スレッド) での
+        破棄が clean —— main は TRT 経由で CUDA primary context を持ち、shutdown 後の単一スレッド地点で
+        走るため。SIGINT を 2 回とも rc=0 / 0.42s で確認。teardown は destructor のままとする。
 - **M3**: **YOLOX 前処理 CUDA カーネル** (letterbox+normalize+HWC→CHW) 同様に device 直結。
 - **M4**: アーキ移行 — Phase 6b の per-cam CPU 前処理を撤去し GPU 経路へ。EGL/CUDA context の
   スレッド親和性、register ライフサイクル、multi-cam の resource キャッシュを整理。

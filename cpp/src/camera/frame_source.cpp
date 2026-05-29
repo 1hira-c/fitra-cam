@@ -115,16 +115,22 @@ void FrameSource::decode_loop() {
         if (!capture_->wait_pop_latest(raw, stop_, std::chrono::milliseconds(100))) {
             continue;
         }
+        bool gpu_decode_ok = false;  // RGBA CUDA buffer retained for GPU prebake
         if (use_hw) {
             // MJPEG bytes decoded on the Jetson HW NVJPEG block (+ VIC color
             // convert), off the CPU. See camera/nvjpeg_decoder.hpp. The device
             // path additionally retains the RGBA CUDA buffer for the GPU
             // preprocess below; both produce the same BGR `scratch` (still
             // needed by YOLOX / calibration).
-            const bool ok = device_pose_
-                ? hw_decoder_->decode_keep_device(raw.data.data(), raw.data.size(), scratch)
-                : hw_decoder_->decode(raw.data.data(), raw.data.size(), scratch);
-            if (!ok) {
+            if (device_pose_) {
+                gpu_decode_ok =
+                    hw_decoder_->decode_keep_device(raw.data.data(), raw.data.size(), scratch);
+            }
+            // Plain HW decode when not on the device path, or as a fallback if
+            // the device decode/EGL bridge failed — keep the frame on the CPU
+            // prebake path rather than dropping it.
+            if (!gpu_decode_ok &&
+                !hw_decoder_->decode(raw.data.data(), raw.data.size(), scratch)) {
                 FITRA_LOG_WARN("frame_source: HW nvjpeg decode failed for seq={}", raw.seq);
                 continue;
             }
@@ -209,8 +215,10 @@ void FrameSource::decode_loop() {
             // All-GPU path: run the preprocess kernel from the retained RGBA
             // device buffer into a pooled device CHW buffer. The CPU does only
             // the (cheap) inverse-affine per bbox; no per-person warp/normalize.
+            // Gated on gpu_decode_ok so a device-decode fallback this frame
+            // (RGBA buffer not retained) takes the CPU prebake path below.
             bool gpu_done = false;
-            if (device_pose_) {
+            if (gpu_decode_ok) {
                 if (auto buf = chw_pool_.acquire(nb * per_item)) {
                     df.M_invs.resize(nb);
                     bool ok = true;
@@ -261,6 +269,12 @@ void FrameSource::decode_loop() {
         }
         ++frame_idx_;
     }
+    // NOTE: the HW decoder is deliberately NOT reset here. Tearing it down on
+    // the worker thread (cuGraphicsUnregisterResource + NvJPEGDecoder/NvMM/EGL
+    // destruction) segfaults — it races the rest of driver shutdown. Destroying
+    // it in ~FrameSource (main thread) is clean: the main thread holds the CUDA
+    // primary context (TRT binds it process-wide) and the destructor runs at a
+    // well-ordered, single-threaded point after the driver has stopped.
 }
 
 bool FrameSource::try_pop_latest_decoded(DecodedFrame& out) {

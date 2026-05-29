@@ -225,6 +225,7 @@ int fitra_nvjpeg_decode_cuda(void* handle,
                              int check, double* cpu_mean, double* dev_mean) {
     Handle* hd = static_cast<Handle*>(handle);
     if (!hd || !hd->dec || !jpeg || n == 0) return -1;
+    if (!w || !h || !dev_pitch || !dev || !host || !host_pitch) return -1;
 
     uint32_t dw = 0, dh = 0;
     if (!decode_transform_egl(hd, jpeg, n, dw, dh)) return -1;
@@ -292,6 +293,7 @@ int fitra_nvjpeg_decode_to_device(void* handle, const unsigned char* jpeg,
                                   int* dev_pitch, void** dev) {
     Handle* hd = static_cast<Handle*>(handle);
     if (!hd || !hd->dec || !jpeg || n == 0) return -1;
+    if (!w || !h || !dev_pitch || !dev) return -1;
     uint32_t dw = 0, dh = 0;
     if (!decode_transform_egl(hd, jpeg, n, dw, dh)) return -1;
     *w = static_cast<int>(dw); *h = static_cast<int>(dh);
