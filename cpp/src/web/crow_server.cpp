@@ -99,6 +99,7 @@ std::string make_vmt_stats_fragment(const vmt::VmtPublisher& publisher) {
         << ",\"disabled_count\":"                 << s.disabled_count
         << ",\"skipped_invalid_bundles\":"        << s.skipped_invalid_bundles
         << ",\"last_send_ms\":"                   << s.last_send_ms
+        << ",\"e2e_capture_to_send_ms\":"         << s.e2e_capture_to_send_ms
         << ",\"rate_hz\":"                        << o.send_rate_hz
         << ",\"port\":"                           << o.port
         << ",\"index_base\":"                     << o.index_base
@@ -378,6 +379,7 @@ void CrowServer::start() {
                   << ",\"skipped_invalid\":"               << s.skipped_invalid
                   << ",\"ping_count\":"                    << s.ping_count
                   << ",\"last_send_ms\":"                  << s.last_send_ms
+                  << ",\"e2e_capture_to_send_ms\":"        << s.e2e_capture_to_send_ms
                   << "}}";
             if (!body.empty() && body.back() == '}') {
                 body.pop_back();

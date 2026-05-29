@@ -24,7 +24,7 @@ std::optional<StepResult> PosePipeline::step() {
     sr.seq         = raw.seq;
     sr.captured_at = raw.captured_at;
 
-    if (!decoder_.decode(raw.jpeg, decode_scratch_)) {
+    if (!decoder_.decode(raw.data, decode_scratch_)) {
         FITRA_LOG_WARN("jpeg decode failed for seq={}", raw.seq);
         return std::nullopt;
     }

@@ -2,11 +2,65 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <string>
 #include <utility>
+
+#include <cuda_runtime_api.h>
+#include <opencv2/imgproc.hpp>
 
 #include "util/logging.hpp"
 
 namespace fitra::camera {
+
+namespace {
+// BGR ImageNet mean / inverse-std for the RTMPose preprocess kernel. Must match
+// the constants in infer/rtmpose.cpp (preprocess_to_blob).
+constexpr float kMeanBgr[3]   = {103.53f, 116.28f, 123.675f};
+constexpr float kInvStdBgr[3] = {1.0f / 57.375f, 1.0f / 57.12f, 1.0f / 58.395f};
+}  // namespace
+
+DeviceChwPool::DeviceChwPool() : state_{std::make_shared<State>()} {}
+
+DeviceChwPool::State::~State() {
+    for (auto& b : free)
+        if (b.ptr) cudaFree(b.ptr);
+}
+
+std::shared_ptr<DeviceChwBuf> DeviceChwPool::acquire(std::size_t floats) {
+    DeviceChwBuf buf;
+    {
+        std::lock_guard<std::mutex> lk{state_->mu};
+        for (auto it = state_->free.begin(); it != state_->free.end(); ++it) {
+            if (it->capacity >= floats) { buf = *it; state_->free.erase(it); break; }
+        }
+    }
+    bool newly_allocated = false;
+    if (!buf.ptr) {
+        if (cudaMalloc(reinterpret_cast<void**>(&buf.ptr),
+                       floats * sizeof(float)) != cudaSuccess)
+            return nullptr;
+        buf.capacity = floats;
+        newly_allocated = true;
+    }
+    auto st = state_;  // keep pool state alive as long as any buffer is out
+    try {
+        return std::shared_ptr<DeviceChwBuf>(new DeviceChwBuf(buf), [st](DeviceChwBuf* b) {
+            { std::lock_guard<std::mutex> lk{st->mu}; st->free.push_back(*b); }
+            delete b;
+        });
+    } catch (...) {
+        // The control-block/DeviceChwBuf allocation threw: don't leak the device
+        // buffer — free a freshly-cudaMalloc'd one, or recycle a pooled one.
+        if (newly_allocated) {
+            cudaFree(buf.ptr);
+        } else {
+            std::lock_guard<std::mutex> lk{state_->mu};
+            state_->free.push_back(buf);
+        }
+        throw;
+    }
+}
 
 FrameSource::FrameSource(std::unique_ptr<V4l2Capture> capture,
                          std::unique_ptr<infer::Yolox> yolox,
@@ -34,28 +88,105 @@ void FrameSource::start() {
 void FrameSource::stop() {
     if (!worker_.joinable() && !capture_) return;
     stop_.store(true);
+    // decode_loop may be parked in capture_->wait_pop_latest; wake it so it
+    // observes stop_ without waiting out the timeout. Order: flag -> wake -> join.
+    if (capture_) capture_->wake();
     if (worker_.joinable()) worker_.join();
     if (capture_) capture_->stop();
 }
 
 void FrameSource::decode_loop() {
-    std::uint64_t last_seq = 0;
     cv::Mat scratch;
+    const bool use_hw = (capture_->options().pixel_format == PixFmt::Nvjpeg);
+    if (use_hw) {
+        // Construct here so the dlopen + HW init happen on this decode thread.
+        try {
+            hw_decoder_ = std::make_unique<NvJpegHwDecoder>();
+        } catch (const std::exception& e) {
+            FITRA_LOG_ERROR("frame_source: HW NVJPEG decoder unavailable: {}", e.what());
+            return;  // decode thread exits; --pixel-format nvjpeg cannot proceed
+        }
+        // All-GPU front-end (M2): when the .so exposes the device entry points
+        // and we are prebaking pose, run the RTMPose preprocess on the GPU
+        // straight from the EGL-bridged decode output (no per-person CPU warp,
+        // no H2D for the pose input). Falls back per-frame if a buffer can't be
+        // acquired.
+        device_pose_ = rtmpose_enabled_ && hw_decoder_->device_capable();
+        // Bench A/B: force the CPU prebake path even when the GPU one is
+        // available, to compare CPU load / latency of the two front-ends.
+        if (const char* e = std::getenv("FITRA_DISABLE_GPU_PREPROCESS");
+            e && *e && std::string(e) != "0") {
+            device_pose_ = false;
+        }
+        // M3: YOLOX preprocess on the GPU too. Only meaningful alongside the
+        // RTMPose device path; when both are on we can skip the BGR cvtColor.
+        yolox_device_ = device_pose_ && hw_decoder_->yolox_device_capable();
+        if (device_pose_)
+            FITRA_LOG_INFO("frame_source: all-GPU preprocess enabled (RTMPose{})",
+                           yolox_device_ ? " + YOLOX" : "");
+    }
     while (!stop_.load()) {
         Frame raw;
-        if (!capture_->try_pop_latest(raw) || raw.seq == last_seq) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        // Event-driven: block until the capture worker publishes a new frame
+        // (or stop_ is set, or the 100ms safety timeout fires). Replaces the
+        // old 2ms poll-sleep; wait_pop_latest already dedups on seq.
+        if (!capture_->wait_pop_latest(raw, stop_, std::chrono::milliseconds(100))) {
             continue;
         }
-        last_seq = raw.seq;
-        if (!decoder_.decode(raw.jpeg, scratch)) {
-            FITRA_LOG_WARN("frame_source: jpeg decode failed for seq={}", raw.seq);
-            continue;
-        }
-
+        // calib recording forces a BGR copy (raw mp4 tap); pose is skipped.
         const bool calib_recording =
             opts_.calib_recording_flag
             && opts_.calib_recording_flag->load(std::memory_order_relaxed);
+
+        bool gpu_decode_ok = false;     // RGBA CUDA buffer retained for GPU prebake
+        bool scratch_valid = false;     // `scratch` holds a BGR frame
+        int  fw = 0, fh = 0;            // decoded frame dimensions
+        if (use_hw) {
+            // Full-GPU front-end: YOLOX + RTMPose both run from the RGBA CUDA
+            // buffer, so decode straight to device with NO RGBA->BGR cvtColor.
+            // BGR is still produced (decode_keep_device) when something on the
+            // CPU needs it: calibration recording or retain_bgr, or when YOLOX
+            // can't run on the GPU (older .so) and would need a BGR frame.
+            const bool need_bgr =
+                opts_.retain_bgr || calib_recording || (yolox_ && !yolox_device_);
+            if (device_pose_ && !need_bgr) {
+                gpu_decode_ok =
+                    hw_decoder_->decode_to_device(raw.data.data(), raw.data.size(), fw, fh);
+            } else if (device_pose_) {
+                gpu_decode_ok =
+                    hw_decoder_->decode_keep_device(raw.data.data(), raw.data.size(), scratch);
+                scratch_valid = gpu_decode_ok;
+            }
+            // Plain HW decode when not on the device path, or as a fallback if
+            // the device decode/EGL bridge failed — keep the frame on the CPU
+            // prebake path rather than dropping it.
+            if (!gpu_decode_ok) {
+                if (!hw_decoder_->decode(raw.data.data(), raw.data.size(), scratch)) {
+                    FITRA_LOG_WARN("frame_source: HW nvjpeg decode failed for seq={}", raw.seq);
+                    continue;
+                }
+                scratch_valid = true;
+            }
+            if (scratch_valid) { fw = scratch.cols; fh = scratch.rows; }
+        } else if (capture_->options().pixel_format == PixFmt::Yuyv) {
+            // Packed YUV422 -> BGR. No entropy decode; just a color convert.
+            const auto& o = capture_->options();
+            if (static_cast<int>(raw.data.size()) < o.width * o.height * 2) {
+                FITRA_LOG_WARN("frame_source: short YUYV frame for seq={} ({} bytes)",
+                               raw.seq, raw.data.size());
+                continue;
+            }
+            cv::Mat yuy2(o.height, o.width, CV_8UC2,
+                         const_cast<std::uint8_t*>(raw.data.data()));
+            cv::cvtColor(yuy2, scratch, cv::COLOR_YUV2BGR_YUYV);
+        } else {
+            if (!decoder_.decode(raw.data, scratch)) {
+                FITRA_LOG_WARN("frame_source: jpeg decode failed for seq={}", raw.seq);
+                continue;
+            }
+        }
+        if (!use_hw) { scratch_valid = true; fw = scratch.cols; fh = scratch.rows; }
+        auto t_decode = std::chrono::steady_clock::now();
 
         // YOLOX runs on this thread (one IExecutionContext per FrameSource),
         // so all cameras detect in parallel. Skipped during calib recording —
@@ -65,7 +196,25 @@ void FrameSource::decode_loop() {
             bool do_detect = (frame_idx_ % opts_.det_frequency == 0)
                           || cached_bboxes_.empty();
             if (do_detect) {
-                auto dets = yolox_->infer(scratch);
+                // GPU YOLOX: the preprocess kernel fills the engine input from
+                // the retained RGBA device buffer (on the engine's stream); the
+                // kernel and enqueue are ordered on that stream. CPU path used
+                // when the GPU decode fell back (BGR scratch available).
+                std::vector<infer::Bbox> dets;
+                if (gpu_decode_ok && yolox_device_) {
+                    dets = yolox_->infer_device([&](float* dst, cudaStream_t st) {
+                        float r = 1.0f;
+                        if (!hw_decoder_->preprocess_yolox_into(
+                                yolox_->input_size(), 114.0f, dst, st, &r)) {
+                            FITRA_LOG_WARN("frame_source: GPU YOLOX preprocess failed seq={}",
+                                           raw.seq);
+                            return -1.0f;  // tell infer_device to skip the enqueue
+                        }
+                        return r;
+                    });
+                } else {
+                    dets = yolox_->infer(scratch);  // scratch_valid holds here
+                }
                 if (opts_.single_person && dets.size() > 1) {
                     auto largest = std::max_element(
                         dets.begin(), dets.end(),
@@ -81,11 +230,12 @@ void FrameSource::decode_loop() {
                 cached_bboxes_ = std::move(dets);
             }
         }
+        auto t_detect = std::chrono::steady_clock::now();
 
         if (opts_.fake_bbox_if_empty && cached_bboxes_.empty()) {
             infer::Bbox fake{};
-            float w = static_cast<float>(scratch.cols);
-            float h = static_cast<float>(scratch.rows);
+            float w = static_cast<float>(fw);  // frame dims (scratch may be empty
+            float h = static_cast<float>(fh);  // on the pure-device path)
             fake.x1 = 0.2f * w;
             fake.y1 = 0.2f * h;
             fake.x2 = 0.8f * w;
@@ -97,6 +247,8 @@ void FrameSource::decode_loop() {
         DecodedFrame df;
         df.seq         = raw.seq;
         df.captured_at = raw.captured_at;
+        df.t_decode    = t_decode;
+        df.t_detect    = t_detect;
         // During calib recording we drop bboxes too — the central thread sees
         // bboxes.empty() and naturally skips RTMPose. (Without this the
         // "missing prebake" warning would spam.)
@@ -105,30 +257,81 @@ void FrameSource::decode_loop() {
         }
 
         if (rtmpose_enabled_ && !df.bboxes.empty()) {
-            // Preprocess each (frame, bbox) into the contiguous CHW block
-            // here on the per-camera worker thread, shifting the dominant
-            // CPU cost off the central inference thread.
             const std::size_t per_item =
                 infer::RtmPose::blob_floats_per_item(rtmpose_opts_);
-            df.chw_concat.resize(df.bboxes.size() * per_item);
-            df.M_invs.resize(df.bboxes.size());
-            for (std::size_t i = 0; i < df.bboxes.size(); ++i) {
-                infer::RtmPose::preprocess_to_blob(
-                    rtmpose_opts_, scratch, df.bboxes[i],
-                    df.chw_concat.data() + i * per_item,
-                    df.M_invs[i]);
+            const std::size_t nb = df.bboxes.size();
+
+            // All-GPU path: run the preprocess kernel from the retained RGBA
+            // device buffer into a pooled device CHW buffer. The CPU does only
+            // the (cheap) inverse-affine per bbox; no per-person warp/normalize.
+            // Gated on gpu_decode_ok so a device-decode fallback this frame
+            // (RGBA buffer not retained) takes the CPU prebake path below.
+            bool gpu_done = false;
+            if (gpu_decode_ok) {
+                if (auto buf = chw_pool_.acquire(nb * per_item)) {
+                    df.M_invs.resize(nb);
+                    bool ok = true;
+                    for (std::size_t i = 0; i < nb; ++i) {
+                        df.M_invs[i] = infer::RtmPose::compute_m_inv(rtmpose_opts_, df.bboxes[i]);
+                        if (!hw_decoder_->preprocess_into(
+                                df.M_invs[i].ptr<double>(),
+                                rtmpose_opts_.input_w, rtmpose_opts_.input_h,
+                                kMeanBgr, kInvStdBgr, buf->ptr + i * per_item)) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if (ok) { df.chw_dev = std::move(buf); gpu_done = true; }
+                }
+                if (!gpu_done) {
+                    FITRA_LOG_WARN("frame_source: GPU preprocess failed seq={}, "
+                                   "falling back to CPU prebake", raw.seq);
+                    df.M_invs.clear();
+                }
+            }
+
+            // CPU prebake (default path, and fallback for the GPU path):
+            // warp + normalize + HWC->CHW on this per-camera worker thread.
+            // Requires a BGR `scratch`; on the pure-device path it is empty, so
+            // if the GPU prebake failed there we skip pose for this frame (the
+            // central thread handles a missing prebake gracefully) rather than
+            // dereferencing an empty Mat.
+            if (!gpu_done && scratch_valid) {
+                df.chw_concat.resize(nb * per_item);
+                df.M_invs.resize(nb);
+                for (std::size_t i = 0; i < nb; ++i) {
+                    infer::RtmPose::preprocess_to_blob(
+                        rtmpose_opts_, scratch, df.bboxes[i],
+                        df.chw_concat.data() + i * per_item,
+                        df.M_invs[i]);
+                }
+            } else if (!gpu_done) {
+                FITRA_LOG_WARN("frame_source: no GPU prebake and no BGR fallback "
+                               "for seq={}; skipping pose this frame", raw.seq);
+                df.M_invs.clear();  // has_prebaked_pose_inputs() -> false
             }
         }
-        if (!rtmpose_enabled_ || opts_.retain_bgr || calib_recording) {
+        // t_prebake closes the per-camera CPU stage. When the prebake block
+        // above was skipped (no bbox / no RTMPose) this equals t_detect so the
+        // det->bake delta is 0 rather than a garbage epoch-based value.
+        df.t_prebake = std::chrono::steady_clock::now();
+        if ((!rtmpose_enabled_ || opts_.retain_bgr || calib_recording) && scratch_valid) {
             df.bgr = scratch.clone();
         }
 
         {
             std::lock_guard<std::mutex> lk{slot_mu_};
             latest_ = std::move(df);
+            slot_cv_.notify_one();  // wake the central loop if parked in wait_available
         }
         ++frame_idx_;
     }
+    // NOTE: the HW decoder is deliberately NOT reset here. Tearing it down on
+    // the worker thread (cuGraphicsUnregisterResource + NvJPEGDecoder/NvMM/EGL
+    // destruction) segfaults — it races the rest of driver shutdown. Destroying
+    // it in ~FrameSource (main thread) is clean: the main thread holds the CUDA
+    // primary context (TRT binds it process-wide) and the destructor runs at a
+    // well-ordered, single-threaded point after the driver has stopped.
 }
 
 bool FrameSource::try_pop_latest_decoded(DecodedFrame& out) {
@@ -138,6 +341,21 @@ bool FrameSource::try_pop_latest_decoded(DecodedFrame& out) {
     last_returned_seq_ = latest_->seq;
     out = *latest_;
     return true;
+}
+
+bool FrameSource::wait_available(std::atomic<bool>& consumer_stop,
+                                 std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lk{slot_mu_};
+    slot_cv_.wait_for(lk, timeout, [&] {
+        return consumer_stop.load(std::memory_order_relaxed)
+            || (latest_ && latest_->seq != last_returned_seq_);
+    });
+    return latest_ && latest_->seq != last_returned_seq_;
+}
+
+void FrameSource::wake() {
+    std::lock_guard<std::mutex> lk{slot_mu_};
+    slot_cv_.notify_all();
 }
 
 }  // namespace fitra::camera

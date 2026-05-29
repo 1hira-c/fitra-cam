@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -31,6 +32,7 @@
 #include <opencv2/core.hpp>
 
 #include "camera/jpeg_decoder.hpp"
+#include "camera/nvjpeg_decoder.hpp"
 #include "camera/v4l2_capture.hpp"
 #include "infer/rtmpose.hpp"
 #include "infer/types.hpp"
@@ -38,24 +40,64 @@
 
 namespace fitra::camera {
 
+// Recyclable device CHW buffer for the all-GPU front-end. Holds the RTMPose
+// preprocess kernel's output (device memory) for one frame's batch of persons.
+struct DeviceChwBuf {
+    float*      ptr      = nullptr;  // CUDA device pointer
+    std::size_t capacity = 0;        // floats
+};
+
+// Per-camera pool of device CHW buffers. A buffer is acquired on the decode
+// worker, handed to the central inference thread inside a DecodedFrame, and
+// recycled when the last shared_ptr referencing it drops. Because the deleter
+// holds the pool state alive, the worker never frees or overwrites a buffer a
+// consumer still holds — the device analogue of the host path's copy-on-pop.
+class DeviceChwPool {
+public:
+    DeviceChwPool();
+    // At least `floats` capacity. nullptr on cudaMalloc failure (caller falls
+    // back to the CPU prebake path).
+    std::shared_ptr<DeviceChwBuf> acquire(std::size_t floats);
+
+private:
+    struct State {
+        std::mutex                mu;
+        std::vector<DeviceChwBuf> free;
+        ~State();  // cudaFree all recycled buffers
+    };
+    std::shared_ptr<State> state_;
+};
+
 struct DecodedFrame {
     // Populated for decode-only sources, and for prebaked RTMPose sources
     // when Options::retain_bgr is enabled (calibration recording tap).
     cv::Mat                              bgr;
     std::uint64_t                        seq{0};
-    std::chrono::steady_clock::time_point captured_at{};
+    std::chrono::steady_clock::time_point captured_at{};  // t_capture (V4L2 DQBUF)
+    // Per-stage latency timestamps (steady_clock), set on the per-camera
+    // worker as each stage completes. Skipped stages are filled with the
+    // previous stage's value so deltas stay 0 (never default/epoch, which
+    // would poison the rolling average downstream).
+    std::chrono::steady_clock::time_point t_decode{};   // after JPEG/YUYV -> BGR
+    std::chrono::steady_clock::time_point t_detect{};   // after YOLOX block
+    std::chrono::steady_clock::time_point t_prebake{};  // after RTMPose prebake
     std::vector<infer::Bbox>             bboxes;  // empty if no Yolox or no person
     // Pre-baked RTMPose inputs aligned 1:1 with `bboxes`. The chw buffer is a
     // single contiguous block of bboxes.size() * 3*input_h*input_w floats.
     // Populated when the FrameSource was given a non-null rtmpose_opts.
     std::vector<float>                   chw_concat;
     std::vector<cv::Mat>                 M_invs;
+    // All-GPU front-end: per-frame device CHW (preprocess kernel output),
+    // bboxes.size()*per_item floats contiguous. When set, the central thread
+    // feeds TRT from this device buffer (no H2D) instead of chw_concat.
+    std::shared_ptr<DeviceChwBuf>        chw_dev;
 
     bool has_prebaked_pose_inputs(std::size_t per_item) const {
-        return bboxes.empty()
-            || (per_item > 0
-                && chw_concat.size() == bboxes.size() * per_item
-                && M_invs.size() == bboxes.size());
+        if (bboxes.empty()) return true;
+        if (per_item == 0 || M_invs.size() != bboxes.size()) return false;
+        const std::size_t need = bboxes.size() * per_item;
+        if (chw_dev && chw_dev->capacity >= need) return true;  // device path
+        return chw_concat.size() == need;                       // host path
     }
 };
 
@@ -100,6 +142,18 @@ public:
 
     bool try_pop_latest_decoded(DecodedFrame& out);
 
+    // Block until a new decoded frame is available (without consuming it),
+    // `consumer_stop` is set, or `timeout` elapses. Returns true if a fresh
+    // frame is waiting. The caller then consumes it via try_pop_latest_decoded
+    // -- splitting wait-from-consume keeps the central loop's existing Pass-1
+    // poll structure intact. Used by the single-camera event-driven path.
+    bool wait_available(std::atomic<bool>& consumer_stop,
+                        std::chrono::milliseconds timeout);
+
+    // Wake any thread parked in wait_available so a consumer stop flag is
+    // observed immediately. Notifies under the slot lock.
+    void wake();
+
     V4l2Capture&  capture()             { return *capture_; }
     const V4l2Options& options() const  { return capture_->options(); }
     double recv_fps() const             { return capture_->recv_fps(); }
@@ -116,6 +170,17 @@ private:
     infer::RtmPose::Options       rtmpose_opts_{};
 
     JpegDecoder            decoder_;
+    // HW NVJPEG decoder, created lazily on the decode thread when the capture
+    // pixel format is Nvjpeg. nullptr for the mjpeg/yuyv paths.
+    std::unique_ptr<NvJpegHwDecoder> hw_decoder_;
+    // All-GPU front-end: true once the HW decoder is up and exposes the EGL/CUDA
+    // device entry points and RTMPose prebaking is enabled. Set on the worker.
+    bool                   device_pose_ = false;
+    // M3: YOLOX letterbox preprocess also runs on the GPU. When true (and we are
+    // not retaining BGR for calib), the worker decodes straight to the RGBA CUDA
+    // buffer (no RGBA->BGR cvtColor) and feeds YOLOX from the device.
+    bool                   yolox_device_ = false;
+    DeviceChwPool          chw_pool_;
     std::thread            worker_;
     std::atomic<bool>      stop_{false};
 
@@ -124,6 +189,7 @@ private:
     std::vector<infer::Bbox> cached_bboxes_;
 
     mutable std::mutex          slot_mu_;
+    std::condition_variable     slot_cv_;
     std::optional<DecodedFrame> latest_;
     std::uint64_t               last_returned_seq_ = 0;
 };
