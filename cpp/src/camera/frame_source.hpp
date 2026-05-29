@@ -176,6 +176,10 @@ private:
     // All-GPU front-end: true once the HW decoder is up and exposes the EGL/CUDA
     // device entry points and RTMPose prebaking is enabled. Set on the worker.
     bool                   device_pose_ = false;
+    // M3: YOLOX letterbox preprocess also runs on the GPU. When true (and we are
+    // not retaining BGR for calib), the worker decodes straight to the RGBA CUDA
+    // buffer (no RGBA->BGR cvtColor) and feeds YOLOX from the device.
+    bool                   yolox_device_ = false;
     DeviceChwPool          chw_pool_;
     std::thread            worker_;
     std::atomic<bool>      stop_{false};

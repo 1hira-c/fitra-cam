@@ -104,8 +104,12 @@ void FrameSource::decode_loop() {
             e && *e && std::string(e) != "0") {
             device_pose_ = false;
         }
+        // M3: YOLOX preprocess on the GPU too. Only meaningful alongside the
+        // RTMPose device path; when both are on we can skip the BGR cvtColor.
+        yolox_device_ = device_pose_ && hw_decoder_->yolox_device_capable();
         if (device_pose_)
-            FITRA_LOG_INFO("frame_source: all-GPU RTMPose preprocess enabled");
+            FITRA_LOG_INFO("frame_source: all-GPU preprocess enabled (RTMPose{})",
+                           yolox_device_ ? " + YOLOX" : "");
     }
     while (!stop_.load()) {
         Frame raw;
@@ -115,25 +119,41 @@ void FrameSource::decode_loop() {
         if (!capture_->wait_pop_latest(raw, stop_, std::chrono::milliseconds(100))) {
             continue;
         }
-        bool gpu_decode_ok = false;  // RGBA CUDA buffer retained for GPU prebake
+        // calib recording forces a BGR copy (raw mp4 tap); pose is skipped.
+        const bool calib_recording =
+            opts_.calib_recording_flag
+            && opts_.calib_recording_flag->load(std::memory_order_relaxed);
+
+        bool gpu_decode_ok = false;     // RGBA CUDA buffer retained for GPU prebake
+        bool scratch_valid = false;     // `scratch` holds a BGR frame
+        int  fw = 0, fh = 0;            // decoded frame dimensions
         if (use_hw) {
-            // MJPEG bytes decoded on the Jetson HW NVJPEG block (+ VIC color
-            // convert), off the CPU. See camera/nvjpeg_decoder.hpp. The device
-            // path additionally retains the RGBA CUDA buffer for the GPU
-            // preprocess below; both produce the same BGR `scratch` (still
-            // needed by YOLOX / calibration).
-            if (device_pose_) {
+            // Full-GPU front-end: YOLOX + RTMPose both run from the RGBA CUDA
+            // buffer, so decode straight to device with NO RGBA->BGR cvtColor.
+            // BGR is still produced (decode_keep_device) when something on the
+            // CPU needs it: calibration recording or retain_bgr, or when YOLOX
+            // can't run on the GPU (older .so) and would need a BGR frame.
+            const bool need_bgr =
+                opts_.retain_bgr || calib_recording || (yolox_ && !yolox_device_);
+            if (device_pose_ && !need_bgr) {
+                gpu_decode_ok =
+                    hw_decoder_->decode_to_device(raw.data.data(), raw.data.size(), fw, fh);
+            } else if (device_pose_) {
                 gpu_decode_ok =
                     hw_decoder_->decode_keep_device(raw.data.data(), raw.data.size(), scratch);
+                scratch_valid = gpu_decode_ok;
             }
             // Plain HW decode when not on the device path, or as a fallback if
             // the device decode/EGL bridge failed — keep the frame on the CPU
             // prebake path rather than dropping it.
-            if (!gpu_decode_ok &&
-                !hw_decoder_->decode(raw.data.data(), raw.data.size(), scratch)) {
-                FITRA_LOG_WARN("frame_source: HW nvjpeg decode failed for seq={}", raw.seq);
-                continue;
+            if (!gpu_decode_ok) {
+                if (!hw_decoder_->decode(raw.data.data(), raw.data.size(), scratch)) {
+                    FITRA_LOG_WARN("frame_source: HW nvjpeg decode failed for seq={}", raw.seq);
+                    continue;
+                }
+                scratch_valid = true;
             }
+            if (scratch_valid) { fw = scratch.cols; fh = scratch.rows; }
         } else if (capture_->options().pixel_format == PixFmt::Yuyv) {
             // Packed YUV422 -> BGR. No entropy decode; just a color convert.
             const auto& o = capture_->options();
@@ -151,11 +171,8 @@ void FrameSource::decode_loop() {
                 continue;
             }
         }
+        if (!use_hw) { scratch_valid = true; fw = scratch.cols; fh = scratch.rows; }
         auto t_decode = std::chrono::steady_clock::now();
-
-        const bool calib_recording =
-            opts_.calib_recording_flag
-            && opts_.calib_recording_flag->load(std::memory_order_relaxed);
 
         // YOLOX runs on this thread (one IExecutionContext per FrameSource),
         // so all cameras detect in parallel. Skipped during calib recording —
@@ -165,7 +182,23 @@ void FrameSource::decode_loop() {
             bool do_detect = (frame_idx_ % opts_.det_frequency == 0)
                           || cached_bboxes_.empty();
             if (do_detect) {
-                auto dets = yolox_->infer(scratch);
+                // GPU YOLOX: the preprocess kernel fills the engine input from
+                // the retained RGBA device buffer (on the engine's stream); the
+                // kernel and enqueue are ordered on that stream. CPU path used
+                // when the GPU decode fell back (BGR scratch available).
+                std::vector<infer::Bbox> dets;
+                if (gpu_decode_ok && yolox_device_) {
+                    dets = yolox_->infer_device([&](float* dst, cudaStream_t st) {
+                        float r = 1.0f;
+                        if (!hw_decoder_->preprocess_yolox_into(
+                                yolox_->input_size(), 114.0f, dst, st, &r))
+                            FITRA_LOG_WARN("frame_source: GPU YOLOX preprocess failed seq={}",
+                                           raw.seq);
+                        return r;
+                    });
+                } else {
+                    dets = yolox_->infer(scratch);  // scratch_valid holds here
+                }
                 if (opts_.single_person && dets.size() > 1) {
                     auto largest = std::max_element(
                         dets.begin(), dets.end(),
@@ -185,8 +218,8 @@ void FrameSource::decode_loop() {
 
         if (opts_.fake_bbox_if_empty && cached_bboxes_.empty()) {
             infer::Bbox fake{};
-            float w = static_cast<float>(scratch.cols);
-            float h = static_cast<float>(scratch.rows);
+            float w = static_cast<float>(fw);  // frame dims (scratch may be empty
+            float h = static_cast<float>(fh);  // on the pure-device path)
             fake.x1 = 0.2f * w;
             fake.y1 = 0.2f * h;
             fake.x2 = 0.8f * w;
@@ -243,7 +276,11 @@ void FrameSource::decode_loop() {
 
             // CPU prebake (default path, and fallback for the GPU path):
             // warp + normalize + HWC->CHW on this per-camera worker thread.
-            if (!gpu_done) {
+            // Requires a BGR `scratch`; on the pure-device path it is empty, so
+            // if the GPU prebake failed there we skip pose for this frame (the
+            // central thread handles a missing prebake gracefully) rather than
+            // dereferencing an empty Mat.
+            if (!gpu_done && scratch_valid) {
                 df.chw_concat.resize(nb * per_item);
                 df.M_invs.resize(nb);
                 for (std::size_t i = 0; i < nb; ++i) {
@@ -252,13 +289,17 @@ void FrameSource::decode_loop() {
                         df.chw_concat.data() + i * per_item,
                         df.M_invs[i]);
                 }
+            } else if (!gpu_done) {
+                FITRA_LOG_WARN("frame_source: no GPU prebake and no BGR fallback "
+                               "for seq={}; skipping pose this frame", raw.seq);
+                df.M_invs.clear();  // has_prebaked_pose_inputs() -> false
             }
         }
         // t_prebake closes the per-camera CPU stage. When the prebake block
         // above was skipped (no bbox / no RTMPose) this equals t_detect so the
         // det->bake delta is 0 rather than a garbage epoch-based value.
         df.t_prebake = std::chrono::steady_clock::now();
-        if (!rtmpose_enabled_ || opts_.retain_bgr || calib_recording) {
+        if ((!rtmpose_enabled_ || opts_.retain_bgr || calib_recording) && scratch_valid) {
             df.bgr = scratch.clone();
         }
 

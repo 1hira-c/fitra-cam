@@ -33,6 +33,15 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — 全 GPU フロントエンド M3 Step B: frame_source 統合 + cvtColor 撤去
+device 経路を `decode_to_device` (host map / RGBA→BGR cvtColor なし) に切替え、検出フレームで
+`Yolox::infer_device`、calib/retain_bgr 時のみ `decode_keep_device`。**残っていた最後の per-frame
+CPU フルパス (full-frame cvtColor) を撤去**。フレーム寸法は decode 戻り値で追跡、device decode 失敗時は
+BGR+CPU フォールバック (BGR なし時は pose スキップで空 Mat deref 回避)。**2cam 90fps@VGA: CPU
+1.28→0.98 cores (mjpeg 1.83 比 −46%)、cap→pub 12.8→11.7ms** で 1 コアを切った。SIGINT rc=0/0.32s、
+ctest 9/9、CHW/keypoint/bbox correctness 維持。残 CPU は後段推論 + capture → M4/M5。
+→ [design/core-pipeline-gpu-frontend.md](../design/core-pipeline-gpu-frontend.md)
+
 ### 2026-05-29 — 全 GPU フロントエンド M3 Step A: YOLOX 前処理 CUDA カーネル
 YOLOX letterbox 前処理 (resize+HWC→CHW, 正規化なし, 114 pad) を GPU カーネル化。`cv::resize` の
 half-pixel convention + edge clamp を再現。`Yolox::infer_device(fill)` で engine 入力 device バッファを

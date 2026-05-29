@@ -167,10 +167,24 @@ MJPEG ─VIC/NVJPEG decodeToFd─▶ NvBufSurface(YUV422,NVMM)
     (8/8 matched, 0 unmatched)** — CPU-fixed-point vs GPU-float letterbox の微差を FP16 network が
     量子化で吸収 (device-first 順で stale 入力 false-pass を排除して確認)。CHW 0.0028 / keypoint
     0.34px も維持、ctest 9/9。
-  - **Step B (次)**: frame_source 統合 — device 経路を `decode_to_device` (host map / cvtColor なし) に
-    切替え、検出フレームで YOLOX device kernel、calib/retain_bgr 時のみ `decode_keep_device`。これで
-    **full-frame RGBA→BGR cvtColor を撤去** (残っていた最後の per-frame CPU フルパス)。2cam 90fps@VGA で
-    CPU 再測。
+  - **Step B ✅ (2026-05-29)**: frame_source 統合。device 経路を `decode_to_device` (host map /
+    cvtColor なし) に切替え、検出フレームで `Yolox::infer_device`、calib/retain_bgr/(YOLOX 非 device)
+    時のみ `decode_keep_device` で BGR 維持。**full-frame RGBA→BGR cvtColor を撤去** (残っていた最後の
+    per-frame CPU フルパス)。フレーム寸法は scratch ではなく decode 戻り値 `fw/fh` で追跡 (純 device 経路は
+    scratch 空)。フォールバック: device decode 失敗→`decode()` BGR + CPU、GPU prebake 失敗かつ BGR なしは
+    pose スキップ (central が graceful 処理、空 Mat deref を回避)。
+    - **2cam 90fps@VGA 実測** (同一手法):
+
+      | 経路 (2 cam @90fps) | CPU cores | cap→dec | det→bake | cap→pub |
+      |---|---|---|---|---|
+      | mjpeg-CPU | 1.83 | 5.1ms | 2.9ms | 16.7ms |
+      | M2 (RTMPose GPU, +cvtColor) | 1.28 | 3.9ms | 0.5ms | 12.8ms |
+      | **M3 (RTMPose+YOLOX GPU, cvtColor 撤去)** | **0.98** | 3.2ms | 0.5ms | **11.7ms** |
+
+      **M3 は 1 コアを切った** — mjpeg 比 **−46% CPU / −5ms E2E**。M2 比 −0.30 コアは full-frame cvtColor +
+      YOLOX CPU 前処理の撤去分。SIGINT rc=0/0.32s、ctest 9/9、CHW/keypoint/bbox correctness 維持。
+    - **残**: 後段 (capture + YOLOX/RTMPose 推論 + SimCC argmax) が残 CPU。M4 でアーキ整合・multi-cam
+      スループット (170fps) 再計測、M5 で SimCC argmax GPU 化 (host 転送を keypoint のみに)。
 - **M4**: アーキ移行 — Phase 6b の per-cam CPU 前処理を撤去し GPU 経路へ。EGL/CUDA context の
   スレッド親和性、register ライフサイクル、multi-cam の resource キャッシュを整理。
 - **M5 (任意)**: SimCC argmax + inverse-affine を GPU 化し host 転送を keypoint のみに最小化。
