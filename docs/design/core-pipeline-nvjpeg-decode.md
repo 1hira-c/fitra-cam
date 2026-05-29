@@ -109,9 +109,15 @@ NvBufSurfTransform は crop+scale も担えるので prebake warpAffine 吸収 (
   (`fitra_nvjpeg_iso.cpp`)。本体に dlopen ローダ `NvJpegHwDecoder`
   (`camera/nvjpeg_decoder.{hpp,cpp}`, `RTLD_DEEPBIND|RTLD_LOCAL`) を追加、`frame_source` decode 分岐
   + `--pixel-format nvjpeg` 配線 (capture は MJPEG のまま)。下記実測参照。
-- **M2**: NvBufSurfTransform の crop+scale で prebake warpAffine 吸収を狙う (回転有無を要確認)。
-  `det→bake` も含めた短縮を計測。
-- **M3**: NvBuffer プール化 + バッチ（複数カメラ同時 decode）で multi-cam スループット確認。
+- **M2 (一部完了, 2026-05-29)**: decode 出力を .so からゼロコピー (mapped RGBA ポインタ+pitch を返却)
+  にし、手書きスカラー RGBA→BGR ループを除去。BGR 化は本体側で **NEON `cv::cvtColor`** 1 回に。
+  `cap→dec` 5.0→4.0ms。**ただし VIC は 24-bit BGR 出力非対応** (NvBufSurfaceCreate/NvTransform が
+  reject、実機で確認) のため RGBA→BGR のフルフレーム CPU 変換が残り、90fps では CPU 床のまま
+  (下表)。真の高 fps 解放は GPU 前処理 (= NvBufSurfTransform の crop+scale で prebake warpAffine を
+  吸収し full-frame 変換を消す / RTMPose 入力を GPU で作る) が必要。これは migration-plan の Phase 6
+  「GPU 前処理」に合流する大きめの作業として M3 へ送る。
+- **M3 (未着手)**: GPU 前処理 — VIC で decode→crop→resize を 1 パス化し full-frame CPU 変換を
+  排除 (cached bbox で crop)。+ NvBuffer プール化・複数カメラ同時 decode。
 
 ## 検証 (M1 実測, 2026-05-29)
 
@@ -158,10 +164,22 @@ NvBufSurfTransform + map sync + RGBA→BGR の CPU repack が乗る; cap→dec �
 | nvjpeg (HW) | 1.78 cores | 88 | ~81 | 17.5ms |
 
 30fps で −0.18 cores だった差が 90fps では **ほぼゼロ**。処理フレームが ~166/s に増えると、
-libjpeg decode の CPU 増加分を **nvjpeg 側の RGBA→BGR repack (166×307k px/s) が相殺**し、かつ全体 CPU
-が RTMPose prebake 支配になりデコード差の比率が縮むため。**結論: 現状の nvjpeg は低 fps でのみ CPU
-得、高スループットでは CPU repack が相殺する。M2 (repack 除去) が高 fps で nvjpeg を活かす前提条件。**
-これは当初想定 (台数/解像度が上がるほど一方的に有利) を実測が覆した重要な訂正。
+libjpeg decode の CPU 増加分を **nvjpeg 側の full-frame 色変換 (166×307k px/s) が相殺**し、かつ全体 CPU
+が RTMPose prebake 支配になりデコード差の比率が縮むため。
+
+**M2 後 (ゼロコピー + NEON cvtColor, 2 cam):**
+
+| | mjpeg | nvjpeg | 差 |
+|---|---|---|---|
+| 30fps×2 | 0.89 cores | **0.68** | −0.21 (−24%) |
+| 90fps×2 | 1.81 cores | 1.79 | −0.02 (≈0) |
+
+スカラーループ除去で `cap→dec` は 5.0→4.0ms に改善したが、**24-bit BGR が VIC 非対応で RGBA→BGR の
+full-frame CPU 変換が消せず**、90fps の CPU 床は変わらなかった。
+**結論 (実測確定)**: nvjpeg は **中 fps 帯まで CPU を明確に削る** (≤30fps で −24%) が、カメラ最大 90fps では
+色変換が床になり相殺。完全な高 fps 解放には **GPU 前処理** (full-frame CPU 変換の排除) が必須で、
+これは Phase 6 GPU 前処理として M3 送り。実運用は RTMPose が ~30–80fps なので中 fps 帯の CPU 余力が
+そのまま効く。当初の「fps が上がるほど一方的に有利」想定は実測が覆した。
 
 ## 残課題 / リスク
 - **dlopen 隔離の本体組み込み**: `.so` を CMake で別ターゲット化し、本体は実行時 dlopen。

@@ -36,7 +36,6 @@ struct Handle {
     int            w          = 0;
     int            h          = 0;
     bool           mapped     = false;
-    std::vector<std::uint8_t> bgr;  // reused output, BGR8 (w*h*3)
 };
 
 // Allocate (once) the pitch-linear RGBA destination for the transform and map
@@ -51,6 +50,9 @@ bool ensure_dst(Handle* hd, int w, int h) {
     ap.width       = static_cast<uint32_t>(w);
     ap.height      = static_cast<uint32_t>(h);
     ap.layout      = NVBUF_LAYOUT_PITCH;
+    // VIC supports only 32-bit packed RGB outputs (24-bit BGR is rejected by
+    // NvBufSurfaceCreate/NvBufSurfTransform). Output RGBA; the caller does one
+    // NEON cv::cvtColor(RGBA->BGR).
     ap.colorFormat = NVBUF_COLOR_FORMAT_RGBA;
     ap.memType     = NVBUF_MEM_SURFACE_ARRAY;
     ap.memtag      = NvBufSurfaceTag_VIDEO_CONVERT;
@@ -59,7 +61,6 @@ bool ensure_dst(Handle* hd, int w, int h) {
     if (NvBufSurfaceMap(hd->dst_surf, 0, 0, NVBUF_MAP_READ) != 0) return false;
     hd->mapped = true;
     hd->w = w; hd->h = h;
-    hd->bgr.assign(static_cast<std::size_t>(w) * h * 3, 0);
     return true;
 }
 
@@ -75,14 +76,16 @@ void* fitra_nvjpeg_create() {
     return hd;
 }
 
-// Decode `jpeg` (MJPEG bytes) to BGR8. On success returns a pointer to an
-// internal BGR buffer (valid until the next decode/destroy on this handle) and
-// sets *w/*h; returns nullptr on failure. The caller copies the pixels out.
+// Decode `jpeg` (MJPEG bytes) on the HW NVJPEG block + VIC (YUV->RGBA). On
+// success returns a pointer to the mapped RGBA8 output (zero-copy; valid until
+// the next decode/destroy on this handle) and sets *w/*h/*pitch (row stride in
+// bytes). Returns nullptr on failure. The caller does the single RGBA->BGR
+// NEON conversion (cv::cvtColor) to keep RTMPose's BGR contract.
 __attribute__((visibility("default")))
-const unsigned char* fitra_nvjpeg_decode_bgr(void* handle,
-                                             const unsigned char* jpeg,
-                                             unsigned long n,
-                                             int* w, int* h) {
+const unsigned char* fitra_nvjpeg_decode_rgba(void* handle,
+                                              const unsigned char* jpeg,
+                                              unsigned long n,
+                                              int* w, int* h, int* pitch) {
     Handle* hd = static_cast<Handle*>(handle);
     if (!hd || !hd->dec || !jpeg || n == 0) return nullptr;
 
@@ -102,21 +105,10 @@ const unsigned char* fitra_nvjpeg_decode_bgr(void* handle,
 
     NvBufSurfaceSyncForCpu(hd->dst_surf, 0, 0);
     auto& s = hd->dst_surf->surfaceList[0];
-    const std::uint8_t* rgba = static_cast<const std::uint8_t*>(s.mappedAddr.addr[0]);
-    const std::uint32_t pitch = s.planeParams.pitch[0];
-    std::uint8_t* out = hd->bgr.data();
-    for (uint32_t r = 0; r < dh; ++r) {
-        const std::uint8_t* ir = rgba + static_cast<std::size_t>(r) * pitch;
-        std::uint8_t* orow = out + static_cast<std::size_t>(r) * dw * 3;
-        for (uint32_t c = 0; c < dw; ++c) {
-            orow[3*c + 0] = ir[4*c + 2];  // B
-            orow[3*c + 1] = ir[4*c + 1];  // G
-            orow[3*c + 2] = ir[4*c + 0];  // R
-        }
-    }
-    *w = static_cast<int>(dw);
-    *h = static_cast<int>(dh);
-    return out;
+    *w     = static_cast<int>(dw);
+    *h     = static_cast<int>(dh);
+    *pitch = static_cast<int>(s.planeParams.pitch[0]);
+    return static_cast<const std::uint8_t*>(s.mappedAddr.addr[0]);
 }
 
 __attribute__((visibility("default")))

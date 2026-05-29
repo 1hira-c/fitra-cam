@@ -1,8 +1,12 @@
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE  // RTLD_DEEPBIND
+#endif
 #include "camera/nvjpeg_decoder.hpp"
 
 #include <dlfcn.h>
 #include <unistd.h>
+
+#include <opencv2/imgproc.hpp>
 
 #include <array>
 #include <cstring>
@@ -56,8 +60,8 @@ NvJpegHwDecoder::NvJpegHwDecoder() {
 
     create_  = reinterpret_cast<void* (*)()>(::dlsym(lib_, "fitra_nvjpeg_create"));
     decode_  = reinterpret_cast<const unsigned char* (*)(
-                   void*, const unsigned char*, unsigned long, int*, int*)>(
-                   ::dlsym(lib_, "fitra_nvjpeg_decode_bgr"));
+                   void*, const unsigned char*, unsigned long, int*, int*, int*)>(
+                   ::dlsym(lib_, "fitra_nvjpeg_decode_rgba"));
     destroy_ = reinterpret_cast<void (*)(void*)>(::dlsym(lib_, "fitra_nvjpeg_destroy"));
     if (!create_ || !decode_ || !destroy_) {
         ::dlclose(lib_);
@@ -81,11 +85,16 @@ NvJpegHwDecoder::~NvJpegHwDecoder() {
 
 bool NvJpegHwDecoder::decode(const std::uint8_t* jpeg, std::size_t bytes, cv::Mat& out_bgr) {
     if (!handle_ || !jpeg || bytes == 0) return false;
-    int w = 0, h = 0;
-    const unsigned char* bgr = decode_(handle_, jpeg, static_cast<unsigned long>(bytes), &w, &h);
-    if (!bgr || w <= 0 || h <= 0) return false;
-    // Copy out of the .so's internal buffer (valid only until the next decode).
-    cv::Mat(h, w, CV_8UC3, const_cast<unsigned char*>(bgr)).copyTo(out_bgr);
+    int w = 0, h = 0, pitch = 0;
+    const unsigned char* rgba =
+        decode_(handle_, jpeg, static_cast<unsigned long>(bytes), &w, &h, &pitch);
+    if (!rgba || w <= 0 || h <= 0 || pitch < w * 4) return false;
+    // VIC output is RGBA (24-bit BGR is unsupported). One NEON cv::cvtColor is
+    // the only full-frame CPU pass on the HW route. cvtColor writes a fresh
+    // out_bgr, so we don't alias the .so's mapped buffer past this call.
+    cv::Mat rgba_view(h, w, CV_8UC4, const_cast<unsigned char*>(rgba),
+                      static_cast<std::size_t>(pitch));
+    cv::cvtColor(rgba_view, out_bgr, cv::COLOR_RGBA2BGR);
     return true;
 }
 

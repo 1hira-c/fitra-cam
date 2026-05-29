@@ -40,8 +40,9 @@ private:
     void* handle_ = nullptr;  // per-thread decoder handle inside the .so
     // Resolved C entry points.
     void* (*create_)()                                                       = nullptr;
+    // Returns mapped RGBA8 (zero-copy) + width/height/row-pitch; null on error.
     const unsigned char* (*decode_)(void*, const unsigned char*, unsigned long,
-                                    int*, int*)                              = nullptr;
+                                    int*, int*, int*)                        = nullptr;
     void (*destroy_)(void*)                                                  = nullptr;
 };
 
