@@ -40,6 +40,16 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-05-30 — 継続キャリブの cold-start ブースト
+初期収束が遅すぎる(実機で 1 分以上歩かないと位置が合わない)問題に対処。原因は fine の
+step clamp(`max_pos_step 0.05m` / `max_yaw_step 2°` per 2s resolve)が起動時の大きな初期
+ズレまで律速していたこと。純関数 `update_lock_state` でロック状態を導入し、未収束の間は
+coarse クランプ(`coarse_max_pos_step 0.50m` / `coarse_max_yaw_step 30°` / `blend 0.6`)で
+速く粗収束 → 近接した solve が連続(`lock_streak 3`)したら fine クランプに latch(ジャンプ
+防止は維持)。VMT 再センタリング等の大乖離・runtime トグルで coarse へ復帰。`/stats3d` と
+Web UI に `locked` を追加。新規 ctest `test_lock_state`。
+→ [design/vr-output-continuous-hmd-calibration.md](../design/vr-output-continuous-hmd-calibration.md)(cold-start 追補)
+
 ### 2026-05-29 — 自動・半継続 HMD キャリブレーション
 Phase 15 の単発 alignment を常時バックグラウンド化。起動時から HMD と「信頼性高く
 報告された頭部(不安定時は chest 中点にフォールバック)」を継続サンプリングし、空間

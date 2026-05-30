@@ -78,10 +78,26 @@ struct ContinuousAlignerConfig {
     double sample_ttl_s     = 60.0;   // cell expiry (tracks slow drift)
     int    min_cells        = 8;      // need this many occupied cells to solve
 
-    // ---- solve gate + per-update step clamp ----
+    // ---- solve gate + per-update step clamp (steady-state / "fine") ----
     float  residual_max_m   = 0.15f;  // reject a solve whose mean residual exceeds this
-    float  max_yaw_step_deg = 2.0f;   // clamp |Δyaw| applied per resolve
-    float  max_pos_step_m   = 0.05f;  // clamp |Δ(x,z)| applied per resolve
+    float  max_yaw_step_deg = 2.0f;   // clamp |Δyaw| applied per resolve once locked
+    float  max_pos_step_m   = 0.05f;  // clamp |Δ(x,z)| applied per resolve once locked
+
+    // ---- cold-start boost (coarse convergence before lock) ----
+    // The fine clamps above are tuned for jump-free drift tracking, but they
+    // make the *initial* convergence painfully slow (e.g. 2 deg/resolve -> a
+    // 90 deg start-up offset takes ~90 s). Until the live alignment has settled
+    // onto the solve, run with looser blend/clamp ("coarse"), then latch into
+    // the fine clamps. A large divergence (e.g. VMT re-centering) drops back to
+    // coarse so it re-acquires quickly.
+    float  coarse_blend_alpha     = 0.6f;   // EMA weight while unlocked
+    float  coarse_max_yaw_step_deg = 30.0f; // |Δyaw| clamp while unlocked
+    float  coarse_max_pos_step_m   = 0.50f; // |Δ(x,z)| clamp while unlocked
+    float  lock_pos_tol_m   = 0.10f;  // solve within this of live -> "converged"
+    float  lock_yaw_tol_deg = 3.0f;   // ... and within this yaw
+    int    lock_streak      = 3;      // this many converged resolves in a row -> lock
+    float  unlock_pos_err_m = 0.50f;  // solve diverges this far from live -> re-coarse
+    float  unlock_yaw_err_deg = 20.0f;
 };
 
 // Smooth Hermite ramp. Returns 0 at `zero_at`, 1 at `full_at`, monotonic in
@@ -149,6 +165,27 @@ private:
     std::map<std::int64_t, AlignSample> cells_;
 };
 
+// Cold-start lock state: `locked` selects the fine (jump-free) clamps; while
+// unlocked the loop uses the coarse clamps for fast initial convergence.
+// `streak` counts consecutive converged resolves toward the lock threshold.
+struct LockState {
+    bool locked = false;
+    int  streak = 0;
+};
+
+// Advance the lock state from one solve. Given the live alignment (`current`)
+// and the fresh solve (`target`, with mean `residual_m`): while unlocked, a
+// solve that sits within (lock_pos_tol_m, lock_yaw_tol_deg) of live and under
+// residual_max_m extends the streak, latching `locked` once it reaches
+// `lock_streak`; while locked, a solve diverging past (unlock_pos_err_m,
+// unlock_yaw_err_deg) drops back to coarse. Pure: no clock, no state beyond the
+// returned struct.
+LockState update_lock_state(LockState prev,
+                            const VmtAlignment& current,
+                            const VmtAlignment& target,
+                            float residual_m,
+                            const ContinuousAlignerConfig& cfg);
+
 // Blend `target` toward `current` by `alpha`, clamping the per-update step
 // (translation magnitude and |Δyaw|). Y is copied from `current` (height stays
 // manual); yaw is blended on the circle.
@@ -166,6 +203,7 @@ public:
     struct Status {
         bool                running        = false;
         bool                enabled        = false;
+        bool                locked         = false;  // false = coarse (cold-start) clamps
         int                 occupied_cells = 0;
         int                 n_samples      = 0;
         int                 head_samples   = 0;

@@ -145,6 +145,7 @@ std::string make_continuous_align_fragment(const vmt::ContinuousAligner& a) {
     std::ostringstream out;
     out << "\"continuous_align\":{\"running\":" << (s.running ? "true" : "false")
         << ",\"enabled\":"        << (s.enabled ? "true" : "false")
+        << ",\"locked\":"         << (s.locked ? "true" : "false")
         << ",\"occupied_cells\":" << s.occupied_cells
         << ",\"min_cells\":"      << c.min_cells
         << ",\"n_samples\":"      << s.n_samples

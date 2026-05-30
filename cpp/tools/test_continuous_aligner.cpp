@@ -18,6 +18,8 @@ using fitra::vmt::AutoAlignmentStatus;
 using fitra::vmt::blend_alignment;
 using fitra::vmt::ContinuousAlignerConfig;
 using fitra::vmt::CorrSource;
+using fitra::vmt::LockState;
+using fitra::vmt::update_lock_state;
 using fitra::vmt::HmdPose;
 using fitra::vmt::make_sample;
 using fitra::vmt::ramp;
@@ -197,6 +199,46 @@ void test_blend() {
     CHECK_NEAR(o2.yaw_deg, 180.0f, 1e-3);
 }
 
+void test_lock_state() {
+    ContinuousAlignerConfig cfg;  // lock_streak=3, lock tol (0.10m, 3deg),
+                                  // unlock (0.50m, 20deg), residual_max 0.15m
+    VmtAlignment live;  live.x = 0.0f; live.z = 0.0f; live.yaw_deg = 0.0f;
+
+    // Far-off solve while unlocked: no streak, stays coarse.
+    VmtAlignment far;  far.x = 1.0f; far.z = 0.0f; far.yaw_deg = 45.0f;
+    LockState st;
+    st = update_lock_state(st, live, far, 0.05f, cfg);
+    CHECK(!st.locked && st.streak == 0);
+
+    // A converged solve (close in xz + yaw, low residual) builds the streak and
+    // latches after lock_streak resolves.
+    VmtAlignment near; near.x = 0.02f; near.z = 0.01f; near.yaw_deg = 1.0f;
+    st = update_lock_state(st, live, near, 0.03f, cfg);  // streak 1
+    CHECK(!st.locked && st.streak == 1);
+    st = update_lock_state(st, live, near, 0.03f, cfg);  // streak 2
+    CHECK(!st.locked && st.streak == 2);
+    st = update_lock_state(st, live, near, 0.03f, cfg);  // streak 3 -> lock
+    CHECK(st.locked);
+
+    // High residual breaks the streak before locking.
+    LockState st2;
+    st2 = update_lock_state(st2, live, near, 0.03f, cfg);  // streak 1
+    st2 = update_lock_state(st2, live, near, 0.20f, cfg);  // residual > max -> reset
+    CHECK(!st2.locked && st2.streak == 0);
+
+    // Once locked, a small solve keeps it locked; a large divergence (re-center)
+    // drops back to coarse.
+    LockState locked; locked.locked = true; locked.streak = 3;
+    LockState keep = update_lock_state(locked, live, near, 0.03f, cfg);
+    CHECK(keep.locked);
+    VmtAlignment jumped; jumped.x = 0.8f; jumped.z = 0.0f; jumped.yaw_deg = 0.0f;
+    LockState drop = update_lock_state(locked, live, jumped, 0.03f, cfg);
+    CHECK(!drop.locked && drop.streak == 0);
+    VmtAlignment yawed; yawed.x = 0.0f; yawed.z = 0.0f; yawed.yaw_deg = 30.0f;
+    LockState drop2 = update_lock_state(locked, live, yawed, 0.03f, cfg);
+    CHECK(!drop2.locked);
+}
+
 void test_reservoir_solve_roundtrip() {
     // Build a known forward transform hmd = R*body + t (VMT convention,
     // R = [[c, s], [-s, c]]) and confirm solve_motion on the reservoir
@@ -245,6 +287,7 @@ int main() {
     test_make_sample();
     test_reservoir();
     test_blend();
+    test_lock_state();
     test_reservoir_solve_roundtrip();
     if (g_fail == 0) std::printf("test_continuous_aligner: all checks passed\n");
     return g_fail == 0 ? 0 : 1;

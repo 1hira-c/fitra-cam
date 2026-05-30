@@ -167,6 +167,38 @@ int SampleReservoir::chest_count() const {
     return n;
 }
 
+LockState update_lock_state(LockState prev,
+                            const VmtAlignment& current,
+                            const VmtAlignment& target,
+                            float residual_m,
+                            const ContinuousAlignerConfig& cfg) {
+    const float dx = target.x - current.x;
+    const float dz = target.z - current.z;
+    const float pos_err = std::sqrt(dx * dx + dz * dz);
+    const float yaw_err = std::fabs(wrap180(target.yaw_deg - current.yaw_deg));
+
+    LockState out = prev;
+    if (prev.locked) {
+        // Large divergence (e.g. VMT re-centering): drop back to coarse.
+        if (pos_err > cfg.unlock_pos_err_m || yaw_err > cfg.unlock_yaw_err_deg) {
+            out.locked = false;
+            out.streak = 0;
+        }
+        return out;
+    }
+
+    const bool converged = residual_m <= cfg.residual_max_m &&
+                           pos_err <= cfg.lock_pos_tol_m &&
+                           yaw_err <= cfg.lock_yaw_tol_deg;
+    if (converged) {
+        out.streak = prev.streak + 1;
+        if (out.streak >= cfg.lock_streak) out.locked = true;
+    } else {
+        out.streak = 0;
+    }
+    return out;
+}
+
 VmtAlignment blend_alignment(const VmtAlignment& current,
                              const VmtAlignment& target,
                              float alpha,
@@ -242,6 +274,7 @@ void ContinuousAligner::loop() {
             std::chrono::duration<double>(1.0 / sample_hz));
     auto next_tick = clock::now();
     double last_resolve = -1e18;
+    LockState lock;  // starts unlocked -> coarse clamps for fast cold-start
 
     bool   have_prev = false;
     float  prev_hx = 0.0f, prev_hz = 0.0f;
@@ -264,6 +297,7 @@ void ContinuousAligner::loop() {
         }
         if (!en) {
             have_prev = false;
+            lock = {};  // re-acquire from coarse when toggled back on
             continue;
         }
 
@@ -315,9 +349,13 @@ void ContinuousAligner::loop() {
             if (r.status == AutoAlignmentStatus::Ok &&
                 r.residual_m <= cfg_.residual_max_m) {
                 const VmtAlignment cur = publisher_.alignment();
-                const VmtAlignment next = blend_alignment(
-                    cur, r.alignment, cfg_.blend_alpha,
-                    cfg_.max_yaw_step_deg, cfg_.max_pos_step_m);
+                lock = update_lock_state(lock, cur, r.alignment, r.residual_m, cfg_);
+                // Coarse (unlocked) until the solve settles onto live -> fast
+                // cold-start; fine clamps once locked -> jump-free drift tracking.
+                const float a  = lock.locked ? cfg_.blend_alpha        : cfg_.coarse_blend_alpha;
+                const float ys = lock.locked ? cfg_.max_yaw_step_deg   : cfg_.coarse_max_yaw_step_deg;
+                const float ps = lock.locked ? cfg_.max_pos_step_m     : cfg_.coarse_max_pos_step_m;
+                const VmtAlignment next = blend_alignment(cur, r.alignment, a, ys, ps);
                 publisher_.set_alignment(next);
                 applied = true;
             }
@@ -327,6 +365,7 @@ void ContinuousAligner::loop() {
         }
 
         std::lock_guard<std::mutex> g{status_mu_};
+        status_.locked          = lock.locked;
         status_.occupied_cells  = cells;
         status_.n_samples       = r.n_samples;
         status_.head_samples    = reservoir.head_count();

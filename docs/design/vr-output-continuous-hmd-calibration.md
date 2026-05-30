@@ -80,8 +80,35 @@ Y は手動 slider 維持 / 首ボーン垂直性スコアはキャリブのサ�
    (`blend_alignment`)で live alignment へ反映:
    - `VmtPublisher::set_alignment` 経由(手動 UI / 単発 solver と同じチャネル、last-write-wins)。
    - **Y は current 値を保持**(手動 slider 不変)。yaw は最短弧で blend。
-   - 1 更新あたり並進 `max_pos_step_m(0.05)`・`|Δyaw| max_yaw_step_deg(2)` にクランプ
-     → 飛び(ジャンプ)防止。
+   - 1 更新あたり並進・`|Δyaw|` をクランプ → 飛び(ジャンプ)防止。クランプ値は
+     後述の cold-start lock 状態で coarse/fine を切替える。
+
+### cold-start ブースト(coarse → lock → fine) — 追補(2026-05-30)
+
+**問題**: fine クランプ(`max_pos_step_m 0.05` / `max_yaw_step_deg 2`)は定常ドリフト
+追従とジャンプ防止には適切だが、**起動時の初期収束を律速**する。1 resolve=2s なので
+yaw は 1°/s・並進は 0.025m/s しか動けず、初期ズレ yaw 90°→90s / 並進 1.5m→60s。実機で
+「1 分以上歩かないと位置が合わない」状態になっていた。EMA(`blend 0.2`、時定数 ~10s)
+より step clamp が支配的だったのが原因。
+
+**対策**: モジュールに初期収束(粗・速)と定常追従(細・ジャンプ防止)の区別が無かった
+ので、純関数 `update_lock_state(prev, current, target, residual, cfg) → LockState` で
+ロック状態を管理し、loop が clamp/blend を切替える:
+
+- **unlocked(= coarse)**: `coarse_blend_alpha(0.6)` / `coarse_max_yaw_step_deg(30)` /
+  `coarse_max_pos_step_m(0.50)`。数 resolve で粗収束する。
+- **lock 遷移**: solve が live と近接(`lock_pos_tol_m 0.10` / `lock_yaw_tol_deg 3`)かつ
+  `residual ≤ residual_max_m` の resolve が `lock_streak(3)` 回連続 → `locked=true`。
+- **locked(= fine)**: 既存の保守的クランプに戻り、ジャンプ無しでドリフト追従。
+- **再 coarse**: locked 中に solve が live から大きく乖離(`unlock_pos_err_m 0.50` /
+  `unlock_yaw_err_deg 20`)→ unlock。VMT 再センタリング等で素早く再収束させる。
+  runtime トグル OFF→ON でも lock をリセット(coarse から再取得)。
+
+`blend_alignment`(ctest 済みの純関数)はシグネチャ・挙動とも不変。loop が lock 状態で
+渡す alpha/clamp を選ぶだけ。`update_lock_state` も純関数で、新規 ctest
+`test_lock_state` が streak 蓄積・residual リセット・lock 後の小変位維持・大乖離 unlock
+(並進/yaw 両方)を検証。Status/`/stats3d` に `locked` を追加(Web UI で coarse/fine 可視化)。
+閾値は当面 `ContinuousAlignerConfig` 既定値のまま(CLI 非公開)。
 
 ### 純粋ヘルパ(スレッド/クロック非依存)
 

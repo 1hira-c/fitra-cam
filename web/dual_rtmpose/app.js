@@ -940,8 +940,9 @@ function update3DStats() {
   let contLine = "";
   if (cont) {
     const srcMix = `head=${cont.head_samples ?? 0} chest=${cont.chest_samples ?? 0}`;
+    const phase = cont.locked ? "fine" : "coarse";
     contLine =
-      `\ncont_align     ${cont.enabled ? "on" : "off"} (${cont.last_status || "-"})` +
+      `\ncont_align     ${cont.enabled ? "on" : "off"} [${phase}] (${cont.last_status || "-"})` +
       `\ncont_cells     ${cont.occupied_cells ?? 0}/${cont.min_cells ?? 0} ${srcMix}` +
       `\ncont_resid_m   ${(cont.last_residual_m ?? 0).toFixed(3)}` +
       `\ncont_updates   ${cont.updates ?? 0}/${cont.resolves ?? 0}`;
