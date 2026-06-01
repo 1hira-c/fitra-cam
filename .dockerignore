@@ -17,6 +17,9 @@ python/__pycache__
 # Web assets are needed at runtime; keep them in the image.
 # Exclude only generated artifacts.
 web/**/node_modules
+# web-ui source is built in the webbuild stage; never ship host node_modules/dist.
+web-ui/node_modules
+web-ui/dist
 
 # Editor / OS noise
 .DS_Store

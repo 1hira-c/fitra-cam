@@ -8,6 +8,18 @@
 # Build context = repo root. .dockerignore keeps cpp/build, outputs, python/.venv
 # out of the layer.
 
+# Stage: build the Vite/React SPA (web-ui/dist). Kept separate so the heavy
+# Node toolchain never lands in the runtime image — only the built dist is copied.
+# pnpm is the package manager; corepack activates the version pinned by the
+# "packageManager" field in package.json.
+FROM node:20-bookworm-slim AS webbuild
+RUN corepack enable
+WORKDIR /web-ui
+COPY web-ui/package.json web-ui/pnpm-lock.yaml web-ui/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY web-ui/ ./
+RUN pnpm run build
+
 FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -45,7 +57,9 @@ RUN cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release \
 
 # Layer B: now bring the rest of the C++ sources and the web frontend.
 COPY cpp /workspace/cpp
+# Legacy calibration tools (web/calibration) + the built SPA (web-ui/dist).
 COPY web /workspace/web
+COPY --from=webbuild /web-ui/dist /workspace/web-ui/dist
 
 # Reconfigure + build. Reconfigure is cheap once _deps/ is populated.
 RUN cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release \

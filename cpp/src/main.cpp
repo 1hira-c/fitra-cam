@@ -82,7 +82,7 @@ void print_help() {
         "Optional:\n"
         "  --port N                  HTTP/WS port (default 8000)\n"
         "  --host ADDR               bind address (default 0.0.0.0)\n"
-        "  --static DIR              web frontend dir (default <repo>/web/dual_rtmpose)\n"
+        "  --static DIR              web frontend dir (default <repo>/web-ui/dist)\n"
         "  --no-web                  do not start Crow (driver only, for bench)\n"
         "  --width N / --height N    capture size per camera (default 640x480)\n"
         "  --fps N                   requested capture fps (default 30)\n"
@@ -177,15 +177,19 @@ int probe() {
 
 std::filesystem::path guess_static_dir() {
     auto exe = std::filesystem::canonical("/proc/self/exe");
-    // build/main lives at <repo>/cpp/build/main; we want <repo>/web/dual_rtmpose
+    // build/main lives at <repo>/cpp/build/main; we want the Vite SPA build at
+    // <repo>/web-ui/dist (run `pnpm build` in web-ui first).
     auto repo = exe.parent_path().parent_path().parent_path();
-    return repo / "web" / "dual_rtmpose";
+    return repo / "web-ui" / "dist";
 }
 
 std::filesystem::path guess_subject_calib_static_dir() {
+    // The SPA is a single build served at both `/` and `/subject-calib`; the
+    // /subject-calib route reads index.html from this dir and React Router
+    // dispatches on the path. Same dist as guess_static_dir().
     auto exe = std::filesystem::canonical("/proc/self/exe");
     auto repo = exe.parent_path().parent_path().parent_path();
-    return repo / "web" / "subject_calibration";
+    return repo / "web-ui" / "dist";
 }
 
 std::filesystem::path guess_dump_tool_path() {

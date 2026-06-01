@@ -1,39 +1,31 @@
-:root {
-  --bg: #111;
-  --fg: #eee;
-  --panel: #1a1a1a;
-  --accent: #4cf;
-}
-* { box-sizing: border-box; }
-html, body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--fg);
+/* Ported from legacy web/dual_rtmpose/styles.css, scoped under .viewer-page. */
+.viewer-page {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--fg);
 }
-header {
+.viewer-page header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 8px 16px;
   border-bottom: 1px solid #333;
 }
-header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-.conn-group {
+.viewer-page header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+.viewer-page .conn-group {
   display: flex;
   gap: 16px;
   align-items: center;
 }
-.conn { font-size: 12px; color: #aaa; }
-.conn.live { color: #4cf; }
-.conn.dead { color: #f66; }
-main {
+.viewer-page .conn { font-size: 12px; color: #aaa; text-decoration: none; }
+.viewer-page .conn.live { color: #4cf; }
+.viewer-page .conn.dead { color: #f66; }
+.viewer-page .cams {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   padding: 16px;
 }
-.pane {
+.viewer-page .pane {
   background: var(--panel);
   border-radius: 8px;
   padding: 12px;
@@ -41,12 +33,12 @@ main {
   flex-direction: column;
   gap: 8px;
 }
-.pane h2 {
+.viewer-page .pane h2 {
   margin: 0;
   font-size: 14px;
   color: var(--accent);
 }
-canvas {
+.viewer-page canvas {
   width: 100%;
   height: auto;
   aspect-ratio: 4 / 3;
@@ -54,21 +46,21 @@ canvas {
   border-radius: 4px;
   display: block;
 }
-#canvas3d {
+.viewer-page #canvas3d {
   cursor: grab;
   touch-action: none;
 }
-#canvas3d:active {
+.viewer-page #canvas3d:active {
   cursor: grabbing;
 }
-.stats {
+.viewer-page .stats {
   margin: 0;
   font-size: 12px;
   line-height: 1.4;
   white-space: pre-wrap;
   color: #ccc;
 }
-.view3d {
+.viewer-page .view3d {
   margin: 0 16px 16px;
   background: var(--panel);
   border-radius: 8px;
@@ -77,22 +69,22 @@ canvas {
   flex-direction: column;
   gap: 8px;
 }
-.view3d-head {
+.viewer-page .view3d-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
 }
-.view3d h2 {
+.viewer-page .view3d h2 {
   margin: 0;
   font-size: 14px;
   color: var(--accent);
 }
-.view3d-tabs {
+.viewer-page .view3d-tabs {
   display: inline-flex;
   gap: 4px;
 }
-.view3d-tabs button {
+.viewer-page .view3d-tabs button {
   background: #252525;
   border: 1px solid #444;
   color: #ccc;
@@ -102,11 +94,11 @@ canvas {
   font-size: 12px;
   cursor: pointer;
 }
-.view3d-tabs button.active {
+.viewer-page .view3d-tabs button.active {
   border-color: var(--accent);
   color: var(--fg);
 }
-.view3d-toggle {
+.viewer-page .view3d-toggle {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -115,13 +107,13 @@ canvas {
   cursor: pointer;
   user-select: none;
 }
-.view3d-toggle input[type="checkbox"] {
+.viewer-page .view3d-toggle input[type="checkbox"] {
   margin: 0;
 }
-.canvas3d-wrap {
+.viewer-page .canvas3d-wrap {
   position: relative;
 }
-.canvas-status {
+.viewer-page .canvas-status {
   position: absolute;
   top: 12px;
   left: 12px;
@@ -130,7 +122,7 @@ canvas {
   pointer-events: none;
   user-select: none;
 }
-.vmt-align {
+.viewer-page .vmt-align {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 10px;
@@ -138,29 +130,29 @@ canvas {
   border: 1px solid #333;
   border-radius: 6px;
 }
-.vmt-align-head {
+.viewer-page .vmt-align-head {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) auto auto minmax(96px, auto);
   gap: 8px;
   align-items: center;
 }
-.vmt-align h3 {
+.viewer-page .vmt-align h3 {
   margin: 0;
   font-size: 12px;
   color: var(--accent);
 }
-.vmt-axis-row {
+.viewer-page .vmt-axis-row {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr) 108px 76px;
   gap: 10px;
   align-items: center;
 }
-.vmt-align label {
+.viewer-page .vmt-align label {
   font-size: 11px;
   color: #aaa;
   text-align: right;
 }
-.vmt-align-number {
+.viewer-page .vmt-align-number {
   width: 100%;
   min-width: 0;
   background: #101010;
@@ -171,7 +163,7 @@ canvas {
   font-size: 12px;
   padding: 4px 6px;
 }
-.vmt-align-slider {
+.viewer-page .vmt-align-slider {
   width: 100%;
   height: 44px;
   min-width: 0;
@@ -179,12 +171,12 @@ canvas {
   accent-color: var(--accent);
   cursor: pointer;
 }
-.vmt-align-slider::-webkit-slider-runnable-track {
+.viewer-page .vmt-align-slider::-webkit-slider-runnable-track {
   height: 12px;
   border-radius: 999px;
   background: #333;
 }
-.vmt-align-slider::-webkit-slider-thumb {
+.viewer-page .vmt-align-slider::-webkit-slider-thumb {
   appearance: none;
   width: 34px;
   height: 34px;
@@ -193,25 +185,25 @@ canvas {
   background: var(--accent);
   border: 2px solid #101010;
 }
-.vmt-align-slider::-moz-range-track {
+.viewer-page .vmt-align-slider::-moz-range-track {
   height: 12px;
   border-radius: 999px;
   background: #333;
 }
-.vmt-align-slider::-moz-range-thumb {
+.viewer-page .vmt-align-slider::-moz-range-thumb {
   width: 32px;
   height: 32px;
   border-radius: 50%;
   background: var(--accent);
   border: 2px solid #101010;
 }
-.vmt-align-total {
+.viewer-page .vmt-align-total {
   color: #ddd;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
-.vmt-align button {
+.viewer-page .vmt-align button {
   background: #252525;
   border: 1px solid #444;
   color: #ccc;
@@ -221,25 +213,25 @@ canvas {
   font-size: 12px;
   cursor: pointer;
 }
-.vmt-align button:hover:not(:disabled),
-.vmt-align button:focus-visible:not(:disabled) {
+.viewer-page .vmt-align button:hover:not(:disabled),
+.viewer-page .vmt-align button:focus-visible:not(:disabled) {
   border-color: var(--accent);
   color: var(--fg);
 }
-.vmt-align-number:disabled,
-.vmt-align-slider:disabled,
-.vmt-align button:disabled {
+.viewer-page .vmt-align-number:disabled,
+.viewer-page .vmt-align-slider:disabled,
+.viewer-page .vmt-align button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
-.vmt-align-status {
+.viewer-page .vmt-align-status {
   color: #aaa;
   font-size: 11px;
   align-self: center;
 }
-.vmt-align-status.live { color: #4cf; }
-.vmt-align-status.dead { color: #f66; }
-.trackers-table {
+.viewer-page .vmt-align-status.live { color: #4cf; }
+.viewer-page .vmt-align-status.dead { color: #f66; }
+.viewer-page .trackers-table {
   width: 100%;
   margin-top: 8px;
   border-collapse: collapse;
@@ -247,47 +239,47 @@ canvas {
   font-variant-numeric: tabular-nums;
   color: #ccc;
 }
-.trackers-table th,
-.trackers-table td {
+.viewer-page .trackers-table th,
+.viewer-page .trackers-table td {
   border-bottom: 1px solid #2b2f36;
   padding: 3px 6px;
   text-align: right;
   white-space: nowrap;
 }
-.trackers-table th:first-child,
-.trackers-table td:first-child {
+.viewer-page .trackers-table th:first-child,
+.viewer-page .trackers-table td:first-child {
   text-align: left;
   color: #ddd;
 }
-.trackers-table thead th {
+.viewer-page .trackers-table thead th {
   position: sticky;
   top: 0;
   background: #1a1a1a;
   color: #888;
   font-weight: 500;
 }
-.trackers-table tr.state-frozen { background: rgba(255, 80, 80, 0.08); }
-.trackers-table tr.state-leakage { background: rgba(255, 200, 80, 0.08); }
-.trackers-table tr.state-active  { background: transparent; }
-.trackers-table td.warn { color: #ff9966; }
-.trackers-table td.bad  { color: #ff6666; }
-.slimevr-corrections {
+.viewer-page .trackers-table tr.state-frozen { background: rgba(255, 80, 80, 0.08); }
+.viewer-page .trackers-table tr.state-leakage { background: rgba(255, 200, 80, 0.08); }
+.viewer-page .trackers-table tr.state-active  { background: transparent; }
+.viewer-page .trackers-table td.warn { color: #ff9966; }
+.viewer-page .trackers-table td.bad  { color: #ff6666; }
+.viewer-page .slimevr-corrections {
   border-top: 1px solid #2b2f36;
   padding-top: 8px;
 }
-.slimevr-corrections-head {
+.viewer-page .slimevr-corrections-head {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 4px;
 }
-.slimevr-corrections-head h3 {
+.viewer-page .slimevr-corrections-head h3 {
   margin: 0;
   font-size: 12px;
   color: var(--accent);
 }
-.slimevr-corrections-head button,
-.slimevr-table button {
+.viewer-page .slimevr-corrections-head button,
+.viewer-page .slimevr-table button {
   min-width: 28px;
   height: 24px;
   border: 1px solid #444;
@@ -298,46 +290,46 @@ canvas {
   font-size: 11px;
   cursor: pointer;
 }
-.slimevr-corrections-head button:hover,
-.slimevr-table button:hover {
+.viewer-page .slimevr-corrections-head button:hover,
+.viewer-page .slimevr-table button:hover {
   border-color: var(--accent);
   color: var(--fg);
 }
-.slimevr-corrections-head button:disabled,
-.slimevr-table button:disabled {
+.viewer-page .slimevr-corrections-head button:disabled,
+.viewer-page .slimevr-table button:disabled {
   opacity: 0.45;
   cursor: default;
 }
-#slimevr-correction-status {
+.viewer-page .slimevr-correction-status {
   color: #888;
   font-size: 11px;
 }
-#slimevr-correction-status.live { color: #4cf; }
-#slimevr-correction-status.dead { color: #f66; }
-.slimevr-table td {
+.viewer-page .slimevr-correction-status.live { color: #4cf; }
+.viewer-page .slimevr-correction-status.dead { color: #f66; }
+.viewer-page .slimevr-table td {
   vertical-align: middle;
 }
-.slimevr-axis-control {
+.viewer-page .slimevr-axis-control {
   display: inline-grid;
   grid-template-columns: 28px 48px 28px;
   align-items: center;
   gap: 4px;
 }
-.slimevr-axis-value {
+.viewer-page .slimevr-axis-value {
   color: #ddd;
   text-align: center;
 }
 
 @media (max-width: 900px) {
-  main { grid-template-columns: 1fr; }
-  .conn-group { flex-direction: column; align-items: flex-end; gap: 2px; }
-  .vmt-align-head {
+  .viewer-page .cams { grid-template-columns: 1fr; }
+  .viewer-page .conn-group { flex-direction: column; align-items: flex-end; gap: 2px; }
+  .viewer-page .vmt-align-head {
     grid-template-columns: 1fr auto auto;
   }
-  .vmt-align-status {
+  .viewer-page .vmt-align-status {
     grid-column: 1 / -1;
   }
-  .vmt-axis-row {
+  .viewer-page .vmt-axis-row {
     grid-template-columns: 28px minmax(0, 1fr) 86px 58px;
     gap: 8px;
   }

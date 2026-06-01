@@ -37,6 +37,18 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-01 — WebUI を Vite/React (TypeScript) へ移行
+旧バニラ JS フロント (`web/dual_rtmpose` 1450 行 + `web/subject_calibration`) を Vite/React/TS の単一 SPA
+(`web-ui/`) に移植。`BrowserRouter` で `/`→viewer・`/subject-calib`→wizard を出し分け、Crow は両ルートで
+同一 `dist/index.html` を返す (SPA fallback)。接続先は `lib/config.ts` の `httpUrl()`/`wsUrl()` に集約し、
+同一オリジン (Crow 配信/dev proxy) と絶対 URL (別ホスト/将来の Tauri/Wails デスクトップ) を 1 コードで賄う。
+HMR 開発は Vite dev server の proxy (`/ws`・`/ws3d` は `ws:true`) 経由で実データ表示。30Hz バンドルは ref +
+`requestAnimationFrame` で命令的描画、stats のみ ~6Hz スロットルで React state 更新。Three.js は依存パッケージ化
+(vendored 破棄)。WS/REST スキーマは不変。Crow は `guess_static_dir`/`guess_subject_calib_static_dir` を
+`web-ui/dist` に向けるのみ (ルート無改修)。Python キャリブ系 (`web/calibration`, :8010/:8020) は将来 C++ 化
+予定のため対象外。最終目標の VMT Manager 統合 (Tauri/Wails 単一 Windows アプリ) を見据えた設計。
+→ [design/vr-output-webui-vite-react.md](../design/vr-output-webui-vite-react.md)
+
 ### 2026-05-29 — 出力レイテンシ M1: frame-rate 非依存 smoothing (キーストーン)
 GPU フロントエンドでパイプラインが詰まった後、E2E の支配項は VR 出力の 60Hz×2 ホップ
 (avg +16.7ms / worst ~33ms)。e2e-latency M4 で hop1 をイベント駆動 (opt-in) にしたが、

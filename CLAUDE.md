@@ -41,7 +41,8 @@ Layout:
 
 - `cpp/` — new C++/TensorRT implementation (in progress; primary direction)
 - `python/` — preserved Python implementation. Kept working as the **numerical reference** for correctness checks and as a fallback. Don't add features here; only patch to keep it runnable.
-- `web/dual_rtmpose/` — Canvas-based static frontend (vanilla HTML/JS). Served by either the Python FastAPI app or (planned) the C++ Crow app. JSON schema must stay compatible.
+- `web-ui/` — Vite + React + TypeScript SPA (viewer at `/`, subject calib at `/subject-calib`). Built to `web-ui/dist/` and served by the C++ Crow app (and the Python FastAPI fallback). Package manager is **pnpm**. `pnpm dev` proxies `/ws`,`/ws3d`,`/api/*` to Crow for HMR. WS/REST JSON schema must stay compatible. See `docs/design/vr-output-webui-vite-react.md`.
+- `web/calibration/` — legacy vanilla-JS camera-calibration tools (measure-extrinsics :8010 / ChArUco :8020, Python FastAPI). Not yet migrated to `web-ui/` (pending C++ re-implementation).
 - `docs/tracks/` — domain work tracks (`README.md` + `core-pipeline.md` / `pose-3d.md` / `vr-output.md`); current source of truth for ongoing work
 - `docs/design/` — design docs for implemented/in-progress work (`<track>-<topic>.md`); successor to the old `phaseN-*.md` docs (template in `docs/design/README.md`)
 - `docs/cpp-migration-plan.md` — frozen migration record + core-pipeline architecture, repo layout, validation criteria
@@ -102,7 +103,7 @@ TensorRT first run builds engines under `outputs/tensorrt_engines/` (~7 min); ca
 - `python/scripts/dual_rtmpose_cameras.py` — CLI snapshot/display
 - `python/scripts/dual_rtmpose_web.py` — FastAPI + WebSocket viewer
 - `python/scripts/record_dual_rtmpose_overlay.py` — 30s raw + overlay MP4 recorder
-- `web/dual_rtmpose/` — static frontend (Canvas); JSON schema defined by `dual_rtmpose_web.py`'s `_publisher_loop`
+- `web-ui/` — Vite/React/TS SPA frontend (`src/routes/`, `src/lib/config.ts` = backend-origin seam); JSON schema mirrors `snapshot.cpp` / `dual_rtmpose_web.py`'s `_publisher_loop`
 - `cpp/CMakeLists.txt` — top-level CMake for C++ tree (FetchContent, FindTensorRT)
 - `cpp/src/` — C++ sources (camera, infer, pipeline, web, util) per `cpp-migration-plan.md` layout
 - `docs/tracks/` — domain work tracks; `docs/cpp-migration-plan.md` — frozen migration record + architecture/validation
