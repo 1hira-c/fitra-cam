@@ -194,6 +194,8 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
         "degeneracy_mode", "disable_below_floor",
         // HMD pose receiver.
         "hmd_listen_enabled", "hmd_listen_port", "hmd_listen_bind", "hmd_stale_ms",
+        // Continuous HMD-driven alignment refinement.
+        "continuous_align", "continuous_sample_hz", "continuous_resolve_s", "continuous_blend",
     };
     check_keys(section, allowed, "vmt");
     if (section["vmt_out"])             out.vmt_out                 = parse_scalar<bool>(section["vmt_out"],                       "vmt.vmt_out");
@@ -208,6 +210,10 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
     if (section["hmd_listen_port"])     out.hmd_listen_port         = parse_scalar<int>(section["hmd_listen_port"],                "vmt.hmd_listen_port");
     if (section["hmd_listen_bind"])     out.hmd_listen_bind         = parse_scalar<std::string>(section["hmd_listen_bind"],        "vmt.hmd_listen_bind");
     if (section["hmd_stale_ms"])        out.hmd_stale_ms            = parse_scalar<double>(section["hmd_stale_ms"],                "vmt.hmd_stale_ms");
+    if (section["continuous_align"])      out.vmt_continuous_align     = parse_scalar<bool>(section["continuous_align"],             "vmt.continuous_align");
+    if (section["continuous_sample_hz"])  out.vmt_continuous_sample_hz = parse_scalar<double>(section["continuous_sample_hz"],        "vmt.continuous_sample_hz");
+    if (section["continuous_resolve_s"])  out.vmt_continuous_resolve_s = parse_scalar<double>(section["continuous_resolve_s"],        "vmt.continuous_resolve_s");
+    if (section["continuous_blend"])      out.vmt_continuous_blend     = parse_scalar<double>(section["continuous_blend"],            "vmt.continuous_blend");
 }
 
 }  // namespace
@@ -342,6 +348,11 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--hmd-listen-port")    { out.hmd_listen_port    = std::atoi(need(i, "--hmd-listen-port")); }
         else if (a == "--hmd-listen-bind")    { out.hmd_listen_bind    = need(i, "--hmd-listen-bind"); }
         else if (a == "--hmd-stale-ms")       { out.hmd_stale_ms       = std::stod(need(i, "--hmd-stale-ms")); }
+        else if (a == "--vmt-continuous-align")    { out.vmt_continuous_align = true; }
+        else if (a == "--no-vmt-continuous-align") { out.vmt_continuous_align = false; }
+        else if (a == "--vmt-continuous-sample-hz"){ out.vmt_continuous_sample_hz = std::stod(need(i, "--vmt-continuous-sample-hz")); }
+        else if (a == "--vmt-continuous-resolve-s"){ out.vmt_continuous_resolve_s = std::stod(need(i, "--vmt-continuous-resolve-s")); }
+        else if (a == "--vmt-continuous-blend")    { out.vmt_continuous_blend     = std::stod(need(i, "--vmt-continuous-blend")); }
         else if (a == "--calibrate")             { out.calibrate = true; }
         else if (a == "--calib-subject-id")      { out.calib_subject_id = need(i, "--calib-subject-id"); }
         else if (a == "--calib-subject-height-m"){ out.calib_subject_height_m = std::stod(need(i, "--calib-subject-height-m")); }
@@ -431,6 +442,17 @@ void validate_options(const MainOptions& opts) {
         }
         if (opts.hmd_stale_ms <= 0.0 || opts.hmd_stale_ms > 10000.0) {
             fail("--hmd-stale-ms must be in (0, 10000]");
+        }
+    }
+    if (opts.vmt_continuous_align) {
+        if (opts.vmt_continuous_sample_hz < 5.0 || opts.vmt_continuous_sample_hz > 120.0) {
+            fail("--vmt-continuous-sample-hz must be in [5, 120]");
+        }
+        if (opts.vmt_continuous_resolve_s < 0.2 || opts.vmt_continuous_resolve_s > 30.0) {
+            fail("--vmt-continuous-resolve-s must be in [0.2, 30]");
+        }
+        if (opts.vmt_continuous_blend <= 0.0 || opts.vmt_continuous_blend > 1.0) {
+            fail("--vmt-continuous-blend must be in (0, 1]");
         }
     }
     if (opts.calibrate && !opts.enable_3d) {
