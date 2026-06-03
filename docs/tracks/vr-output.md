@@ -40,6 +40,19 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-03 — 継続キャリブ「自動追従」トグルを React UI へ移植 (バグ修正)
+Develop マージで判明した移行漏れの解消。WebUI 移行 (2026-06-01) 時点では新 Vite/React UI の
+「自動追従」チェックボックスが `disabled` プレースホルダ (`未接続`) のままで、レガシー JS
+(`web/dual_rtmpose/app.js`) にあった継続キャリブ操作が未配線だった。design doc なし(既存の
+[design/vr-output-continuous-hmd-calibration.md](../design/vr-output-continuous-hmd-calibration.md) /
+[design/vr-output-webui-vite-react.md](../design/vr-output-webui-vite-react.md) の範囲、changelog のみ)。
+- `api.ts`: `postContinuousAlign(enabled)` を追加(`/api/vmt/alignment/auto/continuous/{start,stop}`)。
+- `VmtAutoForm.tsx`: チェックボックスを `continuous_align` ブロックで制御。null=disabled (`未接続`)、
+  present=有効でラベルに `ON (cells n/m)` / `OFF` を表示、`onChange` で start/stop POST、失敗は `<output>` に表示。
+- `statsText.ts`: 3D stats に `cont_align` / `cont_cells` / `cont_resid_m` / `cont_updates` 行を復元(レガシー版と同レイアウト)。
+- `ViewerPage.tsx`: ws3d バンドルの `continuous_align` を ~6Hz スロットル state 経由で `VmtAutoForm` へ供給。
+- バックエンド側 (`publisher_loop` の ws3d fragment) は 2026-06-03 レビュー修正で対応済み、フロント無改修で接続。
+
 ### 2026-06-03 — 継続キャリブのレビュー修正 (バグ修正)
 Codex + GitHub (gemini / Copilot) レビューで顕在化した点を修正。design doc なし(changelog のみ)。
 - `SampleReservoir::key_of`: 負座標で符号付き左シフト UB(VMT x/z は通常移動で負になる)→ uint32 経由 pack。負4象限が別セルになる回帰テスト追加。

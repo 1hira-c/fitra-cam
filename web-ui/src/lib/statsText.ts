@@ -78,6 +78,19 @@ export function build3dStatsText(
     }
   }
 
+  // Continuous HMD-driven alignment status (block exists iff aligner attached).
+  const cont = bundle.continuous_align || null;
+  let contLine = "";
+  if (cont) {
+    const srcMix = `head=${cont.head_samples ?? 0} chest=${cont.chest_samples ?? 0}`;
+    const phase = cont.locked ? "fine" : "coarse";
+    contLine =
+      `\ncont_align     ${cont.enabled ? "on" : "off"} [${phase}] (${cont.last_status || "-"})` +
+      `\ncont_cells     ${cont.occupied_cells ?? 0}/${cont.min_cells ?? 0} ${srcMix}` +
+      `\ncont_resid_m   ${(cont.last_residual_m ?? 0).toFixed(3)}` +
+      `\ncont_updates   ${cont.updates ?? 0}/${cont.resolves ?? 0}`;
+  }
+
   const text =
     `tri_fps         ${(s.tri_fps ?? 0).toFixed(2)}\n` +
     `reproj_med_px  ${(s.reproj_err_med_px ?? 0).toFixed(2)}\n` +
@@ -94,6 +107,7 @@ export function build3dStatsText(
     `ik_locked      ${s.ik_locked ? "true" : "false"}\n` +
     `bundle_seq     ${server3dSeq}` +
     vmtLine +
-    hmdLine;
+    hmdLine +
+    contLine;
   return { text, hmdStatus };
 }

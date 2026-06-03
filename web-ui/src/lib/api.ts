@@ -54,6 +54,18 @@ export async function postMotionStop(): Promise<AutoAlignResponse> {
   return data ?? { ok: false, err: `HTTP ${res.status}` };
 }
 
+/** Start/stop continuous HMD-driven auto-alignment. Returns an error string on failure, else null. */
+export async function postContinuousAlign(enabled: boolean): Promise<string | null> {
+  const path = enabled
+    ? "/api/vmt/alignment/auto/continuous/start"
+    : "/api/vmt/alignment/auto/continuous/stop";
+  const { res, data } = await postJson<{ ok?: boolean; err?: string }>(path);
+  if (!res.ok || (data && data.ok === false)) {
+    return data?.err || `HTTP ${res.status}`;
+  }
+  return null;
+}
+
 // ---- SlimeVR corrections ---------------------------------------------------
 
 export function fetchCorrections(): Promise<CorrectionsResponse> {

@@ -11,7 +11,14 @@ import { useRafLoop } from "../hooks/useRafLoop";
 import { drawCamera } from "../lib/draw2d";
 import { build2dStatsText, build3dStatsText, type HmdStatus } from "../lib/statsText";
 import type { SkeletonViewer } from "../three/SkeletonViewer";
-import type { Bundle2D, Bundle3D, CameraBundle, KpFormat, Tracker } from "../types/bundle";
+import type {
+  Bundle2D,
+  Bundle3D,
+  CameraBundle,
+  ContinuousAlignBlock,
+  KpFormat,
+  Tracker,
+} from "../types/bundle";
 import "../styles/viewer.css";
 
 const STATS_THROTTLE_MS = 160;
@@ -50,6 +57,7 @@ export function ViewerPage() {
   const [stats3dText, setStats3dText] = useState("waiting…");
   const [hmdStatus, setHmdStatus] = useState<HmdStatus>({ text: "no hmd", cls: "" });
   const [trackers, setTrackers] = useState<Tracker[]>([]);
+  const [contAlign, setContAlign] = useState<ContinuousAlignBlock | null>(null);
 
   const status2d = useWebSocketJson<Bundle2D>(
     "/ws",
@@ -116,6 +124,7 @@ export function ViewerPage() {
         setStats3dText(text);
         setHmdStatus(hs);
         setTrackers(bundle3d.current?.trackers ?? []);
+        setContAlign(bundle3d.current?.continuous_align ?? null);
       }
     }, []),
   );
@@ -159,7 +168,11 @@ export function ViewerPage() {
         <ThreeDView onViewer={onViewer} />
         <pre className="stats">{stats3dText}</pre>
         <VmtAlignForm ref={vmtAlignRef} />
-        <VmtAutoForm hmdStatus={hmdStatus} onAlignmentResolved={onAlignmentResolved} />
+        <VmtAutoForm
+          hmdStatus={hmdStatus}
+          continuousAlign={contAlign}
+          onAlignmentResolved={onAlignmentResolved}
+        />
         <SlimeCorrectionTable />
         <TrackerStatsTable trackers={trackers} />
       </section>

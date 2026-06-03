@@ -1,12 +1,18 @@
 import { useEffect, useRef, useState } from "react";
-import { postAutoTpose, postMotionStart, postMotionStop } from "../lib/api";
-import type { AutoAlignResult, VmtAlignment } from "../types/bundle";
+import {
+  postAutoTpose,
+  postContinuousAlign,
+  postMotionStart,
+  postMotionStop,
+} from "../lib/api";
+import type { AutoAlignResult, ContinuousAlignBlock, VmtAlignment } from "../types/bundle";
 
 const DURATION_S = 3.0;
 const SAMPLE_HZ = 30.0;
 
 interface Props {
   hmdStatus: { text: string; cls: string };
+  continuousAlign: ContinuousAlignBlock | null;
   onAlignmentResolved: (alignment: VmtAlignment) => void;
 }
 
@@ -23,10 +29,15 @@ function describeAutoResult(result: AutoAlignResult | undefined): string {
   return `yaw=${yaw.toFixed(2)}° tx=${tx.toFixed(3)} tz=${tz.toFixed(3)} residual=${res.toFixed(4)}m (n=${result.n_samples})`;
 }
 
-export function VmtAutoForm({ hmdStatus, onAlignmentResolved }: Props) {
+export function VmtAutoForm({ hmdStatus, continuousAlign, onAlignmentResolved }: Props) {
   const [result, setResult] = useState("—");
   const [collecting, setCollecting] = useState(false);
   const motionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const onContinuousToggle = async (enabled: boolean) => {
+    const err = await postContinuousAlign(enabled);
+    if (err) setResult(err);
+  };
 
   useEffect(() => () => {
     if (motionTimer.current !== null) clearTimeout(motionTimer.current);
@@ -89,8 +100,19 @@ export function VmtAutoForm({ hmdStatus, onAlignmentResolved }: Props) {
       </div>
       <div className="vmt-axis-row">
         <label>
-          <input type="checkbox" disabled />
-          <span>自動追従 (未接続)</span>
+          <input
+            type="checkbox"
+            disabled={!continuousAlign}
+            checked={!!continuousAlign?.enabled}
+            onChange={(e) => void onContinuousToggle(e.target.checked)}
+          />
+          <span>
+            {!continuousAlign
+              ? "自動追従 (未接続)"
+              : continuousAlign.enabled
+                ? `自動追従 ON (cells ${continuousAlign.occupied_cells ?? 0}/${continuousAlign.min_cells ?? 0})`
+                : "自動追従 OFF"}
+          </span>
         </label>
       </div>
     </form>
