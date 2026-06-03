@@ -232,6 +232,22 @@ set_target_properties(fitra_test_auto_alignment PROPERTIES
 
 add_test(NAME test_auto_alignment COMMAND fitra_test_auto_alignment)
 
+# Continuous HMD-driven alignment: verticality / quality / reservoir / EMA blend.
+add_executable(fitra_test_continuous_aligner
+    test_continuous_aligner.cpp
+)
+
+target_link_libraries(fitra_test_continuous_aligner PRIVATE
+    fitra_vmt
+)
+
+set_target_properties(fitra_test_continuous_aligner PROPERTIES
+    OUTPUT_NAME "test_continuous_aligner"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_continuous_aligner COMMAND fitra_test_continuous_aligner)
+
 # Position EMA in TrackerExtractor. Lives in fitra_slimevr because the
 # helper is part of tracker_extract.{hpp,cpp}.
 add_executable(fitra_test_tracker_extract_pos
