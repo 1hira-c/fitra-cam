@@ -40,13 +40,14 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
-### 2026-06-03 — 継続キャリブのレビュー修正 2 件 (バグ修正)
-コードレビューで顕在化した 2 件を修正。(1) `SampleReservoir::key_of` のセルキー pack が
-負座標で符号付き左シフト UB になっていた(VMT x/z は通常移動で負になる)→ uint32 経由で
-pack。負4象限が別セルになる回帰テストを `test_reservoir` に追加。(2) `continuous_align`
-(と既存の `hmd` ステータス)が `/stats3d` にしか載っておらず、WebUI は `/ws3d` バンドル
-(`state.bundle3d`)しか読まないため「自動追従」トグルが恒久 disabled だった → `publisher_loop`
-の ws3d ブロードキャストにも fragment を載せた。design doc なし(changelog のみ)。
+### 2026-06-03 — 継続キャリブのレビュー修正 (バグ修正)
+Codex + GitHub (gemini / Copilot) レビューで顕在化した点を修正。design doc なし(changelog のみ)。
+- `SampleReservoir::key_of`: 負座標で符号付き左シフト UB(VMT x/z は通常移動で負になる)→ uint32 経由 pack。負4象限が別セルになる回帰テスト追加。
+- `continuous_align`(と既存の `hmd`)ステータスが `/stats3d` にしか載らず、WebUI は `/ws3d` バンドル(`state.bundle3d`)しか読まないため「自動追従」トグルが恒久 disabled だった → `publisher_loop` の ws3d ブロードキャストにも fragment を載せた。
+- `make_sample`: 非有限入力(NaN/Inf)を reject。reservoir 汚染と `key_of` の float→int キャスト UB を防止。
+- `ramp`: `zero_at == full_at` の退化帯を step 関数化(「full_at で 1」契約を満たす)。
+- 自動追従 OFF 時に reservoir を `clear()`(OFF→ON で古セルを使った solve を防止)。HMD 速度計算の dt に下限(`>1e-4`)。
+- gemini の「`joints[19]` で範囲外アクセス」指摘は誤検知(`joints` は固定長 `std::array<,26>`、coco17 でも index 19 は valid=false の zero-init)。
 
 ### 2026-05-30 — 継続キャリブの cold-start ブースト
 初期収束が遅すぎる(実機で 1 分以上歩かないと位置が合わない)問題に対処。原因は fine の

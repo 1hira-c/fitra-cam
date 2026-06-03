@@ -46,7 +46,9 @@ const char* corr_source_name(CorrSource s) {
 
 float ramp(float v, float zero_at, float full_at) {
     const float denom = full_at - zero_at;
-    if (denom == 0.0f) return v == zero_at ? 0.0f : (v == full_at ? 1.0f : 0.0f);
+    // Degenerate band: collapse to a step at the shared threshold so the
+    // "1 at full_at" contract still holds (v == full_at == zero_at -> 1).
+    if (denom == 0.0f) return v < zero_at ? 0.0f : 1.0f;
     float t = (v - zero_at) / denom;
     t = clampf(t, 0.0f, 1.0f);
     return t * t * (3.0f - 2.0f * t);  // smoothstep
@@ -101,6 +103,13 @@ AlignSample make_sample(const SampleInputs& in,
     s.hmd_x   = hmd.x;
     s.hmd_z   = hmd.z;
     s.quality = clampf(conf, 0.0f, 1.0f) * vert * vel;
+
+    // Reject non-finite coords: a NaN/Inf here would poison the reservoir and
+    // hit float->int UB in key_of (the cell coords are derived from hmd x/z).
+    if (!std::isfinite(s.body_x) || !std::isfinite(s.body_z) ||
+        !std::isfinite(s.hmd_x)  || !std::isfinite(s.hmd_z)) {
+        s.source = CorrSource::None;
+    }
     return s;
 }
 
@@ -300,7 +309,8 @@ void ContinuousAligner::loop() {
         }
         if (!en) {
             have_prev = false;
-            lock = {};  // re-acquire from coarse when toggled back on
+            lock = {};         // re-acquire from coarse when toggled back on
+            reservoir.clear();  // ...and from a fresh reservoir, not stale cells
             continue;
         }
 
@@ -324,7 +334,7 @@ void ContinuousAligner::loop() {
         in.hip_center= {jc.x, jc.y, jc.z}; in.hip_valid  = jc.valid; in.hip_score  = jc.score;
 
         float speed = 0.0f;
-        if (have_prev && t > prev_t) {
+        if (have_prev && (t - prev_t) > 1e-4) {  // floor dt to avoid speed blow-up
             const float dx = h.pose.x - prev_hx;
             const float dz = h.pose.z - prev_hz;
             speed = std::sqrt(dx * dx + dz * dz) / static_cast<float>(t - prev_t);

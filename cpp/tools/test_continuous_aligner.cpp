@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -63,6 +64,11 @@ void test_ramp() {
     CHECK_NEAR(ramp(15.0f, 40.0f, 15.0f), 1.0f, 1e-6);
     CHECK_NEAR(ramp(40.0f, 40.0f, 15.0f), 0.0f, 1e-6);
     CHECK_NEAR(ramp(27.5f, 40.0f, 15.0f), 0.5f, 1e-6);
+    // Degenerate band (zero_at == full_at): step at the shared threshold,
+    // honoring the "1 at full_at" contract.
+    CHECK(ramp(0.5f, 1.0f, 1.0f) == 0.0f);  // below
+    CHECK(ramp(1.0f, 1.0f, 1.0f) == 1.0f);  // at full_at == zero_at
+    CHECK(ramp(2.0f, 1.0f, 1.0f) == 1.0f);  // above
 }
 
 void test_verticality() {
@@ -126,6 +132,15 @@ void test_make_sample() {
     in.neck_valid = false;
     {
         AlignSample s = make_sample(in, hmd_at(0.0f, 0.0f), 0.0f, 0.0, cfg);
+        CHECK(s.source == CorrSource::None);
+    }
+
+    // Non-finite input -> rejected (would otherwise poison reservoir/solve and
+    // hit float->int UB in key_of).
+    in.neck_valid = true;
+    {
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        AlignSample s = make_sample(in, hmd_at(nan, 0.0f), 0.0f, 0.0, cfg);
         CHECK(s.source == CorrSource::None);
     }
 }
