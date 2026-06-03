@@ -106,11 +106,14 @@ AlignSample make_sample(const SampleInputs& in,
 
 std::int64_t SampleReservoir::key_of(float x, float z) const {
     const float cell = cfg_.cell_size_m > 1e-3f ? cfg_.cell_size_m : 0.3f;
-    const std::int64_t ix = static_cast<std::int64_t>(std::floor(x / cell));
-    const std::int64_t iz = static_cast<std::int64_t>(std::floor(z / cell));
-    // Pack two 32-bit cell coords into one key. Room-scale coords keep |ix|,
-    // |iz| well within int32, so the shift never overflows in practice.
-    return (ix << 32) ^ (iz & 0xffffffffLL);
+    const std::int32_t ix = static_cast<std::int32_t>(std::floor(x / cell));
+    const std::int32_t iz = static_cast<std::int32_t>(std::floor(z / cell));
+    // Pack two 32-bit cell coords into one key. VMT x/z go negative for normal
+    // room movement, and left-shifting a negative *signed* value is UB, so
+    // reinterpret each half through uint32 before packing.
+    const std::uint64_t ux = static_cast<std::uint32_t>(ix);
+    const std::uint64_t uz = static_cast<std::uint32_t>(iz);
+    return static_cast<std::int64_t>((ux << 32) | uz);
 }
 
 bool SampleReservoir::admit(const AlignSample& s) {

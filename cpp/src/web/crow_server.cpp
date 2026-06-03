@@ -1047,6 +1047,18 @@ void CrowServer::publisher_loop() {
             if (!extra3d.empty()) extra3d += ",";
             extra3d += make_vmt_stats_fragment(*vmt_publisher_);
         }
+        // HMD + continuous-align status: the WebUI reads these from the /ws3d
+        // bundle (state.bundle3d), not by polling /stats3d, so they must ride
+        // the broadcast or the "自動追従" toggle stays disabled / "no hmd".
+        if (hmd_pose_bus_) {
+            if (!extra3d.empty()) extra3d += ",";
+            extra3d += make_hmd_status_fragment(
+                hmd_pose_bus_->snapshot(hmd_stale_ms_), true);
+        }
+        if (continuous_aligner_) {
+            if (!extra3d.empty()) extra3d += ",";
+            extra3d += make_continuous_align_fragment(*continuous_aligner_);
+        }
         auto msg3d = bus3d_ ? bus3d_->make_bundle_json(extra3d)
                             : pipeline::make_disabled_3d_json();
         {

@@ -167,6 +167,20 @@ void test_reservoir() {
     // TTL expiry: everything older than ttl is dropped.
     r.prune(1000.0);
     CHECK(r.occupied_cells() == 0);
+
+    // Negative room coords (VMT x/z routinely go negative): the four sign
+    // quadrants must map to four distinct cells. Regression guard for the
+    // signed-left-shift UB in key_of — a broken pack collapses these.
+    ContinuousAlignerConfig ncfg;
+    ncfg.cell_size_m = 0.3f;
+    ncfg.max_cells = 16;
+    ncfg.sample_ttl_s = 60.0;
+    SampleReservoir nr{ncfg};
+    CHECK(nr.admit(sample_at(-1.0f, -1.0f, 0.6f, 0.0)));
+    CHECK(nr.admit(sample_at(-1.0f,  1.0f, 0.6f, 0.0)));
+    CHECK(nr.admit(sample_at( 1.0f, -1.0f, 0.6f, 0.0)));
+    CHECK(nr.admit(sample_at( 1.0f,  1.0f, 0.6f, 0.0)));
+    CHECK(nr.occupied_cells() == 4);
 }
 
 void test_blend() {

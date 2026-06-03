@@ -40,6 +40,14 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-03 — 継続キャリブのレビュー修正 2 件 (バグ修正)
+コードレビューで顕在化した 2 件を修正。(1) `SampleReservoir::key_of` のセルキー pack が
+負座標で符号付き左シフト UB になっていた(VMT x/z は通常移動で負になる)→ uint32 経由で
+pack。負4象限が別セルになる回帰テストを `test_reservoir` に追加。(2) `continuous_align`
+(と既存の `hmd` ステータス)が `/stats3d` にしか載っておらず、WebUI は `/ws3d` バンドル
+(`state.bundle3d`)しか読まないため「自動追従」トグルが恒久 disabled だった → `publisher_loop`
+の ws3d ブロードキャストにも fragment を載せた。design doc なし(changelog のみ)。
+
 ### 2026-05-30 — 継続キャリブの cold-start ブースト
 初期収束が遅すぎる(実機で 1 分以上歩かないと位置が合わない)問題に対処。原因は fine の
 step clamp(`max_pos_step 0.05m` / `max_yaw_step 2°` per 2s resolve)が起動時の大きな初期
