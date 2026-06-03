@@ -33,6 +33,13 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-05-29 — `maybe_update_3d` の冗長 bone_drift_pct 計算を除去 (挙動不変)
+`MultiCameraDriver::maybe_update_3d` で IK 前に `ik_.bone_drift_pct(skel)` を計算していたが、
+`ik_enabled` 時は直後に IK 後の値で無条件上書きされ pre-IK 値は常に破棄されていた。
+`bone_drift_pct()` は `ik_` の mutex を取り全ボーンを走査するため、公開する skeleton
+上で 1 回だけ計算するよう分岐を整理。4 ケース (ik_enabled × locked) すべてで最終 drift は
+従来と同一。微最適化のため design doc なし (changelog のみ)。ctest 全 10 通過。
+
 ### 2026-05-29 — 全 GPU フロントエンド M4: アーキ整合 + multi-cam 集約スループット実測
 per-cam CPU 前処理の GPU 化は M2/M3 で完了済のため M4 は整合確認 + 実測。各 `FrameSource` は独立に
 `hw_decoder_` (NvJPEGDecoder + EGL register + `DeviceChwPool`) を所有し各 worker が共有 primary context に
