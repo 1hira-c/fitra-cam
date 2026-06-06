@@ -65,6 +65,19 @@ struct MainOptions {
     // of resampling at a fixed cadence. Cuts the extractor's contribution to
     // capture->VR-send latency. Feeds both SlimeVR and VMT. Default off.
     bool   vr_extract_event_driven = false;
+    // One Euro (speed-adaptive) tracker smoothing. Feeds both SlimeVR and VMT
+    // (single producer). Default on: kills at-rest jitter that a fixed-alpha
+    // EMA cannot, staying lag-free in motion. When off, the fixed-alpha EMA
+    // (slimevr.quat_smooth / vmt.pos_smooth) is used. Position params are
+    // per-axis (m/s); rotation params on geodesic angular speed (rad/s). beta=0
+    // → fixed-cutoff low-pass without leaving the One Euro path.
+    bool   vr_one_euro       = true;
+    double vr_pos_mincutoff  = 0.8;   // Hz, at-rest smoothness (lower = smoother)
+    double vr_pos_beta       = 0.4;   // motion responsiveness (higher = less lag)
+    double vr_pos_dcutoff    = 1.0;   // Hz, speed-estimate low-pass
+    double vr_quat_mincutoff = 1.0;
+    double vr_quat_beta      = 0.3;
+    double vr_quat_dcutoff   = 1.0;
 
     // subject
     std::string subjects_dir = "calibrations/subjects";

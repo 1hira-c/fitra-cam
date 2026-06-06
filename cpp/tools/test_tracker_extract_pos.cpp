@@ -27,11 +27,13 @@ namespace {
 
 constexpr float kEps = 1.0e-5f;
 
+using fitra::slimevr::OneEuroParams;
 using fitra::slimevr::PosSmoothingContext;
 using fitra::slimevr::SlimeTracker;
 using fitra::slimevr::TrackerRole;
 using fitra::slimevr::apply_pos_smoothing;
 using fitra::slimevr::kTrackerCount;
+using fitra::slimevr::one_euro_alpha;
 
 void check(bool cond, const std::string& msg) {
     if (!cond) throw std::runtime_error(msg);
@@ -381,6 +383,174 @@ void test_rate_independent_smoothing() {
           "rate-indep: single half-dt step should under-shoot the full step");
 }
 
+// ---------- One Euro (speed-adaptive) position overload ------------------
+
+// The low-pass smoothing factor helper: monotonic in cutoff, with the
+// documented edge cases. alpha = dt/(dt+tau), tau = 1/(2π·cutoff).
+void test_one_euro_alpha_helper() {
+    const float dt = 1.0f / 60.0f;
+    check_close(one_euro_alpha(0.0f, dt), 0.0f, "oe-alpha.zero-cutoff");   // freeze
+    check_close(one_euro_alpha(5.0f, 0.0f), 1.0f, "oe-alpha.zero-dt");     // trust curr
+    const float a_low  = one_euro_alpha(1.0f,  dt);
+    const float a_high = one_euro_alpha(10.0f, dt);
+    check(a_low > 0.0f && a_low < 1.0f, "oe-alpha.low in (0,1)");
+    check(a_high > a_low, "oe-alpha.monotonic: higher cutoff -> larger alpha");
+}
+
+// First valid frame snaps to the measurement (prev <- curr), with no
+// convergence-from-origin transient (unlike the fixed-alpha EMA path which
+// would land at 0.5·curr).
+void test_one_euro_first_frame_snaps() {
+    std::array<cv::Vec3f, kTrackerCount> prev{};
+    PosSmoothingContext ctx;
+    ctx.dt_s = 1.0f / 60.0f;
+    const OneEuroParams p{1.0f, 0.4f, 1.0f};
+
+    auto ts = make_trackers({0.3f, 0.5f, 1.0f}, /*valid=*/true);
+    apply_pos_smoothing(ts, prev, ctx, p);
+
+    check_vec3(prev[0], {0.3f, 0.5f, 1.0f}, "oe-first.snap.prev");
+    check_vec3(ts[0].pos, {0.3f, 0.5f, 1.0f}, "oe-first.snap.curr");
+    check(ctx.has_last_raw[0], "oe-first.has_last_raw");
+    check_vec3(ctx.pos_dx_hat[0], {0.0f, 0.0f, 0.0f}, "oe-first.dx_hat zeroed");
+}
+
+// At rest, a small measurement jitter must move the output far less than the
+// fixed-alpha EMA (base_alpha=0.5) would: that is the whole point of the low
+// at-rest cutoff. Run both filters on the identical input stream.
+void test_one_euro_static_below_ema() {
+    const cv::Vec3f settled{1.0f, 0.0f, 0.0f};
+    const OneEuroParams p{1.0f, 0.4f, 1.0f};
+
+    // One Euro: converge to settled, then a 1 cm jitter step.
+    std::array<cv::Vec3f, kTrackerCount> prev_oe{};
+    PosSmoothingContext ctx_oe; ctx_oe.dt_s = 1.0f / 60.0f;
+    for (int f = 0; f < 200; ++f) {
+        auto ts = make_trackers(settled, true);
+        apply_pos_smoothing(ts, prev_oe, ctx_oe, p);
+    }
+    check_close(prev_oe[0][0], 1.0f, "oe-static.converged", 1.0e-3f);
+    const float pre_oe = prev_oe[0][0];
+    {
+        auto ts = make_trackers({1.01f, 0.0f, 0.0f}, true);
+        apply_pos_smoothing(ts, prev_oe, ctx_oe, p);
+    }
+    const float delta_oe = prev_oe[0][0] - pre_oe;
+
+    // Fixed-alpha EMA on the same step: delta = 0.5 · 0.01 = 0.005.
+    std::array<cv::Vec3f, kTrackerCount> prev_ema{};
+    PosSmoothingContext ctx_ema; ctx_ema.dt_s = 1.0f / 60.0f;
+    for (int f = 0; f < 200; ++f) {
+        auto ts = make_trackers(settled, true);
+        apply_pos_smoothing(ts, prev_ema, ctx_ema, /*base_alpha=*/0.5f);
+    }
+    const float pre_ema = prev_ema[0][0];
+    {
+        auto ts = make_trackers({1.01f, 0.0f, 0.0f}, true);
+        apply_pos_smoothing(ts, prev_ema, ctx_ema, /*base_alpha=*/0.5f);
+    }
+    const float delta_ema = prev_ema[0][0] - pre_ema;
+
+    check(delta_oe < 0.5f * delta_ema,
+          "oe-static: One Euro jitter response (" + std::to_string(delta_oe) +
+          ") must be < half the EMA response (" + std::to_string(delta_ema) + ")");
+}
+
+// Sustained motion must open the cutoff: the per-frame fraction moved toward
+// the target while moving should exceed the at-rest fraction. Same step size
+// in both regimes isolates the speed-adaptive cutoff (not the step magnitude).
+void test_one_euro_motion_more_responsive() {
+    const OneEuroParams p{1.0f, 0.4f, 1.0f};
+    const float dt = 1.0f / 60.0f;
+
+    // At rest: settle, then one small step; fraction = delta / step.
+    std::array<cv::Vec3f, kTrackerCount> prev_rest{};
+    PosSmoothingContext ctx_rest; ctx_rest.dt_s = dt;
+    for (int f = 0; f < 200; ++f) {
+        auto ts = make_trackers({1.0f, 0.0f, 0.0f}, true);
+        apply_pos_smoothing(ts, prev_rest, ctx_rest, p);
+    }
+    const float step = 0.04f;  // 0.04 m/tick = 2.4 m/s (below the 8 m/s gate)
+    const float rest_pre = prev_rest[0][0];
+    {
+        auto ts = make_trackers({1.0f + step, 0.0f, 0.0f}, true);
+        apply_pos_smoothing(ts, prev_rest, ctx_rest, p);
+    }
+    const float frac_rest = (prev_rest[0][0] - rest_pre) / step;
+
+    // In sustained motion: a constant-velocity ramp builds dx_hat, so the
+    // adaptive cutoff (and thus alpha) is higher. Measure the fraction of the
+    // last single-tick step closed.
+    std::array<cv::Vec3f, kTrackerCount> prev_mov{};
+    PosSmoothingContext ctx_mov; ctx_mov.dt_s = dt;
+    float pos = 0.0f;
+    for (int f = 0; f < 60; ++f) {
+        pos += step;
+        auto ts = make_trackers({pos, 0.0f, 0.0f}, true);
+        apply_pos_smoothing(ts, prev_mov, ctx_mov, p);
+    }
+    const float mov_pre = prev_mov[0][0];
+    pos += step;
+    {
+        auto ts = make_trackers({pos, 0.0f, 0.0f}, true);
+        apply_pos_smoothing(ts, prev_mov, ctx_mov, p);
+    }
+    const float frac_mov = (prev_mov[0][0] - mov_pre) / step;
+
+    check(frac_mov > frac_rest,
+          "oe-responsive: moving fraction (" + std::to_string(frac_mov) +
+          ") must exceed at-rest fraction (" + std::to_string(frac_rest) + ")");
+}
+
+// beta = 0 degenerates to a fixed-cutoff low-pass: the per-frame fraction moved
+// is independent of step magnitude (no speed adaptation), for steps below the
+// outlier gate.
+void test_one_euro_beta_zero_fixed_cutoff() {
+    const OneEuroParams p{2.0f, 0.0f, 1.0f};  // beta = 0
+    const float dt = 1.0f / 60.0f;
+
+    auto frac_for_step = [&](float step) {
+        std::array<cv::Vec3f, kTrackerCount> prev{};
+        PosSmoothingContext ctx; ctx.dt_s = dt;
+        for (int f = 0; f < 200; ++f) {
+            auto ts = make_trackers({1.0f, 0.0f, 0.0f}, true);
+            apply_pos_smoothing(ts, prev, ctx, p);
+        }
+        const float pre = prev[0][0];
+        auto ts = make_trackers({1.0f + step, 0.0f, 0.0f}, true);
+        apply_pos_smoothing(ts, prev, ctx, p);
+        return (prev[0][0] - pre) / step;
+    };
+
+    const float f_small = frac_for_step(0.01f);  // 0.6 m/s
+    const float f_big   = frac_for_step(0.05f);  // 3.0 m/s (still < 8 m/s gate)
+    check_close(f_small, f_big, "oe-beta0: fraction independent of step", 1.0e-3f);
+    // And it matches the analytic fixed-cutoff alpha.
+    check_close(f_small, one_euro_alpha(2.0f, dt), "oe-beta0: matches alpha(mincutoff)", 1.0e-3f);
+}
+
+// The outlier velocity gate still fires under One Euro: a glitch spike well
+// above 16 m/s must freeze the output rather than be chased by the
+// speed-opened cutoff.
+void test_one_euro_outlier_gate_still_freezes() {
+    const OneEuroParams p{1.0f, 0.4f, 1.0f};
+    std::array<cv::Vec3f, kTrackerCount> prev{};
+    PosSmoothingContext ctx; ctx.dt_s = 1.0f / 60.0f;
+
+    for (int f = 0; f < 100; ++f) {
+        auto ts = make_trackers({1.0f, 0.0f, 0.0f}, true);
+        apply_pos_smoothing(ts, prev, ctx, p);
+    }
+    const float pre = prev[0][0];
+
+    // 5 m jump in one tick ≈ 300 m/s, far above the 16 m/s gate ceiling.
+    auto ts = make_trackers({6.0f, 0.0f, 0.0f}, true);
+    apply_pos_smoothing(ts, prev, ctx, p);
+    const float delta = prev[0][0] - pre;
+    check(delta < 0.05f,
+          "oe-gate: spike must freeze, delta=" + std::to_string(delta));
+}
+
 }  // namespace
 
 int main() {
@@ -396,6 +566,12 @@ int main() {
         test_velocity_gate_handles_multi_frame_dropout_recovery();
         test_velocity_gate_passes_plausible_motion();
         test_rate_independent_smoothing();
+        test_one_euro_alpha_helper();
+        test_one_euro_first_frame_snaps();
+        test_one_euro_static_below_ema();
+        test_one_euro_motion_more_responsive();
+        test_one_euro_beta_zero_fixed_cutoff();
+        test_one_euro_outlier_gate_still_freezes();
         std::puts("test_tracker_extract_pos ok");
         return 0;
     } catch (const std::exception& e) {

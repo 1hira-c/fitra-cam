@@ -129,6 +129,47 @@ std::array<SlimeTracker, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel,
                  ExtractContext* ctx = nullptr);
 
+// ---- One Euro filter (speed-adaptive low-pass) ----------------------------
+//
+// The fixed-alpha EMA overloads below cannot be both jitter-free at rest and
+// lag-free in motion: a single alpha sets one wall-clock time constant. The
+// One Euro filter (Casiez et al. 2012) makes the low-pass cutoff a function of
+// the signal speed — low cutoff (strong smoothing) when still, high cutoff
+// (responsive) when moving — which is exactly the "still → smooth, moving →
+// snappy" behavior we want. See docs/design/vr-output-one-euro-filter.md.
+//
+//   te      = dt (real step, seconds)
+//   dx      = (x − x_prev_filtered) / te
+//   dx_hat  = lowpass(dx, alpha(dcutoff, te))         // smooth the speed
+//   cutoff  = mincutoff + beta·|dx_hat|               // speed-adaptive cutoff
+//   x_hat   = lowpass(x, alpha(cutoff, te))           // the output
+//
+// `mincutoff` (Hz) sets the at-rest smoothness (lower = smoother / more lag),
+// `beta` the motion responsiveness (higher = less lag when moving; beta = 0
+// degenerates to a fixed-cutoff, frame-rate-independent EMA — the regression
+// fallback), `dcutoff` (Hz) the speed-estimate low-pass (1.0 is the usual
+// default). dt is used directly, so the filter is inherently frame-rate
+// independent (same role as rate_adjust_alpha for the EMA path).
+struct OneEuroParams {
+    float mincutoff = 1.0f;  // Hz, cutoff at zero speed (at-rest smoothness)
+    float beta      = 0.0f;  // speed coefficient (0 = fixed-cutoff EMA)
+    float dcutoff   = 1.0f;  // Hz, cutoff for the speed (derivative) low-pass
+};
+
+// First-order low-pass smoothing factor for cutoff `cutoff_hz` at step `dt_s`:
+//   tau = 1/(2π·cutoff); alpha = dt / (dt + tau) ∈ [0, 1].
+// cutoff_hz <= 0 → 0 (freeze on prev); dt_s <= 0 → 1 (degenerate, trust curr).
+float one_euro_alpha(float cutoff_hz, float dt_s);
+
+// Inter-frame state for the rotation One Euro path. ang_vel_hat holds the
+// low-passed geodesic angular speed (rad/s) per tracker; `initialized` is false
+// until the first valid frame is seen (so the tracker snaps to the first
+// measurement rather than slerping up from the identity quaternion).
+struct QuatSmoothingContext {
+    std::array<float, kTrackerCount> ang_vel_hat{};
+    std::array<bool,  kTrackerCount> initialized{};
+};
+
 // Per-tracker quaternion exponential smoothing with independent swing/twist
 // gates and frame-rate-independent step weighting. First the per-step weight is
 // rate-adjusted:
@@ -155,6 +196,19 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           float base_alpha,
                           float dt_s = 0.0f, float nominal_dt_s = 0.0f);
+
+// One Euro overload: identical swing/twist + parent-yaw-transport machinery as
+// the fixed-alpha form, but the per-step base weight is the speed-adaptive
+// One Euro alpha (derived from each tracker's geodesic angular speed) instead
+// of a single rate-adjusted base_alpha. `ctx` carries the per-tracker speed
+// estimate across frames. dt_s is the real step; nominal_dt_s is still used by
+// the (alpha-independent) parent-yaw transport gate. Held (invalid) trackers
+// keep prev and their ctx state untouched, same as the fixed-alpha form.
+void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+                          std::array<cv::Vec4f, kTrackerCount>& prev_quat,
+                          QuatSmoothingContext& ctx,
+                          const OneEuroParams& params,
+                          float dt_s, float nominal_dt_s);
 
 // Inter-frame state for the position smoothing path. Pass-by-ref so the
 // extractor can hold one of these per loop; default-constructed value is
@@ -194,6 +248,12 @@ struct PosSmoothingContext {
     std::array<bool,         kTrackerCount> has_last_raw{};
     std::array<std::uint32_t, kTrackerCount> invalid_ticks_since_last_raw{};
     float     dt_s = 1.0f / 60.0f;
+    // Per-tracker, per-axis low-passed velocity (m/s) for the One Euro path
+    // (apply_pos_smoothing's OneEuroParams overload). Holds the filtered
+    // derivative `dx_hat` whose magnitude opens the per-axis cutoff. Unused by
+    // the fixed-alpha EMA overload. Reset to (0,0,0) on the first valid frame
+    // for each tracker (snap, no convergence-from-origin transient).
+    std::array<cv::Vec3f,    kTrackerCount> pos_dx_hat{};
 };
 
 // Per-tracker position exponential moving average.
@@ -230,6 +290,20 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          PosSmoothingContext& ctx,
                          float base_alpha,
+                         float nominal_dt_s = 0.0f);
+
+// One Euro overload: same hip-relative hold and outlier velocity gate as the
+// fixed-alpha ctx form, but the per-axis EMA weight is the speed-adaptive
+// One Euro alpha (each of x/y/z filtered independently) instead of a single
+// rate-adjusted base_alpha. The outlier gate still multiplies the result so a
+// triangulation glitch (>16 m/s) freezes rather than being chased by the
+// speed-opened cutoff. ctx.pos_dx_hat carries the per-axis speed estimate;
+// the first valid frame per tracker snaps (prev ← curr, dx_hat ← 0). nominal
+// is accepted for signature parity but unused (One Euro reads ctx.dt_s).
+void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+                         std::array<cv::Vec3f, kTrackerCount>& prev_pos,
+                         PosSmoothingContext& ctx,
+                         const OneEuroParams& params,
                          float nominal_dt_s = 0.0f);
 
 // World-absolute hold form: no hip re-anchor, no velocity gate. Frame-rate

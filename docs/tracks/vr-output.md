@@ -40,6 +40,17 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-03 — One Euro フィルタによる動静適応スムージング
+座位静止時のトラッカー揺れに対処。固定 α EMA(α=0.5 ≈ カットオフ 9.5Hz)は静止の滑らかさと
+動作追従を両立できないため、位置(per-axis)・回転(測地角速度ベース)とも **One Euro
+(速度適応カットオフ)** に置換。静止時は低カットオフで強くスムージング、動作時は `beta·速度`
+でカットオフを開いて遅延なく追従。既存の swing/twist 分離・parent-yaw transport・hip-relative
+hold・外れ値ゲート(8–16 m/s freeze)は温存(swing/twist 本体を per-tracker alpha の `impl` に
+抽出、固定 α 版は bit-identical で既存 ctest 無傷)。既定 ON、`--vr-no-one-euro` で旧 EMA に
+フォールバック、`beta=0` で固定カットオフ EMA に縮退。`three_d.vr_*` YAML / `--vr-{pos,quat}-*`
+CLI を追加。新規 ctest(位置 6 / 回転 3 / config 1)。Phase 14 で見送った One Euro の昇格。
+→ [design/vr-output-one-euro-filter.md](../design/vr-output-one-euro-filter.md)
+
 ### 2026-06-03 — 継続キャリブのレビュー修正 (バグ修正)
 Codex + GitHub (gemini / Copilot) レビューで顕在化した点を修正。design doc なし(changelog のみ)。
 - `SampleReservoir::key_of`: 負座標で符号付き左シフト UB(VMT x/z は通常移動で負になる)→ uint32 経由 pack。負4象限が別セルになる回帰テスト追加。

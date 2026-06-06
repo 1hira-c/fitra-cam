@@ -297,6 +297,44 @@ void test_validate_slimevr_requires_halpe26() {
     check(threw, "slimevr_out + coco17 must throw");
 }
 
+void test_one_euro_yaml_cli_and_validate() {
+    auto p = write_tmp("one_euro.yaml", R"(schema: fitra_main_config_v1
+three_d:
+  vr_one_euro: false
+  vr_pos_mincutoff: 0.5
+  vr_pos_beta: 0.2
+  vr_quat_mincutoff: 1.5
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(opts.vr_one_euro == false,        "three_d.vr_one_euro loads");
+    check(opts.vr_pos_mincutoff == 0.5,     "three_d.vr_pos_mincutoff loads");
+    check(opts.vr_pos_beta == 0.2,          "three_d.vr_pos_beta loads");
+    check(opts.vr_quat_mincutoff == 1.5,    "three_d.vr_quat_mincutoff loads");
+
+    // CLI overrides YAML; --vr-no-one-euro flips the bool back off.
+    std::vector<std::string> argv_buf{
+        "--vr-pos-mincutoff", "0.9", "--vr-quat-beta", "0.4"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(opts.vr_pos_mincutoff == 0.9, "--vr-pos-mincutoff CLI overrides YAML");
+    check(opts.vr_quat_beta == 0.4,     "--vr-quat-beta CLI sets value");
+
+    // dcutoff <= 0 must fail validation.
+    opts.cam_paths[0] = "/tmp/a";
+    opts.det_engine   = "/tmp/y";
+    opts.pose_engine  = "/tmp/r";
+    opts.vr_pos_dcutoff = 0.0;
+    bool threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "dcutoff", "dcutoff validation msg");
+    }
+    check(threw, "vr_pos_dcutoff <= 0 must throw");
+}
+
 void test_early_args_extracts_config_and_probe() {
     std::vector<std::string> argv_buf{"--config", "/tmp/x.yaml", "--probe"};
     auto argv = make_argv(argv_buf);
@@ -348,6 +386,7 @@ const TestCase kTests[] = {
     {"negated_three_d_keys_invert_bools",      test_negated_three_d_keys_invert_runtime_bools},
     {"slimevr_preview_no_reset_yaml_and_cli",  test_slimevr_preview_no_reset_yaml_and_cli},
     {"vmt_index_base_yaml_cli_and_validate",   test_vmt_index_base_yaml_cli_and_validate},
+    {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},
     {"validate_slimevr_requires_halpe26",      test_validate_slimevr_requires_halpe26},

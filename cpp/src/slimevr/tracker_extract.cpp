@@ -632,11 +632,23 @@ float rate_adjust_alpha(float base_alpha, float dt_s, float nominal_dt_s) {
 }
 }  // namespace
 
-void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
-                          std::array<cv::Vec4f, kTrackerCount>& prev_quat,
-                          float base_alpha, float dt_s, float nominal_dt_s) {
-    const float alpha_rate = rate_adjust_alpha(base_alpha, dt_s, nominal_dt_s);
+float one_euro_alpha(float cutoff_hz, float dt_s) {
+    if (!(cutoff_hz > 0.0f)) return 0.0f;  // no signal passes → freeze on prev
+    if (!(dt_s > 0.0f))      return 1.0f;  // degenerate step → trust current
+    constexpr float kTwoPi = 6.283185307179586f;
+    const float tau = 1.0f / (kTwoPi * cutoff_hz);
+    return dt_s / (dt_s + tau);
+}
 
+namespace {
+// Shared swing/twist + parent-yaw-transport core. `alpha[i]` is the per-step
+// base weight for tracker i (the same value for every i in the fixed-alpha
+// path; per-tracker One Euro alpha in the adaptive path). Everything else is
+// identical regardless of how the alpha was produced.
+void apply_quat_smoothing_impl(std::array<SlimeTracker, kTrackerCount>& curr,
+                               std::array<cv::Vec4f, kTrackerCount>& prev_quat,
+                               const std::array<float, kTrackerCount>& alpha,
+                               float dt_s, float nominal_dt_s) {
     // ---- Pelvis-yaw transport for held-roll bones -------------------------
     // An extended limb's roll is unobservable (roll_confidence → 0), so it is
     // held frame-to-frame. For a near-vertical limb (standing, legs/arms down)
@@ -684,7 +696,9 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
             curr[i].quat_wxyz = prev_quat[i];
             continue;
         }
-        // Rate-adjusted per-step weight, then split by swing/twist confidence.
+        // Per-step weight (fixed-rate or One Euro), then split by swing/twist
+        // confidence.
+        const float alpha_rate = alpha[i];
         const float sa = std::clamp(alpha_rate * curr[i].swing_confidence, 0.0f, 1.0f);
         const float ta = std::clamp(alpha_rate * curr[i].roll_confidence,  0.0f, 1.0f);
         cv::Vec4f p = quat_normalize(prev_quat[i]);
@@ -746,6 +760,50 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
         curr[i].quat_wxyz = r;
         prev_quat[i] = r;
     }
+}
+}  // namespace
+
+void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+                          std::array<cv::Vec4f, kTrackerCount>& prev_quat,
+                          float base_alpha, float dt_s, float nominal_dt_s) {
+    // Fixed-alpha path: one rate-adjusted weight shared by every tracker.
+    const float alpha_rate = rate_adjust_alpha(base_alpha, dt_s, nominal_dt_s);
+    std::array<float, kTrackerCount> alpha;
+    alpha.fill(alpha_rate);
+    apply_quat_smoothing_impl(curr, prev_quat, alpha, dt_s, nominal_dt_s);
+}
+
+void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+                          std::array<cv::Vec4f, kTrackerCount>& prev_quat,
+                          QuatSmoothingContext& ctx,
+                          const OneEuroParams& params,
+                          float dt_s, float nominal_dt_s) {
+    const float te = std::max(1.0e-3f, (dt_s > 0.0f) ? dt_s : nominal_dt_s);
+    const float a_d = one_euro_alpha(params.dcutoff, te);
+    std::array<float, kTrackerCount> alpha{};  // 0 for held/first-frame trackers
+    for (std::size_t i = 0; i < kTrackerCount; ++i) {
+        if (!curr[i].valid) continue;  // impl holds prev; ctx state untouched
+        const cv::Vec4f q = quat_normalize(curr[i].quat_wxyz);
+        if (!ctx.initialized[i]) {
+            // First valid frame: snap to the measurement (prev ← curr) so the
+            // tracker does not slerp up from the identity quaternion. With
+            // prev == curr the impl's slerp returns curr for any alpha; leave
+            // alpha[i] = 0 (the held-roll split branch is skipped, sa==ta==0).
+            prev_quat[i]        = q;
+            ctx.ang_vel_hat[i]  = 0.0f;
+            ctx.initialized[i]  = true;
+            continue;
+        }
+        // Geodesic angular speed between the filtered prev and the raw curr.
+        const cv::Vec4f p = quat_normalize(prev_quat[i]);
+        float dot = std::abs(p[0]*q[0] + p[1]*q[1] + p[2]*q[2] + p[3]*q[3]);
+        const float ang   = 2.0f * std::acos(std::clamp(dot, 0.0f, 1.0f));  // [0, π]
+        const float speed = ang / te;  // rad/s
+        ctx.ang_vel_hat[i] += a_d * (speed - ctx.ang_vel_hat[i]);
+        const float cutoff = params.mincutoff + params.beta * std::abs(ctx.ang_vel_hat[i]);
+        alpha[i] = one_euro_alpha(cutoff, te);
+    }
+    apply_quat_smoothing_impl(curr, prev_quat, alpha, dt_s, nominal_dt_s);
 }
 
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
@@ -829,6 +887,82 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
     // leaves prev_hip_valid stuck true with a stale prev_hip_pos, and the next
     // valid frame would re-anchor across the gap — violating the "previous
     // frame's hip was also valid" invariant in the hold branch above.
+    if (ctx.hip_valid) {
+        ctx.prev_hip_pos = ctx.current_hip_pos;
+    }
+    ctx.prev_hip_valid = ctx.hip_valid;
+}
+
+void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+                         std::array<cv::Vec3f, kTrackerCount>& prev_pos,
+                         PosSmoothingContext& ctx,
+                         const OneEuroParams& params, float /*nominal_dt_s*/) {
+    // One Euro reads the real step directly (no rate_adjust_alpha needed); the
+    // hold branch and outlier gate are identical to the fixed-alpha ctx form.
+    const float dt = std::max(1.0e-3f, ctx.dt_s);
+    const bool  can_hip_relative = ctx.hip_valid && ctx.prev_hip_valid;
+
+    for (std::size_t i = 0; i < kTrackerCount; ++i) {
+        cv::Vec3f& p = prev_pos[i];
+
+        if (!curr[i].valid) {
+            // Hold branch — bit-identical to the fixed-alpha overload.
+            if (can_hip_relative && ctx.has_last_raw[i]) {
+                cv::Vec3f offset{p[0] - ctx.prev_hip_pos[0],
+                                 p[1] - ctx.prev_hip_pos[1],
+                                 p[2] - ctx.prev_hip_pos[2]};
+                cv::Vec3f world{ctx.current_hip_pos[0] + offset[0],
+                                ctx.current_hip_pos[1] + offset[1],
+                                ctx.current_hip_pos[2] + offset[2]};
+                curr[i].pos = world;
+                p = world;
+            } else {
+                curr[i].pos = p;
+            }
+            if (ctx.invalid_ticks_since_last_raw[i] < 0xFFFFFFFFu) {
+                ctx.invalid_ticks_since_last_raw[i] += 1;
+            }
+            continue;
+        }
+
+        const cv::Vec3f q = curr[i].pos;
+        // Real elapsed since the last filtered update accounts for any dropout
+        // gap (1 + invalid_ticks ticks), so a recovery frame neither inflates
+        // the gate velocity nor under-weights the One Euro step.
+        const float te = dt * static_cast<float>(1u + ctx.invalid_ticks_since_last_raw[i]);
+
+        if (!ctx.has_last_raw[i]) {
+            // First valid frame: snap (no convergence-from-origin transient).
+            p = q;
+            ctx.pos_dx_hat[i] = cv::Vec3f{0.0f, 0.0f, 0.0f};
+        } else {
+            // Outlier velocity gate (same signal as the fixed-alpha form):
+            // consecutive raw deltas, not the lagging prev_pos.
+            const float dx0 = q[0] - ctx.last_raw_pos[i][0];
+            const float dy0 = q[1] - ctx.last_raw_pos[i][1];
+            const float dz0 = q[2] - ctx.last_raw_pos[i][2];
+            const float dist = std::sqrt(dx0*dx0 + dy0*dy0 + dz0*dz0);
+            const float v_mps = dist / te;
+            const float gate  = smoothstep01(v_mps, kPosVelGateLow_mps, kPosVelGateHigh_mps);
+            const float a_d   = one_euro_alpha(params.dcutoff, te);
+
+            for (int c = 0; c < 3; ++c) {
+                const float dx = (q[c] - p[c]) / te;  // velocity estimate
+                float& dxh = ctx.pos_dx_hat[i][c];
+                dxh += a_d * (dx - dxh);               // low-pass the speed
+                const float cutoff = params.mincutoff + params.beta * std::abs(dxh);
+                // Speed-adaptive cutoff, then the outlier gate still freezes a
+                // glitch (>16 m/s) so the opened cutoff can't chase it.
+                const float a = one_euro_alpha(cutoff, te) * (1.0f - gate);
+                p[c] += a * (q[c] - p[c]);
+            }
+        }
+        curr[i].pos = p;
+        ctx.last_raw_pos[i] = q;
+        ctx.has_last_raw[i] = true;
+        ctx.invalid_ticks_since_last_raw[i] = 0;
+    }
+
     if (ctx.hip_valid) {
         ctx.prev_hip_pos = ctx.current_hip_pos;
     }

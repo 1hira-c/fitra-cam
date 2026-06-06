@@ -94,6 +94,8 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
         "enable_3d", "calib", "kp_conf_thresh", "max_reproj_px",
         "sync_window_ms", "bone_calib_frames", "no_3d_kalman", "no_3d_ik",
         "vr_extract_event_driven",
+        "vr_one_euro", "vr_pos_mincutoff", "vr_pos_beta", "vr_pos_dcutoff",
+        "vr_quat_mincutoff", "vr_quat_beta", "vr_quat_dcutoff",
     };
     check_keys(section, allowed, "three_d");
     if (section["enable_3d"])         out.enable_3d         = parse_scalar<bool>(section["enable_3d"],            "three_d.enable_3d");
@@ -114,6 +116,13 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
         out.vr_extract_event_driven = parse_scalar<bool>(
             section["vr_extract_event_driven"], "three_d.vr_extract_event_driven");
     }
+    if (section["vr_one_euro"])       out.vr_one_euro       = parse_scalar<bool>(section["vr_one_euro"],         "three_d.vr_one_euro");
+    if (section["vr_pos_mincutoff"])  out.vr_pos_mincutoff  = parse_scalar<double>(section["vr_pos_mincutoff"],  "three_d.vr_pos_mincutoff");
+    if (section["vr_pos_beta"])       out.vr_pos_beta       = parse_scalar<double>(section["vr_pos_beta"],       "three_d.vr_pos_beta");
+    if (section["vr_pos_dcutoff"])    out.vr_pos_dcutoff    = parse_scalar<double>(section["vr_pos_dcutoff"],    "three_d.vr_pos_dcutoff");
+    if (section["vr_quat_mincutoff"]) out.vr_quat_mincutoff = parse_scalar<double>(section["vr_quat_mincutoff"], "three_d.vr_quat_mincutoff");
+    if (section["vr_quat_beta"])      out.vr_quat_beta      = parse_scalar<double>(section["vr_quat_beta"],      "three_d.vr_quat_beta");
+    if (section["vr_quat_dcutoff"])   out.vr_quat_dcutoff   = parse_scalar<double>(section["vr_quat_dcutoff"],   "three_d.vr_quat_dcutoff");
 }
 
 void load_subject(const YAML::Node& section, MainOptions& out) {
@@ -328,6 +337,13 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--no-3d-kalman")      { out.kalman_3d = false; }
         else if (a == "--no-3d-ik")          { out.ik_3d = false; }
         else if (a == "--vr-extract-event-driven") { out.vr_extract_event_driven = true; }
+        else if (a == "--vr-no-one-euro")    { out.vr_one_euro = false; }
+        else if (a == "--vr-pos-mincutoff")  { out.vr_pos_mincutoff  = std::stod(need(i, "--vr-pos-mincutoff")); }
+        else if (a == "--vr-pos-beta")       { out.vr_pos_beta       = std::stod(need(i, "--vr-pos-beta")); }
+        else if (a == "--vr-pos-dcutoff")    { out.vr_pos_dcutoff    = std::stod(need(i, "--vr-pos-dcutoff")); }
+        else if (a == "--vr-quat-mincutoff") { out.vr_quat_mincutoff = std::stod(need(i, "--vr-quat-mincutoff")); }
+        else if (a == "--vr-quat-beta")      { out.vr_quat_beta      = std::stod(need(i, "--vr-quat-beta")); }
+        else if (a == "--vr-quat-dcutoff")   { out.vr_quat_dcutoff   = std::stod(need(i, "--vr-quat-dcutoff")); }
         else if (a == "--slimevr-out")       { out.slimevr_out = true; }
         else if (a == "--slimevr-host")      { out.slimevr_host = need(i, "--slimevr-host"); }
         else if (a == "--slimevr-port")      { out.slimevr_port = std::atoi(need(i, "--slimevr-port")); }
@@ -454,6 +470,19 @@ void validate_options(const MainOptions& opts) {
         if (opts.vmt_continuous_blend <= 0.0 || opts.vmt_continuous_blend > 1.0) {
             fail("--vmt-continuous-blend must be in (0, 1]");
         }
+    }
+    // One Euro params drive the TrackerExtractor whenever 3D is on (feeds both
+    // SlimeVR/VMT and the WebUI viz), so validate unconditionally. mincutoff and
+    // beta may be 0 (0 mincutoff with 0 beta freezes — allowed but degenerate);
+    // dcutoff must be > 0 (it is a cutoff, not a coefficient).
+    if (opts.vr_pos_mincutoff < 0.0 || opts.vr_quat_mincutoff < 0.0) {
+        fail("--vr-{pos,quat}-mincutoff must be >= 0");
+    }
+    if (opts.vr_pos_beta < 0.0 || opts.vr_quat_beta < 0.0) {
+        fail("--vr-{pos,quat}-beta must be >= 0");
+    }
+    if (opts.vr_pos_dcutoff <= 0.0 || opts.vr_quat_dcutoff <= 0.0) {
+        fail("--vr-{pos,quat}-dcutoff must be > 0");
     }
     if (opts.calibrate && !opts.enable_3d) {
         fail("--calibrate requires --enable-3d");
