@@ -95,6 +95,8 @@ const vmtAutoTposeBtn    = document.getElementById("vmt-auto-tpose");
 const vmtAutoStartBtn    = document.getElementById("vmt-auto-motion-start");
 const vmtAutoStopBtn     = document.getElementById("vmt-auto-motion-stop");
 const vmtAutoResult      = document.getElementById("vmt-auto-result");
+const vmtAutoContToggle  = document.getElementById("vmt-auto-continuous");
+const vmtAutoContLabel   = document.getElementById("vmt-auto-continuous-label");
 const VMT_AUTO_DURATION_S = 3.0;
 const VMT_AUTO_SAMPLE_HZ  = 30.0;
 
@@ -933,6 +935,33 @@ function update3DStats() {
     vmtHmdStatus.textContent = hmdStatusText;
     vmtHmdStatus.className   = `vmt-align-status ${hmdStatusClass}`.trim();
   }
+  // Continuous HMD-driven alignment status (block exists iff aligner attached).
+  const cont = bundle.continuous_align || null;
+  let contLine = "";
+  if (cont) {
+    const srcMix = `head=${cont.head_samples ?? 0} chest=${cont.chest_samples ?? 0}`;
+    const phase = cont.locked ? "fine" : "coarse";
+    contLine =
+      `\ncont_align     ${cont.enabled ? "on" : "off"} [${phase}] (${cont.last_status || "-"})` +
+      `\ncont_cells     ${cont.occupied_cells ?? 0}/${cont.min_cells ?? 0} ${srcMix}` +
+      `\ncont_resid_m   ${(cont.last_residual_m ?? 0).toFixed(3)}` +
+      `\ncont_updates   ${cont.updates ?? 0}/${cont.resolves ?? 0}`;
+  }
+  if (vmtAutoContToggle) {
+    if (cont) {
+      vmtAutoContToggle.disabled = false;
+      vmtAutoContToggle.checked  = !!cont.enabled;
+      if (vmtAutoContLabel) {
+        vmtAutoContLabel.textContent = cont.enabled
+          ? `自動追従 ON (cells ${cont.occupied_cells ?? 0}/${cont.min_cells ?? 0})`
+          : "自動追従 OFF";
+      }
+    } else {
+      vmtAutoContToggle.disabled = true;
+      vmtAutoContToggle.checked  = false;
+      if (vmtAutoContLabel) vmtAutoContLabel.textContent = "自動追従 (未接続)";
+    }
+  }
   stats3d.textContent =
     `tri_fps         ${(s.tri_fps ?? 0).toFixed(2)}\n` +
     `reproj_med_px  ${(s.reproj_err_med_px ?? 0).toFixed(2)}\n` +
@@ -949,7 +978,8 @@ function update3DStats() {
     `ik_locked      ${s.ik_locked ? "true" : "false"}\n` +
     `bundle_seq     ${state.server3dSeq}` +
     vmtLine +
-    hmdLine;
+    hmdLine +
+    contLine;
   updateTrackerTable(bundle);
 }
 
@@ -1388,9 +1418,29 @@ async function stopMotionCalib() {
   }
 }
 
+async function toggleContinuousAlign(enabled) {
+  const url = enabled
+    ? "/api/vmt/alignment/auto/continuous/start"
+    : "/api/vmt/alignment/auto/continuous/stop";
+  try {
+    const resp = await fetch(url, { method: "POST" });
+    const data = await resp.json();
+    if (!resp.ok || data.ok === false) {
+      setAutoResultText((data && data.err) || `HTTP ${resp.status}`);
+    }
+  } catch (e) {
+    setAutoResultText(e.message || "request failed");
+  }
+}
+
 if (vmtAutoTposeBtn) vmtAutoTposeBtn.addEventListener("click", postAutoTpose);
 if (vmtAutoStartBtn) vmtAutoStartBtn.addEventListener("click", startMotionCalib);
 if (vmtAutoStopBtn)  vmtAutoStopBtn.addEventListener("click",  stopMotionCalib);
+if (vmtAutoContToggle) {
+  vmtAutoContToggle.addEventListener("change", (e) => {
+    toggleContinuousAlign(e.target.checked);
+  });
+}
 
 connect();
 connect3d();

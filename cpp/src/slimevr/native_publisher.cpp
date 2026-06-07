@@ -294,6 +294,16 @@ void NativePublisher::send_loop() {
             if (!send_rotation_burst(tracker_snap)) {
                 std::lock_guard<std::mutex> lk{stats_mu_};
                 ++stats_.skipped_invalid;
+            } else if (skel_snap.t_capture_oldest.time_since_epoch().count() != 0) {
+                // Age of the freshest 3D skeleton at send time = end-to-end
+                // capture->send latency. EMA so the stat is readable at a glance.
+                double e2e = std::chrono::duration<double, std::milli>(
+                                 clk::now() - skel_snap.t_capture_oldest).count();
+                std::lock_guard<std::mutex> lk{stats_mu_};
+                stats_.e2e_capture_to_send_ms =
+                    stats_.e2e_capture_to_send_ms == 0.0
+                        ? e2e
+                        : 0.9 * stats_.e2e_capture_to_send_ms + 0.1 * e2e;
             }
         }
         // Heartbeat at coarser cadence (1 Hz default) so SlimeVR keeps us

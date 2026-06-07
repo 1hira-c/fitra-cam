@@ -34,6 +34,7 @@ class SlimeTrackerBus;   // tracker snapshot bus for /ws3d viz
 namespace fitra::vmt {
 class VmtPublisher;      // fwd decl; full header in crow_server.cpp
 class HmdPoseBus;        // HMD pose source for auto-alignment routes
+class ContinuousAligner; // always-on HMD-driven alignment refiner
 }
 
 namespace fitra::web {
@@ -102,6 +103,12 @@ public:
     // stale and the auto-alignment routes return StaleHmd.
     void set_hmd_pose_bus(vmt::HmdPoseBus* bus, double stale_threshold_ms);
 
+    // Attach the continuous HMD-driven aligner so /stats3d reports its status
+    // and /api/vmt/alignment/auto/continuous/* can toggle it at runtime. Same
+    // ownership rules as set_vmt_publisher (caller retains, must outlive or be
+    // cleared before destruction).
+    void set_continuous_aligner(vmt::ContinuousAligner* aligner);
+
     // Start listening + broadcasting on a background thread. Returns when
     // the server is bound and ready (best-effort; Crow's run() blocks).
     void start();
@@ -126,6 +133,7 @@ private:
     slimevr::SlimeTrackerBus*      tracker_bus_     = nullptr;
     vmt::VmtPublisher*             vmt_publisher_   = nullptr;
     vmt::HmdPoseBus*               hmd_pose_bus_    = nullptr;
+    vmt::ContinuousAligner*        continuous_aligner_ = nullptr;
     double                         hmd_stale_ms_    = 200.0;
 
     struct Impl;

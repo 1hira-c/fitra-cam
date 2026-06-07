@@ -27,6 +27,13 @@ struct MainOptions {
     int width  = 640;
     int height = 480;
     int fps    = 30;
+    // V4L2 pixel format: "mjpeg" (default; camera-side compression, CPU decode)
+    // or "yuyv" (uncompressed; skips decode + camera encode latency but costs
+    // USB bandwidth -> caps resolution/fps). See docs/design/core-pipeline-e2e-latency.md.
+    std::string pixel_format = "mjpeg";
+    // V4L2 mmap ring depth. Fewer buffers = lower worst-case ring staleness;
+    // driver-enforced minimum is 2.
+    int n_buffers = 4;
 
     // inference
     std::string det_engine;
@@ -54,6 +61,10 @@ struct MainOptions {
     // negated flags; the runtime predicate stays positive (kalman_3d / ik_3d).
     bool   kalman_3d = true;
     bool   ik_3d     = true;
+    // VR tracker extraction: react to each new 3D frame (event-driven) instead
+    // of resampling at a fixed cadence. Cuts the extractor's contribution to
+    // capture->VR-send latency. Feeds both SlimeVR and VMT. Default off.
+    bool   vr_extract_event_driven = false;
 
     // subject
     std::string subjects_dir = "calibrations/subjects";
@@ -102,6 +113,14 @@ struct MainOptions {
     int         hmd_listen_port    = 39571;
     std::string hmd_listen_bind    = "0.0.0.0";
     double      hmd_stale_ms       = 200.0;
+
+    // Continuous (always-on) HMD-driven alignment refinement. Requires vmt_out
+    // + hmd_listen_enabled + enable_3d to do anything; silently inert otherwise.
+    // Defaults on so the rig self-aligns from start-up without a manual T-pose.
+    bool   vmt_continuous_align     = true;
+    double vmt_continuous_sample_hz = 15.0;
+    double vmt_continuous_resolve_s = 2.0;
+    double vmt_continuous_blend     = 0.2;   // EMA weight per resolve, in (0, 1]
 
     // Controller-marker extrinsic calibration (see
     // docs/design/pose-3d-controller-marker-extrinsic.md). When enabled, main

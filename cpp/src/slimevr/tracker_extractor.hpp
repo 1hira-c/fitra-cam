@@ -40,6 +40,14 @@ struct TrackerExtractorOptions {
     // 120 frames ≈ 2 s at 60 Hz — long enough to catch a sustained drift but
     // short enough to react to scene changes.
     int    stats_window      = 120;
+    // Event-driven mode: instead of producing at a fixed `extract_rate_hz`,
+    // block on the Skeleton3DBus and react to each new triangulation result
+    // (one smoothing step per real 3D frame). Removes the extractor's fixed-
+    // cadence latency hop. A timeout fallback (extract_rate_hz period) still
+    // fires so stale trackers are cleared when the 3D bus goes quiet. Default
+    // off to preserve the validated fixed-rate behavior; opt in for minimum
+    // capture->send latency.
+    bool   event_driven      = false;
 };
 
 class TrackerExtractor {
@@ -74,9 +82,21 @@ private:
     std::array<cv::Vec4f, kTrackerCount> prev_quat_{};
 
     // Position EMA history. Same single-history invariant as prev_quat_.
-    // Initialized to (0,0,0) in the ctor; first valid frame converges to the
-    // real position within a few frames at pos_smooth=0.5.
+    // Initialized to (0,0,0) in the ctor and converges toward the real
+    // position via the standard EMA step (no first-frame snap). The velocity
+    // gate in apply_pos_smoothing stays disabled until pos_ctx_.has_last_raw[i]
+    // flips on the first valid frame, so the initial convergence is ungated.
     std::array<cv::Vec3f, kTrackerCount> prev_pos_{};
+
+    // FK fallback state for extract_trackers. Holds per-foot anchors
+    // (knee→ankle direction + tibia length, ankle→toe direction + foot
+    // length) learned from fully measured frames; foot trackers fall back
+    // to the anchor when the KP drops in a single frame.
+    ExtractContext extract_ctx_{};
+
+    // Hip cache + per-tracker initialization flags + frame dt for the
+    // position smoother. See PosSmoothingContext docstring.
+    PosSmoothingContext pos_ctx_{};
 
     // Per-tracker rolling stats state.
     //

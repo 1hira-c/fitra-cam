@@ -90,8 +90,17 @@ TriangulatedSkeleton Triangulator::triangulate(
     const std::size_t kp_count = active_kp_count();
     out.skeleton.kp_count = static_cast<std::uint8_t>(kp_count);
 
+    // Per-call scratch reused across keypoints/views to avoid per-keypoint and
+    // per-view heap allocations. thread_local (not mutable members) keeps the
+    // const contract intact: triangulate() touches no shared state, so it stays
+    // thread-safe even if the pipeline later triangulates frames in parallel,
+    // and Triangulator remains cheap to copy/move.
+    static thread_local std::vector<JointView>   views;
+    static thread_local std::vector<cv::Point2f> undist_src;
+    static thread_local std::vector<cv::Point2f> undist_dst;
+
     for (std::size_t k = 0; k < kp_count; ++k) {
-        std::vector<JointView> views;
+        views.clear();
         for (const auto& obs : observations) {
             if (!obs.person || obs.cam_index < 0 ||
                 static_cast<std::size_t>(obs.cam_index) >= cameras_.size()) {
@@ -101,14 +110,13 @@ TriangulatedSkeleton Triangulator::triangulate(
             if (kp.score < opts_.kp_conf_thresh) continue;
 
             const auto& cam = cameras_[static_cast<std::size_t>(obs.cam_index)];
-            std::vector<cv::Point2f> src{{kp.x, kp.y}};
-            std::vector<cv::Point2f> undist;
-            cv::undistortPoints(src, undist, cam.K, cam.dist);
-            if (undist.empty()) continue;
+            undist_src.assign(1, cv::Point2f(kp.x, kp.y));
+            cv::undistortPoints(undist_src, undist_dst, cam.K, cam.dist);
+            if (undist_dst.empty()) continue;
 
             JointView v;
             v.cam_index = obs.cam_index;
-            v.norm = cv::Point2d(undist[0].x, undist[0].y);
+            v.norm = cv::Point2d(undist_dst[0].x, undist_dst[0].y);
             v.pixel = cv::Point2f(kp.x, kp.y);
             v.score = kp.score;
             views.push_back(v);
@@ -134,14 +142,19 @@ bool Triangulator::triangulate_joint(const std::vector<JointView>& views,
                                      int& used_views) const {
     if (views.size() < 2) return false;
 
-    std::vector<int> indices(views.size());
+    // thread_local scratch (see triangulate()): allocation-free across calls,
+    // const-safe, no shared mutable members.
+    static thread_local std::vector<int> indices;
+    static thread_local std::vector<int> kept;
+
+    indices.resize(views.size());
     std::iota(indices.begin(), indices.end(), 0);
 
     cv::Point3d point;
     if (!solve_dlt(views, indices, point)) return false;
 
     if (views.size() > 2) {
-        std::vector<int> kept;
+        kept.clear();
         kept.reserve(indices.size());
         for (int idx : indices) {
             if (reproj_error_px(views[static_cast<std::size_t>(idx)], point) <= opts_.max_reproj_px) {
@@ -152,7 +165,7 @@ bool Triangulator::triangulate_joint(const std::vector<JointView>& views,
             cv::Point3d refined;
             if (solve_dlt(views, kept, refined)) {
                 point = refined;
-                indices = std::move(kept);
+                indices = kept;
             }
         }
     }

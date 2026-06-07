@@ -47,6 +47,7 @@
 #include "util/cuda_check.hpp"
 #include "util/logging.hpp"
 #include "vmt/vmt_publisher.hpp"
+#include "vmt/continuous_aligner.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
 #include "vmt/controller_pose_receiver.hpp"
 #include "web/crow_server.hpp"
@@ -88,6 +89,8 @@ void print_help() {
         "  --no-web                  do not start Crow (driver only, for bench)\n"
         "  --width N / --height N    capture size per camera (default 640x480)\n"
         "  --fps N                   requested capture fps (default 30)\n"
+        "  --pixel-format FMT        mjpeg (default,CPU) | yuyv | nvjpeg (Jetson HW decode)\n"
+        "  --n-buffers N             v4l2 mmap ring depth (default 4, min 2)\n"
         "  --det-frequency N         run YOLOX every N frames (default 10)\n"
         "  --keypoint-format FMT     pose topology: coco17 (17 kpts, default) or halpe26 (26 kpts).\n"
         "                            Must match the K of the supplied --pose-engine.\n"
@@ -107,6 +110,7 @@ void print_help() {
         "  --subject-profile PATH    direct subject profile YAML path for IK\n"
         "  --no-3d-kalman            disable 3D Kalman smoothing\n"
         "  --no-3d-ik                disable 3D IK projection\n"
+        "  --vr-extract-event-driven react to each 3D frame (lower VR latency)\n"
         "\n"
         "SlimeVR native Firmware UDP output (requires --enable-3d + --keypoint-format=halpe26):\n"
         "  --slimevr-out             enable the native Firmware UDP publisher (10 trackers)\n"
@@ -132,6 +136,13 @@ void print_help() {
         "  --hmd-listen-port N       UDP port to listen on (default 39571)\n"
         "  --hmd-listen-bind ADDR    bind address (default 0.0.0.0)\n"
         "  --hmd-stale-ms F          milliseconds without a packet → snapshot.stale=true (default 200)\n"
+        "\n"
+        "Continuous HMD-driven alignment (needs --vmt-out + --hmd-listen-enabled + --enable-3d):\n"
+        "  --vmt-continuous-align       always-on background alignment refinement (default ON)\n"
+        "  --no-vmt-continuous-align    disable the background refiner\n"
+        "  --vmt-continuous-sample-hz F poll rate for HMD/head samples (default 15, [5,120])\n"
+        "  --vmt-continuous-resolve-s F re-solve cadence in seconds (default 2, [0.2,30])\n"
+        "  --vmt-continuous-blend F     EMA weight applied per solve (default 0.2, (0,1])\n"
         "\n"
         "Subject calibration wizard (requires --enable-3d):\n"
         "  --calibrate                 auto-start calibration session at boot\n"
@@ -406,6 +417,12 @@ int main(int argc, char** argv) {
             o.width  = width;
             o.height = height;
             o.fps    = fps;
+            o.n_buffers = opts.n_buffers;
+            o.pixel_format = (opts.pixel_format == "yuyv")
+                                 ? fitra::camera::PixFmt::Yuyv
+                                 : (opts.pixel_format == "nvjpeg")
+                                       ? fitra::camera::PixFmt::Nvjpeg
+                                       : fitra::camera::PixFmt::Mjpeg;
             auto cap = std::make_unique<fitra::camera::V4l2Capture>(o);
 
             auto yolox_eng = fitra::infer::TrtEngine::from_shared(yolox_shared);
@@ -661,6 +678,7 @@ int main(int argc, char** argv) {
             // runs regardless of --vmt-out / --slimevr-out toggles — same
             // architecture as quat_smooth.
             tex_opts.pos_smooth      = static_cast<float>(opts.vmt_pos_smooth);
+            tex_opts.event_driven    = opts.vr_extract_event_driven;
             tracker_extractor = std::make_unique<fitra::slimevr::TrackerExtractor>(
                 *bus3d, *slime_tracker_bus, tex_opts);
             tracker_extractor->start();
@@ -727,23 +745,46 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Continuous (always-on) HMD-driven alignment refinement. Read-only
+        // consumer of bus3d + the HMD bus; nudges vmt_pub's alignment over time.
+        // Inert unless vmt_out + hmd_listen_enabled + enable_3d are all on.
+        std::unique_ptr<fitra::vmt::ContinuousAligner> continuous_aligner;
+        if (vmt_pub && bus3d && hmd_listen_enabled && opts.vmt_continuous_align) {
+            fitra::vmt::ContinuousAlignerConfig cacfg;
+            cacfg.enabled          = true;
+            cacfg.sample_hz        = opts.vmt_continuous_sample_hz;
+            cacfg.resolve_period_s = opts.vmt_continuous_resolve_s;
+            cacfg.blend_alpha      = static_cast<float>(opts.vmt_continuous_blend);
+            continuous_aligner = std::make_unique<fitra::vmt::ContinuousAligner>(
+                *bus3d, *hmd_pose_bus, *vmt_pub, hmd_stale_ms, cacfg);
+            continuous_aligner->start();
+            FITRA_LOG_INFO("continuous HMD alignment: enabled "
+                           "(sample {} Hz, resolve {} s, blend {})",
+                           opts.vmt_continuous_sample_hz,
+                           opts.vmt_continuous_resolve_s,
+                           opts.vmt_continuous_blend);
+        }
+
         // Stop the publishers + tracker extractor on any scope exit. Must
         // outlive the server (so /stats3d never reads a dead pointer / a
         // dead bus) and the driver (the publishers and extractor all read
-        // buses the driver feeds).
+        // buses the driver feeds). The aligner is stopped first because it
+        // reads vmt_pub + the HMD/3D buses.
         struct SlimeStop {
+            fitra::vmt::ContinuousAligner*    aligner;
             fitra::slimevr::NativePublisher*  pub;
             fitra::vmt::VmtPublisher*         vmt_pub;
             fitra::vmt::HmdPoseReceiver*      hmd_recv;
             fitra::slimevr::TrackerExtractor* tex;
             ~SlimeStop() {
+                if (aligner)  aligner->stop();
                 if (pub)      pub->stop();
                 if (vmt_pub)  vmt_pub->stop();
                 if (hmd_recv) hmd_recv->stop();
                 if (tex)      tex->stop();
             }
-        } slime_stop{slime_pub.get(), vmt_pub.get(), hmd_pose_recv.get(),
-                     tracker_extractor.get()};
+        } slime_stop{continuous_aligner.get(), slime_pub.get(), vmt_pub.get(),
+                     hmd_pose_recv.get(), tracker_extractor.get()};
 
         std::unique_ptr<fitra::web::CrowServer> server;
         if (!no_web) {
@@ -780,6 +821,9 @@ int main(int argc, char** argv) {
             // "waiting for hmd" instead of suppressing the section.
             if (hmd_listen_enabled) {
                 server->set_hmd_pose_bus(hmd_pose_bus.get(), hmd_stale_ms);
+            }
+            if (continuous_aligner) {
+                server->set_continuous_aligner(continuous_aligner.get());
             }
             server->start();
         }

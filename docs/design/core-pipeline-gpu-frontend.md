@@ -1,0 +1,226 @@
+# core-pipeline: 全 GPU フロントエンド (decode→前処理→TRT を host 経由なしで)
+
+(着手日 2026-05-29 / 派生元: [`core-pipeline-nvjpeg-decode.md`](core-pipeline-nvjpeg-decode.md) の
+「高 fps では CPU 色変換が床」知見、[`core-pipeline-e2e-latency.md`](core-pipeline-e2e-latency.md) の
+ステージ計測 / migration-plan の Phase 6「GPU 前処理」を具体化)
+
+## 背景 / 動機
+
+E2E レイテンシ + nvjpeg の実測で、**CPU に残るのは前処理だけ**と判明した:
+- decode (HW NVJPEG 化済み) の後、**RGBA→BGR フルフレーム変換が CPU**（VIC は 24-bit BGR 非対応）。
+- RTMPose 前処理 = **warpAffine(crop+scale) + normalize + HWC→CHW が CPU**（Phase 6b で per-cam
+  ワーカーに分散）。YOLOX も letterbox+HWC→CHW が CPU。
+- 各推論の **入力 H2D コピー**。
+
+実測の含意: nvjpeg の CPU オフロードは中 fps 帯まで (-24% @30fps×2) だが、90fps×2 では full-frame
+CPU 変換が床になり相殺 (mjpeg 1.81 / nvjpeg 1.79 cores)。**残る CPU パスを全部 GPU に寄せれば
+高 fps でも CPU が空き、H2D も消え、レイテンシも下がる。** ホストへ戻すのは最終 keypoint だけ。
+
+完了基準: RTMPose(+YOLOX) の入力生成が decode 出力から TRT 入力 device バッファまで **host を一度も
+経由しない**。correctness は CPU 参照と keypoint L2 が許容内。高 fps で CPU が capture+後段のみに
+落ち、`cap→pose` レイテンシが H2D 分縮む。
+
+## 検討した案
+
+### A. CUDA nvJPEG (`nvjpeg.h`) で JPEG→CUDA 直行 → 没
+最短経路だが **この JetPack に CUDA `nvjpeg.h` ヘッダが無い** (`libnvjpeg.so` は MMAPI 版のみ、
+`find / -name nvjpeg.h` 空)。実装不能。
+
+### B. VIC 出力を CUDA メモリ (`NVBUF_MEM_CUDA_DEVICE/UNIFIED`) に直接 → 没
+`surfaceList[].dataPtr` がそのまま CUDA device ptr になれば EGL 不要。だが実機で
+NvBufSurfTransform が **"Surface type not supported for transformation"** で reject
+(CUDA_DEVICE/UNIFIED とも)。SURFACE_ARRAY の dataPtr は CUDA から読めない (unregistered)。没。
+
+### C. EGL register で NvBufSurface→CUDA (採用・実証済み)
+`NvBufSurfaceMapEglImage` → `cuGraphicsEGLRegisterImage` → `cuGraphicsResourceGetMappedEglFrame`
+→ `CUeglFrame.frame.pPitch[0]` が **pitch-linear CUDA device ptr**。DeepStream/MMAPI サンプル 04 の
+定番経路。**スパイクで実証** (下記)。採用。
+
+### D. 現状維持 (CPU 前処理) → 没
+Phase 6b で 170fps を出した構成だが、高 fps で CPU 律速 + H2D 残存。動機の通り高 fps を解放できない。
+
+## 実証済み事実 (スパイク, 2026-05-29, /tmp)
+
+- **EGL→CUDA ブリッジ成立**: 640×480 MJPEG を decodeToFd→NvBufSurfTransform(RGBA, SURFACE_ARRAY)
+  →EglImage→`cuGraphicsEGLRegisterImage`→`GetMappedEglFrame` で `frameType=CU_EGL_FRAME_TYPE_PITCH`,
+  planes=1, pitch=2560(=640×4), `pPitch[0]`=CUDA device ptr を取得。`cudaMemcpy2D` D2H 成功、
+  **CPU マップと画素一致 (R-mean 128.4 = 128.4)**。CUDA カーネルが decode 出力を直読みできることを確認。
+- **RTMPose 前処理は回転なし**: `warp_matrix` は "rotation angle = 0"、中心 crop + アスペクト調整
+  スケールのみ。→ **単純 CUDA bilinear crop+resize で吸収可** (一般 affine 不要)。VIC の crop+scale でも可。
+- `cuGraphicsEGLRegisterImage` は重い → 再利用 dst バッファに対し**確保時 1 回だけ register**しキャッシュ
+  (サンプル 04 の dma_egl_map と同パターン)。
+
+## 採用設計
+
+### データフロー
+```
+MJPEG ─VIC/NVJPEG decodeToFd─▶ NvBufSurface(YUV422,NVMM)
+        ─NvBufSurfTransform─▶ NvBufSurface(RGBA, pitch, SURFACE_ARRAY)   ← 既存 .so 経路を流用
+        ─EglImage+cuGraphicsEGLRegisterImage(確保時1回)─▶ CUeglFrame(CUDA device ptr)
+   [ここから host 経由なし・全 CUDA stream 上]
+   YOLOX:   CUDA kernel(letterbox resize + normalize + HWC→CHW) ─▶ YOLOX TRT 入力(device)
+   RTMPose: CUDA kernel(crop[bbox]+resize→input_w×input_h + 正規化 + HWC→CHW) ─▶ RTMPose TRT 入力(device)
+                                                       ─▶ SimCC ─▶ argmax+inverse-affine(GPU/軽量) ─▶ keypoint(host, 小)
+```
+
+### 所有権・構造
+- **隔離 .so (`libfitra_nvjpeg.so`) を拡張**: EGL register + CUDA 前処理カーネルもこの .so 内に置く
+  (libjpeg-8b 隔離の dlopen 境界をそのまま使う)。C API を `decode → device CHW` まで拡張するか、
+  「decode して登録済み CUeglFrame の device ptr を返す」+ カーネルは本体側 (要 nvcc) かを M1 で決める。
+- **TRT 入力を device バッファ直結**: 現状 `RtmPose`/`Yolox` は host blob → `copy_input_from_host`
+  (H2D)。カーネル出力 device ptr を TRT 入力 binding に直接させ H2D を消す
+  (`trt_engine` に「入力は既に device」モードを足す)。
+- **VIC は GPU SM と別ブロック**: decode/transform/crop-resize を VIC に寄せれば TRT 推論の SM を
+  奪わない。normalize+HWC→CHW の CUDA kernel のみ SM 使用 (軽量)。
+
+### 不変条件
+- latest-frame-wins (SPSC size 1, drop-old) は維持。
+- correctness: keypoint が CPU 経路と L2 許容内 (full-range YCbCr / 正規化係数を CPU と一致させる)。
+- EGL image / CUgraphicsResource / CUDA context は**生成スレッドに束縛**。per-cam ワーカーで
+  decode+register+kernel を回すなら、そのスレッドで CUDA context を current にする。
+
+## Milestone
+- **M1 ✅ (2026-05-29)**: EGL→CUDA interop を .so に常設化 (register キャッシュ)。decode→device CUeglFrame を取得し、
+  まず **既存 CPU 経路と並行**して device→host で取り出し画素一致を回帰確認 (足場)。
+  - 実装: `fitra_nvjpeg_iso.cpp` に `ensure_egl`(=`NvBufSurfaceMapEglImage`→`cuGraphicsEGLRegisterImage`→
+    `GetMappedEglFrame`、`cudaFree(0)` で primary context をデコードスレッドに bind、確保時 1 回 register・
+    解像度変更時のみ `release_egl`) + 新 C API `fitra_nvjpeg_decode_cuda` (device ptr + host map + check 用
+    R-mean を返す)。`decode_rgba` 本番経路は不変。loader 側は `FITRA_NVJPEG_EGL=1` で opt-in、300 フレーム
+    ごとに device↔CPU の R-mean を回帰ログ。.so は `CUDA::cudart`/`CUDA::cuda_driver` をリンク。
+  - 実機検証 (単一カメラ 640×480@30, nvjpeg): device ptr 安定 (register キャッシュ確認)、
+    **device→host R-mean が CPU map と完全一致 (diff=0)** を毎チェックで確認。30fps 維持、SIGINT 0.42s で
+    rc=0 のクリーン終了 (EGL teardown ハングなし)、既定 mjpeg(CPU) 経路は無影響、ctest 9/9 green。
+  - M1 時点では BGR 出力は依然 host map から生成 (足場)。M2 で device ptr を直接消費し host を落とす。
+- **M2**: **RTMPose 前処理 CUDA カーネル** (crop+resize+normalize+HWC→CHW)。出力 device バッファを
+  TRT 入力直結 (`trt_engine` の device-input モード)。keypoint L2 を CPU 参照と照合。H2D 消滅を確認。
+  - **決定 (2026-05-29)**: カーネルは **隔離 .so 内に `.cu` で実装** (nvcc 有効化)。EGL image・CUDA context が
+    既に .so 内にあり親和性が自然、libjpeg 隔離の dlopen 境界も維持。幾何は **CPU が算出する `M_inv`
+    (逆アフィン 2×3) をそのままカーネルに渡す** — `cv::warpAffine` は dst 画素 (ox,oy) を src の
+    `M_inv·(ox,oy,1)` からサンプルするので、同じ `M_inv` を渡せば OpenCV と幾何が完全一致。`getAffineTransform`
+    の device 再実装が不要。回転なし(crop+scale)だが一般 2×3 で書けるため将来の回転にもそのまま対応。
+  - **Step A ✅ (2026-05-29)**: `fitra_nvjpeg_kernels.cu` に `preprocess_rtmpose_kernel`
+    (1 出力画素 1 スレッド、float bilinear、per-neighbor ゼロ境界 = `cv::warpAffine` の BORDER_CONSTANT 相当、
+    RGBA→正規化 BGR を CHW=[B,G,R] に出力)。launch C API `fitra_nvjpeg_preprocess_launch` (stream 受け、
+    同期なし) + テスト用 host API `fitra_nvjpeg_preprocess_rgba_host`。CMake で Jetson 分岐に
+    `enable_language(CUDA)` + `CUDA_ARCHITECTURES 87`、`-fvisibility` は `$<COMPILE_LANGUAGE:CUDA>` で
+    `-Xcompiler` 経由。correctness ツール `tools/gpu_preprocess_check` (録画動画 raw_cam0.mp4 を 8 分割サンプル
+    × 5 bbox、CPU `preprocess_to_blob` と CHW を比較)。**実測: mean abs 0.0028 / mean L2 0.0046 / worst max
+    0.058** — worst は OpenCV の固定小数補間 (INTER_BITS=5, 重み 1/32 量子化) の床
+    (255·(1/64)/std ≈ 0.07) 以内で、本 float カーネルの方がむしろ高精度。channel order / 幾何バグなら
+    diff は 1〜4 オーダーになるので 0.1 を閾値に。ctest 9/9。
+  - **Step B ✅ (2026-05-29)**: device RGBA ptr → カーネル → TRT 入力 device 直結 + prebake 配線。
+    - `TrtEngine::copy_input_region_from_device` (D2D で入力バッファの offset 領域へ、`set_input_shape`
+      でバッチサイズ確定後に各 item を書く)。`RtmPose::PrebakedRequest.chw_dev` を追加、`run_one_prebaked`
+      は batch が device なら set_input_shape → 各 item D2D → enqueue (H2D なし)。`RtmPose::compute_m_inv`
+      で逆アフィンのみ CPU 算出 (per-person warp/normalize は GPU)。
+    - .so: `decode_transform_egl` を抽出し M1/M2 で共有、`fitra_nvjpeg_preprocess_from_last`
+      (直近 decode の RGBA dev → カーネル → 呼び出し側 device CHW、同期して返す)、
+      `fitra_nvjpeg_decode_to_device` (host map なしの純 device decode、M3 用)。loader に
+      `device_capable` / `decode_keep_device` (BGR + RGBA dev 保持) / `preprocess_into`。
+    - **所有権/レース対策**: `DeviceChwPool` (per-camera)。worker が取得→`DecodedFrame.chw_dev`
+      (`shared_ptr<DeviceChwBuf>`) で central へ。deleter がプール state を生かし続けるので、worker は
+      consumer がまだ保持中のバッファを上書き/解放しない (host の copy-on-pop の device 版)。latest-wins
+      lapping でも安全。device 取得失敗時は per-frame で CPU prebake にフォールバック。
+    - **検証**: `tools/gpu_preprocess_check` に keypoint モード追加 (host `infer` vs device
+      `infer_prebaked` を録画動画で照合)。CHW は mean abs 0.0028 / worst 0.058。confident keypoint
+      (score≥0.5) の device-vs-host L2 = **avg 0.34px / worst 1.18px** (PASS, 閾値 2px)。低スコア
+      keypoint は SimCC 平坦部の argmax がサブビンで飛ぶ FP16 既知特性 (実機 track doc) で、device-path の
+      欠陥ではない (offset/stride バグなら 10〜100px オーダー)。実機 (単一カメラ nvjpeg, fake-bbox):
+      `det→bake` **4.1→1.1ms**、`cap→pub` **~20→~15ms** (per-person CPU warp/normalize と pose H2D が消滅)、
+      30fps 維持、SIGINT 0.52s クリーン終了、ctest 9/9。BGR は YOLOX/calib 用に host map から維持
+      (full-frame RGBA→BGR cvtColor は残置、M3/M4 で除去)。
+    - **2cam 90fps@VGA A/B** (env `FITRA_DISABLE_GPU_PREPROCESS=1` で CPU prebake を強制し同一手法比較):
+      GPU フロントエンドが nvjpeg の **~1.8 コア床を初めて割った**。
+
+      | 経路 (2 cam @90fps, nvjpeg) | プロセス CPU | det→bake | cap→pub |
+      |---|---|---|---|
+      | mjpeg (CPU 参考) | 1.83 cores | 2.9ms | 16.7ms |
+      | CPU prebake | 1.77 cores | 3.5ms | 16.4ms |
+      | **GPU フロントエンド** | **1.28 cores** | **0.5ms** | **12.8ms** |
+
+      CPU **−28% (vs nvjpeg-CPU) / −30% (vs mjpeg)**、E2E −3.7ms。nvjpeg doc が「高 fps では色変換が床で
+      CPU 得≈0」と結論した点に対し、**per-person warp/normalize の GPU 移行が高 fps の CPU を解放する**ことを
+      実証 (nvjpeg doc の表に追記)。残り 1.28 コアは full-frame cvtColor + YOLOX + capture が律速 → M3/M4。
+    - **Codex レビュー対応 (2026-05-29)**:
+      - (critical) host/device 混在 batch で `run_one_prebaked` が throw → central crash になり得た。
+        homogeneity 前提を撤廃し `copy_input_region_from_host` を追加、`run_one_prebaked` は item ごとに
+        device(D2D)/host(H2D) を個別に TRT 入力 offset へコピー。multi-cam で一部カメラが CPU フォールバック
+        しても安全。
+      - (major) device decode 失敗時にフレーム破棄 → 直近 HW decode (BGR) + CPU prebake に
+        フォールバック (`gpu_decode_ok` でゲート)。bridge 不調でも pipeline が止まらない。
+      - (minor) exported C API (`decode_cuda`/`decode_to_device`) の出力ポインタ null チェック追加。
+      - (却下) 「EGL/CUDA teardown を生成スレッド(worker)で」案は**実機で逆に segfault**。worker での
+        `hw_decoder_.reset()` は driver shutdown と競合してクラッシュ。`~FrameSource` (main スレッド) での
+        破棄が clean —— main は TRT 経由で CUDA primary context を持ち、shutdown 後の単一スレッド地点で
+        走るため。SIGINT を 2 回とも rc=0 / 0.42s で確認。teardown は destructor のままとする。
+- **M3**: **YOLOX 前処理 CUDA カーネル** (letterbox+HWC→CHW, 正規化なし) 同様に device 直結。
+  YOLOX は per-camera worker の TRT context で動く (RTMPose と違い cross-thread なし) ので、カーネルを
+  worker の TRT stream 上で engine 入力 device バッファに直書きし enqueue → 明示 sync 不要。
+  - **Step A ✅ (2026-05-29)**: `preprocess_yolox_kernel` (letterbox: `cv::resize` の half-pixel
+    convention `(dst+0.5)*scale-0.5` を再現・edge clamp、114 パディング、正規化なし、BGR CHW)。
+    launch `fitra_nvjpeg_preprocess_yolox_launch` (CPU 側で r/nw/nh 算出、`out_r` 返す) +
+    `_from_last` (worker stream で非同期) + host test API。`Yolox::infer_device(fill)` —
+    `fill` が engine 入力 device バッファ (静的 shape, 構築時に確保・bind 済) を充填し r を返す、
+    H2D なし・kernel と enqueue は同一 stream で順序付け。loader に `decode_to_device` (host map なし) /
+    `preprocess_yolox_into` / `yolox_device_capable`。`gpu_preprocess_check` に bbox モード追加
+    (host `infer` vs device `infer_device`、IoU マッチ + corner L2)。**実機: bbox corner L2 = 0.0px
+    (8/8 matched, 0 unmatched)** — CPU-fixed-point vs GPU-float letterbox の微差を FP16 network が
+    量子化で吸収 (device-first 順で stale 入力 false-pass を排除して確認)。CHW 0.0028 / keypoint
+    0.34px も維持、ctest 9/9。
+  - **Step B ✅ (2026-05-29)**: frame_source 統合。device 経路を `decode_to_device` (host map /
+    cvtColor なし) に切替え、検出フレームで `Yolox::infer_device`、calib/retain_bgr/(YOLOX 非 device)
+    時のみ `decode_keep_device` で BGR 維持。**full-frame RGBA→BGR cvtColor を撤去** (残っていた最後の
+    per-frame CPU フルパス)。フレーム寸法は scratch ではなく decode 戻り値 `fw/fh` で追跡 (純 device 経路は
+    scratch 空)。フォールバック: device decode 失敗→`decode()` BGR + CPU、GPU prebake 失敗かつ BGR なしは
+    pose スキップ (central が graceful 処理、空 Mat deref を回避)。
+    - **2cam 90fps@VGA 実測** (同一手法):
+
+      | 経路 (2 cam @90fps) | CPU cores | cap→dec | det→bake | cap→pub |
+      |---|---|---|---|---|
+      | mjpeg-CPU | 1.83 | 5.1ms | 2.9ms | 16.7ms |
+      | M2 (RTMPose GPU, +cvtColor) | 1.28 | 3.9ms | 0.5ms | 12.8ms |
+      | **M3 (RTMPose+YOLOX GPU, cvtColor 撤去)** | **0.98** | 3.2ms | 0.5ms | **11.7ms** |
+
+      **M3 は 1 コアを切った** — mjpeg 比 **−46% CPU / −5ms E2E**。M2 比 −0.30 コアは full-frame cvtColor +
+      YOLOX CPU 前処理の撤去分。SIGINT rc=0/0.32s、ctest 9/9、CHW/keypoint/bbox correctness 維持。
+    - **残**: 後段 (capture + YOLOX/RTMPose 推論 + SimCC argmax) が残 CPU。M4 でアーキ整合・multi-cam
+      スループット (170fps) 再計測、M5 で SimCC argmax GPU 化 (host 転送を keypoint のみに)。
+- **M4 ✅ (2026-05-29)**: アーキ移行の確認 + multi-cam 集約スループット再計測。per-cam CPU 前処理の
+  GPU 化は M2/M3 で完了済みのため、M4 は整合確認と実測が主。
+  - **アーキ**: 各 `FrameSource` (per-camera worker) が独立に `hw_decoder_` (NvJPEGDecoder + EGL register
+    + `DeviceChwPool`) を所有し、各 worker スレッドが `cudaFree(0)` で**共有 primary context** に bind。
+    カメラ間で EGL image / CUgraphicsResource / device バッファの共有はなく、register は確保時 1 回・
+    解像度変更時のみ teardown。teardown は `~FrameSource` (main スレッド) で実施 (worker teardown は
+    shutdown と競合し segfault するため、M2 Step B で確定)。multi-cam の EGL/context 独立性は M3 の
+    2cam device 実機で実証済。
+  - **multi-cam 集約スループット実測** (2cam 90fps@VGA, nvjpeg, full-GPU):
+    recv **88.3 fps × 2 = 176fps 集約**を CPU **1.01 cores** で維持、recent_pose ≈ recv (定常で frame
+    drop なし)。central RTMPose は `rtm=4.84ms/iter` (batch ~1.1 person) で **GPU 推論律速**。
+    → 旧 aggregate 170fps 目標を 2cam で超過 (176fps) しつつ大幅な CPU 余力。3cam 計測は接続カメラ 2 台
+    のため不可だが、CPU 余力 (1 コア) から 3cam でも capture+前処理は収まる見込み。
+  - **SimCC decode コスト確認 (M5 要否判断材料)**: `rtm=4.84ms` の大半は RTMPose FP16 推論 + sync。
+    SimCC の D2H (~61KB/person = K17×(Wx384+Wy512)) と CPU argmax (~46K 比較/person) は sub-ms で、
+    残 1.0 コアの律速 (capture + TRT enqueue + V4L2) ではない。→ **M5 の便益は限定的**。
+- **M5 (任意・保留)**: SimCC argmax + inverse-affine を GPU 化し host 転送を keypoint のみに最小化。
+  M4 実測より便益は小 (<0.5ms / 数 MB/s D2H 削減、CPU argmax は元々非ボトルネック) かつ CUDA を
+  fitra_infer に持ち込む (or 別 gated lib + cross-module kernel) ビルド複雑化を伴う。**現状は見送り**、
+  将来 SimCC decode が律速化した場合 (高 person 数 / 多カメラ) に再評価。
+
+## 検証
+- correctness: 同一フレームで GPU 前処理経路 vs 現行 CPU 経路の RTMPose keypoint L2 (許容内)。
+  色は full-range YCbCr→RGB を CPU `cv::imdecode` と meanAbsDiff<1 で既に確認済み (nvjpeg doc)。
+- レイテンシ: `core-pipeline-e2e-latency.md` の計測基盤で `det→bake`/`bake→pose`/`cap→pub` を
+  CPU 経路と比較。H2D 消滅分の短縮を確認。
+- CPU: 90fps×2 で mjpeg-CPU / nvjpeg-CPU / GPU-frontend を比較。GPU 経路で CPU が capture+後段のみに
+  落ちることを確認 (nvjpeg doc の表に GPU-frontend 列を追加)。
+- ctest 維持、`--pixel-format mjpeg` (cv::imdecode) 無影響、SIGINT クリーン終了。
+
+## 残課題 / リスク
+- **EGL/CUDA context のスレッド管理**が最大の落とし穴 (per-cam ワーカー × EGL image × CUDA stream)。
+- **GPU SM 競合**: normalize/CHW カーネルが TRT 推論と SM を取り合う (VIC 寄せで緩和、kernel は軽量)。
+- **nvcc / CUDA ビルド**: 現状 CMake は `.cu` を持たない (CXX のみ)。カーネルを .cu にするなら
+  CUDA language を有効化、または PTX/driver API で回避するか M1 で決める。
+- **register ライフサイクル**: dst バッファ再確保時 (解像度変更) に unregister/re-register。
+- **Phase 6b アーキとの整合**: 前処理を GPU に戻すと per-cam ワーカーの役割が decode+register に縮む。
+  170fps 達成の前提が変わるので multi-cam スループットを再計測 (M4)。
+- フォールバック: GPU 経路が使えない環境では既存 CPU 経路 (mjpeg/yuyv) を残す。

@@ -47,6 +47,9 @@ struct NativePublisherStats {
     std::uint64_t skipped_invalid  = 0;   // !ik_locked or empty snapshot
     std::uint64_t ping_count       = 0;   // server pings we replied to
     double        last_send_ms     = 0.0; // wall-clock of last RotationData burst
+    // End-to-end latency: age (ms) of the freshest 3D skeleton at the moment
+    // of the last successful RotationData burst (capture -> send). EMA-smoothed.
+    double        e2e_capture_to_send_ms = 0.0;
 };
 
 struct NativePublisherDebugCorrection {

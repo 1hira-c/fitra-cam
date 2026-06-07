@@ -20,6 +20,7 @@
 #include "vmt/vmt_publisher.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
 #include "vmt/auto_alignment.hpp"
+#include "vmt/continuous_aligner.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::web {
@@ -100,6 +101,7 @@ std::string make_vmt_stats_fragment(const vmt::VmtPublisher& publisher) {
         << ",\"disabled_count\":"                 << s.disabled_count
         << ",\"skipped_invalid_bundles\":"        << s.skipped_invalid_bundles
         << ",\"last_send_ms\":"                   << s.last_send_ms
+        << ",\"e2e_capture_to_send_ms\":"         << s.e2e_capture_to_send_ms
         << ",\"rate_hz\":"                        << o.send_rate_hz
         << ",\"port\":"                           << o.port
         << ",\"index_base\":"                     << o.index_base
@@ -135,6 +137,29 @@ std::string make_hmd_status_fragment(const vmt::HmdPoseSnapshot& snap,
                     snap.pose.qx, snap.pose.qy, snap.pose.qz, snap.pose.qw});
     }
     out << "}";
+    return out.str();
+}
+
+std::string make_continuous_align_fragment(const vmt::ContinuousAligner& a) {
+    const auto s = a.status();
+    const auto& c = a.config();
+    std::ostringstream out;
+    out << "\"continuous_align\":{\"running\":" << (s.running ? "true" : "false")
+        << ",\"enabled\":"        << (s.enabled ? "true" : "false")
+        << ",\"locked\":"         << (s.locked ? "true" : "false")
+        << ",\"occupied_cells\":" << s.occupied_cells
+        << ",\"min_cells\":"      << c.min_cells
+        << ",\"n_samples\":"      << s.n_samples
+        << ",\"head_samples\":"   << s.head_samples
+        << ",\"chest_samples\":"  << s.chest_samples
+        << ",\"last_status\":\""  << json_escape(vmt::status_name(s.last_status)) << "\""
+        << ",\"last_residual_m\":"<< s.last_residual_m
+        << ",\"resolves\":"       << s.resolves
+        << ",\"updates\":"        << s.updates
+        << ",\"sample_hz\":"      << c.sample_hz
+        << ",\"resolve_period_s\":"<< c.resolve_period_s
+        << ",\"blend_alpha\":"    << c.blend_alpha
+        << "}";
     return out.str();
 }
 
@@ -308,6 +333,10 @@ void CrowServer::set_tracker_bus(slimevr::SlimeTrackerBus* tracker_bus) {
     tracker_bus_ = tracker_bus;
 }
 
+void CrowServer::set_continuous_aligner(vmt::ContinuousAligner* aligner) {
+    continuous_aligner_ = aligner;
+}
+
 void CrowServer::start() {
     auto& app     = impl_->app;
     auto& clients2d = impl_->clients2d;
@@ -383,6 +412,7 @@ void CrowServer::start() {
                   << ",\"skipped_invalid\":"               << s.skipped_invalid
                   << ",\"ping_count\":"                    << s.ping_count
                   << ",\"last_send_ms\":"                  << s.last_send_ms
+                  << ",\"e2e_capture_to_send_ms\":"        << s.e2e_capture_to_send_ms
                   << "}}";
             if (!body.empty() && body.back() == '}') {
                 body.pop_back();
@@ -406,6 +436,15 @@ void CrowServer::start() {
             auto snap = hmd_pose_bus_->snapshot(hmd_stale_ms_);
             std::ostringstream extra;
             extra << "," << make_hmd_status_fragment(snap, true) << "}";
+            if (!body.empty() && body.back() == '}') {
+                body.pop_back();
+                body += extra.str();
+            }
+        }
+        // Continuous HMD-driven alignment status block.
+        if (continuous_aligner_) {
+            std::ostringstream extra;
+            extra << "," << make_continuous_align_fragment(*continuous_aligner_) << "}";
             if (!body.empty() && body.back() == '}') {
                 body.pop_back();
                 body += extra.str();
@@ -708,6 +747,46 @@ void CrowServer::start() {
             << ",\"last\":";
         append_auto_result_json(out, sess.last, sess.last_mode, sess.samples_seen);
         out << "}";
+        return json_response(out.str());
+    });
+
+    // ----------------------------------------------------------------------
+    // Continuous (always-on) HMD-driven alignment toggle + status. The refiner
+    // runs from start-up; these routes flip it on/off at runtime and report its
+    // reservoir/solve status (also embedded in /stats3d).
+    // ----------------------------------------------------------------------
+    CROW_ROUTE(app, "/api/vmt/alignment/auto/continuous/start").methods(crow::HTTPMethod::POST)
+    ([this](const crow::request& /*req*/) {
+        if (!continuous_aligner_) {
+            return json_response(
+                "{\"ok\":false,\"err\":\"continuous aligner not attached\"}", 409);
+        }
+        continuous_aligner_->set_enabled(true);
+        std::ostringstream out;
+        out << "{\"ok\":true," << make_continuous_align_fragment(*continuous_aligner_) << "}";
+        return json_response(out.str());
+    });
+
+    CROW_ROUTE(app, "/api/vmt/alignment/auto/continuous/stop").methods(crow::HTTPMethod::POST)
+    ([this](const crow::request& /*req*/) {
+        if (!continuous_aligner_) {
+            return json_response(
+                "{\"ok\":false,\"err\":\"continuous aligner not attached\"}", 409);
+        }
+        continuous_aligner_->set_enabled(false);
+        std::ostringstream out;
+        out << "{\"ok\":true," << make_continuous_align_fragment(*continuous_aligner_) << "}";
+        return json_response(out.str());
+    });
+
+    CROW_ROUTE(app, "/api/vmt/alignment/auto/continuous/status")
+    ([this]() {
+        if (!continuous_aligner_) {
+            return json_response(
+                "{\"enabled\":false,\"running\":false,\"attached\":false}");
+        }
+        std::ostringstream out;
+        out << "{\"attached\":true," << make_continuous_align_fragment(*continuous_aligner_) << "}";
         return json_response(out.str());
     });
 
@@ -1052,6 +1131,18 @@ void CrowServer::publisher_loop() {
         if (vmt_publisher_) {
             if (!extra3d.empty()) extra3d += ",";
             extra3d += make_vmt_stats_fragment(*vmt_publisher_);
+        }
+        // HMD + continuous-align status: the WebUI reads these from the /ws3d
+        // bundle (state.bundle3d), not by polling /stats3d, so they must ride
+        // the broadcast or the "自動追従" toggle stays disabled / "no hmd".
+        if (hmd_pose_bus_) {
+            if (!extra3d.empty()) extra3d += ",";
+            extra3d += make_hmd_status_fragment(
+                hmd_pose_bus_->snapshot(hmd_stale_ms_), true);
+        }
+        if (continuous_aligner_) {
+            if (!extra3d.empty()) extra3d += ",";
+            extra3d += make_continuous_align_fragment(*continuous_aligner_);
         }
         auto msg3d = bus3d_ ? bus3d_->make_bundle_json(extra3d)
                             : pipeline::make_disabled_3d_json();

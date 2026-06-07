@@ -58,6 +58,22 @@ USB cam 2 ┘                                 │
 - **RTMPose dynamic batch (1..3)**: TRT engine を `min=1 / opt=3 / max=3` で optimization profile 構成
 - **YOLOX 静的 batch=1 を 3 回 enqueue**: mmdeploy NMS-in-graph のため batch 化が難しい。CUDA stream 上で背中合わせ実行すれば実用上は B=3 とほぼ同等
 
+> **2026-05-29 更新 (E2E レイテンシ作業)**: 上図の capture / SPSC は実装後に一部進化している。
+> (1) ピクセル形式は MJPEG 固定ではなく `--pixel-format {mjpeg,yuyv,nvjpeg}` で切替可 (YUYV は decode を
+> `cv::cvtColor` に分岐、nvjpeg は Jetson HW NVJPEG)。(2) per-cam SPSC slot (size 1, drop-old は不変) の
+> ハンドオフは 2ms poll sleep から condition_variable 通知 (単一カメラ) に変更。(3) ステージ別レイテンシ
+> 計測 + VR `e2e_capture_to_send_ms` を追加。(4) TrackerExtractor をイベント駆動にする opt-in
+> (`--vr-extract-event-driven`)。詳細・実機数値は
+> [`design/core-pipeline-e2e-latency.md`](design/core-pipeline-e2e-latency.md)。
+>
+> **続き (nvjpeg + 全 GPU フロントエンド)**: MJPEG HW デコード (`--pixel-format nvjpeg`、独立 .so に
+> 隔離し `dlopen(RTLD_DEEPBIND)`) と、その後 decode→前処理→TRT を host を介さず GPU で回す**全 GPU
+> フロントエンド**を実装済 (EGL→CUDA ブリッジ + RTMPose/YOLOX 前処理 CUDA カーネル + TRT 入力 device
+> 直結)。2cam 90fps@VGA で CPU 1.83→0.98 cores。詳細は
+> [`design/core-pipeline-nvjpeg-decode.md`](design/core-pipeline-nvjpeg-decode.md) /
+> [`design/core-pipeline-gpu-frontend.md`](design/core-pipeline-gpu-frontend.md)。
+> SimCC argmax の GPU 化 (M5) は残課題。
+
 ## リポジトリレイアウト
 
 ```

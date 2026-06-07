@@ -73,6 +73,9 @@ void TrackerExtractor::start() {
 void TrackerExtractor::stop() {
     if (!running_.load()) return;
     stop_.store(true, std::memory_order_relaxed);
+    // In event-driven mode run_loop may be parked in skel_bus_.wait_for_update;
+    // wake it so stop_ is observed without waiting out the timeout.
+    skel_bus_.wake();
     if (thread_.joinable()) thread_.join();
     running_.store(false);
 }
@@ -81,14 +84,38 @@ void TrackerExtractor::run_loop() {
     using clk = std::chrono::steady_clock;
     const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, opts_.extract_rate_hz));
     const auto period_d = std::chrono::duration_cast<clk::duration>(period);
-    const float dt_s = static_cast<float>(period.count());
-    const int   dt_ms = static_cast<int>(period.count() * 1000.0);
+    const float nominal_dt_s = static_cast<float>(period.count());
+    const int   nominal_dt_ms = static_cast<int>(period.count() * 1000.0);
+    const auto  timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(period_d);
 
     auto next = clk::now() + period_d;
+    auto last_tick = clk::now();
+    std::uint64_t last_update_seq = 0;
 
     while (!stop_.load(std::memory_order_relaxed)) {
-        std::this_thread::sleep_until(next);
-        next += period_d;
+        // dt for angular-velocity / freeze stats. Fixed-rate mode uses the
+        // nominal period; event-driven mode measures the real interval (which
+        // varies with the triangulation cadence) and clamps it so a post-idle
+        // gap doesn't blow up the stats.
+        float dt_s;
+        int   dt_ms;
+        if (opts_.event_driven) {
+            // React to each new 3D frame; the timeout still ticks at
+            // extract_rate_hz so stale trackers get cleared when 3D is quiet.
+            skel_bus_.wait_for_update(last_update_seq, stop_, timeout_ms);
+            if (stop_.load(std::memory_order_relaxed)) break;
+            auto now = clk::now();
+            double measured = std::chrono::duration<double>(now - last_tick).count();
+            last_tick = now;
+            measured = std::min(0.5, std::max(1e-3, measured));
+            dt_s  = static_cast<float>(measured);
+            dt_ms = static_cast<int>(measured * 1000.0);
+        } else {
+            std::this_thread::sleep_until(next);
+            next += period_d;
+            dt_s  = nominal_dt_s;
+            dt_ms = nominal_dt_ms;
+        }
 
         auto snap = skel_bus_.snapshot();
         const infer::Skeleton3D* sk =
@@ -113,9 +140,23 @@ void TrackerExtractor::run_loop() {
         for (std::size_t i = 0; i < kTrackerCount; ++i) {
             raw_trackers[i].role = static_cast<TrackerRole>(i);
         }
+        // Hip context for hip-relative hold. Default is hip_valid=false so
+        // an empty / non-Halpe / hip-dropped snapshot falls back to
+        // world-absolute hold (the legacy behavior).
+        pos_ctx_.hip_valid = false;
         if (sk != nullptr && halpe) {
-            raw_trackers = extract_trackers(*sk);
+            raw_trackers = extract_trackers(*sk, &extract_ctx_);
+            // Halpe26 idx 19 = hip_center. The waist tracker's position is
+            // built from this same joint, so sharing it as the hip reference
+            // keeps the two consistent.
+            constexpr std::size_t kHipCenter = 19;
+            const auto& hc = sk->joints[kHipCenter];
+            if (hc.valid) {
+                pos_ctx_.current_hip_pos = cv::Vec3f{hc.x, hc.y, hc.z};
+                pos_ctx_.hip_valid       = true;
+            }
         }
+        pos_ctx_.dt_s = dt_s;
 
         // Save validity from the RAW extraction (apply_quat_smoothing will
         // mask invalid trackers with the held quat but valid=false stays).
@@ -124,9 +165,14 @@ void TrackerExtractor::run_loop() {
             raw_valid[i] = raw_trackers[i].valid;
         }
 
+        // Frame-rate-independent smoothing: pass the real step dt and the
+        // nominal cadence so the time constant is constant regardless of source
+        // rate. Fixed-rate mode passes dt_s == nominal_dt_s (behavior unchanged);
+        // event-driven mode passes the measured interval so high-fps frames get
+        // proportionally gentler per-step smoothing instead of over-damping.
         auto trackers = raw_trackers;
-        apply_quat_smoothing(trackers, prev_quat_, opts_.quat_smooth);
-        apply_pos_smoothing (trackers, prev_pos_,  opts_.pos_smooth);
+        apply_quat_smoothing(trackers, prev_quat_, opts_.quat_smooth, dt_s, nominal_dt_s);
+        apply_pos_smoothing (trackers, prev_pos_,  pos_ctx_, opts_.pos_smooth, nominal_dt_s);
 
         // ------ Per-tracker rolling stats ------------------------------
         SlimeTrackerStats stats_out{};

@@ -19,9 +19,11 @@
 // construction time, so callers may leave the default 416 and load any of
 // the four humanart variants without touching this struct.
 
+#include <functional>
 #include <string>
 #include <vector>
 
+#include <cuda_runtime_api.h>
 #include <opencv2/core.hpp>
 
 #include "infer/trt_engine.hpp"
@@ -47,7 +49,22 @@ public:
     // pixel coordinates.
     std::vector<Bbox> infer(const cv::Mat& frame_bgr);
 
+    // All-GPU front-end: `fill` writes the letterbox CHW tensor straight into
+    // the engine's input device buffer (on the engine's stream, passed in) and
+    // returns the letterbox scale r (out_x = in_x * r). No host preprocess / no
+    // H2D. The kernel and the TRT enqueue share the engine stream, so they are
+    // ordered without an explicit sync. `fill` must return r<=0 on failure, in
+    // which case inference is skipped (no enqueue on stale input) and {} is
+    // returned. Returns person bboxes in source pixels.
+    std::vector<Bbox> infer_device(
+        const std::function<float(float* dst_dev, cudaStream_t stream)>& fill);
+
+    int input_size() const { return opts_.input_size; }
+
 private:
+    // Read dets/labels, filter to person + score_thr, unscale by r.
+    std::vector<Bbox> decode_dets(float r);
+
     TrtEngine& engine_;
     Options    opts_;
 

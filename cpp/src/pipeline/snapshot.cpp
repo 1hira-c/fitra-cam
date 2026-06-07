@@ -133,11 +133,31 @@ void Skeleton3DBus::update(const Skeleton3DSnapshot& s) {
     std::lock_guard<std::mutex> lk{mu_};
     snapshot_ = s;
     snapshot_.stats.enabled = true;
+    ++update_seq_;
+    cv_.notify_all();  // wake an extractor parked in wait_for_update
 }
 
 Skeleton3DSnapshot Skeleton3DBus::snapshot() const {
     std::lock_guard<std::mutex> lk{mu_};
     return snapshot_;
+}
+
+bool Skeleton3DBus::wait_for_update(std::uint64_t& last_seen,
+                                    std::atomic<bool>& consumer_stop,
+                                    std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lk{mu_};
+    bool got = cv_.wait_for(lk, timeout, [&] {
+        return consumer_stop.load(std::memory_order_relaxed)
+            || update_seq_ != last_seen;
+    });
+    bool fresh = update_seq_ != last_seen;
+    last_seen = update_seq_;
+    return got && fresh;
+}
+
+void Skeleton3DBus::wake() {
+    std::lock_guard<std::mutex> lk{mu_};
+    cv_.notify_all();
 }
 
 std::string Skeleton3DBus::make_bundle_json(const std::string& extra_fields_json) {

@@ -80,6 +80,18 @@ public:
     // --- IO transfer helpers ---
     void copy_input_from_host(const std::string& name,
                               const void* host, std::size_t bytes);
+    // Copy one item into a sub-region (offset) of an input's device buffer.
+    // Call set_input_shape() first so the buffer is sized for the full batch.
+    // The *_from_device variant stays on-GPU (all-GPU front-end: the preprocess
+    // kernel already produced the CHW tensor on the device); the *_from_host
+    // variant is the per-item H2D used so a single batch can mix device and
+    // host items (e.g. one camera on the GPU path, another fallen back to CPU).
+    void copy_input_region_from_device(const std::string& name,
+                                       std::size_t dst_offset_bytes,
+                                       const void* src_dev, std::size_t bytes);
+    void copy_input_region_from_host(const std::string& name,
+                                     std::size_t dst_offset_bytes,
+                                     const void* host, std::size_t bytes);
     void copy_output_to_host(const std::string& name,
                              void* host, std::size_t bytes);
 
