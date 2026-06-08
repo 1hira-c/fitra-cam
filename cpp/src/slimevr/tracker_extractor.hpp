@@ -48,6 +48,21 @@ struct TrackerExtractorOptions {
     // off to preserve the validated fixed-rate behavior; opt in for minimum
     // capture->send latency.
     bool   event_driven      = false;
+
+    // One Euro (speed-adaptive) smoothing. Default on: it kills at-rest jitter
+    // a fixed-alpha EMA cannot, while staying lag-free in motion (see
+    // docs/design/vr-output-one-euro-filter.md). When true, quat_smooth /
+    // pos_smooth above are ignored and the One Euro params below drive both
+    // paths. Set false to fall back to the validated fixed-alpha EMA (A/B and
+    // regression); set beta = 0 in the params for a fixed-cutoff (still
+    // speed-independent) low-pass without leaving the One Euro path.
+    bool          one_euro      = true;
+    // Defaults mirror MainConfig's hardware-tuned values (M3); main.cpp always
+    // overwrites these from the config/CLI, so they only matter for callers that
+    // construct TrackerExtractorOptions directly. Position is per-axis (m/s);
+    // rotation is on the geodesic angular speed (rad/s).
+    OneEuroParams pos_one_euro  {1.0f, 4.0f, 1.0f};   // mincutoff, beta, dcutoff
+    OneEuroParams quat_one_euro {1.5f, 1.5f, 1.0f};
 };
 
 class TrackerExtractor {
@@ -87,6 +102,11 @@ private:
     // gate in apply_pos_smoothing stays disabled until pos_ctx_.has_last_raw[i]
     // flips on the first valid frame, so the initial convergence is ungated.
     std::array<cv::Vec3f, kTrackerCount> prev_pos_{};
+
+    // One Euro rotation state (low-passed angular speed + first-frame init
+    // flags), owned here for the same single-history reason as prev_quat_.
+    // The position One Euro state lives in pos_ctx_ (pos_dx_hat).
+    QuatSmoothingContext quat_ctx_{};
 
     // FK fallback state for extract_trackers. Holds per-foot anchors
     // (knee→ankle direction + tibia length, ankle→toe direction + foot
