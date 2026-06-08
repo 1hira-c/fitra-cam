@@ -312,7 +312,7 @@ three_d:
     check(opts.vr_pos_beta == 0.2,          "three_d.vr_pos_beta loads");
     check(opts.vr_quat_mincutoff == 1.5,    "three_d.vr_quat_mincutoff loads");
 
-    // CLI overrides YAML; --vr-no-one-euro flips the bool back off.
+    // CLI numeric overrides take precedence over the YAML-loaded values.
     std::vector<std::string> argv_buf{
         "--vr-pos-mincutoff", "0.9", "--vr-quat-beta", "0.4"};
     auto argv = make_argv(argv_buf);

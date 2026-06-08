@@ -95,9 +95,14 @@ x_hat   = lowpass(x, alpha(cutoff, te))        // 出力
 
 ### しきい値の根拠
 
-既定値は実機チューニング前の初期値。位置 `mincutoff 0.8Hz / beta 0.4`、回転
-`mincutoff 1.0Hz / beta 0.3`。旧 α=0.5 ≈ カットオフ 9.5Hz に対し静止カットオフを 1 桁下げる方向
-(静止ジッタを強く抑え、`beta·速度` で動作時のみカットオフを開く)。M3 で実機調整。
+初期値(本 doc 執筆時)は位置 `mincutoff 0.8Hz / beta 0.4`、回転 `mincutoff 1.0Hz / beta 0.3`。
+旧 α=0.5 ≈ カットオフ 9.5Hz に対し静止カットオフを 1 桁下げる方向(静止ジッタを強く抑え、
+`beta·速度` で動作時のみカットオフを開く)考え方は不変。
+
+> **現行既定値**: M3 実機チューニングの結果、既定値は位置 `mincutoff 1.0Hz / beta 4.0`、
+> 回転 `mincutoff 1.5Hz / beta 1.5` に更新済み(`MainConfig` / `main.cpp --help` が真の source。
+> 上の初期値は採用判断時の値であって現行設定ではない)。詳細は
+> [`docs/tracks/vr-output.md`](../tracks/vr-output.md) の changelog を参照。
 
 ## Milestone
 

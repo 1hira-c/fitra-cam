@@ -57,11 +57,12 @@ struct TrackerExtractorOptions {
     // regression); set beta = 0 in the params for a fixed-cutoff (still
     // speed-independent) low-pass without leaving the One Euro path.
     bool          one_euro      = true;
-    // Initial defaults tuned conservatively (low at-rest cutoff, moderate beta);
-    // refine on hardware in M3. Position is per-axis (m/s); rotation is on the
-    // geodesic angular speed (rad/s).
-    OneEuroParams pos_one_euro  {0.8f, 0.4f, 1.0f};   // mincutoff, beta, dcutoff
-    OneEuroParams quat_one_euro {1.0f, 0.3f, 1.0f};
+    // Defaults mirror MainConfig's hardware-tuned values (M3); main.cpp always
+    // overwrites these from the config/CLI, so they only matter for callers that
+    // construct TrackerExtractorOptions directly. Position is per-axis (m/s);
+    // rotation is on the geodesic angular speed (rad/s).
+    OneEuroParams pos_one_euro  {1.0f, 4.0f, 1.0f};   // mincutoff, beta, dcutoff
+    OneEuroParams quat_one_euro {1.5f, 1.5f, 1.0f};
 };
 
 class TrackerExtractor {

@@ -40,6 +40,18 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-08 — One Euro の GitHub レビュー修正 (バグ修正)
+PR #25 の gemini / Copilot レビュー指摘を反映。design doc なし(changelog のみ)。
+- **(gemini HIGH / 実バグ)** 位置 One Euro の速度推定 `pos_dx_hat` 更新に外れ値ゲートが
+  効いておらず、三角測量グリッチの巨大 `dx` で速度状態が汚染 → 直後の数フレームで
+  カットオフが開き静止ジッタが素通りしていた。速度更新にも `(1-gate)` を適用し、回帰テスト
+  (`test_one_euro_outlier_gate_does_not_pollute_speed`)を追加。
+- `TrackerExtractorOptions` の One Euro 既定係数が `MainConfig` のチューニング値と不一致
+  だった点を同値化(位置 1.0/4.0、回転 1.5/1.5)+「main 側で上書きされる」旨をコメント明記。
+- design doc の「しきい値の根拠」に現行既定値(初期値ではない)の注記を追加、`one_euro_alpha`
+  のエッジケースコメントの優先順位明確化、`test_main_config` のコメント実態合わせ。
+- 完了の定義に従い `docs/cpp-migration-plan.md` 検証戦略表に One Euro 行を追加。
+
 ### 2026-06-08 — One Euro 既定値を実測チューニング値に更新 (閾値調整)
 `configs/medium_3d.yaml` で詰めた One Euro 係数を `MainConfig` の既定値へ昇格。位置は
 `mincutoff 0.8→1.0` / `beta 0.4→4.0`、回転は `mincutoff 1.0→1.5` / `beta 0.3→1.5`

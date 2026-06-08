@@ -551,6 +551,42 @@ void test_one_euro_outlier_gate_still_freezes() {
           "oe-gate: spike must freeze, delta=" + std::to_string(delta));
 }
 
+// Regression (Gemini review): the outlier gate must also freeze the SPEED
+// estimate, not just the position. A gated glitch otherwise injects a huge dx
+// into dx_hat, which opens the adaptive cutoff for the following frames so
+// at-rest jitter leaks straight through even though the position was frozen.
+// We settle, fire one gated spike, then immediately probe with a small jitter
+// and require the response stay at-rest-small (well under the fixed-alpha EMA).
+void test_one_euro_outlier_gate_does_not_pollute_speed() {
+    const OneEuroParams p{1.0f, 0.4f, 1.0f};
+    std::array<cv::Vec3f, kTrackerCount> prev{};
+    PosSmoothingContext ctx; ctx.dt_s = 1.0f / 60.0f;
+
+    for (int f = 0; f < 100; ++f) {
+        auto ts = make_trackers({1.0f, 0.0f, 0.0f}, true);
+        apply_pos_smoothing(ts, prev, ctx, p);
+    }
+    // Gated glitch spike (≈300 m/s) — frozen by the position gate.
+    {
+        auto ts = make_trackers({6.0f, 0.0f, 0.0f}, true);
+        apply_pos_smoothing(ts, prev, ctx, p);
+    }
+    // Immediately probe with a 1 cm at-rest jitter. If dx_hat was polluted by
+    // the spike, the cutoff is now wide open and this leaks through.
+    const float pre = prev[0][0];
+    {
+        auto ts = make_trackers({prev[0][0] + 0.01f, 0.0f, 0.0f}, true);
+        apply_pos_smoothing(ts, prev, ctx, p);
+    }
+    const float delta = prev[0][0] - pre;
+    // Fixed-alpha EMA (0.5) would move 0.005 m; an unpolluted One Euro at rest
+    // moves far less. Require < 0.0025 m (half the EMA), the same bar as the
+    // static-jitter test — the polluted filter would move ~5-10× this.
+    check(delta < 0.0025f,
+          "oe-gate-speed: post-spike jitter must stay at-rest-small, delta=" +
+              std::to_string(delta));
+}
+
 }  // namespace
 
 int main() {
@@ -572,6 +608,7 @@ int main() {
         test_one_euro_motion_more_responsive();
         test_one_euro_beta_zero_fixed_cutoff();
         test_one_euro_outlier_gate_still_freezes();
+        test_one_euro_outlier_gate_does_not_pollute_speed();
         std::puts("test_tracker_extract_pos ok");
         return 0;
     } catch (const std::exception& e) {

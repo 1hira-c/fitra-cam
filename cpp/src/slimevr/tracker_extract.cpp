@@ -949,7 +949,11 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
             for (int c = 0; c < 3; ++c) {
                 const float dx = (q[c] - p[c]) / te;  // velocity estimate
                 float& dxh = ctx.pos_dx_hat[i][c];
-                dxh += a_d * (dx - dxh);               // low-pass the speed
+                // Gate the speed update too: an un-gated glitch would inflate
+                // dxh, open the cutoff for the next few frames, and let jitter
+                // through even at rest. (1-gate) freezes the speed state on a
+                // glitch just like the position update below.
+                dxh += a_d * (dx - dxh) * (1.0f - gate);  // low-pass the speed
                 const float cutoff = params.mincutoff + params.beta * std::abs(dxh);
                 // Speed-adaptive cutoff, then the outlier gate still freezes a
                 // glitch (>16 m/s) so the opened cutoff can't chase it.

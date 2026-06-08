@@ -158,7 +158,8 @@ struct OneEuroParams {
 
 // First-order low-pass smoothing factor for cutoff `cutoff_hz` at step `dt_s`:
 //   tau = 1/(2π·cutoff); alpha = dt / (dt + tau) ∈ [0, 1].
-// cutoff_hz <= 0 → 0 (freeze on prev); dt_s <= 0 → 1 (degenerate, trust curr).
+// cutoff_hz <= 0 → 0 (freeze on prev) takes precedence; otherwise dt_s <= 0 → 1
+// (degenerate step, trust curr).
 float one_euro_alpha(float cutoff_hz, float dt_s);
 
 // Inter-frame state for the rotation One Euro path. ang_vel_hat holds the
