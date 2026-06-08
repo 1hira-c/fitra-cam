@@ -33,6 +33,18 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-06-08 — (設計) ランチャー常駐 + 推論子プロセスによる WebUI 主導セットアップ基盤を起票
+引数無し起動 → WebUI でステップ式セットアップ (①カメラ選択 ②ChArUco intrinsics ③VMT/SteamVR チェック
+④AprilTag+コントローラ extrinsics ⑤リアルタイムチェック ⑥subject IK) → 設定の即時反映 (不可なら自動
+再起動) → 名前付き設定 bundle の保存/読込/export/import を目標化。現状は全設定が起動時固定・校正モードが
+frame tap 排他のため、**軽量常駐ランチャー (`fitra-launcher`) が WebUI・設定・ウィザードをホストし、重い
+`fitra-cam` を子プロセスとして合成 config で起動/停止/再起動**する構成を採用。ランチャーが単一安定ポート
+(8000) を持ち子 (loopback) へリバースプロキシ、ホット/再起動の分類器でその場反映、bundle は校正成果物を
+同梱。ChArUco intrinsics は C++ 移植 (`IntrinsicCalibSession` 新設)。M0(WS プロキシ de-risk)→M7 の段階
+ロードマップ。**実装は未着手** (依存: `vr-output/webui-vite-react` + `pose-3d/controller-marker-extrinsic-impl`
+の Develop マージ)。
+→ [design/core-pipeline-launcher-daemon.md](../design/core-pipeline-launcher-daemon.md)
+
 ### 2026-05-29 — `maybe_update_3d` の冗長 bone_drift_pct 計算を除去 (挙動不変)
 `MultiCameraDriver::maybe_update_3d` で IK 前に `ik_.bone_drift_pct(skel)` を計算していたが、
 `ik_enabled` 時は直後に IK 後の値で無条件上書きされ pre-IK 値は常に破棄されていた。
