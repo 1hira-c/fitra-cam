@@ -1,61 +1,49 @@
-# Copilot Instructions
+# Copilot Instructions（コードレビュー指示）
 
-## Commands
+> Copilot code review はこのファイルの**先頭 4,000 文字のみ**読む。重要点を先頭に凝縮。
 
-### Environment setup
+## レビュー方針
 
-```bash
-python3 -m venv --system-site-packages .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements-jetson-rtmpose.txt
+- **コメントは日本語**で書く。
+- このリポジトリでの Copilot の主担当は**コード品質**: 可読性・命名・エラーハンドリング・セキュリティ・テスト網羅・規約遵守。正確性/数値や設計/アーキは他レビュワー（Codex / Gemini）が主担当。重大なら指摘して良いが主担当を優先。
+
+## 重点チェック項目
+
+1. **可読性・一貫性**: 命名、関数分割、周辺コードとの整合（コメント密度・命名・イディオムを合わせる）。マジックナンバー、重複、過度なネスト。
+2. **エラーハンドリング・リソース**: 例外安全、`cudaError`/TRT/V4L2 など戻り値チェック漏れ、メモリ/FD/ストリームの解放漏れ、null・境界・整数オーバーフロー。
+3. **セキュリティ**: 入力検証、外部送信時の取り扱い、機密情報のハードコード、安全でない文字列/バッファ操作。
+4. **テスト網羅**: 新規ロジックに対応する `ctest` があるか。回帰を守るテストか。
+5. **規約遵守**:
+   - コミット: `feat(<track>):` / `fix(<track>):` / `docs(<track>):`（track = `core-pipeline` / `pose-3d` / `vr-output`）。プレフィックスは英語、サマリは日本語。`feat(phaseN):` は旧式で禁止。
+   - ブランチ: `<track>/<topic>`。
+   - コード内コメント/識別子は当該ファイルの既存慣習（英語多数派）に従う。
+
+## 具体例（指摘してほしい正/誤パターン）
+
+戻り値チェック漏れ（誤）→ 指摘する:
+```cpp
+cudaMemcpyAsync(dst, src, n, cudaMemcpyHostToDevice, stream);  // 誤: 戻り値未チェック
+CUDA_CHECK(cudaMemcpyAsync(dst, src, n, cudaMemcpyHostToDevice, stream));  // 正
 ```
 
-### Run the current prototype
-
-```bash
-. .venv/bin/activate
-python scripts/dual_rtmpose_cameras.py --max-frames 120 --save-every 30
+latest-frame-wins 違反（誤）→ 指摘する:
+```cpp
+queue.push(frame);                 // 誤: 滞留させ古いフレームを処理 = 鮮度優先の不変条件違反
+latest.store(frame); /* drop-old */ // 正: 最新フレームで上書き
 ```
 
-### Run with live display
+## リポジトリ前提（誤った前提でのレビューを避ける）
 
-```bash
-. .venv/bin/activate
-python scripts/dual_rtmpose_cameras.py --display
-```
+- 主実装は **C++/TensorRT**（`cpp/`、CMake 3.22+ / g++11 / CUDA 12.6 / TensorRT 10.3）。`python/` は **数値参照・フォールバック**で新機能追加はしない。`web/dual_rtmpose/` は Canvas フロント（JSON スキーマ互換を保つ）。
+- `cpp/src/` 構成: `camera`（V4L2+nvjpeg）/ `infer`（TRT, YOLOX, RTMPose）/ `lift`（3D, Kalman, IK）/ `slimevr` / `vmt` / `pipeline` / `web`（Crow）/ `config` / `util`。
+- 守るべき不変条件（破る変更は指摘）:
+  - **latest-frame-wins**: SPSC キューサイズ 1・drop-old。リアルタイム鮮度優先。
+  - **single TRT context / single CUDA stream**（モデルごとに共有 1 つ。カメラ単位で複製しない）。
+  - 数値目標: YOLOX IoU **> 0.99** / RTMPose kpt L2 **< 1px** / 集約 **170 fps**。FP16 は低スコア kpt ドリフト既知。
+- Jetson 制約: OpenCV/TensorRT は **apt 版のみ**（`pip install opencv/tensorrt` 禁止）、カメラは `/dev/v4l/by-path`。
+- **完了の定義**: コードだけでは不十分。track doc changelog ＋（非自明なら）`docs/design/` の design doc が必要。
 
-### Build / test / lint status
+---
 
-This repository does not currently include a committed build system, automated test suite, or lint configuration, so there is no single-test command yet.
-
-## High-level architecture
-
-`fitra-cam` is currently a minimal Jetson-side prototype for dual-camera 2D pose estimation. The only runnable application in the repository today is `scripts/dual_rtmpose_cameras.py`.
-
-That script:
-
-- opens exactly two USB cameras, defaulting to the known `/dev/v4l/by-path/...` device names from the checked Jetson setup
-- uses apt-provided OpenCV `CAP_GSTREAMER` with MJPEG camera pipelines for capture
-- creates one `rtmlib.PoseTracker` per camera
-- processes frames as `capture -> pose tracking/inference -> annotation -> optional display/save`
-- saves annotated snapshots under `outputs/dual_rtmpose/`
-- prints a per-camera runtime summary with frame counts, failures, and average FPS
-
-The broader architecture is captured in `docs/README.md` and `docs/research/*.md`. Those documents describe the intended next stages of the system:
-
-1. multi-camera ingest on Jetson
-2. timestamp-based soft sync and camera calibration
-3. RTMDet + RTMPose 2D inference with detector decimation and tracking between detections
-4. confidence-weighted multi-view triangulation plus temporal smoothing for 3D pose
-5. WebSocket delivery from the Jetson side and Three.js-based 3D visualization in a Web UI
-6. stage-by-stage benchmarking using per-frame timestamps and `tegrastats`
-
-## Key repository conventions
-
-- Treat this as a Jetson-specific codebase. The checked environment and docs assume Jetson Orin Nano Super, JetPack 6.2.x, and Python 3.10.
-- Prefer persistent camera identifiers under `/dev/v4l/by-path`. Do not switch to raw `/dev/video*` names or `/dev/v4l/by-id` without re-validating on hardware; the docs record that `by-path` was the stable choice on the target machine.
-- The current prototype uses apt-provided `python3-opencv` so OpenCV `CAP_GSTREAMER` remains available. Prefer Jetson-friendly MJPEG pipelines (`nvjpegdec` by default, `nvv4l2decoder` as an option) and keep using `/dev/v4l/by-path` identifiers for stable camera selection.
-- Runtime defaults are conservative bring-up settings: `--mode lightweight`, `--det-frequency 5`, `onnxruntime`, CPU-oriented execution, headless by default unless `--display` is passed.
-- When extending toward the planned 3D pipeline, preserve timestamped frame flow and latest-frame-first behavior. The research docs consistently prefer real-time freshness over processing every queued frame.
-- Use the research docs as the source of truth for architecture decisions that are not yet implemented in code. Those docs are written in Japanese and contain important project-specific hardware findings and roadmap decisions.
+補足（review では読まれない可能性あり / Chat・agent 用）: 共通のレビュー指針は
+`docs/review-guidelines.md`、規約は `CLAUDE.md`、検証目標は `docs/cpp-migration-plan.md`。
