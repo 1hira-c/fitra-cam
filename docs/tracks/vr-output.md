@@ -40,6 +40,13 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-08 — One Euro 既定値を実測チューニング値に更新 (閾値調整)
+`configs/medium_3d.yaml` で詰めた One Euro 係数を `MainConfig` の既定値へ昇格。位置は
+`mincutoff 0.8→1.0` / `beta 0.4→4.0`、回転は `mincutoff 1.0→1.5` / `beta 0.3→1.5`
+(`dcutoff` は両軸 1.0 据え置き)。初期既定の `beta` は m/s・rad/s スケールに対し小さすぎ、
+動作時もカットオフが開ききらず遅延が残っていたため引き上げ。`main_config.hpp` の既定値と
+`main.cpp --help` の表記を同値に更新。design doc なし(閾値調整のため changelog のみ)。
+
 ### 2026-06-03 — One Euro フィルタによる動静適応スムージング
 座位静止時のトラッカー揺れに対処。固定 α EMA(α=0.5 ≈ カットオフ 9.5Hz)は静止の滑らかさと
 動作追従を両立できないため、位置(per-axis)・回転(測地角速度ベース)とも **One Euro
