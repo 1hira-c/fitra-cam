@@ -123,7 +123,8 @@ extrinsic_calib:
   ang_vel_max: 8.0          # モーションゲート deg/s
   burst_min: 5              # 1 サンプルに平均するフレーム数
   min_samples: 8            # (cam,face) グループあたりの最小サンプル数
-  controller_port: 39572    # コントローラ pose UDP ポート (HMD は 39571)
+  controller_role: right    # VMT pose relay から採用する controller: left|right
+  controller_port: 39572    # deprecated: 旧コントローラ pose UDP ポート
   controller_bind: 0.0.0.0
   controller_stale_ms: 200.0
 ```

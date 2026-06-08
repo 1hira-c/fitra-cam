@@ -50,6 +50,7 @@
 #include "vmt/continuous_aligner.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
 #include "vmt/controller_pose_receiver.hpp"
+#include "vmt/tracked_pose_receiver.hpp"
 #include "web/crow_server.hpp"
 
 namespace {
@@ -167,8 +168,9 @@ void print_help() {
         "  --excal-ang-vel-max F       motion gate, deg/s (default 8)\n"
         "  --excal-burst-min N         frames averaged per accepted pose (default 5)\n"
         "  --excal-min-samples N       min samples per (cam,face) for the solve (default 8)\n"
-        "  --excal-controller-port N   controller pose UDP port (default 39572)\n"
-        "  --excal-controller-bind ADDR  bind address (default 0.0.0.0)\n"
+        "  --excal-controller-role S   controller role to consume: left|right (default right)\n"
+        "  --excal-controller-port N   deprecated legacy controller UDP port (default 39572)\n"
+        "  --excal-controller-bind ADDR  deprecated legacy bind address (default 0.0.0.0)\n"
         "  --excal-controller-stale-ms F  controller pose staleness threshold (default 200)\n"
         "\n"
         "  --config PATH             runtime YAML config (see docs/backlog-main-yaml-config.md).\n"
@@ -435,6 +437,10 @@ int main(int argc, char** argv) {
             src_opts.det_frequency = det_frequency;
             src_opts.single_person = !multi_person;
             src_opts.fake_bbox_if_empty = bench_fake_bbox;
+            // Controller-marker extrinsic calibration runs AprilTag detection
+            // from the frame tap, so it needs a CPU BGR image even on the
+            // all-GPU nvjpeg path.
+            src_opts.retain_bgr = opts.excal_enabled;
             // Subject-calibration recording taps MultiCameraDriver's frame tap.
             // The same flag pauses YOLOX + RTMPose pre-bake while recording so
             // disk I/O has the CPU/GPU headroom and we don't burn cycles on a
@@ -589,11 +595,10 @@ int main(int argc, char** argv) {
 
         // Controller-marker extrinsic calibration (parallel to the subject
         // wizard; mutually exclusive with it). Receives the VR controller pose
-        // on its own UDP channel, taps camera frames into the collection
-        // session, and solves + writes extrinsics at shutdown.
+        // from the unified VMT pose relay, taps camera frames into the
+        // collection session, and solves + writes extrinsics at shutdown.
         // See docs/design/pose-3d-controller-marker-extrinsic.md.
         auto controller_pose_bus = std::make_unique<fitra::vmt::ControllerPoseBus>();
-        std::unique_ptr<fitra::vmt::ControllerPoseReceiver> controller_pose_recv;
         std::unique_ptr<fitra::pipeline::ExtrinsicCalibSession> excal_session;
         if (opts.excal_enabled) {
             const std::string intr_path = opts.excal_intrinsics.empty()
@@ -623,16 +628,6 @@ int main(int argc, char** argv) {
             excal_session = std::make_unique<fitra::pipeline::ExtrinsicCalibSession>(
                 std::move(ec));
 
-            fitra::vmt::ControllerPoseReceiverOptions copts;
-            copts.bind     = opts.excal_controller_bind;
-            copts.port     = static_cast<std::uint16_t>(opts.excal_controller_port);
-            copts.stale_ms = opts.excal_controller_stale_ms;
-            controller_pose_recv = std::make_unique<fitra::vmt::ControllerPoseReceiver>(
-                *controller_pose_bus, copts);
-            if (!controller_pose_recv->start()) {
-                controller_pose_recv.reset();  // keep collecting; pose just stays absent
-            }
-
             const double stale_ms = opts.excal_controller_stale_ms;
             driver->set_frame_tap(
                 [s = excal_session.get(), bus = controller_pose_bus.get(), stale_ms]
@@ -647,9 +642,9 @@ int main(int argc, char** argv) {
                     s->on_frame(cam, bgr, c);
                 });
             excal_session->start();
-            FITRA_LOG_INFO("extrinsic-calib: collecting (faces={}, out={}). "
+            FITRA_LOG_INFO("extrinsic-calib: collecting (faces={}, controller_role={}, out={}). "
                            "Stop the process to solve + write.",
-                           opts.excal_faces, opts.excal_out);
+                           opts.excal_faces, opts.excal_controller_role, opts.excal_out);
         }
 
         // Stop the driver worker before any session it taps into goes out of
@@ -728,20 +723,31 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Optional HMD pose receiver. Standalone from vmt_pub — both can run
-        // independently for diagnostics, but the auto-alignment solver needs
-        // both the HMD producer and the chest tracker.
+        // Optional unified VMT pose relay receiver. Standalone from vmt_pub —
+        // it feeds the HMD bus for alignment and the selected controller bus
+        // for extrinsic calibration. It also accepts the legacy /fitra/hmd_pose
+        // and /fitra/controller_pose messages on the same port during migration.
         auto hmd_pose_bus = std::make_unique<fitra::vmt::HmdPoseBus>();
-        std::unique_ptr<fitra::vmt::HmdPoseReceiver> hmd_pose_recv;
-        if (hmd_listen_enabled) {
-            fitra::vmt::HmdPoseReceiverOptions hopts;
-            hopts.bind     = hmd_listen_bind;
-            hopts.port     = static_cast<std::uint16_t>(hmd_listen_port);
-            hopts.stale_ms = hmd_stale_ms;
-            hmd_pose_recv = std::make_unique<fitra::vmt::HmdPoseReceiver>(
-                *hmd_pose_bus, hopts);
-            if (!hmd_pose_recv->start()) {
-                hmd_pose_recv.reset();
+        std::unique_ptr<fitra::vmt::TrackedPoseReceiver> tracked_pose_recv;
+        const bool pose_relay_enabled = hmd_listen_enabled || opts.excal_enabled;
+        fitra::vmt::TrackedPoseRole excal_controller_role =
+            fitra::vmt::TrackedPoseRole::RightController;
+        if (!fitra::vmt::parse_tracked_pose_role(opts.excal_controller_role,
+                                                 excal_controller_role)) {
+            // validate_options should have caught this, but keep the runtime
+            // path deterministic if a caller constructed MainOptions manually.
+            excal_controller_role = fitra::vmt::TrackedPoseRole::RightController;
+        }
+        if (pose_relay_enabled) {
+            fitra::vmt::TrackedPoseReceiverOptions popts;
+            popts.bind = hmd_listen_bind;
+            popts.port = static_cast<std::uint16_t>(hmd_listen_port);
+            popts.stale_ms = hmd_stale_ms;
+            popts.controller_role = excal_controller_role;
+            tracked_pose_recv = std::make_unique<fitra::vmt::TrackedPoseReceiver>(
+                *hmd_pose_bus, *controller_pose_bus, popts);
+            if (!tracked_pose_recv->start()) {
+                tracked_pose_recv.reset();
             }
         }
 
@@ -774,17 +780,17 @@ int main(int argc, char** argv) {
             fitra::vmt::ContinuousAligner*    aligner;
             fitra::slimevr::NativePublisher*  pub;
             fitra::vmt::VmtPublisher*         vmt_pub;
-            fitra::vmt::HmdPoseReceiver*      hmd_recv;
+            fitra::vmt::TrackedPoseReceiver*  pose_recv;
             fitra::slimevr::TrackerExtractor* tex;
             ~SlimeStop() {
                 if (aligner)  aligner->stop();
                 if (pub)      pub->stop();
                 if (vmt_pub)  vmt_pub->stop();
-                if (hmd_recv) hmd_recv->stop();
+                if (pose_recv) pose_recv->stop();
                 if (tex)      tex->stop();
             }
         } slime_stop{continuous_aligner.get(), slime_pub.get(), vmt_pub.get(),
-                     hmd_pose_recv.get(), tracker_extractor.get()};
+                     tracked_pose_recv.get(), tracker_extractor.get()};
 
         std::unique_ptr<fitra::web::CrowServer> server;
         if (!no_web) {
@@ -815,12 +821,17 @@ int main(int argc, char** argv) {
             if (slime_tracker_bus) {
                 server->set_tracker_bus(slime_tracker_bus.get());
             }
-            // Always attach the HMD pose bus when --enable-3d is on, even if
-            // the receiver wasn't started. The /stats3d block then reports
-            // enabled=true / have_any=false so the WebUI can show
-            // "waiting for hmd" instead of suppressing the section.
-            if (hmd_listen_enabled) {
+            // Attach the HMD pose bus for either VMT alignment or extrinsic
+            // calibration. The excal 3D scene uses the same Standing/VMT pose
+            // relay frame as the selected controller marker.
+            if (pose_relay_enabled) {
                 server->set_hmd_pose_bus(hmd_pose_bus.get(), hmd_stale_ms);
+            }
+            if (excal_session) {
+                server->set_extrinsic_calib_pose_bus(
+                    controller_pose_bus.get(),
+                    fitra::vmt::tracked_pose_role_name(excal_controller_role),
+                    opts.excal_controller_stale_ms);
             }
             if (continuous_aligner) {
                 server->set_continuous_aligner(continuous_aligner.get());
@@ -874,7 +885,6 @@ int main(int argc, char** argv) {
         driver->stop();   // taps quiesce here — safe to read/solve the session
 
         if (excal_session) {
-            if (controller_pose_recv) controller_pose_recv->stop();
             FITRA_LOG_INFO("extrinsic-calib: collected {} samples; solving...",
                            excal_session->sample_count());
             std::string err;

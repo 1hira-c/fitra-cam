@@ -1,10 +1,9 @@
 // 3D verification scene for the controller-marker extrinsic calibration.
 //
-// Polls /api/excal/extrinsics and places one camera frustum per solved camera
-// in the shared world frame (VMT Standing, Y-up RH, metres). Each frustum's
-// apex is the camera centre and its opening reflects the real intrinsics FoV,
-// so you can eyeball where the cameras sit in the room and whether their
-// relative geometry looks right.
+// Polls /api/excal/extrinsics for solved camera frustums and /api/excal/poses
+// for the live HMD + selected calibration controller pose. All are already in
+// the shared SteamVR Standing / VMT world frame (Y-up RH, metres), so positions
+// and quaternions are applied directly to Three.js objects.
 
 import * as THREE from "three";
 import { OrbitControls } from "OrbitControls";
@@ -27,6 +26,14 @@ scene.add(hemi);
 const CAM_COLORS = [0x66ccff, 0xffaa66, 0x88ff88, 0xff88cc, 0xffff66, 0xcc99ff];
 let camGroup = new THREE.Group();
 scene.add(camGroup);
+
+const poseGroup = new THREE.Group();
+scene.add(poseGroup);
+
+let hmdViz = null;
+let controllerViz = null;
+let extrinsicsStatus = "waiting for a solve...";
+let poseStatus = "waiting for pose relay...";
 
 function resize() {
   const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -76,7 +83,62 @@ function makeCameraViz(cam, color) {
   return g;
 }
 
-async function refresh() {
+function makePoseViz(color, radius) {
+  const g = new THREE.Group();
+  const sphere = new THREE.Mesh(
+    new THREE.SphereGeometry(radius, 24, 16),
+    new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.55,
+      metalness: 0.05,
+      emissive: color,
+      emissiveIntensity: 0.12,
+    })
+  );
+  g.add(sphere);
+  g.add(new THREE.AxesHelper(radius * 3.5));
+  return g;
+}
+
+function updatePoseViz(current, snap, color, radius) {
+  if (!snap || !snap.have_any || snap.stale || !snap.valid || !snap.pos || !snap.quat_xyzw) {
+    if (current) {
+      poseGroup.remove(current);
+    }
+    return null;
+  }
+  const viz = current || makePoseViz(color, radius);
+  if (!current) {
+    poseGroup.add(viz);
+  }
+  viz.position.set(snap.pos[0], snap.pos[1], snap.pos[2]);
+  viz.quaternion.set(
+    snap.quat_xyzw[0],
+    snap.quat_xyzw[1],
+    snap.quat_xyzw[2],
+    snap.quat_xyzw[3]
+  );
+  return viz;
+}
+
+function poseLabel(name, snap) {
+  if (!snap || !snap.enabled) return `${name}: disabled`;
+  if (!snap.have_any) return `${name}: missing`;
+  if (snap.stale) return `${name}: stale ${Math.round(snap.age_ms)} ms`;
+  if (!snap.valid) return `${name}: invalid`;
+  if ("running_ok" in snap && !snap.running_ok) {
+    return `${name}: tracking ${snap.tracking_result}`;
+  }
+  const age = Number.isFinite(snap.age_ms) ? `${Math.round(snap.age_ms)} ms` : "? ms";
+  return `${name}: ok ${age}`;
+}
+
+function updateStatus() {
+  document.getElementById("status").textContent =
+    `${extrinsicsStatus}  |  ${poseStatus}`;
+}
+
+async function refreshExtrinsics() {
   let data;
   try { data = await (await fetch("/api/excal/extrinsics")).json(); }
   catch (e) { document.getElementById("conn").textContent = "disconnected"; return; }
@@ -91,13 +153,29 @@ async function refresh() {
     camGroup.add(makeCameraViz(cam, CAM_COLORS[i % CAM_COLORS.length]));
   });
 
-  const status = document.getElementById("status");
   if (!data.solved || cams.length === 0) {
-    status.textContent = "no solution yet — run a solve on the collect page.";
+    extrinsicsStatus = "cameras: no solution yet";
   } else {
-    status.textContent = `${cams.length} camera(s): `
+    extrinsicsStatus = `${cams.length} camera(s): `
       + cams.map((c) => `${c.id} @ (${c.center.map((v) => v.toFixed(2)).join(", ")})`).join("  ·  ");
   }
+  updateStatus();
+}
+
+async function refreshPoses() {
+  let data;
+  try { data = await (await fetch("/api/excal/poses")).json(); }
+  catch (e) { document.getElementById("conn").textContent = "disconnected"; return; }
+  document.getElementById("conn").textContent = "ok";
+
+  hmdViz = updatePoseViz(hmdViz, data.hmd, 0x4da3ff, 0.055);
+  controllerViz = updatePoseViz(controllerViz, data.controller, 0xffd166, 0.045);
+
+  const controllerName = data.controller?.role
+    ? `${data.controller.role} controller`
+    : "controller";
+  poseStatus = `${poseLabel("HMD", data.hmd)}  ·  ${poseLabel(controllerName, data.controller)}`;
+  updateStatus();
 }
 
 function animate() {
@@ -107,6 +185,8 @@ function animate() {
   requestAnimationFrame(animate);
 }
 
-refresh();
-setInterval(refresh, 1000);
+refreshExtrinsics();
+refreshPoses();
+setInterval(refreshExtrinsics, 1500);
+setInterval(refreshPoses, 100);
 animate();

@@ -306,6 +306,23 @@ set_target_properties(fitra_test_controller_pose_receiver PROPERTIES
 
 add_test(NAME test_controller_pose_receiver COMMAND fitra_test_controller_pose_receiver)
 
+# Unified VMT pose relay receiver — /fitra/tracked_pose role parser, OSC
+# bundle dispatch, and legacy HMD/controller message compatibility.
+add_executable(fitra_test_tracked_pose_receiver
+    test_tracked_pose_receiver.cpp
+)
+
+target_link_libraries(fitra_test_tracked_pose_receiver PRIVATE
+    fitra_vmt
+)
+
+set_target_properties(fitra_test_tracked_pose_receiver PROPERTIES
+    OUTPUT_NAME "test_tracked_pose_receiver"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_tracked_pose_receiver COMMAND fitra_test_tracked_pose_receiver)
+
 # VmtAlignment auto solver — T-pose + 2D Procrustes motion mode.
 add_executable(fitra_test_auto_alignment
     test_auto_alignment.cpp

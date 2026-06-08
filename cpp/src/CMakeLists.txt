@@ -171,6 +171,7 @@ add_library(fitra_vmt STATIC
     vmt/vmt_publisher.cpp
     vmt/hmd_pose_receiver.cpp
     vmt/controller_pose_receiver.cpp
+    vmt/tracked_pose_receiver.cpp
     vmt/auto_alignment.cpp
     vmt/continuous_aligner.cpp
 )

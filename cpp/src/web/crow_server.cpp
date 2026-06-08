@@ -19,6 +19,7 @@
 #include "slimevr/slime_tracker_bus.hpp"
 #include "vmt/vmt_publisher.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
+#include "vmt/controller_pose_receiver.hpp"
 #include "vmt/auto_alignment.hpp"
 #include "vmt/continuous_aligner.hpp"
 #include "util/logging.hpp"
@@ -138,6 +139,59 @@ std::string make_hmd_status_fragment(const vmt::HmdPoseSnapshot& snap,
     }
     out << "}";
     return out.str();
+}
+
+void append_age_ms_json(std::ostringstream& out, double age_ms) {
+    out << (std::isfinite(age_ms) ? age_ms : -1.0);
+}
+
+void append_excal_hmd_pose_json(std::ostringstream& out,
+                                const vmt::HmdPoseSnapshot& snap,
+                                bool enabled) {
+    out << "{\"enabled\":" << (enabled ? "true" : "false")
+        << ",\"have_any\":" << (snap.have_any ? "true" : "false")
+        << ",\"stale\":" << (snap.stale ? "true" : "false")
+        << ",\"valid\":" << (snap.have_any && snap.pose.valid ? "true" : "false")
+        << ",\"age_ms\":";
+    append_age_ms_json(out, snap.age_ms);
+    out << ",\"timestamp_s\":" << (snap.have_any ? snap.pose.timestamp_s : 0.0f);
+    if (snap.have_any) {
+        out << ",\"pos\":[" << snap.pose.x << "," << snap.pose.y << ","
+            << snap.pose.z << "]"
+            << ",\"quat_xyzw\":[" << snap.pose.qx << "," << snap.pose.qy
+            << "," << snap.pose.qz << "," << snap.pose.qw << "]"
+            << ",\"yaw_deg\":" <<
+                (180.0f / 3.14159265358979323846f) *
+                vmt::yaw_from_vmt_quat(vmt::VmtQuat{
+                    snap.pose.qx, snap.pose.qy, snap.pose.qz, snap.pose.qw});
+    }
+    out << "}";
+}
+
+void append_excal_controller_pose_json(std::ostringstream& out,
+                                       const vmt::ControllerPoseSnapshot& snap,
+                                       bool enabled,
+                                       const std::string& role) {
+    out << "{\"enabled\":" << (enabled ? "true" : "false")
+        << ",\"role\":\"" << json_escape(role) << "\""
+        << ",\"have_any\":" << (snap.have_any ? "true" : "false")
+        << ",\"stale\":" << (snap.stale ? "true" : "false")
+        << ",\"valid\":" << (snap.have_any && snap.pose.valid ? "true" : "false")
+        << ",\"running_ok\":"
+        << (snap.have_any && snap.pose.running_ok() ? "true" : "false")
+        << ",\"tracking_result\":"
+        << (snap.have_any ? snap.pose.tracking_result : 0)
+        << ",\"age_ms\":";
+    append_age_ms_json(out, snap.age_ms);
+    out << ",\"timestamp_s\":"
+        << (snap.have_any ? snap.pose.timestamp_s : 0.0f);
+    if (snap.have_any) {
+        out << ",\"pos\":[" << snap.pose.x << "," << snap.pose.y << ","
+            << snap.pose.z << "]"
+            << ",\"quat_xyzw\":[" << snap.pose.qx << "," << snap.pose.qy
+            << "," << snap.pose.qz << "," << snap.pose.qw << "]";
+    }
+    out << "}";
 }
 
 std::string make_continuous_align_fragment(const vmt::ContinuousAligner& a) {
@@ -327,6 +381,14 @@ void CrowServer::set_vmt_publisher(vmt::VmtPublisher* publisher) {
 void CrowServer::set_hmd_pose_bus(vmt::HmdPoseBus* bus, double stale_threshold_ms) {
     hmd_pose_bus_ = bus;
     if (stale_threshold_ms > 0.0) hmd_stale_ms_ = stale_threshold_ms;
+}
+
+void CrowServer::set_extrinsic_calib_pose_bus(vmt::ControllerPoseBus* bus,
+                                              std::string role,
+                                              double stale_threshold_ms) {
+    excal_controller_pose_bus_ = bus;
+    excal_controller_role_ = std::move(role);
+    if (stale_threshold_ms > 0.0) excal_controller_stale_ms_ = stale_threshold_ms;
 }
 
 void CrowServer::set_tracker_bus(slimevr::SlimeTrackerBus* tracker_bus) {
@@ -1074,6 +1136,32 @@ void CrowServer::register_extrinsic_calib_routes_() {
         crow::response r{session->extrinsics_json()};
         r.set_header("Content-Type", "application/json; charset=utf-8");
         return r;
+    });
+
+    CROW_ROUTE(app, "/api/excal/poses")
+    ([this]() {
+        const bool hmd_enabled = hmd_pose_bus_ != nullptr;
+        const bool controller_enabled = excal_controller_pose_bus_ != nullptr;
+
+        vmt::HmdPoseSnapshot hmd_snap;
+        if (hmd_enabled) {
+            hmd_snap = hmd_pose_bus_->snapshot(hmd_stale_ms_);
+        }
+
+        vmt::ControllerPoseSnapshot controller_snap;
+        if (controller_enabled) {
+            controller_snap =
+                excal_controller_pose_bus_->snapshot(excal_controller_stale_ms_);
+        }
+
+        std::ostringstream o;
+        o << "{\"hmd\":";
+        append_excal_hmd_pose_json(o, hmd_snap, hmd_enabled);
+        o << ",\"controller\":";
+        append_excal_controller_pose_json(o, controller_snap, controller_enabled,
+                                          excal_controller_role_);
+        o << "}";
+        return json_response(o.str());
     });
 
     CROW_ROUTE(app, "/api/excal/start").methods(crow::HTTPMethod::POST)

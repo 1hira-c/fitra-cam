@@ -40,6 +40,16 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-08 — VMT pose relay wire spec (HMD + 左右 controller の統合受信)
+controller-marker extrinsic calibration で controller pose が必要になり、旧 PoC の
+`/fitra/hmd_pose` + `/fitra/controller_pose` 別ポート構成は運用に乗らないと判断。VMT Manager 側から
+1 UDP port (`39571`) に `/fitra/tracked_pose` を role 付きで流す canonical wire spec を起票。
+HMD / left controller / right controller を同じ SteamVR Standing universe の absolute pose として送り、
+fitra-cam 側は `TrackedPoseReceiver` で role ごとの latest-wins bus に分配する。旧 message は
+移行期間だけ互換受信。`extrinsic_calib.controller_role` (`left|right`, 既定 `right`) を追加し、
+旧 controller 専用 port は deprecated。
+→ [design/vr-output-vmt-pose-relay-wire-spec.md](../design/vr-output-vmt-pose-relay-wire-spec.md)
+
 ### 2026-06-03 — 継続キャリブのレビュー修正 (バグ修正)
 Codex + GitHub (gemini / Copilot) レビューで顕在化した点を修正。design doc なし(changelog のみ)。
 - `SampleReservoir::key_of`: 負座標で符号付き左シフト UB(VMT x/z は通常移動で負になる)→ uint32 経由 pack。負4象限が別セルになる回帰テスト追加。

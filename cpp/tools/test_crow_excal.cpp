@@ -7,6 +7,8 @@
 #include "pipeline/extrinsic_calib_session.hpp"
 #include "pipeline/snapshot.hpp"
 #include "lift/calib_io.hpp"
+#include "vmt/controller_pose_receiver.hpp"
+#include "vmt/hmd_pose_receiver.hpp"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -82,6 +84,34 @@ int main() {
     fitra::pipeline::ExtrinsicCalibSession session(cfg);
 
     fitra::pipeline::SnapshotBus bus{1};
+    fitra::vmt::HmdPoseBus hmd_bus;
+    fitra::vmt::ControllerPoseBus controller_bus;
+
+    fitra::vmt::HmdPose hmd;
+    hmd.valid = true;
+    hmd.timestamp_s = 12.5f;
+    hmd.x = 1.25f;
+    hmd.y = 2.5f;
+    hmd.z = -3.75f;
+    hmd.qx = 0.0f;
+    hmd.qy = 0.38268343f;
+    hmd.qz = 0.0f;
+    hmd.qw = 0.9238795f;
+    hmd_bus.publish(hmd);
+
+    fitra::vmt::ControllerPose controller;
+    controller.valid = true;
+    controller.tracking_result = fitra::vmt::kTrackingResultRunningOk;
+    controller.timestamp_s = 13.25f;
+    controller.x = -0.5f;
+    controller.y = 1.0f;
+    controller.z = 2.25f;
+    controller.qx = 0.1f;
+    controller.qy = 0.2f;
+    controller.qz = 0.3f;
+    controller.qw = 0.9f;
+    controller_bus.publish(controller);
+
     fitra::web::ServerOptions opts;
     opts.host = "127.0.0.1";
     opts.port = kPort;
@@ -91,6 +121,8 @@ int main() {
 #endif
     fitra::web::CrowServer server(bus, nullptr, opts);
     server.set_extrinsic_calib_session(&session);
+    server.set_hmd_pose_bus(&hmd_bus, 10000.0);
+    server.set_extrinsic_calib_pose_bus(&controller_bus, "left", 10000.0);
     server.start();
 
     // Poll until the server accepts connections.
@@ -116,6 +148,24 @@ int main() {
         CHECK(status == 200);
         CHECK(body.find("\"solved\":false") != std::string::npos);
         CHECK(body.find("\"cameras\":[]") != std::string::npos);
+
+        // Live pose route: HMD plus selected calibration controller only.
+        CHECK(http("GET", "/api/excal/poses", status, body));
+        CHECK(status == 200);
+        CHECK(body.find("\"hmd\":{") != std::string::npos);
+        CHECK(body.find("\"enabled\":true") != std::string::npos);
+        CHECK(body.find("\"have_any\":true") != std::string::npos);
+        CHECK(body.find("\"stale\":false") != std::string::npos);
+        CHECK(body.find("\"valid\":true") != std::string::npos);
+        CHECK(body.find("\"timestamp_s\":12.5") != std::string::npos);
+        CHECK(body.find("\"pos\":[1.25,2.5,-3.75]") != std::string::npos);
+        CHECK(body.find("\"quat_xyzw\":[0,0.382683") != std::string::npos);
+        CHECK(body.find("\"controller\":{") != std::string::npos);
+        CHECK(body.find("\"role\":\"left\"") != std::string::npos);
+        CHECK(body.find("\"running_ok\":true") != std::string::npos);
+        CHECK(body.find("\"tracking_result\":200") != std::string::npos);
+        CHECK(body.find("\"timestamp_s\":13.25") != std::string::npos);
+        CHECK(body.find("\"pos\":[-0.5,1,2.25]") != std::string::npos);
 
 #ifdef FITRA_EXCAL_WEB_DIR
         // Static frontend is served (collect page + 3D scene).

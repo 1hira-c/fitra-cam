@@ -340,6 +340,7 @@ extrinsic_calib:
   faces: "3,4,5"
   tag_size_m: 0.08
   min_samples: 10
+  controller_role: left
   controller_port: 40000
 )");
     MainOptions opts;
@@ -348,12 +349,18 @@ extrinsic_calib:
     check(opts.excal_intrinsics == "/tmp/intr.yaml", "extrinsic_calib.intrinsics loads");
     check(opts.excal_faces == "3,4,5", "extrinsic_calib.faces loads");
     check(opts.excal_min_samples == 10, "extrinsic_calib.min_samples loads");
+    check(opts.excal_controller_role == "left", "extrinsic_calib.controller_role loads");
     check(opts.excal_controller_port == 40000, "extrinsic_calib.controller_port loads");
 
-    std::vector<std::string> argv_buf{"--excal-tag-size-m", "0.12", "--excal-faces", "0,1"};
+    std::vector<std::string> argv_buf{
+        "--excal-tag-size-m", "0.12",
+        "--excal-faces", "0,1",
+        "--excal-controller-role", "right",
+    };
     auto argv = make_argv(argv_buf);
     apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
     check(opts.excal_faces == "0,1", "--excal-faces CLI overrides YAML");
+    check(opts.excal_controller_role == "right", "--excal-controller-role CLI overrides YAML");
 
     // Valid: has intrinsics. Required cam0/engines must be present too.
     opts.cam_paths[0] = "/tmp/a";

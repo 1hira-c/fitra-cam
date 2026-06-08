@@ -138,7 +138,11 @@ struct MainOptions {
     double      excal_ang_vel_max    = 8.0;      // motion gate, deg/s
     int         excal_burst_min      = 5;
     int         excal_min_samples    = 8;        // per (cam, face) group
-    // Controller pose receiver (parallel to the HMD channel).
+    // Controller pose role consumed from the unified VMT pose relay:
+    // "left" | "right" (default). The old dedicated controller port below is
+    // kept for config compatibility during migration.
+    std::string excal_controller_role = "right";
+    // Deprecated legacy controller pose receiver (parallel to the HMD channel).
     int         excal_controller_port = 39572;
     std::string excal_controller_bind = "0.0.0.0";
     double      excal_controller_stale_ms = 200.0;

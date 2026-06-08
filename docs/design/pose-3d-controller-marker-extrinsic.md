@@ -230,20 +230,22 @@ extrinsic(A,B) = T_camA←world ∘ (T_camB←world)⁻¹
   `calibrateCameraCharuco`)。**コントローラ pose の受信経路**
   — 既存の VMT alignment 用 HMD pose 経路 (`vmt_manager` → UDP/OSC → `HmdPoseReceiver` /
   `HmdPoseBus`, 既存 frame 変換ごと) を流用する。具体:
-  - **transport は丸ごと再利用** (実装済 `vmt/controller_pose_receiver.{hpp,cpp}`):
-    `/fitra/controller_pose` を並列にもう 1 本生やし、`HmdPoseBus` と同型の latest-wins bus
-    (`ControllerPoseBus`) に載せる。Windows 側は別 device index を query するだけ。実装は
-    HMD と別ポート (既定 39572 / HMD は 39571) の専用 `ControllerPoseReceiver` クラスとし、
-    OSC decode helper は `vmt/osc_decode.hpp` に抽出して HMD 経路と共有。
-  - **スキーマ拡張** (実装済): 現 `,iffffffff` (valid + ts + pos + quat) に
-    **`eTrackingResult` を 1 個追加** → `,iiffffffff`。`running_ok()` =
-    `bPoseIsValid && eTrackingResult == Running_OK(200)` をゲートに公開。座標系は HMD 経路と
-    同じ Standing+VMT frame をそのまま使う。
+  - **transport は VMT pose relay へ統合する** (2026-06-08 方針更新):
+    PoC 実装では `vmt/controller_pose_receiver.{hpp,cpp}` が `/fitra/controller_pose` を
+    HMD とは別ポート (39572 / HMD は 39571) で受け、`ControllerPoseBus` に載せていた。
+    ただし運用上これは非現実的なので、VMT Manager 側から 1 UDP port (39571) に
+    `/fitra/tracked_pose` を role 付きで送り、fitra-cam 側で HMD / left controller /
+    right controller の latest-wins bus に分配する仕様へ移行する。
+    → [vr-output-vmt-pose-relay-wire-spec.md](vr-output-vmt-pose-relay-wire-spec.md)
+  - **スキーマ拡張**: controller sample は `tracking_result` (OpenVR `ETrackingResult`) を必須で
+    持つ。`running_ok()` = `bPoseIsValid && eTrackingResult == Running_OK(200)` をゲートに公開。
+    座標系は HMD 経路と同じ Standing+VMT frame をそのまま使う。
   - 同期は静止取得ゆえ latest-wins + stale で十分 (timestamp は厳密ペアリング不要)。
-  - **配線済** (2026-05-27): `main` に `ControllerPoseReceiver` + `ControllerPoseBus` を
-    `--extrinsic-calib` 時に起動 (config セクション `extrinsic_calib` / CLI `--excal-*`)。
-    frame tap で bus snapshot → `ControllerObservation` 変換まで結線済。
-  - **未** (実機側): Windows sender 側の controller device query + `/fitra/controller_pose` 送出。
+  - **配線済** (2026-06-08): `main` に `TrackedPoseReceiver` + `ControllerPoseBus` を
+    `--extrinsic-calib` 時に起動。`extrinsic_calib.controller_role` (`left|right`, 既定 `right`) に
+    一致する controller pose だけを frame tap で `ControllerObservation` に変換する。
+  - **未** (VMT 側): VMT Manager からの `/fitra/tracked_pose`
+    (HMD / left controller / right controller) 送出。
 - **M2** — **ソルバ・検出コア実装済 / 収集 UI 未着手**: 準静止・インターリーブ取得の収集 UI
   (**全カメラ × 全 face を姿勢多様性込みで被覆**、モーションゲート + バースト平均) + 各面 `Y_face`
   同時推定の `calibrateRobotWorldHandEye` 一括校正。再現性 (繰り返し校正の extrinsic ばらつき)・

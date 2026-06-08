@@ -221,6 +221,7 @@ void load_extrinsic_calib(const YAML::Node& section, MainOptions& out) {
     static const std::set<std::string> allowed{
         "enabled", "intrinsics", "out", "faces", "tag_size_m",
         "lin_vel_max", "ang_vel_max", "burst_min", "min_samples",
+        "controller_role",
         "controller_port", "controller_bind", "controller_stale_ms",
     };
     check_keys(section, allowed, "extrinsic_calib");
@@ -233,6 +234,7 @@ void load_extrinsic_calib(const YAML::Node& section, MainOptions& out) {
     if (section["ang_vel_max"])     out.excal_ang_vel_max    = parse_scalar<double>(section["ang_vel_max"],         "extrinsic_calib.ang_vel_max");
     if (section["burst_min"])       out.excal_burst_min      = parse_scalar<int>(section["burst_min"],              "extrinsic_calib.burst_min");
     if (section["min_samples"])     out.excal_min_samples    = parse_scalar<int>(section["min_samples"],            "extrinsic_calib.min_samples");
+    if (section["controller_role"]) out.excal_controller_role = parse_scalar<std::string>(section["controller_role"], "extrinsic_calib.controller_role");
     if (section["controller_port"]) out.excal_controller_port = parse_scalar<int>(section["controller_port"],      "extrinsic_calib.controller_port");
     if (section["controller_bind"]) out.excal_controller_bind = parse_scalar<std::string>(section["controller_bind"], "extrinsic_calib.controller_bind");
     if (section["controller_stale_ms"]) out.excal_controller_stale_ms = parse_scalar<double>(section["controller_stale_ms"], "extrinsic_calib.controller_stale_ms");
@@ -395,6 +397,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--excal-ang-vel-max")       { out.excal_ang_vel_max = std::stod(need(i, "--excal-ang-vel-max")); }
         else if (a == "--excal-burst-min")         { out.excal_burst_min = std::atoi(need(i, "--excal-burst-min")); }
         else if (a == "--excal-min-samples")       { out.excal_min_samples = std::atoi(need(i, "--excal-min-samples")); }
+        else if (a == "--excal-controller-role")   { out.excal_controller_role = need(i, "--excal-controller-role"); }
         else if (a == "--excal-controller-port")   { out.excal_controller_port = std::atoi(need(i, "--excal-controller-port")); }
         else if (a == "--excal-controller-bind")   { out.excal_controller_bind = need(i, "--excal-controller-bind"); }
         else if (a == "--excal-controller-stale-ms"){ out.excal_controller_stale_ms = std::stod(need(i, "--excal-controller-stale-ms")); }
@@ -521,6 +524,14 @@ void validate_options(const MainOptions& opts) {
         }
         if (opts.excal_controller_port <= 0 || opts.excal_controller_port > 65535) {
             fail("--excal-controller-port must be in [1, 65535]");
+        }
+        if (opts.excal_controller_role != "left"
+            && opts.excal_controller_role != "right"
+            && opts.excal_controller_role != "left_controller"
+            && opts.excal_controller_role != "right_controller"
+            && opts.excal_controller_role != "left-controller"
+            && opts.excal_controller_role != "right-controller") {
+            fail("--excal-controller-role must be one of left|right");
         }
         if (opts.excal_lin_vel_max <= 0.0 || opts.excal_ang_vel_max <= 0.0) {
             fail("--excal-lin-vel-max / --excal-ang-vel-max must be > 0");
