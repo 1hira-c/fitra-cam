@@ -171,8 +171,17 @@ void TrackerExtractor::run_loop() {
         // event-driven mode passes the measured interval so high-fps frames get
         // proportionally gentler per-step smoothing instead of over-damping.
         auto trackers = raw_trackers;
-        apply_quat_smoothing(trackers, prev_quat_, opts_.quat_smooth, dt_s, nominal_dt_s);
-        apply_pos_smoothing (trackers, prev_pos_,  pos_ctx_, opts_.pos_smooth, nominal_dt_s);
+        if (opts_.one_euro) {
+            // Speed-adaptive: low cutoff (smooth) at rest, high cutoff
+            // (responsive) in motion. quat_smooth/pos_smooth are ignored.
+            apply_quat_smoothing(trackers, prev_quat_, quat_ctx_,
+                                 opts_.quat_one_euro, dt_s, nominal_dt_s);
+            apply_pos_smoothing (trackers, prev_pos_,  pos_ctx_,
+                                 opts_.pos_one_euro, nominal_dt_s);
+        } else {
+            apply_quat_smoothing(trackers, prev_quat_, opts_.quat_smooth, dt_s, nominal_dt_s);
+            apply_pos_smoothing (trackers, prev_pos_,  pos_ctx_, opts_.pos_smooth, nominal_dt_s);
+        }
 
         // ------ Per-tracker rolling stats ------------------------------
         SlimeTrackerStats stats_out{};

@@ -40,6 +40,36 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-08 — One Euro の GitHub レビュー修正 (バグ修正)
+PR #25 の gemini / Copilot レビュー指摘を反映。design doc なし(changelog のみ)。
+- **(gemini HIGH / 実バグ)** 位置 One Euro の速度推定 `pos_dx_hat` 更新に外れ値ゲートが
+  効いておらず、三角測量グリッチの巨大 `dx` で速度状態が汚染 → 直後の数フレームで
+  カットオフが開き静止ジッタが素通りしていた。速度更新にも `(1-gate)` を適用し、回帰テスト
+  (`test_one_euro_outlier_gate_does_not_pollute_speed`)を追加。
+- `TrackerExtractorOptions` の One Euro 既定係数が `MainConfig` のチューニング値と不一致
+  だった点を同値化(位置 1.0/4.0、回転 1.5/1.5)+「main 側で上書きされる」旨をコメント明記。
+- design doc の「しきい値の根拠」に現行既定値(初期値ではない)の注記を追加、`one_euro_alpha`
+  のエッジケースコメントの優先順位明確化、`test_main_config` のコメント実態合わせ。
+- 完了の定義に従い `docs/cpp-migration-plan.md` 検証戦略表に One Euro 行を追加。
+
+### 2026-06-08 — One Euro 既定値を実測チューニング値に更新 (閾値調整)
+`configs/medium_3d.yaml` で詰めた One Euro 係数を `MainConfig` の既定値へ昇格。位置は
+`mincutoff 0.8→1.0` / `beta 0.4→4.0`、回転は `mincutoff 1.0→1.5` / `beta 0.3→1.5`
+(`dcutoff` は両軸 1.0 据え置き)。初期既定の `beta` は m/s・rad/s スケールに対し小さすぎ、
+動作時もカットオフが開ききらず遅延が残っていたため引き上げ。`main_config.hpp` の既定値と
+`main.cpp --help` の表記を同値に更新。design doc なし(閾値調整のため changelog のみ)。
+
+### 2026-06-03 — One Euro フィルタによる動静適応スムージング
+座位静止時のトラッカー揺れに対処。固定 α EMA(α=0.5 ≈ カットオフ 9.5Hz)は静止の滑らかさと
+動作追従を両立できないため、位置(per-axis)・回転(測地角速度ベース)とも **One Euro
+(速度適応カットオフ)** に置換。静止時は低カットオフで強くスムージング、動作時は `beta·速度`
+でカットオフを開いて遅延なく追従。既存の swing/twist 分離・parent-yaw transport・hip-relative
+hold・外れ値ゲート(8–16 m/s freeze)は温存(swing/twist 本体を per-tracker alpha の `impl` に
+抽出、固定 α 版は bit-identical で既存 ctest 無傷)。既定 ON、`--vr-no-one-euro` で旧 EMA に
+フォールバック、`beta=0` で固定カットオフ EMA に縮退。`three_d.vr_*` YAML / `--vr-{pos,quat}-*`
+CLI を追加。新規 ctest(位置 6 / 回転 3 / config 1)。Phase 14 で見送った One Euro の昇格。
+→ [design/vr-output-one-euro-filter.md](../design/vr-output-one-euro-filter.md)
+
 ### 2026-06-03 — 継続キャリブのレビュー修正 (バグ修正)
 Codex + GitHub (gemini / Copilot) レビューで顕在化した点を修正。design doc なし(changelog のみ)。
 - `SampleReservoir::key_of`: 負座標で符号付き左シフト UB(VMT x/z は通常移動で負になる)→ uint32 経由 pack。負4象限が別セルになる回帰テスト追加。

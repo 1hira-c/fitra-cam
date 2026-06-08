@@ -1081,6 +1081,94 @@ void test_keypoint_format_assert() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
 }
 
+// ---------- One Euro (speed-adaptive) rotation overload ------------------
+
+// Yaw quaternion (rotation about world/local +Z): wxyz = {cos(a/2),0,0,sin(a/2)}.
+cv::Vec4f quat_yaw(float angle_rad) {
+    return cv::Vec4f{std::cos(angle_rad * 0.5f), 0.0f, 0.0f, std::sin(angle_rad * 0.5f)};
+}
+
+// Geodesic angle (rad) between two unit quaternions, sign-agnostic.
+float quat_angle(const cv::Vec4f& a, const cv::Vec4f& b) {
+    float dot = std::abs(a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3]);
+    return 2.0f * std::acos(std::min(1.0f, dot));
+}
+
+// First valid frame snaps (prev <- raw), marks ctx.initialized, zeroes the
+// angular-speed estimate.
+void test_one_euro_quat_first_frame_snaps() {
+    using namespace fitra::slimevr;
+    std::array<SlimeTracker, kTrackerCount> curr{};
+    std::array<cv::Vec4f, kTrackerCount> prev{};
+    QuatSmoothingContext ctx;
+    const OneEuroParams p{1.0f, 0.3f, 1.0f};
+
+    const cv::Vec4f raw = quat_yaw(0.7f);
+    curr[0].valid = true;
+    curr[0].quat_wxyz = raw;
+    apply_quat_smoothing(curr, prev, ctx, p, 1.0f / 60.0f, 1.0f / 60.0f);
+
+    check(quat_angle(curr[0].quat_wxyz, raw) < 1.0e-4f, "oe-quat.first.curr snaps to raw");
+    check(quat_angle(prev[0], raw) < 1.0e-4f, "oe-quat.first.prev snaps to raw");
+    check(ctx.initialized[0], "oe-quat.first.initialized set");
+    check(std::abs(ctx.ang_vel_hat[0]) < 1.0e-6f, "oe-quat.first.ang_vel_hat zeroed");
+}
+
+// Invalid input holds prev and leaves ctx untouched (curr follows prev).
+void test_one_euro_quat_invalid_holds_prev() {
+    using namespace fitra::slimevr;
+    std::array<SlimeTracker, kTrackerCount> curr{};
+    std::array<cv::Vec4f, kTrackerCount> prev{};
+    QuatSmoothingContext ctx;
+    ctx.initialized[0] = true;
+    ctx.ang_vel_hat[0] = 1.23f;
+    prev[0] = quat_yaw(0.5f);
+    curr[0].valid = false;
+    curr[0].quat_wxyz = quat_yaw(2.0f);  // raw garbage on invalid
+    const OneEuroParams p{1.0f, 0.3f, 1.0f};
+
+    apply_quat_smoothing(curr, prev, ctx, p, 1.0f / 60.0f, 1.0f / 60.0f);
+
+    check(quat_angle(prev[0], quat_yaw(0.5f)) < 1.0e-4f, "oe-quat.invalid.prev held");
+    check(quat_angle(curr[0].quat_wxyz, quat_yaw(0.5f)) < 1.0e-4f, "oe-quat.invalid.curr follows prev");
+    check(std::abs(ctx.ang_vel_hat[0] - 1.23f) < 1.0e-6f, "oe-quat.invalid.ctx untouched");
+}
+
+// At rest, a small rotational jitter moves the output far less than the
+// fixed-alpha EMA (base_alpha=0.5). Default swing/twist confidences are 1.0,
+// so both paths reduce to a single slerp gated by the per-step alpha.
+void test_one_euro_quat_static_below_ema() {
+    using namespace fitra::slimevr;
+    const OneEuroParams p{1.0f, 0.3f, 1.0f};
+    const float dt = 1.0f / 60.0f;
+    const cv::Vec4f settled = quat_yaw(0.0f);     // identity
+    const cv::Vec4f jitter  = quat_yaw(0.01f);    // 0.01 rad yaw jitter
+
+    // One Euro: snap to identity, settle (ang_vel_hat -> 0), then jitter once.
+    std::array<SlimeTracker, kTrackerCount> curr_oe{};
+    std::array<cv::Vec4f, kTrackerCount> prev_oe{};
+    QuatSmoothingContext ctx;
+    for (int f = 0; f < 50; ++f) {
+        curr_oe[0].valid = true; curr_oe[0].quat_wxyz = settled;
+        apply_quat_smoothing(curr_oe, prev_oe, ctx, p, dt, dt);
+    }
+    curr_oe[0].valid = true; curr_oe[0].quat_wxyz = jitter;
+    apply_quat_smoothing(curr_oe, prev_oe, ctx, p, dt, dt);
+    const float moved_oe = quat_angle(prev_oe[0], settled);
+
+    // Fixed-alpha EMA on the same step: slerp by 0.5 → 0.005 rad.
+    std::array<SlimeTracker, kTrackerCount> curr_ema{};
+    std::array<cv::Vec4f, kTrackerCount> prev_ema{};
+    prev_ema[0] = settled;
+    curr_ema[0].valid = true; curr_ema[0].quat_wxyz = jitter;
+    apply_quat_smoothing(curr_ema, prev_ema, /*base_alpha=*/0.5f);
+    const float moved_ema = quat_angle(prev_ema[0], settled);
+
+    check(moved_oe < 0.5f * moved_ema,
+          "oe-quat.static: One Euro response (" + std::to_string(moved_oe) +
+          ") must be < half the EMA response (" + std::to_string(moved_ema) + ")");
+}
+
 }  // namespace
 
 int main() {
@@ -1112,6 +1200,9 @@ int main() {
         test_foot_fk_fallback_uses_last_anchor(); std::printf("[ok] foot: FK fallback synthesizes ankle/toe from last anchor\n");
         test_foot_fk_fallback_needs_seed();       std::printf("[ok] foot: FK fallback requires a seeded anchor\n");
         test_keypoint_format_assert();            std::printf("[ok] Halpe26 keypoint-format assertion\n");
+        test_one_euro_quat_first_frame_snaps();   std::printf("[ok] One Euro rotation: first frame snaps\n");
+        test_one_euro_quat_invalid_holds_prev();  std::printf("[ok] One Euro rotation: invalid holds prev, ctx untouched\n");
+        test_one_euro_quat_static_below_ema();    std::printf("[ok] One Euro rotation: at-rest jitter < EMA response\n");
         std::puts("test_tracker_extract ok");
         return 0;
     } catch (const std::exception& e) {
