@@ -109,6 +109,13 @@ void print_help() {
         "  --no-3d-kalman            disable 3D Kalman smoothing\n"
         "  --no-3d-ik                disable 3D IK projection\n"
         "  --vr-extract-event-driven react to each 3D frame (lower VR latency)\n"
+        "  --vr-no-one-euro          use fixed-alpha EMA instead of One Euro smoothing\n"
+        "  --vr-pos-mincutoff F      One Euro position at-rest cutoff Hz (default 1.0; lower=smoother)\n"
+        "  --vr-pos-beta F           One Euro position motion responsiveness (default 4.0)\n"
+        "  --vr-pos-dcutoff F        One Euro position speed-estimate cutoff Hz (default 1.0)\n"
+        "  --vr-quat-mincutoff F     One Euro rotation at-rest cutoff Hz (default 1.5)\n"
+        "  --vr-quat-beta F          One Euro rotation motion responsiveness (default 1.5)\n"
+        "  --vr-quat-dcutoff F       One Euro rotation speed-estimate cutoff Hz (default 1.0)\n"
         "\n"
         "SlimeVR native Firmware UDP output (requires --enable-3d + --keypoint-format=halpe26):\n"
         "  --slimevr-out             enable the native Firmware UDP publisher (10 trackers)\n"
@@ -572,6 +579,16 @@ int main(int argc, char** argv) {
             // architecture as quat_smooth.
             tex_opts.pos_smooth      = static_cast<float>(opts.vmt_pos_smooth);
             tex_opts.event_driven    = opts.vr_extract_event_driven;
+            // One Euro (speed-adaptive) smoothing — default path. When on,
+            // quat_smooth/pos_smooth above are ignored. Feeds both outputs +
+            // WebUI (single producer).
+            tex_opts.one_euro        = opts.vr_one_euro;
+            tex_opts.pos_one_euro    = {static_cast<float>(opts.vr_pos_mincutoff),
+                                        static_cast<float>(opts.vr_pos_beta),
+                                        static_cast<float>(opts.vr_pos_dcutoff)};
+            tex_opts.quat_one_euro   = {static_cast<float>(opts.vr_quat_mincutoff),
+                                        static_cast<float>(opts.vr_quat_beta),
+                                        static_cast<float>(opts.vr_quat_dcutoff)};
             tracker_extractor = std::make_unique<fitra::slimevr::TrackerExtractor>(
                 *bus3d, *slime_tracker_bus, tex_opts);
             tracker_extractor->start();

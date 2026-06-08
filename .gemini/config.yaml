@@ -1,0 +1,24 @@
+# Gemini Code Assist 設定（GitHub App）
+# 参照: https://docs.cloud.google.com/gemini/docs/code-review/customize-repo-review
+have_fun: false
+
+# レビュー対象外（生成物・依存・大きなバイナリ）
+ignore_patterns:
+  - "cpp/build/**"
+  - "**/_deps/**"
+  - "outputs/**"
+  - "**/*.engine"
+  - "**/*.onnx"
+  - "python/.venv/**"
+
+code_review:
+  disable: false
+  # MEDIUM 以上の指摘のみ投稿（ノイズ抑制）
+  comment_severity_threshold: MEDIUM
+  # コメント数の上限（-1 で無制限）
+  max_review_comments: -1
+  pull_request_opened:
+    help: false
+    summary: true
+    code_review: true
+    include_drafts: false
