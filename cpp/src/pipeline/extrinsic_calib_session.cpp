@@ -204,18 +204,20 @@ bool ExtrinsicCalibSession::solve_and_write(std::string& err) {
         return false;
     }
 
-    // Convert every solved T_cam<-world from the VMT (Y-up) world frame the
-    // solver produced into the fitra (Z-up) world frame at this single
-    // boundary, so the written file, the live WebUI JSON (extrinsics_json),
-    // and the hot-swapped Triangulator all agree on Z-up. The per-face
-    // T_marker<-controller (X) is frame-independent and left untouched.
-    for (auto& ce : sol.cameras) ce.T_cam_world = to_fitra_world(ce.T_cam_world);
-    for (auto& fs : sol.faces)   fs.T_cam_world = to_fitra_world(fs.T_cam_world);
+    // The solver works in the VMT (Y-up) world frame the controller poses live
+    // in. Keep `solution_` (→ extrinsics_json → the /extrinsic-calib scene) in
+    // that frame: that verification scene overlays the solved cameras with the
+    // live HMD/controller poses (also VMT Y-up) and a floor at Y=0, so the
+    // cameras must stay in the same frame as the poses. Only the *persisted*
+    // YAML is re-expressed into the fitra (Z-up) world frame below, since the
+    // downstream pipeline (triangulation, IK, main ws3d viewer via the
+    // hot-swap that reloads the written file, SlimeVR output) assumes Z-up.
 
     // Build the output CalibrationSet: copy intrinsics, fill in extrinsics.
     lift::CalibrationSet result = cfg_.intrinsics;
-    // Extrinsics are now in the fitra Z-up world frame, so label the file
-    // accordingly regardless of what the intrinsics source claimed.
+    // Persisted extrinsics are converted to the fitra Z-up world frame below,
+    // so label the file accordingly regardless of what the intrinsics source
+    // claimed.
     result.coordinate_system = "world: x/y measured on floor, z up; extrinsics are T_cw";
     for (auto& cam : result.cameras) cam.has_extrinsics = false;
 
@@ -227,7 +229,8 @@ bool ExtrinsicCalibSession::solve_and_write(std::string& err) {
         auto& cam = result.cameras[ce.cam_index];
         cam.has_extrinsics = true;
         cam.extrinsics.method = "controller_marker_handeye";
-        cam.extrinsics.T_cw = cv::Mat(ce.T_cam_world).clone();  // 4x4 CV_64F
+        // VMT (Y-up) world → fitra (Z-up) world, persisted-file only.
+        cam.extrinsics.T_cw = cv::Mat(to_fitra_world(ce.T_cam_world)).clone();  // 4x4 CV_64F
         cv::Mat R = cam.extrinsics.T_cw(cv::Rect(0, 0, 3, 3));
         cv::Mat t = cam.extrinsics.T_cw(cv::Rect(3, 0, 1, 3));
         cv::Mat c = -R.t() * t;

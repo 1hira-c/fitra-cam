@@ -251,6 +251,26 @@ void test_solve_and_write() {
     CHECK(ex.find("\"id\":\"cam1\"") != std::string::npos);
     CHECK(ex.find("\"T_cam_world\":[") != std::string::npos);
     CHECK(ex.find("\"center\":[") != std::string::npos);
+
+    // extrinsics_json feeds the /extrinsic-calib verification scene, which
+    // overlays the cameras with the live HMD/controller poses in the VMT (Y-up)
+    // frame. It must therefore stay UN-converted (VMT frame), unlike the
+    // persisted file (e0, Z-up). Lock that cam0's reported centre matches the
+    // VMT-frame centre of the ground-truth Tcw[0], not the Z-up file centre.
+    const std::string key = "\"center\":[";
+    auto kpos = ex.find(key);
+    cv::Vec3d c_json{};
+    CHECK(kpos != std::string::npos);
+    if (kpos != std::string::npos) {
+        std::sscanf(ex.c_str() + kpos + key.size(), "%lf,%lf,%lf",
+                    &c_json[0], &c_json[1], &c_json[2]);
+    }
+    cv::Matx33d Rg(Tcw[0](0,0),Tcw[0](0,1),Tcw[0](0,2),
+                   Tcw[0](1,0),Tcw[0](1,1),Tcw[0](1,2),
+                   Tcw[0](2,0),Tcw[0](2,1),Tcw[0](2,2));
+    cv::Vec3d tg(Tcw[0](0,3), Tcw[0](1,3), Tcw[0](2,3));
+    cv::Vec3d c_vmt = -(Rg.t() * tg);
+    CHECK_LT(cv::norm(c_json - c_vmt), 1e-4);
 }
 
 // 3) calib_io write/read round-trip with extrinsics.

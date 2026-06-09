@@ -152,15 +152,21 @@ extrinsic(A,B) = T_camA←world ∘ (T_camB←world)⁻¹
   整合してれば成立するので Raw に拘る必要はなく、Standing は**床基準 up がタダで付く** (floor
   plane の旨味) ぶん有利。**条件: セッション中に recenter しない** (Standing は再レベリングで
   原点が飛ぶ ← 既出の「時間近接・1 セッション」不変条件と同じ)。
-- **出力 frame は fitra Z-up へ変換して書き出す** (2026-06-09 追記)。上記のとおり
-  hand-eye の解 `Z = T_cam←world` は controller pose と同じ **VMT/SteamVR Y-up** frame で出る
-  が、floor 較正・triangulation・IK・WebUI 3D viewer・SlimeVR 出力はすべて **fitra Z-up**
-  (`world: x/y on floor, z up`) を前提にする。Y-up のまま書くと viewer で床が垂直に表示され
-  (カメラ中心 z が負になる)、live 3D 全体が誤った frame に乗る。そこで `solve_and_write` の
-  単一境界で `T_cw` に基底変換 `M` を右から掛けて Z-up へ再表現する (`M`: fitra 座標→VMT 座標
-  `(x,y,z)→(x,z,-y)` = `world_pos_to_vmt` の回転 Rx(−90°)。世界軸の付け替えなのでカメラは動かず、
-  相対 extrinsic は不変)。`coordinate_system` ラベルも z-up へ上書きする。viewer だけ直す案は
-  不採用 — live 3D / SlimeVR 出力も同じ誤 frame に乗るため、書き出し側で直すのが正しい階層。
+- **永続化する extrinsics は fitra Z-up へ変換、検証シーンは VMT Y-up のまま** (2026-06-09 追記)。
+  hand-eye の解 `Z = T_cam←world` は controller pose と同じ **VMT/SteamVR Y-up** frame で出る。
+  ここで frame の用途が 2 系統に分かれる:
+  - **`/extrinsic-calib` の検証シーン** (`scene.js`) は `/api/excal/extrinsics` のカメラと
+    `/api/excal/poses` の live HMD/コントローラ姿勢を**同じ frame に重ねて**「カメラが実際に
+    振った位置に出るか」を確認する道具。live 姿勢は VMT Y-up・床は Y=0 なので、**カメラも VMT
+    Y-up のまま**でないと両者が食い違う。よって `solution_` → `extrinsics_json` は無変換。
+  - **永続化 YAML / downstream** (triangulation・IK・メイン ws3d viewer・SlimeVR 出力、および
+    solve 後にファイルを読み直す live hot-swap) はすべて **fitra Z-up** 前提。Y-up のまま書くと
+    床が垂直 (カメラ中心 z が負) になり全体が誤 frame に乗る。
+  したがって変換は **`solve_and_write` で `result.cameras[].T_cw` を作るときだけ** `T_cw` に基底
+  変換 `M` を右から掛けて Z-up へ再表現する (`M`: fitra 座標→VMT 座標 `(x,y,z)→(x,z,-y)` =
+  `world_pos_to_vmt` の回転 Rx(−90°)。世界軸の付け替えなのでカメラは動かず相対 extrinsic は不変)。
+  `coordinate_system` ラベルも z-up へ上書き。検証シーンごと Z-up に倒す案は不採用 — live 姿勢
+  overlay も変換が要り、かつ SteamVR が見せる姿勢と乖離するため、検証は VMT frame が自然。
 - **OpenVR 取得は送信側 (`vmt_manager`) で `fPredictedSecondsToPhotonsFromNow = 0`** (予測誤差を
   消す)。静止取得なので Link/Air Link の遅延は空間誤差に化けない。
 - **取得サンプルのゲート**: **`bPoseIsValid && eTrackingResult == Running_OK`**。現スキーマは

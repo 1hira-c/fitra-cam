@@ -76,16 +76,22 @@ drift 実測リファレンスにも使える。未実装・設計フェーズ�
 → [research/floor-apriltag-sfm-map.md](../research/floor-apriltag-sfm-map.md)
 (設計doc 案D に相互リンク: [design/pose-3d-controller-marker-extrinsic.md](../design/pose-3d-controller-marker-extrinsic.md))
 
-### 2026-06-09 — hand-eye extrinsics を fitra Z-up world frame で書き出し
+### 2026-06-09 — hand-eye extrinsics を fitra Z-up で書き出し (検証シーンは VMT Y-up 維持)
 controller-marker hand-eye の解 `T_cam←world` は controller pose と同じ VMT/SteamVR **Y-up** frame
-で出るため、Z-up 前提の WebUI 3D viewer で床が垂直に表示され (カメラ中心 z が負)、live 3D / SlimeVR
-出力も誤った frame に乗っていた。`ExtrinsicCalibSession::solve_and_write` の単一境界で各 `T_cw` に
-基底変換 (`world_pos_to_vmt` の回転 Rx(−90°) の逆 = 世界軸の付け替え) を右から掛け、fitra Z-up へ
-再表現してから書き出すよう修正。`coordinate_system` ラベルも z-up へ上書き。世界軸の回転なので相対
-extrinsic・基線長は不変、絶対姿勢だけが Z-up に揃う。`extrinsics_json` (WebUI live preview) も同じ
-変換済み解を参照。`test_extrinsic_calib_session` に「絶対 `T_cw` が ground truth×basis change と一致
-(回転 ~0°)・未変換とは ~90° 異なる・ラベルが z-up」を固定。詳細は
+で出るため、Z-up 前提の downstream (triangulation・IK・メイン ws3d viewer・SlimeVR・solve 後の live
+hot-swap) で床が垂直に表示され (カメラ中心 z が負) 誤った frame に乗っていた。`solve_and_write` で
+**永続化 YAML を作るときだけ** 各 `T_cw` に基底変換 (`world_pos_to_vmt` の回転 Rx(−90°) の逆 = 世界軸
+の付け替え) を右から掛け fitra Z-up へ再表現し、`coordinate_system` ラベルも z-up へ上書き。一方
+`/extrinsic-calib` の 3D 検証シーン (`scene.js`) は `/api/excal/extrinsics` のカメラと
+`/api/excal/poses` の live HMD/コントローラ姿勢を同一 frame に重ねる道具で、live 姿勢が VMT Y-up・床
+Y=0 のため、`extrinsics_json` (=`solution_`) は **無変換 (VMT Y-up) のまま** 維持する。世界軸の回転
+なので相対 extrinsic・基線長は不変、永続化側の絶対姿勢だけが Z-up に揃う。`test_extrinsic_calib_session`
+に「書き出し `T_cw` が ground truth×basis change と一致 (回転 ~0°)・未変換とは ~90° 異なる・ラベルが
+z-up」と「`extrinsics_json` の cam 中心が VMT frame のまま」を固定。詳細は
 `docs/design/pose-3d-controller-marker-extrinsic.md`。
+
+> 注: 当初 `extrinsics_json` も Z-up に変換したが、検証シーンでカメラだけ Z-up・live 姿勢が Y-up と
+> なりカメラが別位置に出る回帰を生んだため、変換を永続化 YAML 限定へ修正 (同日)。
 
 ### 2026-06-09 — subject calibration の角度判定を pre-IK skeleton 化
 subject calib の `PoseRecognizer` が live publish と同じ post-IK skeleton を見ていたため、身長 prior
