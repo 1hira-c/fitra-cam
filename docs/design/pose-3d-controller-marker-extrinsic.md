@@ -56,6 +56,15 @@ extrinsic (相対 6DoF) が要る。現状リポジトリにカメラ extrinsic 
 - 代償: **VR world を連結基準に使う = Quest tracking 誤差が inter-camera extrinsic に乗る**。
   案B の「Quest を外す」逃げ道は共視不可で閉じた。この劣化は飲む前提とし、運用で絞り取る。
 
+### 案D: 床 + 可搬スタンドの AprilTag マップを作り各カメラを localize — 後発の代替 (検討中)
+
+- **没ではない**。案A/案B の却下理由 (1.2m で同時共視不能 / BA に共視経路が必要) を、**マップ
+  構築と各カメラ localize の時間分離**で迂回する。各カメラは相手カメラではなく静的マーカーマップに
+  登録されるので共視不要。VR を extrinsic チェーンから外せる = 案C 律速の SLAM drift 項が消える。
+- 案C を潰すものではなく、**初期設定時に選べる方式の 1 つ**。VR 非起動環境・高再現性・案C の
+  drift 実測リファレンスとして価値がある。
+- 詳細・比較・未解決論点 → [research/floor-apriltag-sfm-map.md](../research/floor-apriltag-sfm-map.md)。
+
 ## 採用設計
 
 ### 連結原理 (同時可視なしでカメラを繋ぐ)

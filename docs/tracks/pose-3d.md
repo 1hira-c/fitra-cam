@@ -67,6 +67,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-09 — extrinsic (研究) — 床 AprilTag SfM マップ方式を検討
+共視不要の静的アンカー代替を整理。床 + 可搬スタンド (壁不要) に大判 AprilTag を配置し、スマホ全景
+撮影で SfM マップを自動復元 → 各カメラを共通マップに localize する。案A/案B の却下理由 (同時共視不能
+/ BA 共視経路) をマップ構築と localize の時間分離で迂回し、VR を外すことで案C 律速の Quest SLAM
+drift 項を誤差バジェットから消せる。案C を潰さず初期設定で選べる方式の 1 つとして位置づけ、案C の
+drift 実測リファレンスにも使える。未実装・設計フェーズ前。
+→ [research/floor-apriltag-sfm-map.md](../research/floor-apriltag-sfm-map.md)
+(設計doc 案D に相互リンク: [design/pose-3d-controller-marker-extrinsic.md](../design/pose-3d-controller-marker-extrinsic.md))
+
 ### 2026-06-09 — hand-eye extrinsics を fitra Z-up world frame で書き出し
 controller-marker hand-eye の解 `T_cam←world` は controller pose と同じ VMT/SteamVR **Y-up** frame
 で出るため、Z-up 前提の WebUI 3D viewer で床が垂直に表示され (カメラ中心 z が負)、live 3D / SlimeVR
