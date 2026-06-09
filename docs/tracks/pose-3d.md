@@ -67,6 +67,17 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-10 — subject calib の drift ゲートを post-IK 値へ戻す (pose 判定不能を修正)
+2026-06-09 の pre-IK skeleton 化で、calibration tap に渡す `bone_drift_pct` まで pre-IK の
+measured 値に変えてしまい、`PoseRecognizer` の `max_bone_drift_pct` (~10%) ゲートを毎フレーム超過
+→ ポーズが永久に検出されず IK 較正に入れない回帰を生んでいた (身長入力済みでも不可)。post-IK
+skeleton は bone 長が model にクランプされ drift ≈ 0 (=従来動いていた緩いゲート) なのに対し、生の
+pre-IK 三角測量は容易に 10% を超えるのが原因。**角度の算出元は measured (pre-IK) skeleton のまま**
+(hinge clamp バイアス回避は維持) で、**tap に渡す drift だけ post-IK 値へ戻す**よう
+`MultiCameraDriver::maybe_update_3d` を修正。measured skeleton のコピーは tap がある時だけ取得し
+live path のコストは増やさない。`test_pose_recognizer` に「有効な T-pose は低 drift で in_band、
+高 drift では `bone_drift` 軸で reject」を固定。
+
 ### 2026-06-09 — extrinsic (研究) — 床 AprilTag SfM マップ方式を検討
 共視不要の静的アンカー代替を整理。床 + 可搬スタンド (壁不要) に大判 AprilTag を配置し、スマホ全景
 撮影で SfM マップを自動復元 → 各カメラを共通マップに localize する。案A/案B の却下理由 (同時共視不能

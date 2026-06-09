@@ -383,35 +383,40 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         }
         skel = kalman_.update(skel, dt_s);
     }
-    // Subject calibration pose recognition must see the measured 3D pose
-    // before IK length/hinge projection. Otherwise a height prior or hinge
-    // clamp can manufacture elbow/knee flexion that the subject is not
-    // actually holding (for example a straight arm reported as bent). The tap
-    // fires before ik_.update() below, so `skel` is still the measured pose --
-    // pass it directly rather than copying.
+    // Subject calibration classifies the pose from anatomical joint *angles* on
+    // the measured (pre-IK) skeleton: feeding the post-IK skeleton would let a
+    // hinge/length clamp manufacture elbow/knee flexion the subject is not
+    // actually holding (a straight arm reported as bent). So capture the
+    // measured skeleton before ik_.update() mutates it below -- only when a tap
+    // is actually listening, to avoid the copy on the normal live path.
+    //
+    // The drift value paired with it, however, must be the *post-IK*
+    // bone_drift_pct, not the pre-IK one. PoseRecognizer gates on
+    // max_bone_drift_pct (~10%); the post-IK skeleton is clamped to the model so
+    // its drift is ~0 (an effectively lenient gate, which is how the wizard was
+    // validated), whereas raw pre-IK triangulation easily drifts >10% and would
+    // trip the gate every frame -- making pose hold impossible.
     Skeleton3DTapFn skel_tap_local;
     {
         std::lock_guard<std::mutex> g(tap_mu_);
         skel_tap_local = skeleton3d_tap_;
     }
-    // bone_drift_pct() takes ik_'s mutex and walks every bone, so compute it at
-    // most once per role: the measured pre-IK value for the calibration tap,
-    // and the post-IK value for the published stats when IK is enabled.
-    double drift = 0.0;
-    bool have_drift = false;
-    if (skel_tap_local && tri.valid_joints > 0) {
-        drift = ik_.bone_drift_pct(skel);
-        have_drift = true;
-        skel_tap_local(skel, drift);
-    }
+    const bool tap_active = skel_tap_local && tri.valid_joints > 0;
+    infer::Skeleton3D measured_skel;
+    if (tap_active) measured_skel = skel;
 
-    // Published stats report post-IK drift when IK is enabled; the calibration
-    // tap above already consumed the measured pre-IK drift.
+    double drift = 0.0;
     if (threed_.ik_enabled) {
         skel = ik_.update(skel);
         drift = ik_.bone_drift_pct(skel);
-    } else if (!have_drift) {
+    } else if (ik_.locked()) {
         drift = ik_.bone_drift_pct(skel);
+    }
+
+    // Calibration tap: measured (pre-IK) skeleton for angles + post-IK drift for
+    // the gate. Published stats below use the same post-IK drift.
+    if (tap_active) {
+        skel_tap_local(measured_skel, drift);
     }
 
     auto t1 = std::chrono::steady_clock::now();
