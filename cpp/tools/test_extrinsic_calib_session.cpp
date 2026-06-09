@@ -222,6 +222,28 @@ void test_solve_and_write() {
     CHECK_LT(trans_dist(rel_est, rel_gt), 1e-6);
     CHECK_LT(fitra::lift::rotation_angle_deg(rel_est, rel_gt), 1e-4);
 
+    // The session re-expresses the solved extrinsics from the VMT (Y-up) world
+    // frame the controller poses live in into the fitra (Z-up) world frame, by
+    // right-multiplying T_cw with the basis change M (fitra coords -> VMT
+    // coords: (x,y,z)->(x,z,-y)). The relative extrinsic above is invariant to
+    // this; here lock that the absolute T_cw is the ground truth re-expressed
+    // in Z-up. The change is rotation-only (M has no translation), so compare
+    // rotations: each e_c must match Tcw[c]*M (~0 deg) and visibly differ from
+    // the un-converted Tcw[c] (~90 deg) so an accidental identity no-op fails.
+    const cv::Matx44d vmt_to_fitra{
+        1,  0, 0, 0,
+        0,  0, 1, 0,
+        0, -1, 0, 0,
+        0,  0, 0, 1};
+    CHECK_LT(fitra::lift::rotation_angle_deg(e0, Tcw[0] * vmt_to_fitra), 1e-4);
+    CHECK_LT(fitra::lift::rotation_angle_deg(e1, Tcw[1] * vmt_to_fitra), 1e-4);
+    CHECK(fitra::lift::rotation_angle_deg(e0, Tcw[0]) > 80.0);
+    CHECK(fitra::lift::rotation_angle_deg(e1, Tcw[1]) > 80.0);
+
+    // The written file must advertise the Z-up fitra frame, not "vmt_standing"
+    // or whatever the intrinsics source claimed.
+    CHECK(loaded.coordinate_system.find("z up") != std::string::npos);
+
     // extrinsics_json carries the solved per-camera 6DoF for the 3D scene.
     std::string ex = s.extrinsics_json();
     CHECK(ex.find("\"solved\":true") != std::string::npos);

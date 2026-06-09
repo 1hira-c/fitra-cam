@@ -67,6 +67,17 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-09 — hand-eye extrinsics を fitra Z-up world frame で書き出し
+controller-marker hand-eye の解 `T_cam←world` は controller pose と同じ VMT/SteamVR **Y-up** frame
+で出るため、Z-up 前提の WebUI 3D viewer で床が垂直に表示され (カメラ中心 z が負)、live 3D / SlimeVR
+出力も誤った frame に乗っていた。`ExtrinsicCalibSession::solve_and_write` の単一境界で各 `T_cw` に
+基底変換 (`world_pos_to_vmt` の回転 Rx(−90°) の逆 = 世界軸の付け替え) を右から掛け、fitra Z-up へ
+再表現してから書き出すよう修正。`coordinate_system` ラベルも z-up へ上書き。世界軸の回転なので相対
+extrinsic・基線長は不変、絶対姿勢だけが Z-up に揃う。`extrinsics_json` (WebUI live preview) も同じ
+変換済み解を参照。`test_extrinsic_calib_session` に「絶対 `T_cw` が ground truth×basis change と一致
+(回転 ~0°)・未変換とは ~90° 異なる・ラベルが z-up」を固定。詳細は
+`docs/design/pose-3d-controller-marker-extrinsic.md`。
+
 ### 2026-06-09 — subject calibration の角度判定を pre-IK skeleton 化
 subject calib の `PoseRecognizer` が live publish と同じ post-IK skeleton を見ていたため、身長 prior
 や hinge/length clamp が作った補正後の関節角で hold 判定していた。腕を伸ばしていても肘 flex が

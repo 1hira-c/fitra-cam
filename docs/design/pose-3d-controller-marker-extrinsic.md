@@ -143,6 +143,15 @@ extrinsic(A,B) = T_camA←world ∘ (T_camB←world)⁻¹
   整合してれば成立するので Raw に拘る必要はなく、Standing は**床基準 up がタダで付く** (floor
   plane の旨味) ぶん有利。**条件: セッション中に recenter しない** (Standing は再レベリングで
   原点が飛ぶ ← 既出の「時間近接・1 セッション」不変条件と同じ)。
+- **出力 frame は fitra Z-up へ変換して書き出す** (2026-06-09 追記)。上記のとおり
+  hand-eye の解 `Z = T_cam←world` は controller pose と同じ **VMT/SteamVR Y-up** frame で出る
+  が、floor 較正・triangulation・IK・WebUI 3D viewer・SlimeVR 出力はすべて **fitra Z-up**
+  (`world: x/y on floor, z up`) を前提にする。Y-up のまま書くと viewer で床が垂直に表示され
+  (カメラ中心 z が負になる)、live 3D 全体が誤った frame に乗る。そこで `solve_and_write` の
+  単一境界で `T_cw` に基底変換 `M` を右から掛けて Z-up へ再表現する (`M`: fitra 座標→VMT 座標
+  `(x,y,z)→(x,z,-y)` = `world_pos_to_vmt` の回転 Rx(−90°)。世界軸の付け替えなのでカメラは動かず、
+  相対 extrinsic は不変)。`coordinate_system` ラベルも z-up へ上書きする。viewer だけ直す案は
+  不採用 — live 3D / SlimeVR 出力も同じ誤 frame に乗るため、書き出し側で直すのが正しい階層。
 - **OpenVR 取得は送信側 (`vmt_manager`) で `fPredictedSecondsToPhotonsFromNow = 0`** (予測誤差を
   消す)。静止取得なので Link/Air Link の遅延は空間誤差に化けない。
 - **取得サンプルのゲート**: **`bPoseIsValid && eTrackingResult == Running_OK`**。現スキーマは

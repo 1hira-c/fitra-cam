@@ -24,6 +24,25 @@ cv::Matx44d controller_pose(const ControllerObservation& c) {
     return lift::pose_from_pos_quat(c.x, c.y, c.z, c.qx, c.qy, c.qz, c.qw);
 }
 
+// The controller poses fed to the hand-eye solver come from the VR runtime in
+// the VMT/SteamVR world frame (Y-up RH, X-right, Z-back; see
+// controller_pose_receiver.hpp), so the solved T_cam<-world lands in those
+// axes. Everything downstream -- floor calibration, triangulation, IK, the
+// WebUI 3D viewer, SlimeVR output -- assumes the fitra world frame (Z-up RH,
+// X-right, Y-forward). Re-express the *world* axes without moving the cameras
+// by right-multiplying with the basis change. This is diag4(M) where
+// M maps fitra coords to VMT coords ((x,y,z)->(x,z,-y), i.e. the inverse of
+// vmt::world_pos_to_vmt's rotation Rx(-90 deg)).
+const cv::Matx44d kVmtWorldToFitra{
+    1,  0, 0, 0,
+    0,  0, 1, 0,
+    0, -1, 0, 0,
+    0,  0, 0, 1};
+
+cv::Matx44d to_fitra_world(const cv::Matx44d& T_cam_vmtworld) {
+    return T_cam_vmtworld * kVmtWorldToFitra;
+}
+
 }  // namespace
 
 ExtrinsicCalibSession::ExtrinsicCalibSession(ExtrinsicCalibConfig cfg)
@@ -185,9 +204,19 @@ bool ExtrinsicCalibSession::solve_and_write(std::string& err) {
         return false;
     }
 
+    // Convert every solved T_cam<-world from the VMT (Y-up) world frame the
+    // solver produced into the fitra (Z-up) world frame at this single
+    // boundary, so the written file, the live WebUI JSON (extrinsics_json),
+    // and the hot-swapped Triangulator all agree on Z-up. The per-face
+    // T_marker<-controller (X) is frame-independent and left untouched.
+    for (auto& ce : sol.cameras) ce.T_cam_world = to_fitra_world(ce.T_cam_world);
+    for (auto& fs : sol.faces)   fs.T_cam_world = to_fitra_world(fs.T_cam_world);
+
     // Build the output CalibrationSet: copy intrinsics, fill in extrinsics.
     lift::CalibrationSet result = cfg_.intrinsics;
-    if (result.coordinate_system.empty()) result.coordinate_system = "vmt_standing";
+    // Extrinsics are now in the fitra Z-up world frame, so label the file
+    // accordingly regardless of what the intrinsics source claimed.
+    result.coordinate_system = "world: x/y measured on floor, z up; extrinsics are T_cw";
     for (auto& cam : result.cameras) cam.has_extrinsics = false;
 
     for (const auto& ce : sol.cameras) {
