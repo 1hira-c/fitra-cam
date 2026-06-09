@@ -370,6 +370,10 @@ void CrowServer::set_extrinsic_calib_session(pipeline::ExtrinsicCalibSession* se
     excal_session_ = session;
 }
 
+void CrowServer::set_extrinsic_calib_solved_callback(ExcalSolvedFn fn) {
+    excal_solved_fn_ = std::move(fn);
+}
+
 void CrowServer::set_native_publisher(slimevr::NativePublisher* publisher) {
     native_publisher_ = publisher;
 }
@@ -984,7 +988,6 @@ void CrowServer::stop() {
 }
 
 void CrowServer::register_calibration_routes_() {
-    if (!calib_session_) return;
     auto& app = impl_->app;
     auto* session = calib_session_;
     auto defaults = calib_defaults_;
@@ -1013,6 +1016,40 @@ void CrowServer::register_calibration_routes_() {
         r.set_header("Content-Type", guess_content_type(canon_req));
         return r;
     });
+
+    if (!session) {
+        auto unavailable = []() {
+            return json_response(
+                "{\"ok\":false,\"available\":false,\"state\":\"unavailable\","
+                "\"err\":\"subject calibration requires --enable-3d with exactly 2 cameras\"}",
+                503);
+        };
+        CROW_ROUTE(app, "/api/calib/state")
+        ([unavailable]() {
+            return unavailable();
+        });
+        CROW_ROUTE(app, "/api/calib/preflight").methods(crow::HTTPMethod::POST)
+        ([unavailable](const crow::request& /*req*/) {
+            return unavailable();
+        });
+        CROW_ROUTE(app, "/api/calib/start").methods(crow::HTTPMethod::POST)
+        ([unavailable](const crow::request& /*req*/) {
+            return unavailable();
+        });
+        CROW_ROUTE(app, "/api/calib/cancel").methods(crow::HTTPMethod::POST)
+        ([unavailable](const crow::request& /*req*/) {
+            return unavailable();
+        });
+        CROW_ROUTE(app, "/api/calib/retake").methods(crow::HTTPMethod::POST)
+        ([unavailable](const crow::request& /*req*/) {
+            return unavailable();
+        });
+        CROW_ROUTE(app, "/api/calib/approve").methods(crow::HTTPMethod::POST)
+        ([unavailable](const crow::request& /*req*/) {
+            return unavailable();
+        });
+        return;
+    }
 
     CROW_ROUTE(app, "/api/calib/state")
     ([session]() {
@@ -1098,6 +1135,7 @@ void CrowServer::register_extrinsic_calib_routes_() {
     if (!excal_session_) return;
     auto& app = impl_->app;
     auto* session = excal_session_;
+    auto solved_fn = excal_solved_fn_;
 
     std::filesystem::path excal_root{opts_.excal_static_dir};
     CROW_ROUTE(app, "/extrinsic-calib")
@@ -1184,9 +1222,12 @@ void CrowServer::register_extrinsic_calib_routes_() {
     });
 
     CROW_ROUTE(app, "/api/excal/solve").methods(crow::HTTPMethod::POST)
-    ([session](const crow::request& /*req*/) {
+    ([session, solved_fn](const crow::request& /*req*/) {
         std::string err;
         bool ok = session->solve_and_write(err);
+        if (ok && solved_fn) {
+            ok = solved_fn(err);
+        }
         std::ostringstream o;
         // err can carry paths / OpenCV exception text → JSON-escape so a `"`
         // or backslash from `write failed: …` doesn't break the response body.

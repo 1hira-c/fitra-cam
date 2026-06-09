@@ -132,6 +132,21 @@ set_target_properties(fitra_test_triangulator PROPERTIES
 
 add_test(NAME test_triangulator COMMAND fitra_test_triangulator)
 
+add_executable(fitra_test_pose_recognizer
+    test_pose_recognizer.cpp
+)
+
+target_link_libraries(fitra_test_pose_recognizer PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_pose_recognizer PROPERTIES
+    OUTPUT_NAME "test_pose_recognizer"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_pose_recognizer COMMAND fitra_test_pose_recognizer)
+
 # Controller-marker extrinsic hand-eye solver — synthetic AX=ZB recovery,
 # relative-extrinsic identity, noisy robustness, under-sampled handling.
 add_executable(fitra_test_extrinsic_solver
@@ -196,6 +211,7 @@ target_link_libraries(fitra_test_crow_excal PRIVATE
 # CMAKE_SOURCE_DIR is the cpp/ tree; the web assets live at <repo>/web.
 target_compile_definitions(fitra_test_crow_excal PRIVATE
     FITRA_EXCAL_WEB_DIR="${CMAKE_SOURCE_DIR}/../web/extrinsic_calibration"
+    FITRA_SUBJECT_WEB_DIR="${CMAKE_SOURCE_DIR}/../web/subject_calibration"
 )
 
 set_target_properties(fitra_test_crow_excal PROPERTIES

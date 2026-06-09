@@ -166,6 +166,7 @@ async function refresh() {
   const collecting = s.state === "collecting";
   $("btn_start").disabled = collecting;
   $("btn_stop").disabled = !collecting;
+  $("btn_subject").disabled = s.state !== "solved";
 }
 
 $("btn_start").addEventListener("click", async () => {
@@ -181,9 +182,16 @@ $("btn_stop").addEventListener("click", async () => {
 $("btn_solve").addEventListener("click", async () => {
   setMsg($("ctrl_msg"), "solving…");
   const r = await postJSON("/api/excal/solve");
+  // On failure r.err is self-describing — either "solve/write failed: …" or
+  // "live 3D reload failed: …" when the extrinsics were written but the live
+  // Triangulator hot-swap did not — so surface it verbatim rather than always
+  // prefixing "solve failed" (which would wrongly imply nothing was written).
   setMsg($("ctrl_msg"),
-    r.ok ? "solved — extrinsics written" : `solve failed: ${r.err || ""}`, !r.ok);
+    r.ok ? "solved — live 3D reloaded" : (r.err || "solve failed"), !r.ok);
   refresh();
+});
+$("btn_subject").addEventListener("click", () => {
+  window.location.href = "/subject-calib";
 });
 
 refresh();

@@ -71,6 +71,14 @@ void MultiCameraDriver::set_skeleton3d_tap(Skeleton3DTapFn fn) {
     skeleton3d_tap_ = std::move(fn);
 }
 
+void MultiCameraDriver::set_triangulator(std::shared_ptr<lift::Triangulator> triangulator) {
+    if (!triangulator) {
+        throw std::invalid_argument("set_triangulator requires a non-null triangulator");
+    }
+    std::lock_guard<std::mutex> g(threed_mu_);
+    threed_.triangulator = std::move(triangulator);
+}
+
 void MultiCameraDriver::stop() {
     if (!worker_.joinable() && sources_.empty()) return;
     stop_.store(true);
@@ -302,7 +310,14 @@ void MultiCameraDriver::update_stats(CamState& cs,
 
 void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point now,
                                         std::chrono::system_clock::time_point wall_now) {
-    if (!threed_.triangulator || !threed_.bus) return;
+    std::shared_ptr<lift::Triangulator> triangulator;
+    Skeleton3DBus* bus = nullptr;
+    {
+        std::lock_guard<std::mutex> g(threed_mu_);
+        triangulator = threed_.triangulator;
+        bus = threed_.bus;
+    }
+    if (!triangulator || !bus) return;
     if (latest_snapshots_.size() < 2) return;
 
     std::chrono::steady_clock::time_point min_ts{};
@@ -342,7 +357,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         miss.stats.sync_miss = tri_sync_miss_;
         miss.stats.processed = tri_processed_;
         miss.stats.ik_locked = ik_.locked();
-        threed_.bus->update(miss);
+        bus->update(miss);
         for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
             last_3d_input_seqs_[i] = latest_snapshots_[i].seq;
         }
@@ -359,7 +374,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
             static_cast<int>(i), &snap.persons[0]});
     }
 
-    auto tri = threed_.triangulator->triangulate(observations);
+    auto tri = triangulator->triangulate(observations);
     infer::Skeleton3D skel = tri.skeleton;
     if (threed_.kalman_enabled) {
         double dt_s = 1.0 / 30.0;
@@ -368,27 +383,35 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         }
         skel = kalman_.update(skel, dt_s);
     }
-    // bone_drift_pct() takes ik_ 's mutex and walks every bone, so compute it
-    // exactly once on the skeleton that is actually published. With IK enabled
-    // the post-IK value is what we report, so the pre-IK computation the old
-    // ternary did was always discarded -- skip it.
-    double drift = 0.0;
-    if (threed_.ik_enabled) {
-        skel = ik_.update(skel);
-        drift = ik_.bone_drift_pct(skel);
-    } else if (ik_.locked()) {
-        drift = ik_.bone_drift_pct(skel);
-    }
-
-    // Skeleton tap (after IK so the calibration session sees the same
-    // drift the snapshot publishes).
+    // Subject calibration pose recognition must see the measured 3D pose
+    // before IK length/hinge projection. Otherwise a height prior or hinge
+    // clamp can manufacture elbow/knee flexion that the subject is not
+    // actually holding (for example a straight arm reported as bent). The tap
+    // fires before ik_.update() below, so `skel` is still the measured pose --
+    // pass it directly rather than copying.
     Skeleton3DTapFn skel_tap_local;
     {
         std::lock_guard<std::mutex> g(tap_mu_);
         skel_tap_local = skeleton3d_tap_;
     }
+    // bone_drift_pct() takes ik_'s mutex and walks every bone, so compute it at
+    // most once per role: the measured pre-IK value for the calibration tap,
+    // and the post-IK value for the published stats when IK is enabled.
+    double drift = 0.0;
+    bool have_drift = false;
     if (skel_tap_local && tri.valid_joints > 0) {
+        drift = ik_.bone_drift_pct(skel);
+        have_drift = true;
         skel_tap_local(skel, drift);
+    }
+
+    // Published stats report post-IK drift when IK is enabled; the calibration
+    // tap above already consumed the measured pre-IK drift.
+    if (threed_.ik_enabled) {
+        skel = ik_.update(skel);
+        drift = ik_.bone_drift_pct(skel);
+    } else if (!have_drift) {
+        drift = ik_.bone_drift_pct(skel);
     }
 
     auto t1 = std::chrono::steady_clock::now();
@@ -423,7 +446,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     out.stats.profile_quality_status = ik_.profile_quality_status();
     out.stats.processed = tri_processed_;
     out.stats.sync_miss = tri_sync_miss_;
-    threed_.bus->update(out);
+    bus->update(out);
     for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
         last_3d_input_seqs_[i] = latest_snapshots_[i].seq;
     }

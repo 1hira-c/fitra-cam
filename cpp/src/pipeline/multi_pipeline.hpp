@@ -34,7 +34,7 @@ namespace fitra::pipeline {
 class MultiCameraDriver {
 public:
     struct ThreeDConfig {
-        lift::Triangulator* triangulator = nullptr;
+        std::shared_ptr<lift::Triangulator> triangulator;
         Skeleton3DBus* bus = nullptr;
         double sync_window_ms = 15.0;
         bool kalman_enabled = true;
@@ -82,11 +82,15 @@ public:
     using FrameTapFn = std::function<void(std::size_t cam_idx,
                                           const cv::Mat& bgr,
                                           double ts_ms)>;
+    // Called with the filtered pre-IK 3D skeleton. Subject calibration uses
+    // anatomical joint angles from the measured pose; feeding the post-IK
+    // skeleton would let hinge/length clamps bias the hold detector.
     using Skeleton3DTapFn = std::function<void(const infer::Skeleton3D& skel,
                                                double bone_drift_pct)>;
 
     void set_frame_tap(FrameTapFn fn);
     void set_skeleton3d_tap(Skeleton3DTapFn fn);
+    void set_triangulator(std::shared_ptr<lift::Triangulator> triangulator);
 
     // For the calibration session approval flow: lets the API layer call
     // ik().reload_from_profile() once a new profile is approved.
@@ -112,6 +116,7 @@ private:
     ThreeDConfig         threed_;
     lift::SkeletonKalman kalman_;
     lift::IkSolver       ik_;
+    std::mutex           threed_mu_;
 
     // Tap callbacks. Loop reads these via a local snapshot to avoid holding
     // the mutex across the user callback.

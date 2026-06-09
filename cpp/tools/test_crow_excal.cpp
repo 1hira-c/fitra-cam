@@ -119,6 +119,9 @@ int main() {
 #ifdef FITRA_EXCAL_WEB_DIR
     opts.excal_static_dir = FITRA_EXCAL_WEB_DIR;
 #endif
+#ifdef FITRA_SUBJECT_WEB_DIR
+    opts.calib_static_dir = FITRA_SUBJECT_WEB_DIR;
+#endif
     fitra::web::CrowServer server(bus, nullptr, opts);
     server.set_extrinsic_calib_session(&session);
     server.set_hmd_pose_bus(&hmd_bus, 10000.0);
@@ -166,6 +169,21 @@ int main() {
         CHECK(body.find("\"tracking_result\":200") != std::string::npos);
         CHECK(body.find("\"timestamp_s\":13.25") != std::string::npos);
         CHECK(body.find("\"pos\":[-0.5,1,2.25]") != std::string::npos);
+
+#ifdef FITRA_SUBJECT_WEB_DIR
+        // Subject calibration UI is static and remains reachable even when
+        // the CalibrationSession is not attached (for example non-3D runs).
+        CHECK(http("GET", "/subject-calib", status, body));
+        CHECK(status == 200);
+        CHECK(body.find("Subject Profile Calibration") != std::string::npos);
+        CHECK(http("GET", "/subject-calib/app.js", status, body));
+        CHECK(status == 200);
+        CHECK(body.find("/api/calib/state") != std::string::npos);
+        CHECK(http("GET", "/api/calib/state", status, body));
+        CHECK(status == 503);
+        CHECK(body.find("\"available\":false") != std::string::npos);
+        CHECK(body.find("\"state\":\"unavailable\"") != std::string::npos);
+#endif
 
 #ifdef FITRA_EXCAL_WEB_DIR
         // Static frontend is served (collect page + 3D scene).

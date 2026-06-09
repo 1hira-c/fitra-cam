@@ -467,7 +467,7 @@ int main(int argc, char** argv) {
             return EXIT_FAILURE;
         }
 
-        std::unique_ptr<fitra::lift::Triangulator> triangulator;
+        std::shared_ptr<fitra::lift::Triangulator> triangulator;
         std::unique_ptr<fitra::pipeline::Skeleton3DBus> bus3d;
         // SlimeVR tracker snapshot bus + extractor thread. Always alive when
         // enable_3d so the WebUI orientation viz works without --slimevr-out.
@@ -475,13 +475,13 @@ int main(int argc, char** argv) {
         std::unique_ptr<fitra::slimevr::TrackerExtractor>  tracker_extractor;
         fitra::lift::SubjectProfile subject_profile;
         bool has_subject_profile = false;
+        fitra::lift::Triangulator::Options tri_opts;
+        tri_opts.kp_conf_thresh = kp_conf_thresh;
+        tri_opts.max_reproj_px = max_reproj_px;
         if (enable_3d) {
             FITRA_LOG_INFO("loading calibration: {}", calib_path);
             auto calib = fitra::lift::load_calibration(calib_path);
-            fitra::lift::Triangulator::Options tri_opts;
-            tri_opts.kp_conf_thresh = kp_conf_thresh;
-            tri_opts.max_reproj_px = max_reproj_px;
-            triangulator = std::make_unique<fitra::lift::Triangulator>(calib, tri_opts);
+            triangulator = std::make_shared<fitra::lift::Triangulator>(calib, tri_opts);
             triangulator->require_camera_ids(expected_camera_ids(n_cams));
             bus3d = std::make_unique<fitra::pipeline::Skeleton3DBus>();
             slime_tracker_bus = std::make_unique<fitra::slimevr::SlimeTrackerBus>();
@@ -511,7 +511,7 @@ int main(int argc, char** argv) {
         std::unique_ptr<fitra::pipeline::MultiCameraDriver> driver;
         if (enable_3d) {
             fitra::pipeline::MultiCameraDriver::ThreeDConfig cfg;
-            cfg.triangulator = triangulator.get();
+            cfg.triangulator = triangulator;
             cfg.bus = bus3d.get();
             cfg.sync_window_ms = sync_window_ms;
             cfg.kalman_enabled = kalman_3d;
@@ -534,11 +534,7 @@ int main(int argc, char** argv) {
         // or 3-camera runs rather than silently dropping cam2.
         std::unique_ptr<fitra::pipeline::CalibrationSession> calib_session;
         fitra::pipeline::CalibPreflight calib_defaults;
-        // The subject wizard and the extrinsic-calib collector both claim the
-        // single frame tap; --extrinsic-calib (gated mutually exclusive with
-        // --calibrate in validate_options) takes the tap, so suppress the
-        // subject wizard entirely while extrinsic calibration is active.
-        const bool calib_available = enable_3d && n_cams == 2 && !opts.excal_enabled;
+        const bool calib_available = enable_3d && n_cams == 2;
         if (calibrate_on_boot && !calib_available) {
             std::fprintf(stderr,
                 "--calibrate currently requires exactly 2 cameras (got %zu)\n",
@@ -581,7 +577,7 @@ int main(int argc, char** argv) {
 
             calib_defaults.subject_id = "";
             calib_defaults.subjects_dir = subjects_dir;
-            calib_defaults.calib_yaml   = calib_path;
+            calib_defaults.calib_yaml   = opts.excal_enabled ? opts.excal_out : calib_path;
             calib_defaults.det_engine   = det_engine_path;
             calib_defaults.pose_engine  = pose_engine_path;
             calib_defaults.recording_frames_per_cam = calib_frames_per_cam;
@@ -590,18 +586,16 @@ int main(int argc, char** argv) {
                                             ? guess_dump_tool_path().string()
                                             : calib_dump_tool;
 
-            driver->set_frame_tap(
-                [s = calib_session.get()](std::size_t cam, const cv::Mat& bgr, double ts) {
-                    s->on_frame(cam, bgr, ts);
-                });
             driver->set_skeleton3d_tap(
                 [s = calib_session.get()](const fitra::infer::Skeleton3D& skel, double drift) {
                     s->on_skeleton3d(skel, drift);
                 });
         }
 
-        // Controller-marker extrinsic calibration (parallel to the subject
-        // wizard; mutually exclusive with it). Receives the VR controller pose
+        // Controller-marker extrinsic calibration. Coexists with the subject
+        // wizard in the same process: the shared frame tap below routes frames
+        // to this collector while extrinsics are still collecting/solving, then
+        // to the subject recorder once solved. Receives the VR controller pose
         // from the unified VMT pose relay, taps camera frames into the
         // collection session, and solves + writes extrinsics at shutdown.
         // See docs/design/pose-3d-controller-marker-extrinsic.md.
@@ -635,23 +629,39 @@ int main(int argc, char** argv) {
             excal_session = std::make_unique<fitra::pipeline::ExtrinsicCalibSession>(
                 std::move(ec));
 
-            const double stale_ms = opts.excal_controller_stale_ms;
-            driver->set_frame_tap(
-                [s = excal_session.get(), bus = controller_pose_bus.get(), stale_ms]
-                (std::size_t cam, const cv::Mat& bgr, double ts) {
-                    auto snap = bus->snapshot(stale_ms);
-                    fitra::pipeline::ControllerObservation c;
-                    c.running_ok = !snap.stale && snap.pose.running_ok();
-                    c.x = snap.pose.x; c.y = snap.pose.y; c.z = snap.pose.z;
-                    c.qx = snap.pose.qx; c.qy = snap.pose.qy;
-                    c.qz = snap.pose.qz; c.qw = snap.pose.qw;
-                    c.ts_ms = ts;
-                    s->on_frame(cam, bgr, c);
-                });
             excal_session->start();
             FITRA_LOG_INFO("extrinsic-calib: collecting (faces={}, controller_role={}, out={}). "
                            "Stop the process to solve + write.",
                            opts.excal_faces, opts.excal_controller_role, opts.excal_out);
+        }
+
+        if (calib_session || excal_session) {
+            const double stale_ms = opts.excal_controller_stale_ms;
+            driver->set_frame_tap(
+                [calib = calib_session.get(),
+                 excal = excal_session.get(),
+                 bus = controller_pose_bus.get(),
+                 stale_ms]
+                (std::size_t cam, const cv::Mat& bgr, double ts) {
+                    if (excal) {
+                        const auto st = excal->state();
+                        if (st == fitra::pipeline::ExtrinsicCalibState::kCollecting ||
+                            st == fitra::pipeline::ExtrinsicCalibState::kSolving) {
+                            auto snap = bus->snapshot(stale_ms);
+                            fitra::pipeline::ControllerObservation c;
+                            c.running_ok = !snap.stale && snap.pose.running_ok();
+                            c.x = snap.pose.x; c.y = snap.pose.y; c.z = snap.pose.z;
+                            c.qx = snap.pose.qx; c.qy = snap.pose.qy;
+                            c.qz = snap.pose.qz; c.qw = snap.pose.qw;
+                            c.ts_ms = ts;
+                            excal->on_frame(cam, bgr, c);
+                            return;
+                        }
+                    }
+                    if (calib) {
+                        calib->on_frame(cam, bgr, ts);
+                    }
+                });
         }
 
         // Stop the driver worker before any session it taps into goes out of
@@ -828,6 +838,28 @@ int main(int argc, char** argv) {
             }
             if (excal_session) {
                 server->set_extrinsic_calib_session(excal_session.get());
+                if (enable_3d) {
+                    server->set_extrinsic_calib_solved_callback(
+                        [&, n_cams](std::string& err) {
+                            try {
+                                auto solved =
+                                    fitra::lift::load_calibration(opts.excal_out);
+                                auto next = std::make_shared<fitra::lift::Triangulator>(
+                                    solved, tri_opts);
+                                next->require_camera_ids(expected_camera_ids(n_cams));
+                                driver->set_triangulator(next);
+                                triangulator = std::move(next);
+                                FITRA_LOG_INFO(
+                                    "extrinsic-calib: live 3D reloaded from {}",
+                                    opts.excal_out);
+                                return true;
+                            } catch (const std::exception& e) {
+                                err = std::string("live 3D reload failed: ") + e.what();
+                                FITRA_LOG_ERROR("extrinsic-calib: {}", err);
+                                return false;
+                            }
+                        });
+                }
             }
             if (slime_pub) {
                 server->set_native_publisher(slime_pub.get());
@@ -902,13 +934,17 @@ int main(int argc, char** argv) {
         driver->stop();   // taps quiesce here — safe to read/solve the session
 
         if (excal_session) {
-            FITRA_LOG_INFO("extrinsic-calib: collected {} samples; solving...",
-                           excal_session->sample_count());
-            std::string err;
-            if (excal_session->solve_and_write(err)) {
-                FITRA_LOG_INFO("extrinsic-calib: wrote extrinsics to {}", opts.excal_out);
+            if (excal_session->state() == fitra::pipeline::ExtrinsicCalibState::kSolved) {
+                FITRA_LOG_INFO("extrinsic-calib: already solved; keeping {}", opts.excal_out);
             } else {
-                FITRA_LOG_ERROR("extrinsic-calib: solve/write failed: {}", err);
+                FITRA_LOG_INFO("extrinsic-calib: collected {} samples; solving...",
+                               excal_session->sample_count());
+                std::string err;
+                if (excal_session->solve_and_write(err)) {
+                    FITRA_LOG_INFO("extrinsic-calib: wrote extrinsics to {}", opts.excal_out);
+                } else {
+                    FITRA_LOG_ERROR("extrinsic-calib: solve/write failed: {}", err);
+                }
             }
         }
         return EXIT_SUCCESS;

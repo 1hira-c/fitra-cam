@@ -1,14 +1,14 @@
 #pragma once
 //
 // 3D-angle based pose classifier for the subject-calibration wizard.
-// Operates on a Skeleton3D (already IK-projected with a height-prior or
-// loaded profile) plus the IK's current bone_drift_pct, and reports whether
-// the subject is holding the requested target pose for long enough to start
-// recording.
+// Operates on a measured pre-IK Skeleton3D plus the current IK bone_drift_pct,
+// and reports whether the subject is holding the requested target pose for
+// long enough to start recording.
 //
 // Joint angles are computed in 3D world space, so judgment is independent of
-// the cameras' azimuth/elevation; this is why the wizard requires a subject
-// height up front (it primes the IK so usable 3D angles exist from frame 1).
+// the cameras' azimuth/elevation. The wizard still requires a subject height
+// up front so bone_drift_pct can reject geometry that is too far from the
+// height prior, but angle classification intentionally avoids post-IK clamps.
 
 #include <array>
 #include <string>

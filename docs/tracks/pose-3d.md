@@ -67,6 +67,26 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-09 — subject calibration の角度判定を pre-IK skeleton 化
+subject calib の `PoseRecognizer` が live publish と同じ post-IK skeleton を見ていたため、身長 prior
+や hinge/length clamp が作った補正後の関節角で hold 判定していた。腕を伸ばしていても肘 flex が
+人工的に増える可能性があるため、`MultiCameraDriver` の calibration tap を Kalman 後・IK 前の
+measured skeleton に移動。`bone_drift_pct` は同じ measured skeleton 対象で渡し、公開 `/ws3d` /
+tracker 出力は従来どおり post-IK skeleton を維持。`test_pose_recognizer` で伸展腕の raw 角度と
+post-IK hinge clamp バイアスを固定。
+
+### 2026-06-09 — extrinsic solve 後に subject calibration へ続行
+`/` のヘッダには常に `/subject-calib` リンクが出る一方、Crow 側は `CalibrationSession`
+attach 時だけ `/subject-calib` 静的 route を登録していたため、`--enable-3d` なし / 2 カメラ以外 /
+`--extrinsic-calib` 中など subject wizard 無効条件ではリンク先が 404 になっていた。静的 UI 配信を
+session 有無から切り離し、`/api/calib/*` は session 未 attach 時に JSON 503 (`state=unavailable`)
+を返す形へ変更。`test_crow_excal` に未 attach 時の `/subject-calib` 静的配信 smoke を追加。
+さらに `--extrinsic-calib` 中でも `CalibrationSession` を attach し、frame tap は extrinsic
+collecting/solving 中だけ AprilTag collector へ、それ以外は subject recorder へ振り分ける。
+`/api/excal/solve` 成功時は書き出した `--excal-out` を読み直して live `Triangulator` を
+hot-swap し、WebUI に `Subject calib` 導線を出す。これにより同一プロセスで extrinsic solve →
+subject preflight/capture へ進める。終了時は solve 済み extrinsics を再 solve しない。
+
 ### 2026-05-29 — Triangulator のスクラッチバッファ再利用 (挙動不変リファクタ)
 `Triangulator::triangulate()` / `triangulate_joint()` が per-keypoint・per-view で
 確保していた `std::vector` (`views` / `undistortPoints` の入出力 1 要素ベクタ /
