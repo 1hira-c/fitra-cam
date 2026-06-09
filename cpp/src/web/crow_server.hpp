@@ -15,12 +15,17 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
 
 #include "pipeline/calibration_session.hpp"
 #include "pipeline/snapshot.hpp"
+
+namespace fitra::pipeline {
+class ExtrinsicCalibSession;   // fwd decl; full header included in crow_server.cpp
+}
 
 namespace fitra::slimevr {
 class NativePublisher;   // fwd decl; full header included only in crow_server.cpp
@@ -30,6 +35,7 @@ class SlimeTrackerBus;   // tracker snapshot bus for /ws3d viz
 namespace fitra::vmt {
 class VmtPublisher;      // fwd decl; full header in crow_server.cpp
 class HmdPoseBus;        // HMD pose source for auto-alignment routes
+class ControllerPoseBus; // selected-controller pose source for excal scene
 class ContinuousAligner; // always-on HMD-driven alignment refiner
 }
 
@@ -46,6 +52,11 @@ struct ServerOptions {
     // When non-empty (and a CalibrationSession is attached) /calib serves
     // the wizard frontend and /api/calib/* exposes the orchestrator.
     std::string calib_static_dir;
+
+    // Directory that contains web/extrinsic_calibration/{index.html,app.js,...}.
+    // When non-empty (and an ExtrinsicCalibSession is attached) /extrinsic-calib
+    // serves the collection frontend; /api/excal/* exposes the session.
+    std::string excal_static_dir;
 };
 
 class CrowServer {
@@ -64,6 +75,13 @@ public:
     // Must be called before start().
     void set_calibration_session(pipeline::CalibrationSession* session,
                                  pipeline::CalibPreflight defaults);
+
+    // Attach the controller-marker extrinsic calibration session so /api/excal/*
+    // exposes its state + start/stop/solve controls. Caller retains ownership;
+    // the pointer must outlive the CrowServer. Must be called before start().
+    void set_extrinsic_calib_session(pipeline::ExtrinsicCalibSession* session);
+    using ExcalSolvedFn = std::function<bool(std::string& err)>;
+    void set_extrinsic_calib_solved_callback(ExcalSolvedFn fn);
 
     // Attach the SlimeVR native publisher so /stats3d includes its send
     // counters. Caller retains ownership; the pointer must outlive the
@@ -89,6 +107,14 @@ public:
     // stale and the auto-alignment routes return StaleHmd.
     void set_hmd_pose_bus(vmt::HmdPoseBus* bus, double stale_threshold_ms);
 
+    // Attach the selected extrinsic-calibration controller pose bus so
+    // /api/excal/poses can expose the live HMD + controller markers. The
+    // ControllerPoseBus is already filtered to opts.excal_controller_role by
+    // the tracked-pose receiver; `role` is the label to report to clients.
+    void set_extrinsic_calib_pose_bus(vmt::ControllerPoseBus* bus,
+                                      std::string role,
+                                      double stale_threshold_ms);
+
     // Attach the continuous HMD-driven aligner so /stats3d reports its status
     // and /api/vmt/alignment/auto/continuous/* can toggle it at runtime. Same
     // ownership rules as set_vmt_publisher (caller retains, must outlive or be
@@ -103,6 +129,7 @@ public:
 private:
     void publisher_loop();
     void register_calibration_routes_();
+    void register_extrinsic_calib_routes_();
 
     pipeline::SnapshotBus& bus_;
     pipeline::Skeleton3DBus* bus3d_ = nullptr;
@@ -113,12 +140,17 @@ private:
 
     pipeline::CalibrationSession*  calib_session_   = nullptr;
     pipeline::CalibPreflight       calib_defaults_;
+    pipeline::ExtrinsicCalibSession* excal_session_ = nullptr;
+    ExcalSolvedFn                  excal_solved_fn_;
     slimevr::NativePublisher*      native_publisher_ = nullptr;
     slimevr::SlimeTrackerBus*      tracker_bus_     = nullptr;
     vmt::VmtPublisher*             vmt_publisher_   = nullptr;
     vmt::HmdPoseBus*               hmd_pose_bus_    = nullptr;
+    vmt::ControllerPoseBus*        excal_controller_pose_bus_ = nullptr;
     vmt::ContinuousAligner*        continuous_aligner_ = nullptr;
     double                         hmd_stale_ms_    = 200.0;
+    double                         excal_controller_stale_ms_ = 200.0;
+    std::string                    excal_controller_role_ = "right";
 
     struct Impl;
     std::unique_ptr<Impl>  impl_;

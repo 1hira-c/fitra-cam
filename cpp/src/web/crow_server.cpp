@@ -14,10 +14,12 @@
 #define CROW_MAIN
 #include <crow.h>
 
+#include "pipeline/extrinsic_calib_session.hpp"
 #include "slimevr/native_publisher.hpp"
 #include "slimevr/slime_tracker_bus.hpp"
 #include "vmt/vmt_publisher.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
+#include "vmt/controller_pose_receiver.hpp"
 #include "vmt/auto_alignment.hpp"
 #include "vmt/continuous_aligner.hpp"
 #include "util/logging.hpp"
@@ -137,6 +139,59 @@ std::string make_hmd_status_fragment(const vmt::HmdPoseSnapshot& snap,
     }
     out << "}";
     return out.str();
+}
+
+void append_age_ms_json(std::ostringstream& out, double age_ms) {
+    out << (std::isfinite(age_ms) ? age_ms : -1.0);
+}
+
+void append_excal_hmd_pose_json(std::ostringstream& out,
+                                const vmt::HmdPoseSnapshot& snap,
+                                bool enabled) {
+    out << "{\"enabled\":" << (enabled ? "true" : "false")
+        << ",\"have_any\":" << (snap.have_any ? "true" : "false")
+        << ",\"stale\":" << (snap.stale ? "true" : "false")
+        << ",\"valid\":" << (snap.have_any && snap.pose.valid ? "true" : "false")
+        << ",\"age_ms\":";
+    append_age_ms_json(out, snap.age_ms);
+    out << ",\"timestamp_s\":" << (snap.have_any ? snap.pose.timestamp_s : 0.0f);
+    if (snap.have_any) {
+        out << ",\"pos\":[" << snap.pose.x << "," << snap.pose.y << ","
+            << snap.pose.z << "]"
+            << ",\"quat_xyzw\":[" << snap.pose.qx << "," << snap.pose.qy
+            << "," << snap.pose.qz << "," << snap.pose.qw << "]"
+            << ",\"yaw_deg\":" <<
+                (180.0f / 3.14159265358979323846f) *
+                vmt::yaw_from_vmt_quat(vmt::VmtQuat{
+                    snap.pose.qx, snap.pose.qy, snap.pose.qz, snap.pose.qw});
+    }
+    out << "}";
+}
+
+void append_excal_controller_pose_json(std::ostringstream& out,
+                                       const vmt::ControllerPoseSnapshot& snap,
+                                       bool enabled,
+                                       const std::string& role) {
+    out << "{\"enabled\":" << (enabled ? "true" : "false")
+        << ",\"role\":\"" << json_escape(role) << "\""
+        << ",\"have_any\":" << (snap.have_any ? "true" : "false")
+        << ",\"stale\":" << (snap.stale ? "true" : "false")
+        << ",\"valid\":" << (snap.have_any && snap.pose.valid ? "true" : "false")
+        << ",\"running_ok\":"
+        << (snap.have_any && snap.pose.running_ok() ? "true" : "false")
+        << ",\"tracking_result\":"
+        << (snap.have_any ? snap.pose.tracking_result : 0)
+        << ",\"age_ms\":";
+    append_age_ms_json(out, snap.age_ms);
+    out << ",\"timestamp_s\":"
+        << (snap.have_any ? snap.pose.timestamp_s : 0.0f);
+    if (snap.have_any) {
+        out << ",\"pos\":[" << snap.pose.x << "," << snap.pose.y << ","
+            << snap.pose.z << "]"
+            << ",\"quat_xyzw\":[" << snap.pose.qx << "," << snap.pose.qy
+            << "," << snap.pose.qz << "," << snap.pose.qw << "]";
+    }
+    out << "}";
 }
 
 std::string make_continuous_align_fragment(const vmt::ContinuousAligner& a) {
@@ -311,6 +366,14 @@ void CrowServer::set_calibration_session(pipeline::CalibrationSession* session,
     calib_defaults_ = std::move(defaults);
 }
 
+void CrowServer::set_extrinsic_calib_session(pipeline::ExtrinsicCalibSession* session) {
+    excal_session_ = session;
+}
+
+void CrowServer::set_extrinsic_calib_solved_callback(ExcalSolvedFn fn) {
+    excal_solved_fn_ = std::move(fn);
+}
+
 void CrowServer::set_native_publisher(slimevr::NativePublisher* publisher) {
     native_publisher_ = publisher;
 }
@@ -322,6 +385,14 @@ void CrowServer::set_vmt_publisher(vmt::VmtPublisher* publisher) {
 void CrowServer::set_hmd_pose_bus(vmt::HmdPoseBus* bus, double stale_threshold_ms) {
     hmd_pose_bus_ = bus;
     if (stale_threshold_ms > 0.0) hmd_stale_ms_ = stale_threshold_ms;
+}
+
+void CrowServer::set_extrinsic_calib_pose_bus(vmt::ControllerPoseBus* bus,
+                                              std::string role,
+                                              double stale_threshold_ms) {
+    excal_controller_pose_bus_ = bus;
+    excal_controller_role_ = std::move(role);
+    if (stale_threshold_ms > 0.0) excal_controller_stale_ms_ = stale_threshold_ms;
 }
 
 void CrowServer::set_tracker_bus(slimevr::SlimeTrackerBus* tracker_bus) {
@@ -841,6 +912,7 @@ void CrowServer::start() {
     // /api/calib/* and /artifacts/<path> are not shadowed by the static
     // handler below.
     register_calibration_routes_();
+    register_extrinsic_calib_routes_();
 
     // Static files under opts_.static_dir
     std::filesystem::path static_root{opts_.static_dir};
@@ -916,7 +988,6 @@ void CrowServer::stop() {
 }
 
 void CrowServer::register_calibration_routes_() {
-    if (!calib_session_) return;
     auto& app = impl_->app;
     auto* session = calib_session_;
     auto defaults = calib_defaults_;
@@ -945,6 +1016,40 @@ void CrowServer::register_calibration_routes_() {
         r.set_header("Content-Type", guess_content_type(canon_req));
         return r;
     });
+
+    if (!session) {
+        auto unavailable = []() {
+            return json_response(
+                "{\"ok\":false,\"available\":false,\"state\":\"unavailable\","
+                "\"err\":\"subject calibration requires --enable-3d with exactly 2 cameras\"}",
+                503);
+        };
+        CROW_ROUTE(app, "/api/calib/state")
+        ([unavailable]() {
+            return unavailable();
+        });
+        CROW_ROUTE(app, "/api/calib/preflight").methods(crow::HTTPMethod::POST)
+        ([unavailable](const crow::request& /*req*/) {
+            return unavailable();
+        });
+        CROW_ROUTE(app, "/api/calib/start").methods(crow::HTTPMethod::POST)
+        ([unavailable](const crow::request& /*req*/) {
+            return unavailable();
+        });
+        CROW_ROUTE(app, "/api/calib/cancel").methods(crow::HTTPMethod::POST)
+        ([unavailable](const crow::request& /*req*/) {
+            return unavailable();
+        });
+        CROW_ROUTE(app, "/api/calib/retake").methods(crow::HTTPMethod::POST)
+        ([unavailable](const crow::request& /*req*/) {
+            return unavailable();
+        });
+        CROW_ROUTE(app, "/api/calib/approve").methods(crow::HTTPMethod::POST)
+        ([unavailable](const crow::request& /*req*/) {
+            return unavailable();
+        });
+        return;
+    }
 
     CROW_ROUTE(app, "/api/calib/state")
     ([session]() {
@@ -1020,6 +1125,115 @@ void CrowServer::register_calibration_routes_() {
         std::ostringstream o;
         o << "{\"ok\":" << (ok ? "true" : "false")
           << ",\"err\":\"" << err << "\"}";
+        crow::response r{o.str()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+}
+
+void CrowServer::register_extrinsic_calib_routes_() {
+    if (!excal_session_) return;
+    auto& app = impl_->app;
+    auto* session = excal_session_;
+    auto solved_fn = excal_solved_fn_;
+
+    std::filesystem::path excal_root{opts_.excal_static_dir};
+    CROW_ROUTE(app, "/extrinsic-calib")
+    ([excal_root]() {
+        auto body = read_file(excal_root / "index.html");
+        if (body.empty()) return crow::response{404, "extrinsic-calib UI not installed"};
+        crow::response r{body};
+        r.set_header("Content-Type", "text/html; charset=utf-8");
+        return r;
+    });
+    CROW_ROUTE(app, "/extrinsic-calib/<path>")
+    ([excal_root](const std::string& sub) {
+        std::filesystem::path req = excal_root / sub;
+        auto canon_req  = std::filesystem::weakly_canonical(req);
+        auto canon_root = std::filesystem::weakly_canonical(excal_root);
+        if (canon_req.string().rfind(canon_root.string(), 0) != 0) {
+            return crow::response{403, "forbidden"};
+        }
+        if (!std::filesystem::is_regular_file(canon_req)) {
+            return crow::response{404, "not found"};
+        }
+        crow::response r{read_file(canon_req)};
+        r.set_header("Content-Type", guess_content_type(canon_req));
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/excal/state")
+    ([session]() {
+        crow::response r{session->state_json()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/excal/extrinsics")
+    ([session]() {
+        crow::response r{session->extrinsics_json()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/excal/poses")
+    ([this]() {
+        const bool hmd_enabled = hmd_pose_bus_ != nullptr;
+        const bool controller_enabled = excal_controller_pose_bus_ != nullptr;
+
+        vmt::HmdPoseSnapshot hmd_snap;
+        if (hmd_enabled) {
+            hmd_snap = hmd_pose_bus_->snapshot(hmd_stale_ms_);
+        }
+
+        vmt::ControllerPoseSnapshot controller_snap;
+        if (controller_enabled) {
+            controller_snap =
+                excal_controller_pose_bus_->snapshot(excal_controller_stale_ms_);
+        }
+
+        std::ostringstream o;
+        o << "{\"hmd\":";
+        append_excal_hmd_pose_json(o, hmd_snap, hmd_enabled);
+        o << ",\"controller\":";
+        append_excal_controller_pose_json(o, controller_snap, controller_enabled,
+                                          excal_controller_role_);
+        o << "}";
+        return json_response(o.str());
+    });
+
+    CROW_ROUTE(app, "/api/excal/start").methods(crow::HTTPMethod::POST)
+    ([session](const crow::request& /*req*/) {
+        session->start();
+        crow::response r{"{\"ok\":true,\"state\":\""
+                         + std::string(pipeline::extrinsic_calib_state_name(session->state()))
+                         + "\"}"};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/excal/stop").methods(crow::HTTPMethod::POST)
+    ([session](const crow::request& /*req*/) {
+        session->stop_collecting();
+        crow::response r{"{\"ok\":true,\"samples\":"
+                         + std::to_string(session->sample_count()) + "}"};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/excal/solve").methods(crow::HTTPMethod::POST)
+    ([session, solved_fn](const crow::request& /*req*/) {
+        std::string err;
+        bool ok = session->solve_and_write(err);
+        if (ok && solved_fn) {
+            ok = solved_fn(err);
+        }
+        std::ostringstream o;
+        // err can carry paths / OpenCV exception text → JSON-escape so a `"`
+        // or backslash from `write failed: …` doesn't break the response body.
+        o << "{\"ok\":" << (ok ? "true" : "false")
+          << ",\"err\":\"" << json_escape(err) << "\""
+          << ",\"state\":\"" << pipeline::extrinsic_calib_state_name(session->state()) << "\"}";
         crow::response r{o.str()};
         r.set_header("Content-Type", "application/json; charset=utf-8");
         return r;

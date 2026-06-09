@@ -225,6 +225,30 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
     if (section["continuous_blend"])      out.vmt_continuous_blend     = parse_scalar<double>(section["continuous_blend"],            "vmt.continuous_blend");
 }
 
+void load_extrinsic_calib(const YAML::Node& section, MainOptions& out) {
+    ensure_map(section, "extrinsic_calib");
+    static const std::set<std::string> allowed{
+        "enabled", "intrinsics", "out", "faces", "tag_size_m",
+        "lin_vel_max", "ang_vel_max", "burst_min", "min_samples",
+        "controller_role",
+        "controller_port", "controller_bind", "controller_stale_ms",
+    };
+    check_keys(section, allowed, "extrinsic_calib");
+    if (section["enabled"])         out.excal_enabled        = parse_scalar<bool>(section["enabled"],               "extrinsic_calib.enabled");
+    if (section["intrinsics"])      out.excal_intrinsics     = parse_scalar<std::string>(section["intrinsics"],     "extrinsic_calib.intrinsics");
+    if (section["out"])             out.excal_out            = parse_scalar<std::string>(section["out"],            "extrinsic_calib.out");
+    if (section["faces"])           out.excal_faces          = parse_scalar<std::string>(section["faces"],          "extrinsic_calib.faces");
+    if (section["tag_size_m"])      out.excal_tag_size_m     = parse_scalar<double>(section["tag_size_m"],          "extrinsic_calib.tag_size_m");
+    if (section["lin_vel_max"])     out.excal_lin_vel_max    = parse_scalar<double>(section["lin_vel_max"],         "extrinsic_calib.lin_vel_max");
+    if (section["ang_vel_max"])     out.excal_ang_vel_max    = parse_scalar<double>(section["ang_vel_max"],         "extrinsic_calib.ang_vel_max");
+    if (section["burst_min"])       out.excal_burst_min      = parse_scalar<int>(section["burst_min"],              "extrinsic_calib.burst_min");
+    if (section["min_samples"])     out.excal_min_samples    = parse_scalar<int>(section["min_samples"],            "extrinsic_calib.min_samples");
+    if (section["controller_role"]) out.excal_controller_role = parse_scalar<std::string>(section["controller_role"], "extrinsic_calib.controller_role");
+    if (section["controller_port"]) out.excal_controller_port = parse_scalar<int>(section["controller_port"],      "extrinsic_calib.controller_port");
+    if (section["controller_bind"]) out.excal_controller_bind = parse_scalar<std::string>(section["controller_bind"], "extrinsic_calib.controller_bind");
+    if (section["controller_stale_ms"]) out.excal_controller_stale_ms = parse_scalar<double>(section["controller_stale_ms"], "extrinsic_calib.controller_stale_ms");
+}
+
 }  // namespace
 
 void load_main_config(const std::string& path, MainOptions& out) {
@@ -252,6 +276,7 @@ void load_main_config(const std::string& path, MainOptions& out) {
     static const std::set<std::string> top_allowed{
         "schema", "cameras", "inference", "web", "three_d",
         "subject", "calibration", "logging", "slimevr", "vmt",
+        "extrinsic_calib",
     };
     for (auto it = root.begin(); it != root.end(); ++it) {
         const auto key = it->first.as<std::string>();
@@ -269,6 +294,7 @@ void load_main_config(const std::string& path, MainOptions& out) {
     if (root["logging"])     load_logging   (root["logging"],     out);
     if (root["slimevr"])     load_slimevr   (root["slimevr"],     out);
     if (root["vmt"])         load_vmt       (root["vmt"],         out);
+    if (root["extrinsic_calib"]) load_extrinsic_calib(root["extrinsic_calib"], out);
 }
 
 EarlyArgs scan_early_args(int argc, char** argv) {
@@ -378,6 +404,19 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--calib-auto-exit")       { out.calib_auto_exit = true; }
         else if (a == "--calib-static-dir")      { out.calib_static_dir = need(i, "--calib-static-dir"); }
         else if (a == "--calib-dump-tool")       { out.calib_dump_tool = need(i, "--calib-dump-tool"); }
+        else if (a == "--extrinsic-calib")         { out.excal_enabled = true; }
+        else if (a == "--excal-intrinsics")        { out.excal_intrinsics = need(i, "--excal-intrinsics"); }
+        else if (a == "--excal-out")               { out.excal_out = need(i, "--excal-out"); }
+        else if (a == "--excal-faces")             { out.excal_faces = need(i, "--excal-faces"); }
+        else if (a == "--excal-tag-size-m")        { out.excal_tag_size_m = std::stod(need(i, "--excal-tag-size-m")); }
+        else if (a == "--excal-lin-vel-max")       { out.excal_lin_vel_max = std::stod(need(i, "--excal-lin-vel-max")); }
+        else if (a == "--excal-ang-vel-max")       { out.excal_ang_vel_max = std::stod(need(i, "--excal-ang-vel-max")); }
+        else if (a == "--excal-burst-min")         { out.excal_burst_min = std::atoi(need(i, "--excal-burst-min")); }
+        else if (a == "--excal-min-samples")       { out.excal_min_samples = std::atoi(need(i, "--excal-min-samples")); }
+        else if (a == "--excal-controller-role")   { out.excal_controller_role = need(i, "--excal-controller-role"); }
+        else if (a == "--excal-controller-port")   { out.excal_controller_port = std::atoi(need(i, "--excal-controller-port")); }
+        else if (a == "--excal-controller-bind")   { out.excal_controller_bind = need(i, "--excal-controller-bind"); }
+        else if (a == "--excal-controller-stale-ms"){ out.excal_controller_stale_ms = std::stod(need(i, "--excal-controller-stale-ms")); }
         else {
             fail(std::string("unknown arg: ") + argv[i]);
         }
@@ -490,6 +529,42 @@ void validate_options(const MainOptions& opts) {
     if (opts.calibrate
         && (opts.calib_subject_id.empty() || opts.calib_subject_height_m <= 0.0)) {
         fail("--calibrate requires --calib-subject-id and --calib-subject-height-m");
+    }
+    if (opts.excal_enabled) {
+        // Uses the frame tap exclusively; the subject wizard also claims it.
+        if (opts.calibrate) {
+            fail("--extrinsic-calib cannot be combined with --calibrate");
+        }
+        // Needs per-camera intrinsics: a dedicated file or the three_d.calib.
+        if (opts.excal_intrinsics.empty() && opts.calib.empty()) {
+            fail("--extrinsic-calib requires --excal-intrinsics PATH (or --calib PATH)");
+        }
+        if (opts.excal_faces.empty()) {
+            fail("--extrinsic-calib requires at least one face id (--excal-faces)");
+        }
+        if (opts.excal_tag_size_m <= 0.0 || opts.excal_tag_size_m > 2.0) {
+            fail("--excal-tag-size-m must be in (0, 2]");
+        }
+        if (opts.excal_burst_min < 1) {
+            fail("--excal-burst-min must be >= 1");
+        }
+        if (opts.excal_min_samples < 3) {
+            fail("--excal-min-samples must be >= 3 (hand-eye needs >= 3 per group)");
+        }
+        if (opts.excal_controller_port <= 0 || opts.excal_controller_port > 65535) {
+            fail("--excal-controller-port must be in [1, 65535]");
+        }
+        if (opts.excal_controller_role != "left"
+            && opts.excal_controller_role != "right"
+            && opts.excal_controller_role != "left_controller"
+            && opts.excal_controller_role != "right_controller"
+            && opts.excal_controller_role != "left-controller"
+            && opts.excal_controller_role != "right-controller") {
+            fail("--excal-controller-role must be one of left|right");
+        }
+        if (opts.excal_lin_vel_max <= 0.0 || opts.excal_ang_vel_max <= 0.0) {
+            fail("--excal-lin-vel-max / --excal-ang-vel-max must be > 0");
+        }
     }
 }
 

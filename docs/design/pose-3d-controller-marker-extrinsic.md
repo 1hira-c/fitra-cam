@@ -2,8 +2,11 @@
 
 (着手日 2026-05-27 / 上流 = pose-3d トラック、原点合わせで vr-output トラックと接続)
 
-> ステータス: **検討中 (PoC 前)**。実装着手前の設計記録。数値根拠の一部は PoC (M0)
-> で実測して確定させる。
+> ステータス: **実装中**。ハード非依存のコア (M1 transport / M2 ソルバ・検出) は
+> 単体テスト付きで実装済み (2026-05-27, `cpp/src/vmt/controller_pose_receiver.*`,
+> `cpp/src/lift/extrinsic_solver.*`, `cpp/src/lift/apriltag_marker.*`)。実機を要する
+> M0 (PnP 残差 / SLAM ドリフト実測) と live 収集 UI (M2 後半 / M4) は未着手 —
+> 数値根拠の一部はこの PoC で実測して確定させる。各 Milestone の進捗は下記 Milestone 節参照。
 >
 > 主要参考: **Sensors 26(8):2285 (2026)** "Robot-Driven Calibration and Accuracy
 > Assessment of Meta Quest 3 Inside-Out Tracking (TECHMAN TM5-900)" — Touch Plus を
@@ -52,6 +55,15 @@ extrinsic (相対 6DoF) が要る。現状リポジトリにカメラ extrinsic 
 - 2 カメラ同時可視が不要 (後述の連結原理)。これが本環境の決め手。
 - 代償: **VR world を連結基準に使う = Quest tracking 誤差が inter-camera extrinsic に乗る**。
   案B の「Quest を外す」逃げ道は共視不可で閉じた。この劣化は飲む前提とし、運用で絞り取る。
+
+### 案D: 床 + 可搬スタンドの AprilTag マップを作り各カメラを localize — 後発の代替 (検討中)
+
+- **没ではない**。案A/案B の却下理由 (1.2m で同時共視不能 / BA に共視経路が必要) を、**マップ
+  構築と各カメラ localize の時間分離**で迂回する。各カメラは相手カメラではなく静的マーカーマップに
+  登録されるので共視不要。VR を extrinsic チェーンから外せる = 案C 律速の SLAM drift 項が消える。
+- 案C を潰すものではなく、**初期設定時に選べる方式の 1 つ**。VR 非起動環境・高再現性・案C の
+  drift 実測リファレンスとして価値がある。
+- 詳細・比較・未解決論点 → [research/floor-apriltag-sfm-map.md](../research/floor-apriltag-sfm-map.md)。
 
 ## 採用設計
 
@@ -140,6 +152,15 @@ extrinsic(A,B) = T_camA←world ∘ (T_camB←world)⁻¹
   整合してれば成立するので Raw に拘る必要はなく、Standing は**床基準 up がタダで付く** (floor
   plane の旨味) ぶん有利。**条件: セッション中に recenter しない** (Standing は再レベリングで
   原点が飛ぶ ← 既出の「時間近接・1 セッション」不変条件と同じ)。
+- **出力 frame は fitra Z-up へ変換して書き出す** (2026-06-09 追記)。上記のとおり
+  hand-eye の解 `Z = T_cam←world` は controller pose と同じ **VMT/SteamVR Y-up** frame で出る
+  が、floor 較正・triangulation・IK・WebUI 3D viewer・SlimeVR 出力はすべて **fitra Z-up**
+  (`world: x/y on floor, z up`) を前提にする。Y-up のまま書くと viewer で床が垂直に表示され
+  (カメラ中心 z が負になる)、live 3D 全体が誤った frame に乗る。そこで `solve_and_write` の
+  単一境界で `T_cw` に基底変換 `M` を右から掛けて Z-up へ再表現する (`M`: fitra 座標→VMT 座標
+  `(x,y,z)→(x,z,-y)` = `world_pos_to_vmt` の回転 Rx(−90°)。世界軸の付け替えなのでカメラは動かず、
+  相対 extrinsic は不変)。`coordinate_system` ラベルも z-up へ上書きする。viewer だけ直す案は
+  不採用 — live 3D / SlimeVR 出力も同じ誤 frame に乗るため、書き出し側で直すのが正しい階層。
 - **OpenVR 取得は送信側 (`vmt_manager`) で `fPredictedSecondsToPhotonsFromNow = 0`** (予測誤差を
   消す)。静止取得なので Link/Air Link の遅延は空間誤差に化けない。
 - **取得サンプルのゲート**: **`bPoseIsValid && eTrackingResult == Running_OK`**。現スキーマは
@@ -213,26 +234,86 @@ extrinsic(A,B) = T_camA←world ∘ (T_camB←world)⁻¹
 
 ## Milestone
 
-- **M0 (PoC / 設計確定の前提)**: コントローラ静止精度は Sensors 2026 で sub-mm と既知なので、
+> 進捗 (2026-05-27): M1 の transport と M2 のソルバ・検出コアが実装済み (テスト緑)。M0 と
+> M1 の物理 (マウント 3D モデル・intrinsics 手順) と live 収集 UI は未着手。
+
+- **M0 (PoC / 設計確定の前提)** — **未着手 (実機要)**: コントローラ静止精度は Sensors 2026 で sub-mm と既知なので、
   M0 が測るべきは**未計測の 2 項** — (1) **我々の AprilTag PnP 残差**(1 カメラで PnP pose vs
   コントローラ pose、近接・静止)と、(2) **このセッション環境での SLAM 原点ドリフト**(静止 HMD
   pose を数分監視し world frame の動きを実測)。加えて **(3) 手持ち準静止時の残揺れ**(velocity /
   corner 移動量の分布)を測り、モーションゲートのしきい値を裏付ける。この 3 つで案C の現実的な
   精度天井を確定し、本設計のしきい(サンプル数・許容ドリフト時間窓・ゲート閾)を裏付ける。
-- **M1**: 多面タグマウントの 3D モデル + intrinsics キャリブ手順 (ChArUco 近接・カメラ毎、
+- **M1** — **transport 実装済 / 物理 (3D モデル・intrinsics 手順) 未着手**: 多面タグマウントの
+  3D モデル + intrinsics キャリブ手順 (ChArUco 近接・カメラ毎、
   `calibrateCameraCharuco`)。**コントローラ pose の受信経路**
   — 既存の VMT alignment 用 HMD pose 経路 (`vmt_manager` → UDP/OSC → `HmdPoseReceiver` /
   `HmdPoseBus`, 既存 frame 変換ごと) を流用する。具体:
-  - **transport は丸ごと再利用**: `/fitra/controller_pose` を並列にもう 1 本生やし、`HmdPoseBus`
-    と同型の latest-wins bus に載せる。Windows 側は別 device index を query するだけ。
-  - **スキーマ拡張**: 現 `,iffffffff` (valid + ts + pos + quat) に **`eTrackingResult` を 1 個追加**
-    (上記ゲートのため)。座標系は HMD 経路と同じ Standing+VMT frame をそのまま使う。
+  - **transport は VMT pose relay へ統合する** (2026-06-08 方針更新):
+    PoC 実装では `vmt/controller_pose_receiver.{hpp,cpp}` が `/fitra/controller_pose` を
+    HMD とは別ポート (39572 / HMD は 39571) で受け、`ControllerPoseBus` に載せていた。
+    ただし運用上これは非現実的なので、VMT Manager 側から 1 UDP port (39571) に
+    `/fitra/tracked_pose` を role 付きで送り、fitra-cam 側で HMD / left controller /
+    right controller の latest-wins bus に分配する仕様へ移行する。
+    → [vr-output-vmt-pose-relay-wire-spec.md](vr-output-vmt-pose-relay-wire-spec.md)
+  - **スキーマ拡張**: controller sample は `tracking_result` (OpenVR `ETrackingResult`) を必須で
+    持つ。`running_ok()` = `bPoseIsValid && eTrackingResult == Running_OK(200)` をゲートに公開。
+    座標系は HMD 経路と同じ Standing+VMT frame をそのまま使う。
   - 同期は静止取得ゆえ latest-wins + stale で十分 (timestamp は厳密ペアリング不要)。
-- **M2**: 準静止・インターリーブ取得の収集 UI (**全カメラ × 全 face を姿勢多様性込みで被覆**、
-  モーションゲート + バースト平均) + 各面 `Y_face` 同時推定の `calibrateRobotWorldHandEye` 一括校正。
-  再現性 (繰り返し校正の extrinsic ばらつき)・Y_face 一致・面間ジオメトリ一定性を評価。
-- **M3 (任意・精度上限狙い)**: 全サンプル (per-camera PnP + VR world 拘束) を小さな BA に
-  放り込み、取得時間ズレ / ドリフト・剛体タグ拘束を重み付きで大域分配。M2 で不足なら着手。
+  - **配線済** (2026-06-08): `main` に `TrackedPoseReceiver` + `ControllerPoseBus` を
+    `--extrinsic-calib` 時に起動。`extrinsic_calib.controller_role` (`left|right`, 既定 `right`) に
+    一致する controller pose だけを frame tap で `ControllerObservation` に変換する。
+  - **未** (VMT 側): VMT Manager からの `/fitra/tracked_pose`
+    (HMD / left controller / right controller) 送出。
+- **M2** — **ソルバ・検出コア実装済 / 収集 UI 未着手**: 準静止・インターリーブ取得の収集 UI
+  (**全カメラ × 全 face を姿勢多様性込みで被覆**、モーションゲート + バースト平均) + 各面 `Y_face`
+  同時推定の `calibrateRobotWorldHandEye` 一括校正。再現性 (繰り返し校正の extrinsic ばらつき)・
+  Y_face 一致・面間ジオメトリ一定性を評価。
+  - **実装済 (ハード非依存)**:
+    - `lift/extrinsic_solver.{hpp,cpp}` — `A_i·X = Z·B_i` を `calibrateRobotWorldHandEye`
+      (AX=ZB) に写像。(camera,face) グループ毎に解き、Z=`T_cam←world` を面間集約 + 面間 spread
+      を品質指標化、X=`T_marker←controller` (= Y_face⁻¹) を副産物に、自己残差 (並進/回転 RMS) と
+      回転多様性 (`rotation_span_deg`) を算出。出力 `T_cam_world` は `calib_io` の
+      `Extrinsics.T_cw` (world→camera) と同じ向き。
+    - `lift/apriltag_marker.{hpp,cpp}` — `DICT_APRILTAG_36h11` 検出 (sub-px refine) + 面 ID→サイズ
+      設定 + `SOLVEPNP_IPPE_SQUARE` で `T_cam←face`。PnP は純関数 `solve_tag_pose` に切り出し。
+    - 検証: 合成データで厳密復元 (1e-9 m / 1e-6°)・相対 extrinsic 恒等・ノイズ <1cm/<1°、
+      tag render→detect→PnP 往復。`ctest -R 'extrinsic_solver|apriltag_marker'`。
+    - `pipeline/extrinsic_calib_session.{hpp,cpp}` (2026-05-27) — **収集ループ骨格**: frame tap →
+      AprilTag 検出 → 最新 controller pose とペアリング → モーションゲート (controller 線速度/角速度
+      しきい) → (cam,face) 毎バースト平均 → `ExtrinsicSample` 蓄積 → 終了時 `solve_and_write`
+      で hand-eye solve + `CalibrationSet` (intrinsics 複製 + extrinsic 充填) を YAML 書き出し。
+      `calib_io::write_calibration` を新設。`main` に `--extrinsic-calib` フローを配線
+      (subject wizard と frame tap 排他)。被覆/ゲート状態の `state_json` も用意。
+    - `web/crow_server` (2026-05-27) — **Crow 配線**: `set_extrinsic_calib_session` +
+      `/api/excal/{state,start,stop,solve}` (subject wizard の `/api/calib/*` と同型)。`state` は
+      `state_json` (state / samples / 線速角速ゲート値 / 被覆マトリクス / per-camera solution)、
+      `start`/`stop`/`solve` は POST。`main` から server に attach。
+    - `web/extrinsic_calibration/` (2026-05-27) — **収集 UI フロントエンド** (M2 コア部): Control
+      (state バッジ + Start/Stop/Solve)、glanceable な **Capture gate** (理由付き
+      GOOD/MOVING/NO_TAG/NO_POSE + 線速角速バー)、**per-camera ライブ検出** (face id·reproj·
+      controller OK·age — UI 案 #1/#2)、**被覆マトリクス** (cam × face、min_samples でセル色)、
+      Solve 後の per-camera 結果 (面間 spread mm/deg)、raw state。`/extrinsic-calib` で配信
+      (`crow_server` 静的ルート + `guess_extrinsic_calib_static_dir`)。state_json に
+      `num_cams`/`min_samples`/`faces`/`gate_reason`/`detections` を追加。
+    - `web/extrinsic_calibration/scene.html` + `scene.js` (2026-05-27) — **3D 検証シーン** (M4 の
+      カメラ frustum 部): `/api/excal/extrinsics` (intrinsics + `T_cam_world` + camera_center) を
+      ポーリングし、three.js で各カメラの 6DoF を共通 world frame に frustum (実 FoV) + 軸で配置。
+      床 Y0 グリッド + 原点 AxesHelper。three.js は既存 `web/dual_rtmpose/vendor` を `/vendor` 経由で流用。
+    - セッションは `on_frame` で per-camera 最新検出を保持 (`gate_reason_` がタグ可視+controller
+      tracking+動きを統合判定)、`extrinsics_json` で solved 6DoF を公開。
+    - 検証: モーションゲート/バースト機構、permissive ゲートでの end-to-end solve→write→reload で
+      相対 extrinsic 厳密一致、`calib_io` 往復、レンダtag→on_frame で検出/gate_reason、
+      `extrinsics_json` 内容、ループバック実 HTTP で `/api/excal/*` + 静的配信 (collect/scene)。
+      `ctest -R 'extrinsic_calib_session|main_config|crow_excal'`。
+  - **未** (実機 or 大掛かりで保留): per-camera ライブ**映像**へのオーバーレイ (現状は検出ステータスを
+    テキスト/チップで表示。映像配信は bundle/MJPEG 拡張が要りカメラ無しでは無意味)、M4 の live solver
+    漸進表示 + 「カメラの意見 vs VR真値」重畳 (live 検出ストリームと連動)、M3 BA (下記)、
+    バースト平均の実画像での品質確認、再現性/一致の実機評価。
+- **M3 (任意・精度上限狙い)** — **意図的に保留**: 全サンプル (per-camera PnP + VR world 拘束) を
+  小さな BA に放り込み、取得時間ズレ / ドリフト・剛体タグ拘束を重み付きで大域分配。実装自体は
+  ハード非依存で合成テスト可能だが、(a) 閉形式 Shah が合成データを厳密復元しており BA の上積みは
+  ノイズ+面間不整合下でしか出ない、(b) 本来の動機 (SLAM ドリフトの重み付け) は M0 実測値が無いと
+  較正できない、ため M2 で不足が出るまで着手しない。SE(3) LM 自前実装の工数/バグリスクに見合わない。
 - **M4 (任意・完全有料 / コア後)**: 3D 検証シーン (上記セットアップ UI の 5〜7) — カメラ frustum
   表示・リアルタイム漸進 solve + preview ボタン・カメラの意見 vs VR真値の重畳で校正結果を体感。
   live solver のループ統合 + publisher schema 拡張が要る。コア校正完了後の UX 投資。

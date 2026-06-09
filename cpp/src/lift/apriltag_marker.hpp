@@ -1,0 +1,87 @@
+#pragma once
+//
+// Multi-face AprilTag marker detection + per-face PnP, producing the
+// T_cam←face observations the extrinsic hand-eye solver consumes.
+//
+// See docs/design/pose-3d-controller-marker-extrinsic.md. A rigid mount on the
+// VR controller carries several AprilTag 36h11 faces (each a distinct ID).
+// Held near a camera, at least one face faces it; we decode that face and run
+// solvePnP against the known square-tag geometry to get T_cam←face. The
+// per-face mount offset relative to the controller is NOT measured here — it is
+// recovered as the hand-eye X term (see extrinsic_solver.hpp).
+//
+// AprilTag is preferred over plain ArUco for its low-resolution / long-range
+// decode robustness; near-field use here makes decoding comfortable.
+
+#include <array>
+#include <string>
+#include <vector>
+
+#include <opencv2/core.hpp>
+#include <opencv2/objdetect/aruco_detector.hpp>
+
+namespace fitra::lift {
+
+// One configured marker face: an AprilTag 36h11 ID and the physical side length
+// of its black square (the PnP scale). Faces may differ in size.
+struct MarkerFace {
+    int    face_id    = 0;
+    double tag_size_m = 0.10;
+};
+
+struct MarkerBoardConfig {
+    // cv::aruco predefined-dictionary id. Default DICT_APRILTAG_36h11.
+    int dictionary = -1;            // -1 → resolved to DICT_APRILTAG_36h11 in ctor
+    std::vector<MarkerFace> faces;
+
+    const MarkerFace* find(int id) const;
+};
+
+// A decoded face with its recovered pose.
+struct TagDetection {
+    int                        face_id = 0;
+    std::array<cv::Point2f, 4> corners{};      // image px, aruco order (TL,TR,BR,BL)
+    cv::Matx44d                T_cam_face{};    // object(face) → camera (from PnP)
+    double                     reproj_rms_px = 0.0;
+    bool                       pose_ok = false;
+};
+
+class AprilTagDetector {
+public:
+    explicit AprilTagDetector(MarkerBoardConfig cfg);
+
+    // Detect configured faces in `image` (BGR or grayscale) using the given
+    // intrinsics (K 3x3, dist 1xN, both CV_64F). Returns one entry per decoded
+    // face whose ID is in the config; faces not in the config are ignored.
+    //
+    // Not thread-safe: the internal cv::aruco::ArucoDetector carries state and
+    // must not be called from multiple threads concurrently. Call sites that
+    // hand frames in serially (the calibration session's frame tap) are fine.
+    std::vector<TagDetection> detect(const cv::Mat& image,
+                                     const cv::Mat& K,
+                                     const cv::Mat& dist);
+
+    const MarkerBoardConfig& config() const { return cfg_; }
+
+private:
+    MarkerBoardConfig         cfg_;
+    cv::aruco::ArucoDetector  detector_;  // built once in the ctor
+};
+
+// Pure PnP for a single square tag. `corners` are the four image-space corners
+// in aruco order (TL, TR, BR, BL); `tag_size_m` is the black-square side. On
+// success fills `T_cam_face` (object→camera) and the reprojection RMS (px).
+// Uses SOLVEPNP_IPPE_SQUARE (planar-square specialised). Returns false if PnP
+// fails. Pure function — unit-tested without any image.
+bool solve_tag_pose(const std::array<cv::Point2f, 4>& corners,
+                    double tag_size_m,
+                    const cv::Mat& K,
+                    const cv::Mat& dist,
+                    cv::Matx44d& T_cam_face,
+                    double& reproj_rms_px);
+
+// Object-space corners of a square tag (side `s`) centred at the face origin,
+// Z=0 plane, matching aruco corner order: TL(-,+), TR(+,+), BR(+,-), BL(-,-).
+std::array<cv::Point3f, 4> tag_object_corners(double s);
+
+}  // namespace fitra::lift

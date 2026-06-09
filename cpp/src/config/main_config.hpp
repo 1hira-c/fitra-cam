@@ -134,6 +134,31 @@ struct MainOptions {
     double vmt_continuous_sample_hz = 15.0;
     double vmt_continuous_resolve_s = 2.0;
     double vmt_continuous_blend     = 0.2;   // EMA weight per resolve, in (0, 1]
+
+    // Controller-marker extrinsic calibration (see
+    // docs/design/pose-3d-controller-marker-extrinsic.md). When enabled, main
+    // receives the controller pose on a parallel UDP channel, taps camera
+    // frames into the collection session, and writes extrinsics on solve.
+    bool        excal_enabled        = false;
+    // Intrinsics-only calibration YAML (extrinsics ignored). Empty → reuse
+    // three_d.calib.
+    std::string excal_intrinsics;
+    std::string excal_out            = "calibrations/extrinsics.yaml";
+    // AprilTag 36h11 face IDs, comma-separated (e.g. "0,1,2").
+    std::string excal_faces          = "0,1,2";
+    double      excal_tag_size_m     = 0.10;     // uniform face size, metres
+    double      excal_lin_vel_max    = 0.03;     // motion gate, m/s
+    double      excal_ang_vel_max    = 8.0;      // motion gate, deg/s
+    int         excal_burst_min      = 5;
+    int         excal_min_samples    = 8;        // per (cam, face) group
+    // Controller pose role consumed from the unified VMT pose relay:
+    // "left" | "right" (default). The old dedicated controller port below is
+    // kept for config compatibility during migration.
+    std::string excal_controller_role = "right";
+    // Deprecated legacy controller pose receiver (parallel to the HMD channel).
+    int         excal_controller_port = 39572;
+    std::string excal_controller_bind = "0.0.0.0";
+    double      excal_controller_stale_ms = 200.0;
 };
 
 // Schema version embedded in every YAML config. Bump only when a

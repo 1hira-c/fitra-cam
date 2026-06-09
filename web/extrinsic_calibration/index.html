@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>fitra-cam Extrinsic Calibration</title>
+  <link rel="stylesheet" href="/extrinsic-calib/styles.css">
+</head>
+<body>
+  <header>
+    <h1>Controller-Marker Extrinsic Calibration</h1>
+    <div class="conn-group">
+      <div id="conn" class="conn">connecting…</div>
+      <a class="conn link" href="/extrinsic-calib/scene.html">3D scene</a>
+      <a class="conn link" href="/">live</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>1. Control</h2>
+      <p>
+        コントローラ固定 AprilTag を各カメラの近くに持って行き、<b>一瞬止める</b>と
+        その姿勢のサンプルが溜まります。全カメラ×全 face を姿勢多様性込みで被覆したら Solve。
+        取得は短時間 1 セッションで（recenter 厳禁）。
+      </p>
+      <div class="status-line">
+        state: <span id="state" class="badge">-</span> &middot;
+        samples: <span id="samples">0</span> &middot;
+        cams: <span id="num_cams">-</span> &middot;
+        min/group: <span id="min_samples">-</span>
+      </div>
+      <div class="actions">
+        <button id="btn_start" type="button">Start collecting</button>
+        <button id="btn_stop" type="button" disabled>Stop</button>
+        <button id="btn_solve" type="button">Solve &amp; write</button>
+        <button id="btn_subject" type="button" disabled>Subject calib</button>
+      </div>
+      <div id="ctrl_msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>2. Capture gate <span class="hint">(glanceable)</span></h2>
+      <div class="gate" id="gate">—</div>
+      <div class="bar"><div id="lin_bar" class="bar-fill"></div></div>
+      <div class="bar-label">linear <span id="lin_val">-</span> / <span id="lin_max">-</span> m/s</div>
+      <div class="bar"><div id="ang_bar" class="bar-fill"></div></div>
+      <div class="bar-label">angular <span id="ang_val">-</span> / <span id="ang_max">-</span> deg/s</div>
+      <p class="hint">
+        理由: <b>NO_TAG</b> どのカメラもタグ未検出 / <b>NO_POSE</b> コントローラ tracking 不良 /
+        <b>MOVING</b> 動いている / <b>GOOD</b> 撮影中。
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>Live detections <span class="hint">(per camera)</span></h2>
+      <table class="detections" id="detections">
+        <thead>
+          <tr><th>cam</th><th>controller</th><th>faces (id · reproj px)</th><th>age</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>3. Coverage <span class="hint">(emitted samples per cam × face)</span></h2>
+      <div id="coverage_wrap">
+        <table class="matrix" id="matrix"><tbody></tbody></table>
+      </div>
+      <div class="bar-label">
+        セル色: <span class="cell empty">0</span>
+        <span class="cell low">1..min-1</span>
+        <span class="cell ok">&ge; min</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>4. Result <span class="hint">(after solve)</span></h2>
+      <table class="result" id="result">
+        <thead>
+          <tr><th>cam</th><th>faces</th><th>samples</th>
+              <th>face spread (mm)</th><th>face spread (deg)</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="result_msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>Raw state</h2>
+      <pre id="raw" class="log"></pre>
+    </section>
+  </main>
+
+  <script src="/extrinsic-calib/app.js"></script>
+</body>
+</html>

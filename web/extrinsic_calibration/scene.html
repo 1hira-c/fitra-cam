@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>fitra-cam Extrinsic — 3D scene</title>
+  <link rel="stylesheet" href="/extrinsic-calib/styles.css">
+  <style>
+    #view { width: 100%; height: 70vh; display: block; background: #0b0e13; }
+    .scene-info { font-size: 0.85em; color: #aab2bc; padding: 0.5em 1em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Extrinsic — 3D verification scene</h1>
+    <div class="conn-group">
+      <div id="conn" class="conn">connecting…</div>
+      <a class="conn link" href="/extrinsic-calib">collect</a>
+      <a class="conn link" href="/">live</a>
+    </div>
+  </header>
+
+  <div class="scene-info">
+    Solve 後の各カメラの 6DoF を共通 world frame に frustum で配置（床=Y0 グリッド、原点=AxesHelper）。
+    <span id="status">waiting for a solve…</span>
+  </div>
+  <canvas id="view"></canvas>
+
+  <!-- three.js is vendored under the main static dir (web/dual_rtmpose/vendor). -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three.module.min.js",
+        "OrbitControls": "/vendor/OrbitControls.js"
+      }
+    }
+  </script>
+  <script type="module" src="/extrinsic-calib/scene.js"></script>
+</body>
+</html>

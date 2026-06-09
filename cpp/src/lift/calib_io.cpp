@@ -106,6 +106,53 @@ CalibrationSet load_calibration(const std::string& path) {
     return out;
 }
 
+void write_calibration(const std::string& path, const CalibrationSet& calib) {
+    validate_calibration(calib);
+    cv::FileStorage fs{path, cv::FileStorage::WRITE};
+    if (!fs.isOpened()) {
+        throw std::runtime_error("failed to open calibration file for write: " + path);
+    }
+    fs << "schema" << (calib.schema.empty() ? std::string("fitra_calibration_v1")
+                                            : calib.schema);
+    fs << "unit" << (calib.unit.empty() ? std::string("m") : calib.unit);
+    fs << "coordinate_system"
+       << (calib.coordinate_system.empty() ? std::string("world") : calib.coordinate_system);
+
+    fs << "intrinsics" << "{";
+    for (const auto& cam : calib.cameras) {
+        fs << cam.id << "{";
+        fs << "width" << cam.intrinsics.width;
+        fs << "height" << cam.intrinsics.height;
+        fs << "rms_px" << cam.intrinsics.rms_px;
+        if (!cam.intrinsics.source.empty()) fs << "source" << cam.intrinsics.source;
+        fs << "K" << cam.intrinsics.K;
+        fs << "dist" << cam.intrinsics.dist;
+        fs << "}";
+    }
+    fs << "}";
+
+    bool any_ext = false;
+    for (const auto& cam : calib.cameras) any_ext |= cam.has_extrinsics;
+    if (any_ext) {
+        fs << "extrinsics" << "{";
+        for (const auto& cam : calib.cameras) {
+            if (!cam.has_extrinsics) continue;
+            fs << cam.id << "{";
+            fs << "method" << (cam.extrinsics.method.empty()
+                               ? std::string("unknown") : cam.extrinsics.method);
+            fs << "T_cw" << cam.extrinsics.T_cw;
+            cv::Mat center = (cv::Mat_<double>(1, 3) <<
+                cam.extrinsics.camera_center_w[0],
+                cam.extrinsics.camera_center_w[1],
+                cam.extrinsics.camera_center_w[2]);
+            fs << "camera_center_w" << center;
+            fs << "}";
+        }
+        fs << "}";
+    }
+    fs.release();
+}
+
 void validate_calibration(const CalibrationSet& calib) {
     if (calib.cameras.empty()) {
         throw std::runtime_error("calibration has no cameras");
