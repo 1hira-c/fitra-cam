@@ -12,6 +12,8 @@
 // `--probe` is a CUDA device + TRT runtime sanity check that exits.
 
 #include <atomic>
+#include <cctype>
+#include <charconv>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -613,11 +615,24 @@ int main(int argc, char** argv) {
                     ec.intrinsics.cameras.size(), n_cams);
                 return EXIT_FAILURE;
             }
-            // Parse "0,1,2" face ids; uniform tag size for the skeleton.
+            // Parse "0,1,2" face ids; uniform tag size for the skeleton. Parse
+            // strictly: a non-numeric token (typo, stray char) must fail loudly
+            // rather than std::atoi-fold to face 0 and silently miscalibrate.
             for (const auto& tok : split_csv(opts.excal_faces)) {
                 if (tok.empty()) continue;
+                int face_id = 0;
+                auto [ptr, ec_parse] =
+                    std::from_chars(tok.data(), tok.data() + tok.size(), face_id);
+                if (ec_parse != std::errc{} || ptr != tok.data() + tok.size() ||
+                    face_id < 0) {
+                    std::fprintf(stderr,
+                        "extrinsic-calib: invalid --excal-faces token '%s' "
+                        "(expected non-negative integers, e.g. \"0,1,2\")\n",
+                        tok.c_str());
+                    return EXIT_FAILURE;
+                }
                 fitra::lift::MarkerFace f;
-                f.face_id = std::atoi(tok.c_str());
+                f.face_id = face_id;
                 f.tag_size_m = opts.excal_tag_size_m;
                 ec.board.faces.push_back(f);
             }

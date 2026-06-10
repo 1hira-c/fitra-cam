@@ -1151,7 +1151,15 @@ void CrowServer::register_extrinsic_calib_routes_() {
         std::filesystem::path req = excal_root / sub;
         auto canon_req  = std::filesystem::weakly_canonical(req);
         auto canon_root = std::filesystem::weakly_canonical(excal_root);
-        if (canon_req.string().rfind(canon_root.string(), 0) != 0) {
+        // Prefix match alone allows sibling-directory traversal (root "/a/b"
+        // would accept "/a/b2/..."). Anchor the match to a directory boundary by
+        // appending the separator to the root before comparing.
+        std::string root_str = canon_root.string();
+        if (!root_str.empty() &&
+            root_str.back() != std::filesystem::path::preferred_separator) {
+            root_str += std::filesystem::path::preferred_separator;
+        }
+        if (canon_req.string().rfind(root_str, 0) != 0) {
             return crow::response{403, "forbidden"};
         }
         if (!std::filesystem::is_regular_file(canon_req)) {

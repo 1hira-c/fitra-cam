@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <sstream>
 #include <vector>
 
@@ -22,6 +23,32 @@ namespace {
 
 cv::Matx44d controller_pose(const ControllerObservation& c) {
     return lift::pose_from_pos_quat(c.x, c.y, c.z, c.qx, c.qy, c.qz, c.qw);
+}
+
+// Minimal JSON string escaper. camera ids come from the calibration file and
+// validate_calibration only guarantees non-empty, so an id containing '"' or
+// '\' (or a control char) would otherwise break the response JSON.
+std::string json_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out;
 }
 
 // The controller poses fed to the hand-eye solver come from the VR runtime in
@@ -276,7 +303,7 @@ std::string ExtrinsicCalibSession::extrinsics_json() const {
         if (!first) os << ",";
         first = false;
         os << "{\"cam\":" << ce.cam_index
-           << ",\"id\":\"" << cam.id << "\""
+           << ",\"id\":\"" << json_escape(cam.id) << "\""
            << ",\"width\":" << cam.intrinsics.width
            << ",\"height\":" << cam.intrinsics.height
            << ",\"fx\":" << K.at<double>(0, 0)

@@ -230,6 +230,7 @@ bool TrackedPoseReceiver::dispatch_message_(const std::uint8_t* data,
 
 bool TrackedPoseReceiver::dispatch_packet_(const std::uint8_t* data,
                                            std::size_t len) {
+    if (!data || len == 0) return false;  // is_bundle() dereferences data
     TrackedPoseReceiverStats delta;
     bool any = false;
 
@@ -238,7 +239,10 @@ bool TrackedPoseReceiver::dispatch_packet_(const std::uint8_t* data,
         while (off + 4 <= len) {
             std::uint32_t elem_size = read_be32(data + off);
             off += 4;
-            if (elem_size == 0 || off + elem_size > len) {
+            // off <= len here, so len - off is safe and avoids the off+elem_size
+            // overflow that could otherwise bypass this bound (elem_size is
+            // attacker-controlled 32-bit from the wire).
+            if (elem_size == 0 || elem_size > len - off) {
                 return false;
             }
             if (dispatch_message_(data + off, elem_size, delta)) {
