@@ -10,6 +10,8 @@
 
 #include <opencv2/core.hpp>
 
+#include "geom/frames.hpp"
+
 namespace fitra::lift {
 
 struct Intrinsics {
@@ -23,8 +25,17 @@ struct Intrinsics {
 
 struct Extrinsics {
     std::string method;
-    cv::Mat T_cw;             // 4x4, world -> camera
+    cv::Mat T_cw;             // 4x4 CV_64F, world -> camera (fitra Z-up world)
     cv::Vec3d camera_center_w{0.0, 0.0, 0.0};
+
+    // Typed view of T_cw for the SE(3)-layer consumers (Triangulator). The
+    // stored T_cw is the validated serialized representation (validate_calibration
+    // checks its shape/finiteness); this wraps it once it is known 4x4 CV_64F.
+    // The frame is fitra Z-up world by the file contract (extrinsic_calib_session
+    // re-expresses the solver's VMT Y-up output before writing).
+    geom::T_cam_world pose() const {
+        return geom::T_cam_world::from_raw(cv::Matx44d(T_cw.ptr<double>()));
+    }
 };
 
 struct CameraCalibration {

@@ -107,7 +107,7 @@ OpenCV 関数（`solvePnP` / `calibrateRobotWorldHandEye` / `projectPoints` / `u
 - **M0**: 本 doc + `docs/tracks/pose-3d.md` changelog 1 行。`docs:` コミット。
 - **M1**: `geom/frames.hpp` / `geom/world_convention.hpp` 追加、SE(3) ヘルパ昇格（実装移動、API 不変）、新規 `test_geom_frames`。既存コード未接続で build green 自明。`refactor(pose-3d):`
 - **M2**: extrinsic_solver / apriltag_marker / extrinsic_calib_session を typed alias 化 + basis 集約置換（split-brain 震源）。既存 test は数値不変。
-- **M3**: `Extrinsics.T_cw` を `geom::T_cam_world` 化、Triangulator ctor で typed→raw。`test_triangulator` 数値不変。
+- **M3**: `Extrinsics::pose()` 型付きアクセサ（`geom::T_cam_world`、fitra Z-up）を追加し Triangulator ctor がそれ経由で R/t を取得。`Extrinsics.T_cw` 自体は `cv::Mat` のまま据置 — calib_io は**任意入力を検証する直列化境界**であり、`validate_calibration` が T_cw の行列サイズ/有限性/同次行を弾く契約を持つ。固定 `Matx44d` 化すると不正ファイルが wrap 時に例外/誤読してこの検証を迂回するため、フィールド型は変えず**消費側で型付け**する（型安全の利得は triangulation が fitra Z-up extrinsic を受けることの保証、直列化境界の堅牢性は維持）。`test_triangulator` 数値不変。
 - **M4**: `test_vmt_protocol` / `test_firmware_protocol` に「変換が `geom::fitra_to_vmt_basis` と一致」のクロスチェック追加（実装据置、回帰ネット強化）。
 
 各 M で `ctest` 全 pass を green ゲート。M1→M4 は独立 revert 可能。
