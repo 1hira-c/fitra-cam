@@ -116,8 +116,8 @@ Scene make_scene(int n_cams, int n_faces, int n_poses,
                 ExtrinsicSample s;
                 s.cam_index = c;
                 s.face_id   = f;
-                s.T_cam_marker = A;
-                s.T_world_controller = B;
+                s.T_cam_marker = fitra::geom::T_cam_marker::from_raw(A);
+                s.T_world_controller = fitra::geom::T_world_controller::from_raw(B);
                 sc.samples.push_back(s);
             }
         }
@@ -140,8 +140,8 @@ void test_exact() {
     }
     for (const auto& ce : sol.cameras) {
         const cv::Matx44d& gt = sc.T_cam_world_gt[ce.cam_index];
-        CHECK_LT(trans_dist(ce.T_cam_world, gt), 1e-9);
-        CHECK_LT(rotation_angle_deg(ce.T_cam_world, gt), 1e-6);
+        CHECK_LT(trans_dist(ce.T_cam_world.raw(), gt), 1e-9);
+        CHECK_LT(rotation_angle_deg(ce.T_cam_world.raw(), gt), 1e-6);
         CHECK_LT(ce.face_spread_trans_m, 1e-9);
         CHECK_LT(ce.face_spread_rot_deg, 1e-6);
     }
@@ -154,7 +154,7 @@ void test_relative() {
     auto sol = solve_extrinsics(sc.samples);
     CHECK(sol.ok);
     CHECK(sol.cameras.size() == 2);
-    cv::Matx44d rel_est = sol.cameras[0].T_cam_world * invert_rigid(sol.cameras[1].T_cam_world);
+    cv::Matx44d rel_est = sol.cameras[0].T_cam_world.raw() * invert_rigid(sol.cameras[1].T_cam_world.raw());
     cv::Matx44d rel_gt  = sc.T_cam_world_gt[0] * invert_rigid(sc.T_cam_world_gt[1]);
     CHECK_LT(trans_dist(rel_est, rel_gt), 1e-9);
     CHECK_LT(rotation_angle_deg(rel_est, rel_gt), 1e-6);
@@ -167,8 +167,8 @@ void test_noisy() {
     CHECK(sol.ok);
     for (const auto& ce : sol.cameras) {
         const cv::Matx44d& gt = sc.T_cam_world_gt[ce.cam_index];
-        CHECK_LT(trans_dist(ce.T_cam_world, gt), 0.01);   // < 1 cm
-        CHECK_LT(rotation_angle_deg(ce.T_cam_world, gt), 1.0);  // < 1 deg
+        CHECK_LT(trans_dist(ce.T_cam_world.raw(), gt), 0.01);   // < 1 cm
+        CHECK_LT(rotation_angle_deg(ce.T_cam_world.raw(), gt), 1.0);  // < 1 deg
     }
     for (const auto& fs : sol.faces) {
         CHECK(fs.solved);

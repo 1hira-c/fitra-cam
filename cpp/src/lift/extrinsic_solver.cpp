@@ -67,8 +67,8 @@ ExtrinsicSolution solve_extrinsics(const std::vector<ExtrinsicSample>& samples,
         // max geodesic angle of any B_i relative to B_0.
         double span = 0.0;
         for (std::size_t i = 1; i < items.size(); ++i) {
-            span = std::max(span, rotation_angle_deg(items[0]->T_world_controller,
-                                                     items[i]->T_world_controller));
+            span = std::max(span, rotation_angle_deg(items[0]->T_world_controller.raw(),
+                                                     items[i]->T_world_controller.raw()));
         }
         fs.rotation_span_deg = span;
 
@@ -81,10 +81,11 @@ ExtrinsicSolution solve_extrinsics(const std::vector<ExtrinsicSample>& samples,
         std::vector<cv::Mat> R_w2c, t_w2c, R_b2g, t_b2g;
         R_w2c.reserve(items.size());
         for (const auto* s : items) {
-            cv::Matx33d Ra = rot_of(s->T_cam_marker);
-            cv::Vec3d   ta = trans_of(s->T_cam_marker);
-            cv::Matx33d Rb = rot_of(s->T_world_controller);
-            cv::Vec3d   tb = trans_of(s->T_world_controller);
+            // OpenCV boundary: unwrap the typed transforms for calibrateRobotWorldHandEye.
+            cv::Matx33d Ra = s->T_cam_marker.rot();
+            cv::Vec3d   ta = s->T_cam_marker.trans();
+            cv::Matx33d Rb = s->T_world_controller.rot();
+            cv::Vec3d   tb = s->T_world_controller.trans();
             R_w2c.push_back(cv::Mat(Ra));
             t_w2c.push_back(cv::Mat(ta));
             R_b2g.push_back(cv::Mat(Rb));
@@ -111,17 +112,19 @@ ExtrinsicSolution solve_extrinsics(const std::vector<ExtrinsicSample>& samples,
         cv::Vec3d   tz(t_g2c64.ptr<double>());
         cv::Matx33d Rx(R_b2w64.ptr<double>());  // X = T_marker←controller rotation
         cv::Vec3d   tx(t_b2w64.ptr<double>());
-        fs.T_cam_world         = compose(Rz, tz);
-        fs.T_marker_controller = compose(Rx, tx);
+        fs.T_cam_world         = geom::T_cam_vmtworld::from_raw(compose(Rz, tz));
+        fs.T_marker_controller = geom::T_marker_controller::from_raw(compose(Rx, tx));
 
-        // Residual: measured A_i vs predicted Z·B_i·X⁻¹.
-        cv::Matx44d Xinv = invert_rigid(fs.T_marker_controller);
+        // Residual: measured A_i (T_cam←marker) vs predicted Z·B_i·X⁻¹. The
+        // typed composition checks the frame chain at compile time:
+        //   Cam←Vmt · Vmt←Controller · Controller←Marker = Cam←Marker.
+        auto Xinv = fs.T_marker_controller.inverse();  // Controller←Marker
         double sum_t2 = 0.0, sum_a2 = 0.0;
         for (const auto* s : items) {
-            cv::Matx44d pred = fs.T_cam_world * s->T_world_controller * Xinv;
-            cv::Vec3d dt = trans_of(s->T_cam_marker) - trans_of(pred);
+            geom::T_cam_marker pred = fs.T_cam_world * s->T_world_controller * Xinv;
+            cv::Vec3d dt = s->T_cam_marker.trans() - pred.trans();
             sum_t2 += dt.dot(dt);
-            double da = rotation_angle_deg(s->T_cam_marker, pred);
+            double da = rotation_angle_deg(s->T_cam_marker.raw(), pred.raw());
             sum_a2 += da * da;
         }
         fs.residual_trans_rms_m = std::sqrt(sum_t2 / items.size());
@@ -144,19 +147,19 @@ ExtrinsicSolution solve_extrinsics(const std::vector<ExtrinsicSample>& samples,
         std::vector<cv::Matx33d> rots;
         cv::Vec3d tsum(0, 0, 0);
         for (const auto* fs : faces) {
-            rots.push_back(rot_of(fs->T_cam_world));
-            tsum += trans_of(fs->T_cam_world);
+            rots.push_back(fs->T_cam_world.rot());
+            tsum += fs->T_cam_world.trans();
             ce.n_samples += fs->n_samples;
         }
         cv::Matx33d Rmean = average_rotation(rots);
         cv::Vec3d   tmean = tsum / static_cast<double>(faces.size());
-        ce.T_cam_world = compose(Rmean, tmean);
+        ce.T_cam_world = geom::T_cam_vmtworld::from_raw(compose(Rmean, tmean));
 
         // Cross-face spread relative to the mean (quality metric).
         for (const auto* fs : faces) {
-            double dt = cv::norm(trans_of(fs->T_cam_world) - tmean);
+            double dt = cv::norm(fs->T_cam_world.trans() - tmean);
             ce.face_spread_trans_m = std::max(ce.face_spread_trans_m, dt);
-            double da = rotation_angle_deg(ce.T_cam_world, fs->T_cam_world);
+            double da = rotation_angle_deg(ce.T_cam_world.raw(), fs->T_cam_world.raw());
             ce.face_spread_rot_deg = std::max(ce.face_spread_rot_deg, da);
         }
         out.cameras.push_back(ce);

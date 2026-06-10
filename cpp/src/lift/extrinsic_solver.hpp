@@ -32,15 +32,21 @@
 
 #include <opencv2/core.hpp>
 
+#include "geom/frames.hpp"
+
 namespace fitra::lift {
 
 // One accepted observation: a single marker face seen by one camera at the
 // same instant the controller pose was sampled (motion-gated upstream).
+//
+// The controller poses come from the VR runtime in the VMT/SteamVR world frame
+// (Y-up), so the world the solver recovers extrinsics in is VmtWorld — see the
+// T_cam_world fields below and the basis change applied when persisting.
 struct ExtrinsicSample {
-    int         cam_index = 0;
-    int         face_id   = 0;
-    cv::Matx44d T_cam_marker{};        // A_i = T_cam←marker (from solvePnP)
-    cv::Matx44d T_world_controller{};  // B_i = T_world←controller (from VR)
+    int                       cam_index = 0;
+    int                       face_id   = 0;
+    geom::T_cam_marker        T_cam_marker{};        // A_i = T_cam←marker (solvePnP)
+    geom::T_world_controller  T_world_controller{};  // B_i = T_world←controller (VR)
 };
 
 struct ExtrinsicSolverOptions {
@@ -53,11 +59,13 @@ struct ExtrinsicSolverOptions {
 
 // Per (camera, face) hand-eye solution + self-consistency residual.
 struct FaceSolution {
-    int         cam_index = 0;
-    int         face_id   = 0;
-    int         n_samples = 0;
-    cv::Matx44d T_cam_world{};          // Z (the per-face extrinsic estimate)
-    cv::Matx44d T_marker_controller{};  // X (= Y_face⁻¹)
+    int                       cam_index = 0;
+    int                       face_id   = 0;
+    int                       n_samples = 0;
+    // Z (per-face extrinsic estimate). In VmtWorld — the controller-pose world;
+    // the basis change to fitra Z-up is applied only when persisting the YAML.
+    geom::T_cam_vmtworld      T_cam_world{};
+    geom::T_marker_controller T_marker_controller{};  // X (= Y_face⁻¹)
     // Spread of the controller-pose rotations feeding this group — low values
     // mean poor observability (the doc's "回転多様性" warning).
     double rotation_span_deg = 0.0;
@@ -69,9 +77,12 @@ struct FaceSolution {
 
 // Aggregated extrinsic for one camera across all its faces.
 struct CameraExtrinsic {
-    int         cam_index = 0;
-    cv::Matx44d T_cam_world{};   // world → camera (matches calib_io Extrinsics.T_cw)
-    int         n_faces   = 0;
+    int                  cam_index = 0;
+    // world → camera, in VmtWorld (the controller-pose frame). The persisted
+    // calib_io Extrinsics.T_cw is this re-expressed into fitra Z-up via
+    // geom::fitra_to_vmt_basis() — they match only after that basis change.
+    geom::T_cam_vmtworld T_cam_world{};
+    int                  n_faces   = 0;
     int         n_samples = 0;
     // Cross-face disagreement of the T_cam←world estimates (quality metric).
     double face_spread_trans_m   = 0.0;
