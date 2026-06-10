@@ -2,6 +2,7 @@
 # Declared before fitra_infer so RTMPose can use the active KeypointFormat
 # to validate engine K against the runtime topology.
 add_library(fitra_lift STATIC
+    geom/frames.cpp
     lift/calib_io.cpp
     lift/triangulator.cpp
     lift/extrinsic_solver.cpp

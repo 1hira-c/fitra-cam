@@ -83,14 +83,16 @@ Transform<frame::FitraWorld, frame::VmtWorld> vmt_to_fitra_basis();   // = .inve
 
 solver が消費する controller pose の world は VMT Y-up なので、**solver 出力 `Z = T_cam←world` は `Transform<Camera, VmtWorld>`（= `T_cam_vmtworld`）で型付けする**。同名フィールドが「変換前=VMT / 変換後=fitra」と非対称な点（(b)）が、ここで型として顕在化する:
 
+基底再表現の数式: ある点の fitra 座標 `p_f` と VMT 座標 `p_v` は `p_v = M·p_f`（M = `world_pos_to_vmt` の回転 = 旧 `kVmtWorldToFitra` の行列）。`T_cam_world·p_f = T_cam_vmtworld·p_v = T_cam_vmtworld·M·p_f` より右乗算行列は M。型では M は「fitra 座標を入れて vmt 座標を出す」= `Transform<VmtWorld, FitraWorld>` = `fitra_to_vmt_basis()`。
+
 ```cpp
 // solution_ (検証シーン用) は VMT Y-up のまま:  FaceSolution/CameraExtrinsic.T_cam_world : T_cam_vmtworld
 // 永続 YAML だけ fitra Z-up へ:
-geom::T_cam_world T_cw = ce.T_cam_world * geom::vmt_to_fitra_basis();  // Cam<-Vmt * Vmt<-Fitra = Cam<-Fitra
+geom::T_cam_world T_cw = ce.T_cam_world * geom::fitra_to_vmt_basis();  // Cam<-Vmt * Vmt<-Fitra = Cam<-Fitra
 extr.T_cw = cv::Mat(T_cw.raw()).clone();
 ```
 
-`ce.T_cam_world * geom::fitra_to_vmt_basis()`（向き違い）は `Cam<-Vmt * Vmt<-Fitra` ではなく `Cam<-Vmt * Fitra<-Vmt` でフレーム不一致 → コンパイルエラー。現状 `kVmtWorldToFitra` の右乗算と数式的に同一だが、向きを取り違えると通らなくなる。`kVmtWorldToFitra` ローカル定数は削除。
+`ce.T_cam_world * geom::vmt_to_fitra_basis()`（向き違い）は `Cam<-Vmt * Fitra<-Vmt` でフレーム不一致 → コンパイルエラー。現状 `kVmtWorldToFitra` の右乗算と数式的に同一だが、向きを取り違えると通らなくなる。`kVmtWorldToFitra` ローカル定数は削除。
 
 ### OpenCV 境界の escape-hatch 規約
 
@@ -118,7 +120,7 @@ ctest --test-dir cpp/build --output-on-failure
 ```
 
 - 既存 ctest が数値不変で pass: `test_extrinsic_solver`, `test_apriltag_marker`, `test_triangulator`, `test_tracker_extract`, `test_kalman_chain`, `test_vmt_protocol`, `test_firmware_protocol`, `test_extrinsic_calib_session` ほか。
-- 新規 `test_geom_frames`: 合成結合律 / `inverse` 往復恒等 / `fitra_to_vmt_basis` が `world_pos_to_vmt` の R と一致 / `vmt_to_fitra_basis` が旧 `kVmtWorldToFitra` とビット一致 / `Point3` 変換。
+- 新規 `test_geom_frames`: 合成結合律 / `inverse` 往復恒等 / `fitra_to_vmt_basis` が `world_pos_to_vmt` の R と一致 かつ 旧 `kVmtWorldToFitra` とビット一致 / `Point3` 変換。
 - ネガティブコンパイル確認（手順を本 doc に記載、CI 化は任意）: `T_cam_world{} * T_cam_marker{}` がコンパイルエラーになること（フレーム不一致）。
 - 実機: extrinsic calib → YAML 出力 → main 起動で検証シーンと live pose が同一フレームに乗る（2026-06-09 リグレッション再現防止）。
 
