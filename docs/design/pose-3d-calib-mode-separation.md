@@ -40,9 +40,16 @@ subject wizard と controller-marker extrinsic は live パイプラインと**�
 - (b) excal→subject の同一プロセス続行 (track changelog 2026-06-09) は**意図された UX**。
   これを壊すかどうかが本設計の主要トレードオフで、案C/C' の分岐点。
 
+疎結合化の到達目標をもう一段先に置く: **calib-extrinsic はサンプル動画 + 記録済み VR 座標データ
+だけで (カメラ・SteamVR・実機なしに) solve まで再現できる**こと。`ExtrinsicCalibSession` は
+既に `on_frame(cam_idx, cv::Mat, ControllerObservation)` という注入可能な seam を持ち
+(V4L2 / TRT / pose relay に非依存)、live 専用なのは main.cpp の tap 配線だけ。M2 で導入する
+軽量 capture ループを入力抽象越しに書けば、replay は同じ経路に載る (下記「オフライン replay」)。
+
 **完了条件**: runtime モードの構築パスに calibration session / tap / ホットスワップが存在しない。
 setup 系モードは publisher を構築しない。モード境界を越えるのは YAML のみ。ctest 全 pass +
-実機で excal → subject → runtime の 3 段フローが回る。
+実機で excal → subject → runtime の 3 段フローが回る。加えて calib-extrinsic が記録データからの
+replay で solve まで再現でき、その経路が ctest で固定されている。
 
 ## 検討した案
 
@@ -98,7 +105,8 @@ TRT/CUDA context・V4L2 の mid-process 完全 teardown→再構築という**�
 - `calib-extrinsic` は `MultiCameraDriver` を使わず、FrameSource 群を poll して
   `session->on_frame()` を呼ぶ**軽量 capture ループ** (新規・数十行) で回す。これにより
   driver の frame tap は calib-subject 専用の単一 consumer 機構になり、`main.cpp:653-680` の
-  状態分岐 mux が消える。
+  状態分岐 mux が消える。ループは入力抽象 (下記 `ExcalInputSource`) に対して書き、
+  live / replay を同一経路にする。
 - CLI は既存フラグを温存して mode を導出する (`--extrinsic-calib` → calib-extrinsic、
   `--calibrate` → calib-subject、どちらもなし → run)。両指定はエラー (排他)。
   invocation 互換を保ち、runbook/スクリプトの書き換えを不要にする。
@@ -109,6 +117,51 @@ TRT/CUDA context・V4L2 の mid-process 完全 teardown→再構築という**�
 新: solve 成功 → YAML 書き出し → web UI に「subject calib モードで再起動」のガイダンス
 (実行コマンド表示) を出して auto-exit。プロセス内 supervisor は持たない
 (必要になったら `scripts/` の薄い 2 段ラッパで足りる — 残課題)。
+
+### オフライン replay (calib-extrinsic の実機レステスト)
+
+セッション側の seam は既にある (`on_frame(cam_idx, bgr, ctrl)` / さらに低層の `ingest()`) ので、
+足すのは**入力側の抽象と記録フォーマット**だけ。
+
+- **入力抽象 `ExcalInputSource`**: 「次の (cam_idx, frame, ControllerObservation) をくれる」
+  だけの小さなインターフェース。実装 2 つ:
+  - live — FrameSource (decode-only) poll + `ControllerPoseBus::snapshot()` (現 main.cpp tap の
+    ロジックをそのまま移設)。
+  - replay — カメラごとの MP4 (`cv::VideoCapture`、tools 群で既に使用実績あり) + 下記 JSONL。
+- **記録 = 単体ツール `tools/excal_record`** (main 非依存。M1〜M3 を待たず先行投入できる)。
+  カメラ群 (V4L2 decode 不要 — MJPEG バイト列を**そのまま** `cam<N>/<frame>.jpg` へ書く
+  パススルー) + VMT pose relay 受信 (`ControllerPoseReceiver`) を持ち、フレーム単位で
+  `{cam, seq, file, ts_ms, ctrl: {running_ok, x,y,z, qx,qy,qz,qw, ...診断}}` を
+  `frames.jsonl` に 1 行ずつ書く。JPEG パススルーの理由: 再エンコードなし (録画中の CPU
+  ほぼゼロ・AprilTag コーナーが圧縮で劣化しない)、replay は同じバイト列を `imdecode`
+  するだけで live の CPU decode 経路と一致する。動画として眺めたければ ffmpeg で連結すれば
+  よい (`サンプル動画` の実体はこの JPEG 連番 + JSONL)。
+  **frame↔pose のペアリングを記録時に確定させる**のが肝 — 別々のストリームを replay 時に
+  timestamp で再ペアリングする方式は bus の stale 判定 (wall clock 依存) を再現できず
+  bit-exact にならない。motion gate / burst の時間判定はすべて記録済み `ts_ms` で駆動される
+  (wall clock 非依存) ので、ペア済み記録の逐次投入で収集判定が決定的に再現される。
+  `ts_ms` は live tap と同じ意味論 (`captured_at` の session 起点相対 ms)。
+  容量特性 (実測 1920x1200 MJPEG): JPEG 約 150KB/枚 × 30fps × 2 台 = 約 9MB/秒
+  (1 分 ≈ 0.55GB)。Jetson のディスクには十分収まるが fixture として残すには大きいので
+  **実録 fixture は短く録る**運用。さらに絞りたければ `--fps` を下げる (記録 = replay
+  フレームなので等価性は保たれる)。`running_ok` 区間のみ保存する間引きは velocity 推定
+  (`extrinsic_calib_session.cpp` `update_velocity_`) の連続性を変え bit-exact 等価性を
+  崩すため採らない。
+- **CLI**: `--excal-replay <session_dir>` で calib-extrinsic モードを replay 入力で起動 →
+  collect → solve → YAML 書き出しまで無人で実行 (web/カメラ/SteamVR 不要)。
+- **テスト 2 層**:
+  - ctest — replay loader の単体テスト。合成フレームを一時 JPEG 連番 + JSONL に書き出し →
+    replay 経路で `on_frame()` 直叩きと同一サンプル列になることを固定 (live↔replay 等価性)。
+    実録データはサイズ的にコミットしない。
+  - 実録 fixture — 実機で `excal_record` した短いセッションを `outputs/` 配下に保持し
+    (評価動画 `outputs/recorded_rtmpose/` と同じ扱い)、`--excal-replay` で solve 結果が
+    基準 YAML と一致することを手動/スクリプトで確認。回帰検証・solver パラメータ調整の
+    再現環境になる。
+
+subject calib 側は優先度を下げる: `on_frame` / `on_skeleton3d` とも注入可能な seam が既にあり、
+分析段 (`dump_keypoints_3d`) はそもそも録画 clip を食うオフラインツール、hold 判定の中核は
+`test_pose_recognizer` が単体で固定済み。ウィザード状態機械の skeleton JSONL replay は
+必要になったら同じパターンで足せる (残課題)。
 
 ### web の出し分け
 
@@ -140,14 +193,20 @@ mode dispatch + 各モードの組み立て宣言だけにする。calib-subject
   挙動変更: calib 中の tracker 出力停止、run での `/api/calib/*` 404。
 - **M2**: ライブ再注入の削除。`set_triangulator` / `reload_from_profile` / solved callback /
   tap mux を削除。calib-extrinsic を FrameSource 直結軽量ループ + decode-only 化
-  (TRT 実行時不要)。solve 後は auto-exit + 再起動ガイダンス。`test_crow_excal` の
+  (TRT 実行時不要)。ループは `ExcalInputSource` 抽象越しに実装 (live 実装のみ)。
+  solve 後は auto-exit + 再起動ガイダンス。`test_crow_excal` の
   同一プロセス続行を固定しているテストは新契約 (solve → guidance → exit) に書き換え。
 - **M3**: composition root 抽出 + Crow ルート登録のモジュール化。挙動不変リファクタ
   (M1/M2 の配線を builder へ移すだけ)。
-- **M4**: ドキュメント整備。track doc 現状節・`cpp-migration-plan.md` の該当アーキ記述・
-  3 段フロー runbook。
+- **M4**: オフライン replay。`--excal-replay` (replay 入力実装) + live↔replay 等価性の
+  ctest。実機で短い実録 fixture を 1 本録って solve 再現を確認。
+  (記録側 `tools/excal_record` は main 非依存の単体ツールなので M 系列に入れず先行投入 —
+  2026-06-10 実装済み。)
+- **M5**: ドキュメント整備。track doc 現状節・`cpp-migration-plan.md` の該当アーキ記述・
+  3 段フロー runbook + replay 手順。
 
-各 M で build + `ctest` 全 pass を green ゲート。M1 と M2 は独立 revert 可能、M3 は M1/M2 後提。
+各 M で build + `ctest` 全 pass を green ゲート。M1 と M2 は独立 revert 可能、M3 は M1/M2 後提、
+M4 は M2 の `ExcalInputSource` 後提。
 
 ## 検証
 
@@ -166,6 +225,9 @@ ctest --test-dir cpp/build --output-on-failure
   のシンボルが削除済み (コンパイルレベルで再注入経路が存在しない)。
 - 性能: run モードの hot path は不変ないし微減 (tap の nullptr チェック分岐が消える)。
   `calib-extrinsic` は TRT 初期化が消えるぶん起動が速くなる。
+- **オフライン replay** (M4): live↔replay 等価性 ctest が pass。実録セッションの
+  `--excal-replay` で solve が成功し、出力 extrinsics が記録時の基準 YAML と一致
+  (translation/rotation の許容差内)。カメラ・SteamVR 非接続環境で完走すること。
 
 ## 残課題
 
@@ -178,3 +240,6 @@ ctest --test-dir cpp/build --output-on-failure
   を実装する場合は calib-extrinsic の別フェーズ or 新 setup モードとして追加する。
 - excal→subject の 1 コマンド運用が実機で欲しくなったら `scripts/` の薄い 2 段ラッパで対応
   (案C' の同一プロセス再構築は再考しない)。
+- **subject calib の replay**: ウィザード状態機械への skeleton3d JSONL + 動画 replay。
+  seam (`on_frame` / `on_skeleton3d`) は既にあり、excal と同じパターンで足せる。
+  分析段は `dump_keypoints_3d` が既にオフラインなので、必要性が出てから。

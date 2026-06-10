@@ -74,7 +74,12 @@ Triangulator ホットスワップ・frame tap 多重化) を解消する設計�
 RunMode (`run` / `calib-subject` / `calib-extrinsic`) に分け、モード間の受け渡しを YAML 成果物
 (CalibrationSet / SubjectProfile) + プロセス再起動のみへ縮退。excal→subject の同一プロセス続行
 UX は再起動ガイダンスへ置換 (案C' 同一プロセス再構築は teardown リスクで没、案B 別バイナリ化は
-build graph 手術が先で将来含み)。本エントリ時点では設計 doc のみ (M0)、実装 M1〜M4 は別ブランチ。
+build graph 手術が先で将来含み)。到達目標としてオフライン replay を追加: calib-extrinsic を
+サンプル動画 + 記録済み VR 座標 (JSONL) だけで solve まで再現可能にし、live↔replay 等価性を
+ctest で固定する (M4)。記録側の単体ツール `tools/excal_record` (MJPEG パススルー JPEG 連番 +
+frame↔pose ペア済み frames.jsonl、main 非依存・TRT 実行不要) は本エントリで先行実装済み —
+実機 2 カメラ + 擬似 OSC pose でスモーク確認 (30fps×2 維持・ペアリング/単調 ts 検証)。
+モード分離本体の M1〜M5 は別ブランチ。
 → [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
 
 ### 2026-06-10 — 座標フレームを型レベルで区別 (split-brain 再発を型で防止)
