@@ -67,6 +67,16 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-10 — キャリブレーション専念モード化の設計 doc (M0、実装は別途)
+「初期設定・キャリブ中に他モジュールは動かなくてよい」という前提合意を受け、subject wizard /
+controller-marker extrinsic と live パイプラインの同居 + ライブ再注入 (IK ホットリロード・
+Triangulator ホットスワップ・frame tap 多重化) を解消する設計を記録。1 バイナリのまま排他
+RunMode (`run` / `calib-subject` / `calib-extrinsic`) に分け、モード間の受け渡しを YAML 成果物
+(CalibrationSet / SubjectProfile) + プロセス再起動のみへ縮退。excal→subject の同一プロセス続行
+UX は再起動ガイダンスへ置換 (案C' 同一プロセス再構築は teardown リスクで没、案B 別バイナリ化は
+build graph 手術が先で将来含み)。本エントリ時点では設計 doc のみ (M0)、実装 M1〜M4 は別ブランチ。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
 ### 2026-06-10 — 座標フレームを型レベルで区別 (split-brain 再発を型で防止)
 3D 数学が素の `cv::Matx44d` / `cv::Vec3d` で、フレーム意味論が変数名とコメントだけに宿っていた問題に対し、
 SE(3) レイヤ (extrinsic solver / triangulation / calib I/O / calib session) へ phantom-typed
