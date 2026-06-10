@@ -67,6 +67,16 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-10 — 座標フレームを型レベルで区別 (split-brain 再発を型で防止)
+3D 数学が素の `cv::Matx44d` / `cv::Vec3d` で、フレーム意味論が変数名とコメントだけに宿っていた問題に対し、
+SE(3) レイヤ (extrinsic solver / triangulation / calib I/O / calib session) へ phantom-typed
+`geom::Transform<To,From>` 代数を導入。中間フレーム不一致の合成と world 種別 (fitra Z-up / VMT Y-up) の
+取り違えをコンパイルエラー化する。3 箇所に散在していた Z-up↔Y-up 変換を単一の `geom::fitra_to_vmt_basis()` /
+`vmt_to_fitra_basis()` に集約 (`extrinsic_calib_session` の `kVmtWorldToFitra` を置換、wire 変換は実装据置で
+test クロスチェック)。leaf (`Joint3D`/kalman/IK/wire) は現状維持し「常に fitra Z-up」を不変条件で固定。
+2026-06-09 の split-brain リグレッションの根因 (型で防げない frame 混同) を構造的に塞ぐ。挙動・数値は不変。
+→ [design/pose-3d-typed-coordinate-frames.md](../design/pose-3d-typed-coordinate-frames.md)
+
 ### 2026-06-10 — subject calib の drift ゲートを post-IK 値へ戻す (pose 判定不能を修正)
 2026-06-09 の pre-IK skeleton 化で、calibration tap に渡す `bone_drift_pct` まで pre-IK の
 measured 値に変えてしまい、`PoseRecognizer` の `max_bone_drift_pct` (~10%) ゲートを毎フレーム超過
