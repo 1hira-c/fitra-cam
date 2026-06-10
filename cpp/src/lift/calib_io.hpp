@@ -44,4 +44,11 @@ struct CalibrationSet {
 CalibrationSet load_calibration(const std::string& path);
 void validate_calibration(const CalibrationSet& calib);
 
+// Write `calib` to `path` in the same OpenCV FileStorage layout
+// load_calibration reads (schema / unit / coordinate_system + per-camera
+// intrinsics map + optional per-camera extrinsics map). Cameras with
+// has_extrinsics=false are emitted under intrinsics only. Throws on open
+// failure. Used by the extrinsic calibration session to persist results.
+void write_calibration(const std::string& path, const CalibrationSet& calib);
+
 }  // namespace fitra::lift

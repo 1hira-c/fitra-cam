@@ -67,6 +67,63 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-10 — subject calib の drift ゲートを post-IK 値へ戻す (pose 判定不能を修正)
+2026-06-09 の pre-IK skeleton 化で、calibration tap に渡す `bone_drift_pct` まで pre-IK の
+measured 値に変えてしまい、`PoseRecognizer` の `max_bone_drift_pct` (~10%) ゲートを毎フレーム超過
+→ ポーズが永久に検出されず IK 較正に入れない回帰を生んでいた (身長入力済みでも不可)。post-IK
+skeleton は bone 長が model にクランプされ drift ≈ 0 (=従来動いていた緩いゲート) なのに対し、生の
+pre-IK 三角測量は容易に 10% を超えるのが原因。**角度の算出元は measured (pre-IK) skeleton のまま**
+(hinge clamp バイアス回避は維持) で、**tap に渡す drift だけ post-IK 値へ戻す**よう
+`MultiCameraDriver::maybe_update_3d` を修正。measured skeleton のコピーは tap がある時だけ取得し
+live path のコストは増やさない。`test_pose_recognizer` に「有効な T-pose は低 drift で in_band、
+高 drift では `bone_drift` 軸で reject」を固定。
+
+### 2026-06-09 — extrinsic (研究) — 床 AprilTag SfM マップ方式を検討
+共視不要の静的アンカー代替を整理。床 + 可搬スタンド (壁不要) に大判 AprilTag を配置し、スマホ全景
+撮影で SfM マップを自動復元 → 各カメラを共通マップに localize する。案A/案B の却下理由 (同時共視不能
+/ BA 共視経路) をマップ構築と localize の時間分離で迂回し、VR を外すことで案C 律速の Quest SLAM
+drift 項を誤差バジェットから消せる。案C を潰さず初期設定で選べる方式の 1 つとして位置づけ、案C の
+drift 実測リファレンスにも使える。未実装・設計フェーズ前。
+→ [research/floor-apriltag-sfm-map.md](../research/floor-apriltag-sfm-map.md)
+(設計doc 案D に相互リンク: [design/pose-3d-controller-marker-extrinsic.md](../design/pose-3d-controller-marker-extrinsic.md))
+
+### 2026-06-09 — hand-eye extrinsics を fitra Z-up で書き出し (検証シーンは VMT Y-up 維持)
+controller-marker hand-eye の解 `T_cam←world` は controller pose と同じ VMT/SteamVR **Y-up** frame
+で出るため、Z-up 前提の downstream (triangulation・IK・メイン ws3d viewer・SlimeVR・solve 後の live
+hot-swap) で床が垂直に表示され (カメラ中心 z が負) 誤った frame に乗っていた。`solve_and_write` で
+**永続化 YAML を作るときだけ** 各 `T_cw` に基底変換 (`world_pos_to_vmt` の回転 Rx(−90°) の逆 = 世界軸
+の付け替え) を右から掛け fitra Z-up へ再表現し、`coordinate_system` ラベルも z-up へ上書き。一方
+`/extrinsic-calib` の 3D 検証シーン (`scene.js`) は `/api/excal/extrinsics` のカメラと
+`/api/excal/poses` の live HMD/コントローラ姿勢を同一 frame に重ねる道具で、live 姿勢が VMT Y-up・床
+Y=0 のため、`extrinsics_json` (=`solution_`) は **無変換 (VMT Y-up) のまま** 維持する。世界軸の回転
+なので相対 extrinsic・基線長は不変、永続化側の絶対姿勢だけが Z-up に揃う。`test_extrinsic_calib_session`
+に「書き出し `T_cw` が ground truth×basis change と一致 (回転 ~0°)・未変換とは ~90° 異なる・ラベルが
+z-up」と「`extrinsics_json` の cam 中心が VMT frame のまま」を固定。詳細は
+`docs/design/pose-3d-controller-marker-extrinsic.md`。
+
+> 注: 当初 `extrinsics_json` も Z-up に変換したが、検証シーンでカメラだけ Z-up・live 姿勢が Y-up と
+> なりカメラが別位置に出る回帰を生んだため、変換を永続化 YAML 限定へ修正 (同日)。
+
+### 2026-06-09 — subject calibration の角度判定を pre-IK skeleton 化
+subject calib の `PoseRecognizer` が live publish と同じ post-IK skeleton を見ていたため、身長 prior
+や hinge/length clamp が作った補正後の関節角で hold 判定していた。腕を伸ばしていても肘 flex が
+人工的に増える可能性があるため、`MultiCameraDriver` の calibration tap を Kalman 後・IK 前の
+measured skeleton に移動。`bone_drift_pct` は同じ measured skeleton 対象で渡し、公開 `/ws3d` /
+tracker 出力は従来どおり post-IK skeleton を維持。`test_pose_recognizer` で伸展腕の raw 角度と
+post-IK hinge clamp バイアスを固定。
+
+### 2026-06-09 — extrinsic solve 後に subject calibration へ続行
+`/` のヘッダには常に `/subject-calib` リンクが出る一方、Crow 側は `CalibrationSession`
+attach 時だけ `/subject-calib` 静的 route を登録していたため、`--enable-3d` なし / 2 カメラ以外 /
+`--extrinsic-calib` 中など subject wizard 無効条件ではリンク先が 404 になっていた。静的 UI 配信を
+session 有無から切り離し、`/api/calib/*` は session 未 attach 時に JSON 503 (`state=unavailable`)
+を返す形へ変更。`test_crow_excal` に未 attach 時の `/subject-calib` 静的配信 smoke を追加。
+さらに `--extrinsic-calib` 中でも `CalibrationSession` を attach し、frame tap は extrinsic
+collecting/solving 中だけ AprilTag collector へ、それ以外は subject recorder へ振り分ける。
+`/api/excal/solve` 成功時は書き出した `--excal-out` を読み直して live `Triangulator` を
+hot-swap し、WebUI に `Subject calib` 導線を出す。これにより同一プロセスで extrinsic solve →
+subject preflight/capture へ進める。終了時は solve 済み extrinsics を再 solve しない。
+
 ### 2026-05-29 — Triangulator のスクラッチバッファ再利用 (挙動不変リファクタ)
 `Triangulator::triangulate()` / `triangulate_joint()` が per-keypoint・per-view で
 確保していた `std::vector` (`views` / `undistortPoints` の入出力 1 要素ベクタ /
@@ -117,6 +174,45 @@ Kalman / IK) のうち上 2 層で解決。tracker_extract に hip 相対 hold +
 FK fallback を追加し、Kalman を per-joint 独立から hip 起点の kinematic-tree (root world +
 child parent-relative offset) に再構築。
 → [design/pose-3d-locomotion-stability.md](../design/pose-3d-locomotion-stability.md)
+
+### 2026-05-27 — コントローラ固定 AprilTag extrinsic: M1 transport + M2 ソルバ/検出コア
+案C (コントローラ固定マーカー + VR world 連結) のソフト側コアを着手・実装。実機を要する
+M0 (PnP 残差 / SLAM ドリフト実測) と live 収集 UI (M2 後半 / M4) は手戻りリスクを承知で後回し、
+ハードに依存しない 3 モジュールを単体テスト付きで先行実装した:
+- **M1 transport**: `vmt/controller_pose_receiver.{hpp,cpp}` — `/fitra/controller_pose`
+  (`,iiffffffff` = HMD の `,iffffffff` に `eTrackingResult` を 1 個追加) を HMD と並列の
+  latest-wins bus で受信。`running_ok()` ゲート (`bPoseIsValid && Running_OK`)。OSC decode
+  helper を `vmt/osc_decode.hpp` に抽出し HMD 経路と共有。
+- **M2 ソルバ**: `lift/extrinsic_solver.{hpp,cpp}` — `A_i·X = Z·B_i` を
+  `cv::calibrateRobotWorldHandEye` (AX=ZB) に写像 (A=T_cam←marker / B=T_world←controller /
+  Z=T_cam←world / X=T_marker←controller=Y_face⁻¹)。(camera,face) グループ毎に解き、面間で
+  T_cam←world を集約 + spread を品質指標化、自己残差も算出。
+- **M2 検出**: `lift/apriltag_marker.{hpp,cpp}` — `DICT_APRILTAG_36h11` 検出 + 面 ID→サイズ
+  設定 + `SOLVEPNP_IPPE_SQUARE` で T_cam←face。`objdetect` を OpenCV link に追加。
+- **収集ループ骨格 + 配線**: `pipeline/extrinsic_calib_session.{hpp,cpp}` — frame tap → 検出 →
+  controller pose ペアリング → モーションゲート (線速/角速しきい) → (cam,face) 毎バースト平均 →
+  `ExtrinsicSample` 蓄積 → 終了時 solve + `CalibrationSet` 書き出し。`calib_io::write_calibration`
+  新設。`main`/`main_config` に `--extrinsic-calib` / `extrinsic_calib:` セクションと
+  `ControllerPoseReceiver` 起動を配線 (subject wizard と frame tap 排他)。
+- **Crow 配線 + WebUI**: `crow_server` に `set_extrinsic_calib_session` +
+  `/api/excal/{state,start,stop,solve,extrinsics}` (subject wizard の `/api/calib/*` と同型) +
+  `/extrinsic-calib` 静的配信。フロントエンド `web/extrinsic_calibration/` — Start/Stop/Solve、
+  理由付き Capture gate (GOOD/MOVING/NO_TAG/NO_POSE)、per-camera ライブ検出 (face·reproj·age)、
+  被覆マトリクス (cam×face, min_samples でセル色)、Solve 後 per-camera 結果。`state_json` に
+  `num_cams`/`min_samples`/`faces`/`gate_reason`/`detections` 追加。
+- **3D 検証シーン**: `scene.html`+`scene.js` (three.js, vendor 流用) が `/api/excal/extrinsics`
+  (intrinsics + `T_cam_world` + center) を読み、各カメラ 6DoF を共通 world frame に frustum 配置。
+  session は `on_frame` で per-camera 最新検出を保持 + `gate_reason_`/`extrinsics_json` を公開。
+- 検証: `ctest -R 'extrinsic_solver|apriltag_marker|controller_pose_receiver|extrinsic_calib_session|main_config|crow_excal'`。
+  合成データで厳密復元 (1e-9 m / 1e-6°)・相対 extrinsic 恒等・ノイズ <1cm/<1°、tag
+  render→detect→PnP 往復、収集ループの gate/burst + end-to-end solve→write→reload、
+  レンダ tag→on_frame の検出/gate_reason、`extrinsics_json` 内容、ループバック実 HTTP で
+  `/api/excal/*` + 静的配信 (collect/scene)。
+- **未** (実機 or 大掛かりで保留): Windows sender の controller 送出、per-camera ライブ**映像**
+  オーバーレイ (検出ステータスはテキスト表示済、映像配信は別途)、M4 live solver 重畳、M3 BA
+  (閉形式が合成厳密復元 + 動機が M0 実測待ちのため保留)、M0 実測。収集制御は headless 既定 +
+  WebUI/API 手動制御。
+→ [design/pose-3d-controller-marker-extrinsic.md](../design/pose-3d-controller-marker-extrinsic.md)
 
 ### 2026-05-24〜25 — roll 品質詰め + WebUI tracker 可視化 + per-tracker stats
 「観察基盤を先に作る → データで仮説確定 → 構造修正」の順で立位伸展時の 90° roll を解消。

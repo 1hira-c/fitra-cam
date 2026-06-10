@@ -1,9 +1,8 @@
-#include "vmt/hmd_pose_receiver.hpp"
+#include "vmt/controller_pose_receiver.hpp"
 
 #include "vmt/osc_decode.hpp"
 
 #include <arpa/inet.h>
-#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -14,15 +13,13 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
-#include <stdexcept>
-#include <string>
 
 namespace fitra::vmt {
 
 namespace {
 
-constexpr const char* kAddress = "/fitra/hmd_pose";
-constexpr const char* kTypetag = ",iffffffff";
+constexpr const char* kAddress = "/fitra/controller_pose";
+constexpr const char* kTypetag = ",iiffffffff";
 
 inline double now_steady_ms() {
     using namespace std::chrono;
@@ -40,8 +37,9 @@ using osc::read_be_float;
 // Parser (pure function)
 // ---------------------------------------------------------------------------
 
-bool parse_hmd_pose_packet(const std::uint8_t* data, std::size_t len, HmdPose& out) {
-    if (!data || len < 16) return false;  // address alone is at least 16 bytes
+bool parse_controller_pose_packet(const std::uint8_t* data, std::size_t len,
+                                  ControllerPose& out) {
+    if (!data || len < 24) return false;  // address (24 bytes) alone is the floor
 
     std::string addr;
     std::size_t off = consume_osc_string(data, len, addr);
@@ -52,37 +50,38 @@ bool parse_hmd_pose_packet(const std::uint8_t* data, std::size_t len, HmdPose& o
     if (adv == 0 || typetag != kTypetag) return false;
     off += adv;
 
-    // Remaining must be exactly 9 × 4 byte args (i32 + 8 × f32).
-    constexpr std::size_t kArgBytes = 9 * 4;
+    // Remaining must be exactly 10 × 4 byte args (2 × i32 + 8 × f32).
+    constexpr std::size_t kArgBytes = 10 * 4;
     if (len - off < kArgBytes) return false;
 
     const std::uint8_t* a = data + off;
-    out.valid       = (read_be32(a + 0)  != 0);
-    out.timestamp_s = read_be_float(a + 4);
-    out.x           = read_be_float(a + 8);
-    out.y           = read_be_float(a + 12);
-    out.z           = read_be_float(a + 16);
-    out.qx          = read_be_float(a + 20);
-    out.qy          = read_be_float(a + 24);
-    out.qz          = read_be_float(a + 28);
-    out.qw          = read_be_float(a + 32);
+    out.valid           = (read_be32(a + 0) != 0);
+    out.tracking_result = static_cast<std::int32_t>(read_be32(a + 4));
+    out.timestamp_s     = read_be_float(a + 8);
+    out.x               = read_be_float(a + 12);
+    out.y               = read_be_float(a + 16);
+    out.z               = read_be_float(a + 20);
+    out.qx              = read_be_float(a + 24);
+    out.qy              = read_be_float(a + 28);
+    out.qz              = read_be_float(a + 32);
+    out.qw              = read_be_float(a + 36);
     return true;
 }
 
 // ---------------------------------------------------------------------------
-// HmdPoseBus
+// ControllerPoseBus
 // ---------------------------------------------------------------------------
 
-void HmdPoseBus::publish(const HmdPose& pose) {
+void ControllerPoseBus::publish(const ControllerPose& pose) {
     std::lock_guard<std::mutex> g(mu_);
     latest_              = pose;
     have_any_            = true;
     last_recv_steady_ms_ = now_steady_ms();
 }
 
-HmdPoseSnapshot HmdPoseBus::snapshot(double stale_threshold_ms) const {
+ControllerPoseSnapshot ControllerPoseBus::snapshot(double stale_threshold_ms) const {
     std::lock_guard<std::mutex> g(mu_);
-    HmdPoseSnapshot s;
+    ControllerPoseSnapshot s;
     s.have_any = have_any_;
     s.pose     = latest_;
     if (!have_any_) {
@@ -95,34 +94,34 @@ HmdPoseSnapshot HmdPoseBus::snapshot(double stale_threshold_ms) const {
     return s;
 }
 
-void HmdPoseBus::reset() {
+void ControllerPoseBus::reset() {
     std::lock_guard<std::mutex> g(mu_);
-    latest_              = HmdPose{};
+    latest_              = ControllerPose{};
     have_any_            = false;
     last_recv_steady_ms_ = 0.0;
 }
 
 // ---------------------------------------------------------------------------
-// HmdPoseReceiver
+// ControllerPoseReceiver
 // ---------------------------------------------------------------------------
 
-HmdPoseReceiver::HmdPoseReceiver(HmdPoseBus& bus, HmdPoseReceiverOptions opts)
+ControllerPoseReceiver::ControllerPoseReceiver(ControllerPoseBus& bus,
+                                               ControllerPoseReceiverOptions opts)
     : bus_(bus), opts_(std::move(opts)) {}
 
-HmdPoseReceiver::~HmdPoseReceiver() { stop(); }
+ControllerPoseReceiver::~ControllerPoseReceiver() { stop(); }
 
-bool HmdPoseReceiver::start() {
+bool ControllerPoseReceiver::start() {
     if (sock_fd_ >= 0) return true;  // already started (idempotent-ish)
 
     sock_fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (sock_fd_ < 0) {
-        std::fprintf(stderr, "[hmd_pose_receiver] socket() failed: %s\n",
+        std::fprintf(stderr, "[controller_pose_receiver] socket() failed: %s\n",
                      std::strerror(errno));
         return false;
     }
 
-    // Non-blocking with short recvfrom timeout via SO_RCVTIMEO so stop()
-    // exits the loop quickly without needing eventfd.
+    // Short recvfrom timeout via SO_RCVTIMEO so stop() exits the loop quickly.
     timeval tv{};
     tv.tv_sec  = 0;
     tv.tv_usec = 100 * 1000;  // 100 ms
@@ -138,7 +137,7 @@ bool HmdPoseReceiver::start() {
         addr.sin_addr.s_addr = htonl(INADDR_ANY);
     } else if (::inet_pton(AF_INET, opts_.bind.c_str(), &addr.sin_addr) != 1) {
         std::fprintf(stderr,
-            "[hmd_pose_receiver] invalid bind address '%s'\n",
+            "[controller_pose_receiver] invalid bind address '%s'\n",
             opts_.bind.c_str());
         ::close(sock_fd_);
         sock_fd_ = -1;
@@ -146,7 +145,7 @@ bool HmdPoseReceiver::start() {
     }
 
     if (::bind(sock_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        std::fprintf(stderr, "[hmd_pose_receiver] bind(%s:%u) failed: %s\n",
+        std::fprintf(stderr, "[controller_pose_receiver] bind(%s:%u) failed: %s\n",
                      opts_.bind.c_str(), opts_.port, std::strerror(errno));
         ::close(sock_fd_);
         sock_fd_ = -1;
@@ -155,12 +154,12 @@ bool HmdPoseReceiver::start() {
 
     stop_.store(false);
     recv_thread_ = std::thread([this]() { recv_loop(); });
-    std::printf("[hmd_pose_receiver] listening on %s:%u (stale_ms=%.1f)\n",
+    std::printf("[controller_pose_receiver] listening on %s:%u (stale_ms=%.1f)\n",
                 opts_.bind.c_str(), opts_.port, opts_.stale_ms);
     return true;
 }
 
-void HmdPoseReceiver::stop() {
+void ControllerPoseReceiver::stop() {
     stop_.store(true);
     if (recv_thread_.joinable()) recv_thread_.join();
     if (sock_fd_ >= 0) {
@@ -169,13 +168,13 @@ void HmdPoseReceiver::stop() {
     }
 }
 
-HmdPoseReceiverStats HmdPoseReceiver::stats() const {
+ControllerPoseReceiverStats ControllerPoseReceiver::stats() const {
     std::lock_guard<std::mutex> g(stats_mu_);
     return stats_;
 }
 
-void HmdPoseReceiver::recv_loop() {
-    std::uint8_t buf[512];  // /fitra/hmd_pose is 64 bytes; oversize for safety
+void ControllerPoseReceiver::recv_loop() {
+    std::uint8_t buf[512];  // packet is 72 bytes; oversize for safety
     while (!stop_.load()) {
         sockaddr_in src{};
         socklen_t   src_len = sizeof(src);
@@ -190,13 +189,13 @@ void HmdPoseReceiver::recv_loop() {
                 ++stats_.recv_errors;
             }
             std::fprintf(stderr,
-                "[hmd_pose_receiver] recvfrom failed: %s\n",
+                "[controller_pose_receiver] recvfrom failed: %s\n",
                 std::strerror(errno));
             continue;
         }
 
-        HmdPose pose;
-        if (!parse_hmd_pose_packet(buf, static_cast<std::size_t>(n), pose)) {
+        ControllerPose pose;
+        if (!parse_controller_pose_packet(buf, static_cast<std::size_t>(n), pose)) {
             std::lock_guard<std::mutex> g(stats_mu_);
             ++stats_.packets_rejected;
             continue;
