@@ -9,7 +9,7 @@
 // composes the typed Transforms below so the conversion direction is checked.
 //
 //   fitra (Z-up, X-right, Y-forward) -> VMT (Y-up, X-right, Z-back)
-//   is (x, y, z) -> (x, z, -y), i.e. a +90deg rotation about X mapping the
+//   is (x, y, z) -> (x, z, -y), i.e. an Rx(-90deg) rotation about X mapping the
 //   fitra axes onto the VMT axes (the rotation part of vmt::world_pos_to_vmt).
 
 #include "geom/frames.hpp"

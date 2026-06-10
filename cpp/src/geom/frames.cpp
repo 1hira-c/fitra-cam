@@ -53,19 +53,20 @@ cv::Vec4d mat_to_quat(const cv::Matx33d& R) {
         y = (R(0, 2) - R(2, 0)) / s;
         z = (R(1, 0) - R(0, 1)) / s;
     } else if (R(0, 0) > R(1, 1) && R(0, 0) > R(2, 2)) {
-        double s = std::sqrt(1.0 + R(0, 0) - R(1, 1) - R(2, 2)) * 2.0;
+        // clamp the radicand: a slightly non-orthonormal R can push it < 0 → NaN.
+        double s = std::sqrt(std::max(0.0, 1.0 + R(0, 0) - R(1, 1) - R(2, 2))) * 2.0;
         w = (R(2, 1) - R(1, 2)) / s;
         x = 0.25 * s;
         y = (R(0, 1) + R(1, 0)) / s;
         z = (R(0, 2) + R(2, 0)) / s;
     } else if (R(1, 1) > R(2, 2)) {
-        double s = std::sqrt(1.0 + R(1, 1) - R(0, 0) - R(2, 2)) * 2.0;
+        double s = std::sqrt(std::max(0.0, 1.0 + R(1, 1) - R(0, 0) - R(2, 2))) * 2.0;
         w = (R(0, 2) - R(2, 0)) / s;
         x = (R(0, 1) + R(1, 0)) / s;
         y = 0.25 * s;
         z = (R(1, 2) + R(2, 1)) / s;
     } else {
-        double s = std::sqrt(1.0 + R(2, 2) - R(0, 0) - R(1, 1)) * 2.0;
+        double s = std::sqrt(std::max(0.0, 1.0 + R(2, 2) - R(0, 0) - R(1, 1))) * 2.0;
         w = (R(1, 0) - R(0, 1)) / s;
         x = (R(0, 2) + R(2, 0)) / s;
         y = (R(1, 2) + R(2, 1)) / s;
@@ -89,6 +90,7 @@ cv::Matx33d quat_to_mat(const cv::Vec4d& q) {
 
 // Chordal mean of rotations via sign-aligned quaternion averaging.
 cv::Matx33d average_rotation(const std::vector<cv::Matx33d>& rots) {
+    if (rots.empty()) return cv::Matx33d::eye();  // defensive: front() would be UB
     cv::Vec4d acc(0, 0, 0, 0);
     cv::Vec4d ref = mat_to_quat(rots.front());
     for (const auto& R : rots) {

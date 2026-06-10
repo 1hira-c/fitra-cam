@@ -9,6 +9,7 @@
 #include "geom/frames.hpp"
 #include "geom/world_convention.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -130,6 +131,19 @@ void test_extrinsic_reexpress() {
     CHECK_LT(mat_diff(T_cam_fitra.raw(), legacy), 1e-15);
 }
 
+// Defensive guards: empty input must not be UB.
+void test_degenerate_inputs() {
+    // average_rotation({}) must return identity (front() would be UB).
+    cv::Matx33d r = average_rotation({});
+    CHECK_LT(mat_diff(cv::Matx44d::eye(),
+                      cv::Matx44d(r(0,0),r(0,1),r(0,2),0,
+                                  r(1,0),r(1,1),r(1,2),0,
+                                  r(2,0),r(2,1),r(2,2),0,
+                                  0,0,0,1)), 1e-12);
+    // average_poses({}) returns identity too.
+    CHECK_LT(mat_diff(average_poses({}), cv::Matx44d::eye()), 1e-12);
+}
+
 }  // namespace
 
 int main() {
@@ -138,6 +152,7 @@ int main() {
     test_point_transport();
     test_basis_change();
     test_extrinsic_reexpress();
+    test_degenerate_inputs();
     if (g_fail) {
         std::fprintf(stderr, "test_geom_frames: %d failures\n", g_fail);
         return 1;
