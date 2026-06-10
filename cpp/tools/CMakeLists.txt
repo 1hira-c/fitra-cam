@@ -99,6 +99,22 @@ set_target_properties(fitra_check_calibration PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
+# Excal replay sample recorder: raw MJPEG passthrough frames + per-frame
+# paired controller poses (frames.jsonl). No TRT execution at runtime.
+add_executable(fitra_excal_record
+    excal_record.cpp
+)
+
+target_link_libraries(fitra_excal_record PRIVATE
+    fitra_camera      # V4l2Capture (link pulls fitra_infer; unused at runtime)
+    fitra_vmt         # ControllerPoseReceiver / ControllerPoseBus
+)
+
+set_target_properties(fitra_excal_record PROPERTIES
+    OUTPUT_NAME "excal_record"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
 # Recorded two-camera 2D -> 3D dump with reprojection overlays.
 add_executable(fitra_dump_keypoints_3d
     dump_keypoints_3d.cpp
