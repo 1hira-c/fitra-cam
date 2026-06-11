@@ -3,11 +3,22 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-05-29)
+## 現状 (2026-06-11)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
 **kinematic-tree (root = hip_center, children = parent-relative offset)** で動く。
+
+**プロセスは排他 RunMode (`run` / `calib-subject` / `calib-extrinsic`) で動く**
+([design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md) M1–M4
+実装済み)。mode は既存フラグから導出 (`--calibrate` → calib-subject、`--extrinsic-calib` or
+`--excal-replay` → calib-extrinsic)。calib↔runtime の契約は **YAML 成果物のみ**
+(CalibrationSet / SubjectProfile) + プロセス再起動 — ライブ再注入 (triangulator ホットスワップ /
+IK ホットリロード / tap mux) はコンパイルレベルで存在しない。構築は `cpp/src/app/` の
+builder + モード runner (main.cpp は dispatch のみ)。calib-extrinsic は TRT 非依存の
+decode-only で、`--excal-replay <dir>` により `tools/excal_record` セッションから実機レスで
+solve まで再現できる (live↔replay 等価性は `test_excal_replay` で固定)。
+運用手順は [runbook-pose-3d-calibration.md](../runbook-pose-3d-calibration.md)。
 
 ### 設計原則 / live な制約
 
@@ -66,6 +77,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-06-11 — 専念モード化のドキュメント整備 (M5、M1–M5 完了)
+track doc 現状節をモード分離後アーキへ更新、`cpp-migration-plan.md` のレイアウト節に
+`app/` composition root の注記を追加、設計 doc に実装記録 (doc 未記載だった実装判断 +
+意図的挙動変更 + 残検証) を追記。3 段フロー (excal → subject → run) と
+`excal_record` / `--excal-replay` の運用手順を
+[runbook-pose-3d-calibration.md](../runbook-pose-3d-calibration.md) として新設。
+**残**: 実機での 3 段フロー通し確認と実録 fixture からの solve 再現。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
 
 ### 2026-06-11 — calib-extrinsic オフライン replay (--excal-replay) + live↔replay 等価性 ctest (専念モード化 M4)
 `tools/excal_record` セッション (JPEG 連番 + ペア済み frames.jsonl) を `ExcalInputSource` の

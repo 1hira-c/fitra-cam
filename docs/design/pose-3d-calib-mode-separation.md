@@ -1,6 +1,7 @@
 # pose-3d: キャリブレーション専念モード化 (calib↔runtime の YAML 疎結合化)
 
-(着手日 2026-06-10 / 関連: [pose-3d-controller-marker-extrinsic.md](pose-3d-controller-marker-extrinsic.md),
+(着手日 2026-06-10 / **M1–M5 実装完了 2026-06-11** (実機検証は残、下記実装記録参照) /
+関連: [pose-3d-controller-marker-extrinsic.md](pose-3d-controller-marker-extrinsic.md),
 [vr-output-continuous-hmd-calibration.md](vr-output-continuous-hmd-calibration.md) /
 前提合意: **初期設定・キャリブレーション中に他モジュールが動く必要はない** — 専念してよい)
 
@@ -228,6 +229,38 @@ ctest --test-dir cpp/build --output-on-failure
 - **オフライン replay** (M4): live↔replay 等価性 ctest が pass。実録セッションの
   `--excal-replay` で solve が成功し、出力 extrinsics が記録時の基準 YAML と一致
   (translation/rotation の許容差内)。カメラ・SteamVR 非接続環境で完走すること。
+
+## 実装記録 (2026-06-11)
+
+M1–M5 実装済み (コミット: M1 RunMode ゲーティング → M2 再注入削除 + 軽量ループ →
+M3 composition root 抽出 → M4 オフライン replay → M5 doc)。doc に書かれていなかった
+実装判断:
+
+- **RunMode の置き場所**: `config/main_config.hpp` の `enum class RunMode` +
+  `run_mode(MainOptions)` / `run_mode_name()`。排他検証は既存 `validate_options` に追加
+  (TRT 非依存の `test_main_config` で導出と排他を固定)。`--slimevr-out`/`--vmt-out` は
+  `--extrinsic-calib`/`--excal-replay` とも validate レベルで排他。
+- **auto-exit の機構**: `ExtrinsicCalibSession::set_on_solved` (kSolved 遷移後・mutex 外で
+  1 回発火、`CalibrationSession::set_on_exit_requested` と同型)。solve 入口が Crow route と
+  shutdown フォールバックの 2 つあるため session 側に置いた。web へのガイダンスは
+  `CrowServer::set_extrinsic_calib_next_step` → solve 成功応答の `next_step` フィールド。
+- **エンジン必須の緩和**: calib-extrinsic (replay 含む) では `--det-engine`/`--pose-engine`
+  必須を免除 (decode-only)。replay 時は `--cam0` も免除。
+- **run モードの未登録パスの実コード**: GET は静的 catchall に落ちて 404、POST は 405
+  (Crow の GET-only rule マッチ)。`test_crow_excal` はこの形で固定。
+- **replay の決定性**: frames.jsonl の行順逐次投入 (velocity 推定の prev 状態がセッション
+  全体で 1 本のため、per-cam 分割・ts 再ソートは gate 判定を変える)。`running_ok` は記録時
+  確定値を使い stale 再判定しない。等価性テストは**両経路とも同じ encode 済み JPEG バイト列**
+  を通す (生 Mat 基準だと codec の検査になる)。比較用に
+  `ExtrinsicCalibSession::samples_snapshot()` を追加。
+- **構造検査の結果**: `set_triangulator` / `reload_from_profile` /
+  `set_extrinsic_calib_solved_callback` は grep 0 件 (コンパイルレベルで再注入経路なし)。
+- **挙動変更 (意図的)**: calib 中の tracker 出力停止 / run での calib・excal ルート + 静的
+  ページ消滅 / calib-subject での hmd-listen 受信廃止 (消費者不在だった) / replay・shutdown
+  solve 失敗の EXIT_FAILURE 化。
+- **残検証 (実機)**: excal → subject → run の 3 段フロー、`excal_record` 実録 fixture からの
+  `--excal-replay` solve 再現 (基準 YAML との許容差比較)。手順は
+  [runbook-pose-3d-calibration.md](../runbook-pose-3d-calibration.md)。
 
 ## 残課題
 
