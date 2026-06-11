@@ -103,7 +103,7 @@ public:
     // through the motion gate and burst accumulator (no image / PnP). Returns
     // true if the observation passed the motion gate (was buffered).
     bool ingest(std::size_t cam_idx, int face_id,
-                const cv::Matx44d& T_cam_face,
+                const geom::T_cam_marker& T_cam_face,
                 const ControllerObservation& ctrl);
 
     // A single face decoded in one camera's most recent frame (for the live UI).

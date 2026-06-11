@@ -70,8 +70,11 @@ Triangulator::Triangulator(const CalibrationSet& calib, Options opts)
         m.id = cam.id;
         m.K = cam.intrinsics.K.clone();
         m.dist = cam.intrinsics.dist.clone();
-        m.R = cam.extrinsics.T_cw(cv::Rect(0, 0, 3, 3)).clone();
-        m.t = cam.extrinsics.T_cw(cv::Rect(3, 0, 1, 3)).clone();
+        // Typed fitra Z-up world->camera extrinsic; unwrap to cv::Mat R/t for
+        // the OpenCV DLT / projectPoints math below.
+        const geom::T_cam_world T_cw = cam.extrinsics.pose();
+        m.R = cv::Mat(T_cw.rot());
+        m.t = cv::Mat(T_cw.trans());
         cv::Rodrigues(m.R, m.rvec);
         m.Pn = cv::Mat::zeros(3, 4, CV_64F);
         m.R.copyTo(m.Pn(cv::Rect(0, 0, 3, 3)));

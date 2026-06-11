@@ -81,9 +81,10 @@ void test_solve_tag_pose() {
     cv::projectPoints(objv, rvec, tvec, K, dist, proj);
     std::array<cv::Point2f, 4> corners{proj[0], proj[1], proj[2], proj[3]};
 
-    cv::Matx44d T;
+    fitra::geom::T_cam_marker Tw;
     double rms = 0.0;
-    bool ok = solve_tag_pose(corners, tag, K, dist, T, rms);
+    bool ok = solve_tag_pose(corners, tag, K, dist, Tw, rms);
+    const cv::Matx44d& T = Tw.raw();
     CHECK(ok);
     CHECK_LT(rms, 1e-3);
     // Translation recovery within a few microns.
@@ -124,7 +125,7 @@ void test_detect_roundtrip() {
         CHECK(dets[0].face_id == face_id);
         CHECK(dets[0].pose_ok);
         CHECK_LT(dets[0].reproj_rms_px, 1.0);
-        CHECK(dets[0].T_cam_face(2, 3) > 0.0);  // tag in front of camera
+        CHECK(dets[0].T_cam_face.raw()(2, 3) > 0.0);  // tag in front of camera
     }
 }
 

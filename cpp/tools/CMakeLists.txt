@@ -117,6 +117,23 @@ set_target_properties(fitra_dump_keypoints_3d PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
+# Typed coordinate-frame layer: Transform composition / inverse / Point3
+# transport and the single fitra<->VMT basis change vs the legacy constant.
+add_executable(fitra_test_geom_frames
+    test_geom_frames.cpp
+)
+
+target_link_libraries(fitra_test_geom_frames PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_geom_frames PROPERTIES
+    OUTPUT_NAME "test_geom_frames"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_geom_frames COMMAND fitra_test_geom_frames)
+
 add_executable(fitra_test_triangulator
     test_triangulator.cpp
 )

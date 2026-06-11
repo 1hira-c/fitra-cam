@@ -121,7 +121,8 @@ void test_gate_and_burst() {
     s.start();
 
     cv::Matx44d still = rigid(0, 0, 0, 0.1, 1.0, 1.5);
-    cv::Matx44d Tcf   = rigid(0.1, 0.2, 0.0, 0.0, 0.0, 1.0);
+    fitra::geom::T_cam_marker Tcf =
+        fitra::geom::T_cam_marker::from_raw(rigid(0.1, 0.2, 0.0, 0.0, 0.0, 1.0));
     double ts = 0.0;
 
     // First still frame primes velocity (no velocity yet → rejected).
@@ -190,7 +191,8 @@ void test_solve_and_write() {
         ts += 200.0;
         for (int c = 0; c < 2; ++c) {
             // forward chain: A = T_cam<-world · B · T_controller<-face
-            cv::Matx44d A = Tcw[c] * B * Tcf_off;
+            fitra::geom::T_cam_marker A =
+                fitra::geom::T_cam_marker::from_raw(Tcw[c] * B * Tcf_off);
             for (int k = 0; k < cfg.burst_min + 1; ++k) {
                 s.ingest(c, 0, A, ctrl_at(B, ts));
                 ts += 10.0;
