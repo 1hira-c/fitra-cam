@@ -1017,39 +1017,11 @@ void CrowServer::register_calibration_routes_() {
         return r;
     });
 
-    if (!session) {
-        auto unavailable = []() {
-            return json_response(
-                "{\"ok\":false,\"available\":false,\"state\":\"unavailable\","
-                "\"err\":\"subject calibration requires --enable-3d with exactly 2 cameras\"}",
-                503);
-        };
-        CROW_ROUTE(app, "/api/calib/state")
-        ([unavailable]() {
-            return unavailable();
-        });
-        CROW_ROUTE(app, "/api/calib/preflight").methods(crow::HTTPMethod::POST)
-        ([unavailable](const crow::request& /*req*/) {
-            return unavailable();
-        });
-        CROW_ROUTE(app, "/api/calib/start").methods(crow::HTTPMethod::POST)
-        ([unavailable](const crow::request& /*req*/) {
-            return unavailable();
-        });
-        CROW_ROUTE(app, "/api/calib/cancel").methods(crow::HTTPMethod::POST)
-        ([unavailable](const crow::request& /*req*/) {
-            return unavailable();
-        });
-        CROW_ROUTE(app, "/api/calib/retake").methods(crow::HTTPMethod::POST)
-        ([unavailable](const crow::request& /*req*/) {
-            return unavailable();
-        });
-        CROW_ROUTE(app, "/api/calib/approve").methods(crow::HTTPMethod::POST)
-        ([unavailable](const crow::request& /*req*/) {
-            return unavailable();
-        });
-        return;
-    }
+    // No session attached (run / calib-extrinsic mode): the /api/calib/*
+    // routes are not registered at all and fall through to Crow's 404.
+    // Subject calibration is a dedicated mode — restart with --calibrate.
+    // See docs/design/pose-3d-calib-mode-separation.md.
+    if (!session) return;
 
     CROW_ROUTE(app, "/api/calib/state")
     ([session]() {

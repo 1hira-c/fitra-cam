@@ -179,10 +179,15 @@ int main() {
         CHECK(http("GET", "/subject-calib/app.js", status, body));
         CHECK(status == 200);
         CHECK(body.find("/api/calib/state") != std::string::npos);
+        // /api/calib/* only exist in calib-subject mode. With no session
+        // attached the routes are never registered, so requests fall through
+        // to the GET-only static catchall: GET → 404 (no such file), POST →
+        // 405 (no POST rule). Either way there is no 503 JSON stub anymore
+        // (docs/design/pose-3d-calib-mode-separation.md).
         CHECK(http("GET", "/api/calib/state", status, body));
-        CHECK(status == 503);
-        CHECK(body.find("\"available\":false") != std::string::npos);
-        CHECK(body.find("\"state\":\"unavailable\"") != std::string::npos);
+        CHECK(status == 404);
+        CHECK(http("POST", "/api/calib/start", status, body));
+        CHECK(status == 405);
 #endif
 
 #ifdef FITRA_EXCAL_WEB_DIR

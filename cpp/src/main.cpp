@@ -154,8 +154,9 @@ void print_help() {
         "  --vmt-continuous-resolve-s F re-solve cadence in seconds (default 2, [0.2,30])\n"
         "  --vmt-continuous-blend F     EMA weight applied per solve (default 0.2, (0,1])\n"
         "\n"
-        "Subject calibration wizard (requires --enable-3d):\n"
-        "  --calibrate                 auto-start calibration session at boot\n"
+        "Subject calibration wizard (dedicated calib-subject mode, requires --enable-3d;\n"
+        "VR publishers are unavailable while calibrating):\n"
+        "  --calibrate                 run in subject-calibration mode (auto-start at boot)\n"
         "  --calib-subject-id ID       required with --calibrate (subject identifier)\n"
         "  --calib-subject-height-m F  required with --calibrate (1.0 .. 2.3 m)\n"
         "  --calib-frames-per-cam N    frames per camera per pose (default 75 ≈ 5s @ 15fps)\n"
@@ -166,8 +167,8 @@ void print_help() {
         "  --calib-dump-tool PATH      override dump_keypoints_3d path used by analysis\n"
         "  --subjects-dir DIR          subject profile root (also used by --calibrate)\n"
         "\n"
-        "Controller-marker extrinsic calibration (mutually exclusive with --calibrate;\n"
-        "see docs/design/pose-3d-controller-marker-extrinsic.md):\n"
+        "Controller-marker extrinsic calibration (dedicated calib-extrinsic mode, mutually\n"
+        "exclusive with --calibrate; see docs/design/pose-3d-controller-marker-extrinsic.md):\n"
         "  --extrinsic-calib           collect controller-marker samples; solve+write at exit\n"
         "  --excal-intrinsics PATH     intrinsics-only calibration YAML (else reuses --calib)\n"
         "  --excal-out PATH            output extrinsics YAML (default calibrations/extrinsics.yaml)\n"
@@ -324,6 +325,13 @@ int main(int argc, char** argv) {
             return EXIT_FAILURE;
         }
 
+        // Exclusive run mode (run / calib-subject / calib-extrinsic), derived
+        // from the validated flags. Each mode builds only what it needs; the
+        // contract between modes is the YAML artifacts on disk.
+        // See docs/design/pose-3d-calib-mode-separation.md.
+        const auto mode = fitra::config::run_mode(opts);
+        FITRA_LOG_INFO("[fitra] mode={}", fitra::config::run_mode_name(mode));
+
         // Binding aliases keep the downstream runtime-construction code
         // (originally written against ~40 local variables) unchanged. The
         // compiler folds these references away.
@@ -395,7 +403,8 @@ int main(int argc, char** argv) {
             if (!path.empty()) ++requested_cam_count;
         }
         const bool calib_frame_recording_possible =
-            enable_3d && requested_cam_count == 2;
+            mode == fitra::config::RunMode::CalibSubject
+            && enable_3d && requested_cam_count == 2;
         // Shared "calibration is recording" flag. When true:
         //   - FrameSource skips YOLOX + RTMPose pre-bake and retains BGR
         //   - CalibrationSession collects raw frames into the per-pose buffer
@@ -530,22 +539,21 @@ int main(int argc, char** argv) {
         }
         driver->start();
 
-        // Subject calibration session: only set up when 3D is enabled AND
-        // exactly 2 cameras are attached. The session orchestrator and
-        // dump_keypoints_3d both assume cam0/cam1; refuse to attach for 1-
-        // or 3-camera runs rather than silently dropping cam2.
+        // Subject calibration session: built only in calib-subject mode (3D
+        // enabled is enforced by validate_options) with exactly 2 cameras.
+        // The session orchestrator and dump_keypoints_3d both assume
+        // cam0/cam1; refuse to attach for 1- or 3-camera runs rather than
+        // silently dropping cam2.
         std::unique_ptr<fitra::pipeline::CalibrationSession> calib_session;
         fitra::pipeline::CalibPreflight calib_defaults;
-        const bool calib_available = enable_3d && n_cams == 2;
+        const bool calib_available =
+            mode == fitra::config::RunMode::CalibSubject
+            && enable_3d && n_cams == 2;
         if (calibrate_on_boot && !calib_available) {
             std::fprintf(stderr,
                 "--calibrate currently requires exactly 2 cameras (got %zu)\n",
                 n_cams);
             return EXIT_FAILURE;
-        }
-        if (enable_3d && n_cams != 2) {
-            FITRA_LOG_WARN("calibration wizard disabled: needs exactly 2 cameras (got {})",
-                           n_cams);
         }
         if (calib_available) {
             calib_session = std::make_unique<fitra::pipeline::CalibrationSession>();
@@ -579,7 +587,7 @@ int main(int argc, char** argv) {
 
             calib_defaults.subject_id = "";
             calib_defaults.subjects_dir = subjects_dir;
-            calib_defaults.calib_yaml   = opts.excal_enabled ? opts.excal_out : calib_path;
+            calib_defaults.calib_yaml   = calib_path;
             calib_defaults.det_engine   = det_engine_path;
             calib_defaults.pose_engine  = pose_engine_path;
             calib_defaults.recording_frames_per_cam = calib_frames_per_cam;
@@ -594,16 +602,14 @@ int main(int argc, char** argv) {
                 });
         }
 
-        // Controller-marker extrinsic calibration. Coexists with the subject
-        // wizard in the same process: the shared frame tap below routes frames
-        // to this collector while extrinsics are still collecting/solving, then
-        // to the subject recorder once solved. Receives the VR controller pose
-        // from the unified VMT pose relay, taps camera frames into the
-        // collection session, and solves + writes extrinsics at shutdown.
-        // See docs/design/pose-3d-controller-marker-extrinsic.md.
+        // Controller-marker extrinsic calibration (calib-extrinsic mode only;
+        // mutually exclusive with the subject wizard). Receives the VR
+        // controller pose from the unified VMT pose relay, taps camera frames
+        // into the collection session, and solves + writes extrinsics at
+        // shutdown. See docs/design/pose-3d-controller-marker-extrinsic.md.
         auto controller_pose_bus = std::make_unique<fitra::vmt::ControllerPoseBus>();
         std::unique_ptr<fitra::pipeline::ExtrinsicCalibSession> excal_session;
-        if (opts.excal_enabled) {
+        if (mode == fitra::config::RunMode::CalibExtrinsic) {
             const std::string intr_path = opts.excal_intrinsics.empty()
                                           ? opts.calib : opts.excal_intrinsics;
             FITRA_LOG_INFO("extrinsic-calib: loading intrinsics from {}", intr_path);
@@ -725,8 +731,11 @@ int main(int argc, char** argv) {
         // server so /stats3d can hand out the slimevr stats block.
         // bus3d / slime_tracker_bus are guaranteed non-null at this point
         // (gated by enable_3d).
+        // VR publishers exist only in run mode — validate_options rejects
+        // --slimevr-out/--vmt-out under the setup modes; the mode check here
+        // makes the invariant structural.
         std::unique_ptr<fitra::slimevr::NativePublisher> slime_pub;
-        if (slimevr_out) {
+        if (mode == fitra::config::RunMode::Run && slimevr_out) {
             fitra::slimevr::NativePublisherOptions opts;
             opts.host         = slimevr_host;
             opts.port         = static_cast<std::uint16_t>(slimevr_port);
@@ -747,7 +756,7 @@ int main(int argc, char** argv) {
         // publishers can be enabled simultaneously and share the same
         // TrackerExtractor state (single-producer invariant).
         std::unique_ptr<fitra::vmt::VmtPublisher> vmt_pub;
-        if (vmt_out) {
+        if (mode == fitra::config::RunMode::Run && vmt_out) {
             fitra::vmt::VmtPublisherOptions vopts;
             vopts.host         = vmt_host;
             vopts.port         = static_cast<std::uint16_t>(vmt_port);

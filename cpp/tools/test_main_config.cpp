@@ -422,6 +422,67 @@ extrinsic_calib:
     check(threw, "--extrinsic-calib + --calibrate must throw");
 }
 
+void test_run_mode_derivation_and_publisher_exclusivity() {
+    using fitra::config::RunMode;
+    using fitra::config::run_mode;
+    using fitra::config::run_mode_name;
+
+    MainOptions opts;
+    opts.cam_paths[0] = "/tmp/a";
+    opts.det_engine   = "/tmp/y";
+    opts.pose_engine  = "/tmp/r";
+    validate_options(opts);
+    check(run_mode(opts) == RunMode::Run, "no calib flags -> run mode");
+    check(std::string(run_mode_name(RunMode::Run)) == "run", "run label");
+
+    MainOptions subj = opts;
+    subj.calibrate = true;
+    subj.enable_3d = true;
+    subj.calib = "/tmp/cam.yaml";
+    subj.calib_subject_id = "subj";
+    subj.calib_subject_height_m = 1.7;
+    validate_options(subj);
+    check(run_mode(subj) == RunMode::CalibSubject,
+          "--calibrate -> calib-subject mode");
+    check(std::string(run_mode_name(RunMode::CalibSubject)) == "calib-subject",
+          "calib-subject label");
+
+    MainOptions excal = opts;
+    excal.excal_enabled = true;
+    excal.excal_intrinsics = "/tmp/intr.yaml";
+    validate_options(excal);
+    check(run_mode(excal) == RunMode::CalibExtrinsic,
+          "--extrinsic-calib -> calib-extrinsic mode");
+    check(std::string(run_mode_name(RunMode::CalibExtrinsic)) == "calib-extrinsic",
+          "calib-extrinsic label");
+
+    // Setup modes never construct publishers; validate rejects the combos.
+    MainOptions bad = excal;
+    bad.enable_3d = true;
+    bad.calib = "/tmp/cam.yaml";
+    bad.keypoint_format = "halpe26";
+    bad.slimevr_out = true;
+    bool threw = false;
+    try { validate_options(bad); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--slimevr-out cannot be combined with --extrinsic-calib",
+                       "slimevr+excal exclusivity msg");
+    }
+    check(threw, "--slimevr-out + --extrinsic-calib must throw");
+
+    bad.slimevr_out = false;
+    bad.vmt_out = true;
+    threw = false;
+    try { validate_options(bad); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--vmt-out cannot be combined with --extrinsic-calib",
+                       "vmt+excal exclusivity msg");
+    }
+    check(threw, "--vmt-out + --extrinsic-calib must throw");
+}
+
 struct TestCase {
     const char* name;
     void (*fn)();
@@ -439,6 +500,8 @@ const TestCase kTests[] = {
     {"slimevr_preview_no_reset_yaml_and_cli",  test_slimevr_preview_no_reset_yaml_and_cli},
     {"vmt_index_base_yaml_cli_and_validate",   test_vmt_index_base_yaml_cli_and_validate},
     {"extrinsic_calib_yaml_cli_and_validate",  test_extrinsic_calib_yaml_cli_and_validate},
+    {"run_mode_derivation_and_publisher_exclusivity",
+                                               test_run_mode_derivation_and_publisher_exclusivity},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},

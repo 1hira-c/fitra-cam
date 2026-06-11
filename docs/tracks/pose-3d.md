@@ -67,6 +67,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-11 — RunMode 導入 + モード別構築ゲーティング (専念モード化 M1)
+`run_mode(MainOptions)` で排他 RunMode (`run` / `calib-subject` / `calib-extrinsic`) を導出し
+(既存フラグから導出、invocation 互換)、main.cpp の構築をモードでゲート: CalibrationSession +
+`calib_recording_flag` 配布は calib-subject 限定、ExtrinsicCalibSession は calib-extrinsic 限定、
+SlimeVR/VMT publisher は run 限定 (`--slimevr-out`/`--vmt-out` × `--extrinsic-calib` を validate
+で排他化)。run モードの `/api/calib/*` は 503 スタブ廃止で未登録 (GET 404 / POST 405)。
+挙動変更: calib 中の tracker 出力停止、run での wizard API 消滅。ライブ再注入の削除は M2。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
 ### 2026-06-10 — キャリブレーション専念モード化の設計 doc (M0、実装は別途)
 「初期設定・キャリブ中に他モジュールは動かなくてよい」という前提合意を受け、subject wizard /
 controller-marker extrinsic と live パイプラインの同居 + ライブ再注入 (IK ホットリロード・

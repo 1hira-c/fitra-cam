@@ -161,6 +161,19 @@ struct MainOptions {
     double      excal_controller_stale_ms = 200.0;
 };
 
+// Exclusive run mode, derived from the calibration flags (invocation stays
+// flag-compatible; see docs/design/pose-3d-calib-mode-separation.md). Each
+// mode builds only what it needs; the only thing crossing a mode boundary is
+// YAML on disk. Derive after validate_options() — it enforces the flags'
+// mutual exclusivity.
+enum class RunMode { Run, CalibSubject, CalibExtrinsic };
+
+RunMode run_mode(const MainOptions& opts);
+
+// Stable label for logs and /api/state: "run" / "calib-subject" /
+// "calib-extrinsic".
+const char* run_mode_name(RunMode mode);
+
 // Schema version embedded in every YAML config. Bump only when a
 // non-backwards-compatible change to the YAML layout is required.
 inline constexpr const char* kMainConfigSchema = "fitra_main_config_v1";

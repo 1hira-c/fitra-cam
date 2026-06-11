@@ -423,6 +423,21 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
     }
 }
 
+RunMode run_mode(const MainOptions& opts) {
+    if (opts.excal_enabled) return RunMode::CalibExtrinsic;
+    if (opts.calibrate)     return RunMode::CalibSubject;
+    return RunMode::Run;
+}
+
+const char* run_mode_name(RunMode mode) {
+    switch (mode) {
+        case RunMode::CalibSubject:   return "calib-subject";
+        case RunMode::CalibExtrinsic: return "calib-extrinsic";
+        case RunMode::Run:            break;
+    }
+    return "run";
+}
+
 void validate_options(const MainOptions& opts) {
     if (opts.cam_paths[0].empty() || opts.det_engine.empty() || opts.pose_engine.empty()) {
         fail("missing required option (need --cam0 + --det-engine + --pose-engine)");
@@ -453,6 +468,9 @@ void validate_options(const MainOptions& opts) {
         if (opts.calibrate) {
             fail("--slimevr-out cannot be combined with --calibrate");
         }
+        if (opts.excal_enabled) {
+            fail("--slimevr-out cannot be combined with --extrinsic-calib");
+        }
         if (opts.slimevr_port <= 0 || opts.slimevr_port > 65535) {
             fail("--slimevr-port must be in [1, 65535]");
         }
@@ -472,6 +490,9 @@ void validate_options(const MainOptions& opts) {
         }
         if (opts.calibrate) {
             fail("--vmt-out cannot be combined with --calibrate");
+        }
+        if (opts.excal_enabled) {
+            fail("--vmt-out cannot be combined with --extrinsic-calib");
         }
         if (opts.vmt_port <= 0 || opts.vmt_port > 65535) {
             fail("--vmt-port must be in [1, 65535]");
