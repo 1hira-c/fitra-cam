@@ -1,12 +1,16 @@
 // Integration smoke test for the /api/excal/* routes: spins up a real
 // CrowServer with an attached ExtrinsicCalibSession on a loopback port and
 // drives state / start / stop / solve over HTTP via raw sockets. No cameras,
-// no GPU — just the web wiring.
+// no GPU — just the web wiring. Also locks the solve contract of the
+// dedicated calib-extrinsic mode: a successful solve fires the session's
+// on_solved hook (main wires it to auto-exit) and the response carries the
+// "next_step" restart guidance (docs/design/pose-3d-calib-mode-separation.md).
 
 #include "web/crow_server.hpp"
 #include "pipeline/extrinsic_calib_session.hpp"
 #include "pipeline/snapshot.hpp"
 #include "lift/calib_io.hpp"
+#include "lift/extrinsic_solver.hpp"
 #include "vmt/controller_pose_receiver.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
 
@@ -15,7 +19,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -74,6 +80,32 @@ fitra::lift::CalibrationSet make_intrinsics() {
     return set;
 }
 
+// Synthetic-sample helpers, same pattern as test_extrinsic_calib_session.
+cv::Matx44d rigid(double rx, double ry, double rz, double tx, double ty, double tz) {
+    double cx = std::cos(rx / 2), sx = std::sin(rx / 2);
+    double cy = std::cos(ry / 2), sy = std::sin(ry / 2);
+    double cz = std::cos(rz / 2), sz = std::sin(rz / 2);
+    double w  = cx * cy * cz + sx * sy * sz;
+    double qx = sx * cy * cz - cx * sy * sz;
+    double qy = cx * sy * cz + sx * cy * sz;
+    double qz = cx * cy * sz - sx * sy * cz;
+    return fitra::lift::pose_from_pos_quat(tx, ty, tz, qx, qy, qz, w);
+}
+
+fitra::pipeline::ControllerObservation ctrl_at(const cv::Matx44d& B, double ts_ms) {
+    fitra::pipeline::ControllerObservation c;
+    c.running_ok = true;
+    c.x = B(0, 3); c.y = B(1, 3); c.z = B(2, 3);
+    double t = B(0,0) + B(1,1) + B(2,2), w, x, y, z;
+    if (t > 0) { double s = std::sqrt(t + 1.0) * 2; w = 0.25*s; x=(B(2,1)-B(1,2))/s; y=(B(0,2)-B(2,0))/s; z=(B(1,0)-B(0,1))/s; }
+    else if (B(0,0) > B(1,1) && B(0,0) > B(2,2)) { double s=std::sqrt(1+B(0,0)-B(1,1)-B(2,2))*2; w=(B(2,1)-B(1,2))/s; x=0.25*s; y=(B(0,1)+B(1,0))/s; z=(B(0,2)+B(2,0))/s; }
+    else if (B(1,1) > B(2,2)) { double s=std::sqrt(1+B(1,1)-B(0,0)-B(2,2))*2; w=(B(0,2)-B(2,0))/s; x=(B(0,1)+B(1,0))/s; y=0.25*s; z=(B(1,2)+B(2,1))/s; }
+    else { double s=std::sqrt(1+B(2,2)-B(0,0)-B(1,1))*2; w=(B(1,0)-B(0,1))/s; x=(B(0,2)+B(2,0))/s; y=(B(1,2)+B(2,1))/s; z=0.25*s; }
+    c.qx = x; c.qy = y; c.qz = z; c.qw = w;
+    c.ts_ms = ts_ms;
+    return c;
+}
+
 }  // namespace
 
 int main() {
@@ -81,7 +113,18 @@ int main() {
     cfg.intrinsics = make_intrinsics();
     cfg.board.faces.push_back(fitra::lift::MarkerFace{0, 0.10});
     cfg.out_path = "/tmp/fitra_excal_route_test.yaml";
+    // Permissive gate so the success-path samples below pass straight through.
+    cfg.lin_vel_max_mps = 1e9;
+    cfg.ang_vel_max_dps = 1e9;
+    cfg.burst_min = 3;
+    cfg.burst_max = 1000;
+    cfg.burst_gap_ms = 100.0;
+    cfg.min_samples_per_group = 3;
     fitra::pipeline::ExtrinsicCalibSession session(cfg);
+
+    // Auto-exit hook: main wires this to g_stop; here we only record it.
+    std::atomic<int> solved_calls{0};
+    session.set_on_solved([&solved_calls]() { ++solved_calls; });
 
     fitra::pipeline::SnapshotBus bus{1};
     fitra::vmt::HmdPoseBus hmd_bus;
@@ -124,6 +167,8 @@ int main() {
 #endif
     fitra::web::CrowServer server(bus, nullptr, opts);
     server.set_extrinsic_calib_session(&session);
+    server.set_extrinsic_calib_next_step(
+        "restart: ./main --calibrate --enable-3d --calib /tmp/fitra_excal_route_test.yaml ...");
     server.set_hmd_pose_bus(&hmd_bus, 10000.0);
     server.set_extrinsic_calib_pose_bus(&controller_bus, "left", 10000.0);
     server.start();
@@ -219,11 +264,39 @@ int main() {
         CHECK(status == 200);
         CHECK(body.find("\"samples\":0") != std::string::npos);
 
-        // solve with no samples → ok:false, state failed.
+        // solve with no samples → ok:false, state failed; no guidance, no
+        // auto-exit hook fired.
         CHECK(http("POST", "/api/excal/solve", status, body));
         CHECK(status == 200);
         CHECK(body.find("\"ok\":false") != std::string::npos);
         CHECK(body.find("\"state\":\"failed\"") != std::string::npos);
+        CHECK(body.find("\"next_step\"") == std::string::npos);
+        CHECK(solved_calls.load() == 0);
+
+        // Success path: refill with synthetic samples (same geometry as
+        // test_extrinsic_calib_session::test_solve_and_write, 1 camera) and
+        // solve again → ok:true + next_step guidance + on_solved fired once.
+        CHECK(http("POST", "/api/excal/start", status, body));
+        CHECK(status == 200);
+        const cv::Matx44d Tcw     = rigid(0.0, 0.0, 0.0, 0.0, 0.1, 2.0);
+        const cv::Matx44d Tcf_off = rigid(0.4, -0.3, 0.0, 0.03, -0.02, 0.05);
+        double ts = 0.0;
+        for (int p = 0; p < 6; ++p) {
+            cv::Matx44d B = rigid(0.3 * p, -0.4 * p, 0.2 * p,
+                                  0.1 * p, 1.0, 1.5 + 0.05 * p);
+            ts += 200.0;
+            auto A = fitra::geom::T_cam_marker::from_raw(Tcw * B * Tcf_off);
+            for (int k = 0; k < cfg.burst_min + 1; ++k) {
+                session.ingest(0, 0, A, ctrl_at(B, ts));
+                ts += 10.0;
+            }
+        }
+        CHECK(http("POST", "/api/excal/solve", status, body));
+        CHECK(status == 200);
+        CHECK(body.find("\"ok\":true") != std::string::npos);
+        CHECK(body.find("\"state\":\"solved\"") != std::string::npos);
+        CHECK(body.find("\"next_step\":\"restart: ./main --calibrate") != std::string::npos);
+        CHECK(solved_calls.load() == 1);
     }
 
     server.stop();

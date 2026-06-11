@@ -182,16 +182,21 @@ $("btn_stop").addEventListener("click", async () => {
 $("btn_solve").addEventListener("click", async () => {
   setMsg($("ctrl_msg"), "solving…");
   const r = await postJSON("/api/excal/solve");
-  // On failure r.err is self-describing — either "solve/write failed: …" or
-  // "live 3D reload failed: …" when the extrinsics were written but the live
-  // Triangulator hot-swap did not — so surface it verbatim rather than always
-  // prefixing "solve failed" (which would wrongly imply nothing was written).
+  // On success the process writes the extrinsics YAML and auto-exits;
+  // r.next_step carries the restart command for the next mode
+  // (docs/design/pose-3d-calib-mode-separation.md). On failure r.err is
+  // self-describing ("solve/write failed: …") — surface it verbatim.
   setMsg($("ctrl_msg"),
-    r.ok ? "solved — live 3D reloaded" : (r.err || "solve failed"), !r.ok);
+    r.ok ? `solved — ${r.next_step || "extrinsics written"} (this process exits now)`
+         : (r.err || "solve failed"),
+    !r.ok);
   refresh();
 });
 $("btn_subject").addEventListener("click", () => {
-  window.location.href = "/subject-calib";
+  // The dedicated calib-extrinsic process has (or is about to) exit after a
+  // successful solve; subject calibration is a separate restart.
+  setMsg($("ctrl_msg"),
+    "restart main with --calibrate (subject-calib mode) — see the solve message");
 });
 
 refresh();

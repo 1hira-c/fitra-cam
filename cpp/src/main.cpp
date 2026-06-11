@@ -30,6 +30,8 @@
 #include <NvInfer.h>
 #include <NvInferVersion.h>
 
+#include "app/excal_live_input.hpp"
+#include "app/excal_runner.hpp"
 #include "camera/v4l2_capture.hpp"
 #include "config/main_config.hpp"
 #include "infer/rtmpose.hpp"
@@ -168,8 +170,10 @@ void print_help() {
         "  --subjects-dir DIR          subject profile root (also used by --calibrate)\n"
         "\n"
         "Controller-marker extrinsic calibration (dedicated calib-extrinsic mode, mutually\n"
-        "exclusive with --calibrate; see docs/design/pose-3d-controller-marker-extrinsic.md):\n"
-        "  --extrinsic-calib           collect controller-marker samples; solve+write at exit\n"
+        "exclusive with --calibrate; decode-only — --det-engine/--pose-engine not required;\n"
+        "see docs/design/pose-3d-controller-marker-extrinsic.md):\n"
+        "  --extrinsic-calib           collect controller-marker samples; auto-exits after a\n"
+        "                              successful solve+write (also solves on Ctrl-C)\n"
         "  --excal-intrinsics PATH     intrinsics-only calibration YAML (else reuses --calib)\n"
         "  --excal-out PATH            output extrinsics YAML (default calibrations/extrinsics.yaml)\n"
         "  --excal-faces \"0,1,2\"       AprilTag 36h11 face IDs on the marker\n"
@@ -266,6 +270,166 @@ std::vector<std::string> split_csv(const std::string& s) {
 std::atomic<bool> g_stop{false};
 void on_signal(int) { g_stop.store(true); }
 
+// Dedicated calib-extrinsic mode: decode-only cameras + AprilTag collection +
+// VMT pose relay receiver + /api/excal web UI. No TensorRT, no
+// MultiCameraDriver, no publishers. Solve success auto-exits with a restart
+// guidance; the only artifact handed to the next mode is the extrinsics YAML.
+// See docs/design/pose-3d-calib-mode-separation.md.
+int run_calib_extrinsic(const fitra::config::MainOptions& opts) {
+    std::signal(SIGINT, on_signal);
+
+    // Decode-only FrameSources (Yolox=nullptr, no RTMPose prebake): the
+    // capture loop only needs CPU BGR frames for AprilTag detection.
+    std::vector<std::unique_ptr<fitra::camera::FrameSource>> sources;
+    for (const auto& path : opts.cam_paths) {
+        if (path.empty()) continue;
+        fitra::camera::V4l2Options o;
+        o.device_path = path;
+        o.width  = opts.width;
+        o.height = opts.height;
+        o.fps    = opts.fps;
+        o.n_buffers = opts.n_buffers;
+        o.pixel_format = (opts.pixel_format == "yuyv")
+                             ? fitra::camera::PixFmt::Yuyv
+                             : (opts.pixel_format == "nvjpeg")
+                                   ? fitra::camera::PixFmt::Nvjpeg
+                                   : fitra::camera::PixFmt::Mjpeg;
+        auto cap = std::make_unique<fitra::camera::V4l2Capture>(o);
+        sources.push_back(std::make_unique<fitra::camera::FrameSource>(
+            std::move(cap), nullptr, fitra::camera::FrameSource::Options{}));
+    }
+    const std::size_t n_cams = sources.size();
+
+    const std::string intr_path = opts.excal_intrinsics.empty()
+                                  ? opts.calib : opts.excal_intrinsics;
+    FITRA_LOG_INFO("extrinsic-calib: loading intrinsics from {}", intr_path);
+    fitra::pipeline::ExtrinsicCalibConfig ec;
+    ec.intrinsics = fitra::lift::load_calibration(intr_path);
+    if (ec.intrinsics.cameras.size() < n_cams) {
+        std::fprintf(stderr,
+            "extrinsic-calib: intrinsics file has %zu cameras, need >= %zu\n",
+            ec.intrinsics.cameras.size(), n_cams);
+        return EXIT_FAILURE;
+    }
+    // Parse "0,1,2" face ids; uniform tag size for the skeleton. Parse
+    // strictly: a non-numeric token (typo, stray char) must fail loudly
+    // rather than std::atoi-fold to face 0 and silently miscalibrate.
+    for (const auto& tok : split_csv(opts.excal_faces)) {
+        if (tok.empty()) continue;
+        int face_id = 0;
+        auto [ptr, ec_parse] =
+            std::from_chars(tok.data(), tok.data() + tok.size(), face_id);
+        if (ec_parse != std::errc{} || ptr != tok.data() + tok.size() ||
+            face_id < 0) {
+            std::fprintf(stderr,
+                "extrinsic-calib: invalid --excal-faces token '%s' "
+                "(expected non-negative integers, e.g. \"0,1,2\")\n",
+                tok.c_str());
+            return EXIT_FAILURE;
+        }
+        fitra::lift::MarkerFace f;
+        f.face_id = face_id;
+        f.tag_size_m = opts.excal_tag_size_m;
+        ec.board.faces.push_back(f);
+    }
+    ec.lin_vel_max_mps        = opts.excal_lin_vel_max;
+    ec.ang_vel_max_dps        = opts.excal_ang_vel_max;
+    ec.burst_min              = opts.excal_burst_min;
+    ec.min_samples_per_group  = opts.excal_min_samples;
+    ec.out_path               = opts.excal_out;
+    auto excal_session = std::make_unique<fitra::pipeline::ExtrinsicCalibSession>(
+        std::move(ec));
+
+    // Unified VMT pose relay receiver: the selected controller is the
+    // calibration input; the HMD feeds the /extrinsic-calib scene.
+    auto hmd_pose_bus = std::make_unique<fitra::vmt::HmdPoseBus>();
+    auto controller_pose_bus = std::make_unique<fitra::vmt::ControllerPoseBus>();
+    fitra::vmt::TrackedPoseRole controller_role =
+        fitra::vmt::TrackedPoseRole::RightController;
+    if (!fitra::vmt::parse_tracked_pose_role(opts.excal_controller_role,
+                                             controller_role)) {
+        // validate_options should have caught this, but keep the runtime
+        // path deterministic if a caller constructed MainOptions manually.
+        controller_role = fitra::vmt::TrackedPoseRole::RightController;
+    }
+    fitra::vmt::TrackedPoseReceiverOptions popts;
+    popts.bind = opts.hmd_listen_bind;
+    popts.port = static_cast<std::uint16_t>(opts.hmd_listen_port);
+    popts.stale_ms = opts.hmd_stale_ms;
+    popts.controller_role = controller_role;
+    auto pose_recv = std::make_unique<fitra::vmt::TrackedPoseReceiver>(
+        *hmd_pose_bus, *controller_pose_bus, popts);
+    if (!pose_recv->start()) {
+        pose_recv.reset();
+    }
+
+    const std::string guidance =
+        "extrinsics written to " + opts.excal_out
+        + ". Next: restart in subject-calib mode — ./main --calibrate"
+          " --enable-3d --calib " + opts.excal_out
+        + " --calib-subject-id <ID> --calib-subject-height-m <H> ...";
+
+    // Auto-exit on solve: the YAML is the mode's whole output, so once it is
+    // written there is nothing left to run. Fires from the Crow worker (or
+    // the shutdown fallback below); the main loop notices g_stop within
+    // ~100 ms, after the solve response has been written.
+    excal_session->set_on_solved([&guidance]() {
+        FITRA_LOG_INFO("extrinsic-calib: solved. {}", guidance);
+        g_stop.store(true);
+    });
+
+    // Inert snapshot bus: no driver feeds it; /stats serves an empty bundle.
+    fitra::pipeline::SnapshotBus bus{n_cams};
+    std::unique_ptr<fitra::web::CrowServer> server;
+    if (!opts.no_web) {
+        fitra::web::ServerOptions sopts;
+        sopts.host = opts.host;
+        sopts.port = opts.port;
+        sopts.static_dir = opts.static_dir.empty()
+                            ? guess_static_dir().string()
+                            : opts.static_dir;
+        sopts.excal_static_dir = guess_extrinsic_calib_static_dir().string();
+        server = std::make_unique<fitra::web::CrowServer>(bus, nullptr, sopts);
+        server->set_extrinsic_calib_session(excal_session.get());
+        server->set_extrinsic_calib_next_step(guidance);
+        server->set_hmd_pose_bus(hmd_pose_bus.get(), opts.hmd_stale_ms);
+        server->set_extrinsic_calib_pose_bus(
+            controller_pose_bus.get(),
+            fitra::vmt::tracked_pose_role_name(controller_role),
+            opts.excal_controller_stale_ms);
+        server->start();
+    }
+
+    excal_session->start();
+    FITRA_LOG_INFO("extrinsic-calib: collecting (faces={}, controller_role={}, "
+                   "out={}). Solve from the web UI, or stop the process to "
+                   "solve + write.",
+                   opts.excal_faces, opts.excal_controller_role, opts.excal_out);
+
+    fitra::app::ExcalLiveInput input{std::move(sources), *controller_pose_bus,
+                                     opts.excal_controller_stale_ms};
+    input.start();
+    fitra::app::run_excal_loop(input, *excal_session, g_stop);
+    input.stop();
+
+    if (server) server->stop();
+    if (pose_recv) pose_recv->stop();
+
+    if (excal_session->state() == fitra::pipeline::ExtrinsicCalibState::kSolved) {
+        FITRA_LOG_INFO("extrinsic-calib: already solved; keeping {}", opts.excal_out);
+        return EXIT_SUCCESS;
+    }
+    FITRA_LOG_INFO("extrinsic-calib: collected {} samples; solving...",
+                   excal_session->sample_count());
+    std::string err;
+    if (!excal_session->solve_and_write(err)) {
+        FITRA_LOG_ERROR("extrinsic-calib: solve/write failed: {}", err);
+        return EXIT_FAILURE;
+    }
+    FITRA_LOG_INFO("extrinsic-calib: wrote extrinsics to {}", opts.excal_out);
+    return EXIT_SUCCESS;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -331,6 +495,12 @@ int main(int argc, char** argv) {
         // See docs/design/pose-3d-calib-mode-separation.md.
         const auto mode = fitra::config::run_mode(opts);
         FITRA_LOG_INFO("[fitra] mode={}", fitra::config::run_mode_name(mode));
+
+        // calib-extrinsic builds an entirely different (much smaller) stack —
+        // dispatch before the TRT/driver construction sequence below.
+        if (mode == fitra::config::RunMode::CalibExtrinsic) {
+            return run_calib_extrinsic(opts);
+        }
 
         // Binding aliases keep the downstream runtime-construction code
         // (originally written against ~40 local variables) unchanged. The
@@ -455,10 +625,6 @@ int main(int argc, char** argv) {
             src_opts.det_frequency = det_frequency;
             src_opts.single_person = !multi_person;
             src_opts.fake_bbox_if_empty = bench_fake_bbox;
-            // Controller-marker extrinsic calibration runs AprilTag detection
-            // from the frame tap, so it needs a CPU BGR image even on the
-            // all-GPU nvjpeg path.
-            src_opts.retain_bgr = opts.excal_enabled;
             // Subject-calibration recording taps MultiCameraDriver's frame tap.
             // The same flag pauses YOLOX + RTMPose pre-bake while recording so
             // disk I/O has the CPU/GPU headroom and we don't burn cycles on a
@@ -563,10 +729,13 @@ int main(int argc, char** argv) {
             calib_session->set_log([](const std::string& l) {
                 std::fprintf(stderr, "[calib] %s\n", l.c_str());
             });
+            // No in-process reinjection: the approved profile is a YAML
+            // artifact consumed by the next run-mode boot (--subject-id).
             calib_session->set_on_approved([&](const fitra::lift::SubjectProfile& p) {
-                FITRA_LOG_INFO("hot-reloading IK from approved profile (id={})",
-                               p.subject_id);
-                driver->ik().reload_from_profile(p);
+                FITRA_LOG_INFO(
+                    "profile approved (id={}). Restart in run mode to use it: "
+                    "./main --enable-3d --calib {} --subject-id {} ...",
+                    p.subject_id, calib_path, p.subject_id);
             });
             // Prime the live IK with the subject's height the moment preflight
             // succeeds, so the 3D angle recognizer has a sensible bone-length
@@ -602,91 +771,18 @@ int main(int argc, char** argv) {
                 });
         }
 
-        // Controller-marker extrinsic calibration (calib-extrinsic mode only;
-        // mutually exclusive with the subject wizard). Receives the VR
-        // controller pose from the unified VMT pose relay, taps camera frames
-        // into the collection session, and solves + writes extrinsics at
-        // shutdown. See docs/design/pose-3d-controller-marker-extrinsic.md.
-        auto controller_pose_bus = std::make_unique<fitra::vmt::ControllerPoseBus>();
-        std::unique_ptr<fitra::pipeline::ExtrinsicCalibSession> excal_session;
-        if (mode == fitra::config::RunMode::CalibExtrinsic) {
-            const std::string intr_path = opts.excal_intrinsics.empty()
-                                          ? opts.calib : opts.excal_intrinsics;
-            FITRA_LOG_INFO("extrinsic-calib: loading intrinsics from {}", intr_path);
-            fitra::pipeline::ExtrinsicCalibConfig ec;
-            ec.intrinsics = fitra::lift::load_calibration(intr_path);
-            if (ec.intrinsics.cameras.size() < n_cams) {
-                std::fprintf(stderr,
-                    "extrinsic-calib: intrinsics file has %zu cameras, need >= %zu\n",
-                    ec.intrinsics.cameras.size(), n_cams);
-                return EXIT_FAILURE;
-            }
-            // Parse "0,1,2" face ids; uniform tag size for the skeleton. Parse
-            // strictly: a non-numeric token (typo, stray char) must fail loudly
-            // rather than std::atoi-fold to face 0 and silently miscalibrate.
-            for (const auto& tok : split_csv(opts.excal_faces)) {
-                if (tok.empty()) continue;
-                int face_id = 0;
-                auto [ptr, ec_parse] =
-                    std::from_chars(tok.data(), tok.data() + tok.size(), face_id);
-                if (ec_parse != std::errc{} || ptr != tok.data() + tok.size() ||
-                    face_id < 0) {
-                    std::fprintf(stderr,
-                        "extrinsic-calib: invalid --excal-faces token '%s' "
-                        "(expected non-negative integers, e.g. \"0,1,2\")\n",
-                        tok.c_str());
-                    return EXIT_FAILURE;
-                }
-                fitra::lift::MarkerFace f;
-                f.face_id = face_id;
-                f.tag_size_m = opts.excal_tag_size_m;
-                ec.board.faces.push_back(f);
-            }
-            ec.lin_vel_max_mps        = opts.excal_lin_vel_max;
-            ec.ang_vel_max_dps        = opts.excal_ang_vel_max;
-            ec.burst_min              = opts.excal_burst_min;
-            ec.min_samples_per_group  = opts.excal_min_samples;
-            ec.out_path               = opts.excal_out;
-            excal_session = std::make_unique<fitra::pipeline::ExtrinsicCalibSession>(
-                std::move(ec));
-
-            excal_session->start();
-            FITRA_LOG_INFO("extrinsic-calib: collecting (faces={}, controller_role={}, out={}). "
-                           "Stop the process to solve + write.",
-                           opts.excal_faces, opts.excal_controller_role, opts.excal_out);
-        }
-
-        if (calib_session || excal_session) {
-            const double stale_ms = opts.excal_controller_stale_ms;
+        // Subject-calibration frame recording: the wizard is the frame tap's
+        // only consumer now that calib-extrinsic runs its own capture loop.
+        if (calib_session) {
             driver->set_frame_tap(
-                [calib = calib_session.get(),
-                 excal = excal_session.get(),
-                 bus = controller_pose_bus.get(),
-                 stale_ms]
+                [calib = calib_session.get()]
                 (std::size_t cam, const cv::Mat& bgr, double ts) {
-                    if (excal) {
-                        const auto st = excal->state();
-                        if (st == fitra::pipeline::ExtrinsicCalibState::kCollecting ||
-                            st == fitra::pipeline::ExtrinsicCalibState::kSolving) {
-                            auto snap = bus->snapshot(stale_ms);
-                            fitra::pipeline::ControllerObservation c;
-                            c.running_ok = !snap.stale && snap.pose.running_ok();
-                            c.x = snap.pose.x; c.y = snap.pose.y; c.z = snap.pose.z;
-                            c.qx = snap.pose.qx; c.qy = snap.pose.qy;
-                            c.qz = snap.pose.qz; c.qw = snap.pose.qw;
-                            c.ts_ms = ts;
-                            excal->on_frame(cam, bgr, c);
-                            return;
-                        }
-                    }
-                    if (calib) {
-                        calib->on_frame(cam, bgr, ts);
-                    }
+                    calib->on_frame(cam, bgr, ts);
                 });
         }
 
         // Stop the driver worker before any session it taps into goes out of
-        // scope. Declared *after* both calib_session and excal_session so that
+        // scope. Declared *after* calib_session so that
         // on unwind (early return / exception path) this destructor — which
         // calls driver->stop() — runs first, quiescing the frame-tap callbacks
         // before the session objects they reference are destroyed. Normal
@@ -775,26 +871,28 @@ int main(int argc, char** argv) {
         }
 
         // Optional unified VMT pose relay receiver. Standalone from vmt_pub —
-        // it feeds the HMD bus for alignment and the selected controller bus
-        // for extrinsic calibration. It also accepts the legacy /fitra/hmd_pose
+        // it feeds the HMD bus for alignment (calib-extrinsic, which also
+        // consumes the controller bus, runs its own receiver in
+        // run_calib_extrinsic). It also accepts the legacy /fitra/hmd_pose
         // and /fitra/controller_pose messages on the same port during migration.
         auto hmd_pose_bus = std::make_unique<fitra::vmt::HmdPoseBus>();
+        auto controller_pose_bus = std::make_unique<fitra::vmt::ControllerPoseBus>();
         std::unique_ptr<fitra::vmt::TrackedPoseReceiver> tracked_pose_recv;
-        const bool pose_relay_enabled = hmd_listen_enabled || opts.excal_enabled;
-        fitra::vmt::TrackedPoseRole excal_controller_role =
-            fitra::vmt::TrackedPoseRole::RightController;
-        if (!fitra::vmt::parse_tracked_pose_role(opts.excal_controller_role,
-                                                 excal_controller_role)) {
-            // validate_options should have caught this, but keep the runtime
-            // path deterministic if a caller constructed MainOptions manually.
-            excal_controller_role = fitra::vmt::TrackedPoseRole::RightController;
-        }
+        const bool pose_relay_enabled = hmd_listen_enabled;
         if (pose_relay_enabled) {
+            fitra::vmt::TrackedPoseRole controller_role =
+                fitra::vmt::TrackedPoseRole::RightController;
+            if (!fitra::vmt::parse_tracked_pose_role(opts.excal_controller_role,
+                                                     controller_role)) {
+                // validate_options should have caught this, but keep the runtime
+                // path deterministic if a caller constructed MainOptions manually.
+                controller_role = fitra::vmt::TrackedPoseRole::RightController;
+            }
             fitra::vmt::TrackedPoseReceiverOptions popts;
             popts.bind = hmd_listen_bind;
             popts.port = static_cast<std::uint16_t>(hmd_listen_port);
             popts.stale_ms = hmd_stale_ms;
-            popts.controller_role = excal_controller_role;
+            popts.controller_role = controller_role;
             tracked_pose_recv = std::make_unique<fitra::vmt::TrackedPoseReceiver>(
                 *hmd_pose_bus, *controller_pose_bus, popts);
             if (!tracked_pose_recv->start()) {
@@ -860,31 +958,6 @@ int main(int argc, char** argv) {
             if (calib_session) {
                 server->set_calibration_session(calib_session.get(), calib_defaults);
             }
-            if (excal_session) {
-                server->set_extrinsic_calib_session(excal_session.get());
-                if (enable_3d) {
-                    server->set_extrinsic_calib_solved_callback(
-                        [&, n_cams](std::string& err) {
-                            try {
-                                auto solved =
-                                    fitra::lift::load_calibration(opts.excal_out);
-                                auto next = std::make_shared<fitra::lift::Triangulator>(
-                                    solved, tri_opts);
-                                next->require_camera_ids(expected_camera_ids(n_cams));
-                                driver->set_triangulator(next);
-                                triangulator = std::move(next);
-                                FITRA_LOG_INFO(
-                                    "extrinsic-calib: live 3D reloaded from {}",
-                                    opts.excal_out);
-                                return true;
-                            } catch (const std::exception& e) {
-                                err = std::string("live 3D reload failed: ") + e.what();
-                                FITRA_LOG_ERROR("extrinsic-calib: {}", err);
-                                return false;
-                            }
-                        });
-                }
-            }
             if (slime_pub) {
                 server->set_native_publisher(slime_pub.get());
             }
@@ -894,17 +967,9 @@ int main(int argc, char** argv) {
             if (slime_tracker_bus) {
                 server->set_tracker_bus(slime_tracker_bus.get());
             }
-            // Attach the HMD pose bus for either VMT alignment or extrinsic
-            // calibration. The excal 3D scene uses the same Standing/VMT pose
-            // relay frame as the selected controller marker.
+            // Attach the HMD pose bus for the VMT alignment routes.
             if (pose_relay_enabled) {
                 server->set_hmd_pose_bus(hmd_pose_bus.get(), hmd_stale_ms);
-            }
-            if (excal_session) {
-                server->set_extrinsic_calib_pose_bus(
-                    controller_pose_bus.get(),
-                    fitra::vmt::tracked_pose_role_name(excal_controller_role),
-                    opts.excal_controller_stale_ms);
             }
             if (continuous_aligner) {
                 server->set_continuous_aligner(continuous_aligner.get());
@@ -955,22 +1020,7 @@ int main(int argc, char** argv) {
 
         if (server) server->stop();
         if (slime_pub) slime_pub->stop();   // explicit stop; SlimeStop guard is the fallback
-        driver->stop();   // taps quiesce here — safe to read/solve the session
-
-        if (excal_session) {
-            if (excal_session->state() == fitra::pipeline::ExtrinsicCalibState::kSolved) {
-                FITRA_LOG_INFO("extrinsic-calib: already solved; keeping {}", opts.excal_out);
-            } else {
-                FITRA_LOG_INFO("extrinsic-calib: collected {} samples; solving...",
-                               excal_session->sample_count());
-                std::string err;
-                if (excal_session->solve_and_write(err)) {
-                    FITRA_LOG_INFO("extrinsic-calib: wrote extrinsics to {}", opts.excal_out);
-                } else {
-                    FITRA_LOG_ERROR("extrinsic-calib: solve/write failed: {}", err);
-                }
-            }
-        }
+        driver->stop();   // taps quiesce here — safe for the session to wind down
         return EXIT_SUCCESS;
     } catch (const std::exception& e) {
         FITRA_LOG_ERROR("fatal: {}", e.what());

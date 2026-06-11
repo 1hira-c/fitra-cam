@@ -370,8 +370,8 @@ void CrowServer::set_extrinsic_calib_session(pipeline::ExtrinsicCalibSession* se
     excal_session_ = session;
 }
 
-void CrowServer::set_extrinsic_calib_solved_callback(ExcalSolvedFn fn) {
-    excal_solved_fn_ = std::move(fn);
+void CrowServer::set_extrinsic_calib_next_step(std::string guidance) {
+    excal_next_step_ = std::move(guidance);
 }
 
 void CrowServer::set_native_publisher(slimevr::NativePublisher* publisher) {
@@ -1107,7 +1107,6 @@ void CrowServer::register_extrinsic_calib_routes_() {
     if (!excal_session_) return;
     auto& app = impl_->app;
     auto* session = excal_session_;
-    auto solved_fn = excal_solved_fn_;
 
     std::filesystem::path excal_root{opts_.excal_static_dir};
     CROW_ROUTE(app, "/extrinsic-calib")
@@ -1202,18 +1201,21 @@ void CrowServer::register_extrinsic_calib_routes_() {
     });
 
     CROW_ROUTE(app, "/api/excal/solve").methods(crow::HTTPMethod::POST)
-    ([session, solved_fn](const crow::request& /*req*/) {
+    ([this, session](const crow::request& /*req*/) {
         std::string err;
         bool ok = session->solve_and_write(err);
-        if (ok && solved_fn) {
-            ok = solved_fn(err);
-        }
         std::ostringstream o;
         // err can carry paths / OpenCV exception text → JSON-escape so a `"`
         // or backslash from `write failed: …` doesn't break the response body.
         o << "{\"ok\":" << (ok ? "true" : "false")
           << ",\"err\":\"" << json_escape(err) << "\""
-          << ",\"state\":\"" << pipeline::extrinsic_calib_state_name(session->state()) << "\"}";
+          << ",\"state\":\"" << pipeline::extrinsic_calib_state_name(session->state()) << "\"";
+        // On success the session's on_solved hook is about to stop the
+        // process (auto-exit); tell the client what to run next.
+        if (ok && !excal_next_step_.empty()) {
+            o << ",\"next_step\":\"" << json_escape(excal_next_step_) << "\"";
+        }
+        o << "}";
         crow::response r{o.str()};
         r.set_header("Content-Type", "application/json; charset=utf-8");
         return r;

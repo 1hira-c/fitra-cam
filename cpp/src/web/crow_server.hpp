@@ -80,8 +80,13 @@ public:
     // exposes its state + start/stop/solve controls. Caller retains ownership;
     // the pointer must outlive the CrowServer. Must be called before start().
     void set_extrinsic_calib_session(pipeline::ExtrinsicCalibSession* session);
-    using ExcalSolvedFn = std::function<bool(std::string& err)>;
-    void set_extrinsic_calib_solved_callback(ExcalSolvedFn fn);
+
+    // Human-facing guidance spliced into a successful /api/excal/solve
+    // response as "next_step" (the subject-calib restart command). Replaces
+    // the old live-reinject solved callback: solve writes the YAML and the
+    // process auto-exits; nothing is reloaded in-process. Must be called
+    // before start().
+    void set_extrinsic_calib_next_step(std::string guidance);
 
     // Attach the SlimeVR native publisher so /stats3d includes its send
     // counters. Caller retains ownership; the pointer must outlive the
@@ -141,7 +146,7 @@ private:
     pipeline::CalibrationSession*  calib_session_   = nullptr;
     pipeline::CalibPreflight       calib_defaults_;
     pipeline::ExtrinsicCalibSession* excal_session_ = nullptr;
-    ExcalSolvedFn                  excal_solved_fn_;
+    std::string                    excal_next_step_;
     slimevr::NativePublisher*      native_publisher_ = nullptr;
     slimevr::SlimeTrackerBus*      tracker_bus_     = nullptr;
     vmt::VmtPublisher*             vmt_publisher_   = nullptr;

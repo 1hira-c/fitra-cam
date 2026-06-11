@@ -67,6 +67,19 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-11 — ライブ再注入の物理削除 + calib-extrinsic 軽量ループ化 (専念モード化 M2)
+calib↔runtime のプロセス内再注入経路をコンパイルレベルで削除:
+`MultiCameraDriver::set_triangulator` (triangulator ホットスワップ)、`IkSolver::reload_from_profile`
+(approve 後の IK ホットリロード)、`CrowServer::set_extrinsic_calib_solved_callback`、frame tap の
+excal/calib 状態分岐 mux。calib-extrinsic は `ExcalInputSource` 抽象 (新 `pipeline/excal_input_source.hpp`)
+越しの軽量 capture ループ (`app/excal_live_input` + `app/excal_runner`、新 static lib `fitra_app`) に
+載せ替え、TRT 初期化・MultiCameraDriver・publisher を一切構築しない (decode-only。
+`--det-engine`/`--pose-engine` も不要に)。solve 成功は `ExtrinsicCalibSession::set_on_solved` 経由で
+auto-exit し、`/api/excal/solve` 応答と web UI に再起動コマンド (`next_step`) を提示。
+approve 後の wizard も run モード再起動のガイダンスログに置換。replay (M4) は同じ
+`ExcalInputSource` 経路に載る。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
 ### 2026-06-11 — RunMode 導入 + モード別構築ゲーティング (専念モード化 M1)
 `run_mode(MainOptions)` で排他 RunMode (`run` / `calib-subject` / `calib-extrinsic`) を導出し
 (既存フラグから導出、invocation 互換)、main.cpp の構築をモードでゲート: CalibrationSession +

@@ -27,12 +27,6 @@ public:
 
     infer::Skeleton3D update(const infer::Skeleton3D& input);
 
-    // Atomically swap to a new subject profile. Safe to call while update()
-    // is running on another thread: the next update() will use the new
-    // bone lengths. Clears any in-flight observation samples and sets
-    // profile_loaded_ = locked_ = true.
-    void reload_from_profile(const SubjectProfile& profile);
-
     // Re-prime IK from a subject height (AIST/HQL anthropometry ratios) at
     // runtime. Used by the calibration wizard during preflight so the 3D
     // angle recognizer sees a sensible bone-length lock from frame 1.

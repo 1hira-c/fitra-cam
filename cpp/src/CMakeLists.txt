@@ -197,6 +197,25 @@ target_link_libraries(fitra_web PUBLIC
     Crow::Crow
 )
 
+# Mode composition pieces for cpp/build/main (calib-extrinsic live input +
+# capture loop; the M3 builders join here). Separate from fitra_pipeline
+# because the live input needs fitra_vmt (ControllerPoseBus), and fitra_vmt
+# already links fitra_pipeline via fitra_slimevr — the dependency must point
+# this way.
+add_library(fitra_app STATIC
+    app/excal_live_input.cpp
+    app/excal_runner.cpp
+)
+
+target_include_directories(fitra_app PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(fitra_app PUBLIC
+    fitra_pipeline
+    fitra_vmt
+)
+
 # Runtime config loader for cpp/build/main (`--config PATH` YAML).
 # Independent of TensorRT/CUDA so its unit test stays light.
 add_library(fitra_config STATIC
@@ -217,6 +236,7 @@ add_executable(fitra_cam_main
 )
 
 target_link_libraries(fitra_cam_main PRIVATE
+    fitra_app
     fitra_config
     fitra_pipeline
     fitra_web

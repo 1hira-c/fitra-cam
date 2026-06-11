@@ -71,14 +71,6 @@ void MultiCameraDriver::set_skeleton3d_tap(Skeleton3DTapFn fn) {
     skeleton3d_tap_ = std::move(fn);
 }
 
-void MultiCameraDriver::set_triangulator(std::shared_ptr<lift::Triangulator> triangulator) {
-    if (!triangulator) {
-        throw std::invalid_argument("set_triangulator requires a non-null triangulator");
-    }
-    std::lock_guard<std::mutex> g(threed_mu_);
-    threed_.triangulator = std::move(triangulator);
-}
-
 void MultiCameraDriver::stop() {
     if (!worker_.joinable() && sources_.empty()) return;
     stop_.store(true);

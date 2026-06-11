@@ -137,13 +137,6 @@ void IkSolver::apply_subject_profile_locked(const SubjectProfile& profile) {
     locked_ = true;
 }
 
-void IkSolver::reload_from_profile(const SubjectProfile& profile) {
-    std::lock_guard<std::mutex> g(mu_);
-    for (auto& v : samples_) v.clear();
-    observed_frames_ = 0;
-    apply_subject_profile_locked(profile);
-}
-
 void IkSolver::apply_subject_height(double m) {
     if (m <= 0.0) return;
     std::lock_guard<std::mutex> g(mu_);

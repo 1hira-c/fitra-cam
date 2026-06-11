@@ -439,7 +439,14 @@ const char* run_mode_name(RunMode mode) {
 }
 
 void validate_options(const MainOptions& opts) {
-    if (opts.cam_paths[0].empty() || opts.det_engine.empty() || opts.pose_engine.empty()) {
+    if (run_mode(opts) == RunMode::CalibExtrinsic) {
+        // calib-extrinsic is decode-only (AprilTag detection on CPU) — no TRT
+        // engines are loaded. Cameras are still required for live collection.
+        if (opts.cam_paths[0].empty()) {
+            fail("missing required option (need --cam0)");
+        }
+    } else if (opts.cam_paths[0].empty() || opts.det_engine.empty()
+               || opts.pose_engine.empty()) {
         fail("missing required option (need --cam0 + --det-engine + --pose-engine)");
     }
     if (opts.pixel_format != "mjpeg" && opts.pixel_format != "yuyv"

@@ -19,6 +19,7 @@
 // from the Crow / main thread. All shared state is mutex-guarded.
 
 #include <cstddef>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -116,6 +117,12 @@ public:
     // Solve from accumulated samples; on success write the extrinsics YAML.
     bool solve_and_write(std::string& err);
 
+    // Invoked once per successful solve_and_write() (state → kSolved), after
+    // the session mutex is released. Wire before frames start flowing; main
+    // uses it to auto-exit calib-extrinsic mode once the YAML is written
+    // (docs/design/pose-3d-calib-mode-separation.md).
+    void set_on_solved(std::function<void()> fn) { on_solved_ = std::move(fn); }
+
     ExtrinsicCalibState state() const;
     std::size_t         sample_count() const;
     std::string         state_json() const;        // self-contained, for Crow
@@ -171,6 +178,7 @@ private:
 
     lift::ExtrinsicSolution solution_;
     std::string             last_error_;
+    std::function<void()>   on_solved_;
 
     // Pre-built AprilTag detector. The inner cv::aruco::ArucoDetector is heavy
     // to construct (dictionary lookup + parameter setup); on_frame() is the hot
