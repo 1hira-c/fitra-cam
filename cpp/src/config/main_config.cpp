@@ -228,13 +228,14 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
 void load_extrinsic_calib(const YAML::Node& section, MainOptions& out) {
     ensure_map(section, "extrinsic_calib");
     static const std::set<std::string> allowed{
-        "enabled", "intrinsics", "out", "faces", "tag_size_m",
+        "enabled", "replay_dir", "intrinsics", "out", "faces", "tag_size_m",
         "lin_vel_max", "ang_vel_max", "burst_min", "min_samples",
         "controller_role",
         "controller_port", "controller_bind", "controller_stale_ms",
     };
     check_keys(section, allowed, "extrinsic_calib");
     if (section["enabled"])         out.excal_enabled        = parse_scalar<bool>(section["enabled"],               "extrinsic_calib.enabled");
+    if (section["replay_dir"])      out.excal_replay         = parse_scalar<std::string>(section["replay_dir"],     "extrinsic_calib.replay_dir");
     if (section["intrinsics"])      out.excal_intrinsics     = parse_scalar<std::string>(section["intrinsics"],     "extrinsic_calib.intrinsics");
     if (section["out"])             out.excal_out            = parse_scalar<std::string>(section["out"],            "extrinsic_calib.out");
     if (section["faces"])           out.excal_faces          = parse_scalar<std::string>(section["faces"],          "extrinsic_calib.faces");
@@ -405,6 +406,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--calib-static-dir")      { out.calib_static_dir = need(i, "--calib-static-dir"); }
         else if (a == "--calib-dump-tool")       { out.calib_dump_tool = need(i, "--calib-dump-tool"); }
         else if (a == "--extrinsic-calib")         { out.excal_enabled = true; }
+        else if (a == "--excal-replay")            { out.excal_replay = need(i, "--excal-replay"); }
         else if (a == "--excal-intrinsics")        { out.excal_intrinsics = need(i, "--excal-intrinsics"); }
         else if (a == "--excal-out")               { out.excal_out = need(i, "--excal-out"); }
         else if (a == "--excal-faces")             { out.excal_faces = need(i, "--excal-faces"); }
@@ -424,8 +426,10 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
 }
 
 RunMode run_mode(const MainOptions& opts) {
-    if (opts.excal_enabled) return RunMode::CalibExtrinsic;
-    if (opts.calibrate)     return RunMode::CalibSubject;
+    if (opts.excal_enabled || !opts.excal_replay.empty()) {
+        return RunMode::CalibExtrinsic;
+    }
+    if (opts.calibrate) return RunMode::CalibSubject;
     return RunMode::Run;
 }
 
@@ -439,10 +443,12 @@ const char* run_mode_name(RunMode mode) {
 }
 
 void validate_options(const MainOptions& opts) {
-    if (run_mode(opts) == RunMode::CalibExtrinsic) {
+    const RunMode mode = run_mode(opts);
+    if (mode == RunMode::CalibExtrinsic) {
         // calib-extrinsic is decode-only (AprilTag detection on CPU) — no TRT
-        // engines are loaded. Cameras are still required for live collection.
-        if (opts.cam_paths[0].empty()) {
+        // engines are loaded. Cameras are required for live collection only;
+        // a replay session brings its own frames.
+        if (opts.excal_replay.empty() && opts.cam_paths[0].empty()) {
             fail("missing required option (need --cam0)");
         }
     } else if (opts.cam_paths[0].empty() || opts.det_engine.empty()
@@ -475,8 +481,8 @@ void validate_options(const MainOptions& opts) {
         if (opts.calibrate) {
             fail("--slimevr-out cannot be combined with --calibrate");
         }
-        if (opts.excal_enabled) {
-            fail("--slimevr-out cannot be combined with --extrinsic-calib");
+        if (mode == RunMode::CalibExtrinsic) {
+            fail("--slimevr-out cannot be combined with --extrinsic-calib/--excal-replay");
         }
         if (opts.slimevr_port <= 0 || opts.slimevr_port > 65535) {
             fail("--slimevr-port must be in [1, 65535]");
@@ -498,8 +504,8 @@ void validate_options(const MainOptions& opts) {
         if (opts.calibrate) {
             fail("--vmt-out cannot be combined with --calibrate");
         }
-        if (opts.excal_enabled) {
-            fail("--vmt-out cannot be combined with --extrinsic-calib");
+        if (mode == RunMode::CalibExtrinsic) {
+            fail("--vmt-out cannot be combined with --extrinsic-calib/--excal-replay");
         }
         if (opts.vmt_port <= 0 || opts.vmt_port > 65535) {
             fail("--vmt-port must be in [1, 65535]");
@@ -558,10 +564,10 @@ void validate_options(const MainOptions& opts) {
         && (opts.calib_subject_id.empty() || opts.calib_subject_height_m <= 0.0)) {
         fail("--calibrate requires --calib-subject-id and --calib-subject-height-m");
     }
-    if (opts.excal_enabled) {
-        // Uses the frame tap exclusively; the subject wizard also claims it.
+    if (mode == RunMode::CalibExtrinsic) {
+        // Dedicated mode — mutually exclusive with the subject wizard.
         if (opts.calibrate) {
-            fail("--extrinsic-calib cannot be combined with --calibrate");
+            fail("--extrinsic-calib/--excal-replay cannot be combined with --calibrate");
         }
         // Needs per-camera intrinsics: a dedicated file or the three_d.calib.
         if (opts.excal_intrinsics.empty() && opts.calib.empty()) {

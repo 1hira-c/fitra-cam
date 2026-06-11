@@ -67,6 +67,19 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-11 — calib-extrinsic オフライン replay (--excal-replay) + live↔replay 等価性 ctest (専念モード化 M4)
+`tools/excal_record` セッション (JPEG 連番 + ペア済み frames.jsonl) を `ExcalInputSource` の
+replay 実装 (`pipeline/excal_replay_input`) として再生し、`--excal-replay <dir>` 単独で
+calib-extrinsic を無人実行 (collect→solve→YAML、カメラ・SteamVR・web 不要、solve 失敗は
+EXIT_FAILURE)。決定性の要: frames.jsonl の**行順逐次投入** (velocity 推定の prev 状態が
+セッション全体で 1 本のため per-cam 分割や ts 再ソートは等価性を壊す) と、記録時確定の
+`running_ok` を再判定しないこと。等価性 ctest (`test_excal_replay`) は合成 AprilTag フレームを
+recorder フォーマットで一時 dir に書き、同一 JPEG バイト列を on_frame 直叩きと replay 経路の
+両方に通して sample 列の bit-exact 一致を固定 (`samples_snapshot()` を比較用に追加)。
+parser (`parse_excal_frame_line`) の strict reject も固定。実録 fixture での solve 再現確認は
+実機作業として残 (M5 runbook に手順)。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
 ### 2026-06-11 — composition root 抽出 + Crow ルートのモード別モジュール化 (専念モード化 M3)
 main.cpp (~1030 行) の構築シーケンスを `cpp/src/app/` の builder
 (trt_stack / camera_builder / threed_builder / pose_relay_builder / output_builder /

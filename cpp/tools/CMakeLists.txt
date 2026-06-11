@@ -231,6 +231,23 @@ set_target_properties(fitra_test_extrinsic_calib_session PROPERTIES
 
 add_test(NAME test_extrinsic_calib_session COMMAND fitra_test_extrinsic_calib_session)
 
+# Offline replay for calib-extrinsic — frames.jsonl parser + live↔replay
+# sample-stream equivalence on a synthetic recorder-format session.
+add_executable(fitra_test_excal_replay
+    test_excal_replay.cpp
+)
+
+target_link_libraries(fitra_test_excal_replay PRIVATE
+    fitra_pipeline
+)
+
+set_target_properties(fitra_test_excal_replay PROPERTIES
+    OUTPUT_NAME "test_excal_replay"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_excal_replay COMMAND fitra_test_excal_replay)
+
 # Integration smoke test for the /api/excal/* Crow routes (live loopback server).
 add_executable(fitra_test_crow_excal
     test_crow_excal.cpp

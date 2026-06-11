@@ -140,6 +140,10 @@ struct MainOptions {
     // receives the controller pose on a parallel UDP channel, taps camera
     // frames into the collection session, and writes extrinsics on solve.
     bool        excal_enabled        = false;
+    // Offline replay: a tools/excal_record session directory (JPEG sequence +
+    // frames.jsonl). Non-empty implies calib-extrinsic mode and runs
+    // collect→solve unattended — no cameras, no SteamVR, no web.
+    std::string excal_replay;
     // Intrinsics-only calibration YAML (extrinsics ignored). Empty → reuse
     // three_d.calib.
     std::string excal_intrinsics;

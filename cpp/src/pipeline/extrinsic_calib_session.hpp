@@ -125,6 +125,12 @@ public:
 
     ExtrinsicCalibState state() const;
     std::size_t         sample_count() const;
+    // Copy of the accumulated samples (flushed bursts only). Used by the
+    // live↔replay equivalence test to compare sample streams element-wise.
+    std::vector<lift::ExtrinsicSample> samples_snapshot() const {
+        std::lock_guard<std::mutex> g(mu_);
+        return samples_;
+    }
     std::string         state_json() const;        // self-contained, for Crow
     // Per-camera intrinsics + solved T_cam_world (world→camera) for the 3D
     // verification scene. Empty `cameras` until a solve succeeds.

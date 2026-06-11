@@ -133,6 +133,7 @@ add_library(fitra_pipeline STATIC
     pipeline/snapshot.cpp
     pipeline/calibration_session.cpp
     pipeline/extrinsic_calib_session.cpp
+    pipeline/excal_replay_input.cpp
 )
 
 target_link_libraries(fitra_pipeline PUBLIC

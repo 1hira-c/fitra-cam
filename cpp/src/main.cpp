@@ -136,6 +136,8 @@ void print_help() {
         "see docs/design/pose-3d-controller-marker-extrinsic.md):\n"
         "  --extrinsic-calib           collect controller-marker samples; auto-exits after a\n"
         "                              successful solve+write (also solves on Ctrl-C)\n"
+        "  --excal-replay DIR          replay a tools/excal_record session unattended\n"
+        "                              (collect->solve->write; no camera/SteamVR/web needed)\n"
         "  --excal-intrinsics PATH     intrinsics-only calibration YAML (else reuses --calib)\n"
         "  --excal-out PATH            output extrinsics YAML (default calibrations/extrinsics.yaml)\n"
         "  --excal-faces \"0,1,2\"       AprilTag 36h11 face IDs on the marker\n"

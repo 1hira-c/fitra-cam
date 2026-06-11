@@ -483,6 +483,46 @@ void test_run_mode_derivation_and_publisher_exclusivity() {
     check(threw, "--vmt-out + --extrinsic-calib must throw");
 }
 
+void test_excal_replay_yaml_cli_and_mode() {
+    using fitra::config::RunMode;
+    using fitra::config::run_mode;
+
+    auto p = write_tmp("excal_replay.yaml", R"(schema: fitra_main_config_v1
+extrinsic_calib:
+  replay_dir: /tmp/session
+  intrinsics: /tmp/intr.yaml
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(opts.excal_replay == "/tmp/session", "extrinsic_calib.replay_dir loads");
+
+    // CLI flag + mode derivation. Replay validates with no cameras and no
+    // TRT engines — the session brings its own frames.
+    MainOptions o2;
+    std::vector<std::string> argv_buf{"--excal-replay", "/tmp/sess2",
+                                      "--excal-intrinsics", "/tmp/intr.yaml"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(o2, static_cast<int>(argv.size()), argv.data());
+    check(o2.excal_replay == "/tmp/sess2", "--excal-replay CLI sets value");
+    validate_options(o2);  // must not throw
+    check(run_mode(o2) == RunMode::CalibExtrinsic,
+          "--excal-replay alone -> calib-extrinsic mode");
+
+    // Still exclusive with --calibrate.
+    o2.calibrate = true;
+    o2.enable_3d = true;
+    o2.calib = "/tmp/cam.yaml";
+    o2.calib_subject_id = "s";
+    o2.calib_subject_height_m = 1.7;
+    bool threw = false;
+    try { validate_options(o2); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--excal-replay", "replay+calibrate exclusivity msg");
+    }
+    check(threw, "--excal-replay + --calibrate must throw");
+}
+
 struct TestCase {
     const char* name;
     void (*fn)();
@@ -502,6 +542,7 @@ const TestCase kTests[] = {
     {"extrinsic_calib_yaml_cli_and_validate",  test_extrinsic_calib_yaml_cli_and_validate},
     {"run_mode_derivation_and_publisher_exclusivity",
                                                test_run_mode_derivation_and_publisher_exclusivity},
+    {"excal_replay_yaml_cli_and_mode",         test_excal_replay_yaml_cli_and_mode},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},

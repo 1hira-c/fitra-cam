@@ -14,6 +14,7 @@
 #include "app/pose_relay_builder.hpp"
 #include "app/server_builder.hpp"
 #include "lift/calib_io.hpp"
+#include "pipeline/excal_replay_input.hpp"
 #include "pipeline/extrinsic_calib_session.hpp"
 #include "util/logging.hpp"
 
@@ -39,15 +40,11 @@ std::vector<std::string> split_csv(const std::string& s) {
     return out;
 }
 
-}  // namespace
-
-int run_mode_calib_extrinsic(const config::MainOptions& opts,
-                             std::atomic<bool>& stop) {
-    // Decode-only FrameSources (no YOLOX, no RTMPose prebake): the capture
-    // loop only needs CPU BGR frames for AprilTag detection.
-    auto cams = make_frame_sources(opts, nullptr, nullptr);
-    const std::size_t n_cams = cams.sources.size();
-
+// Builds the session from opts (intrinsics load + face-id parse + gate
+// thresholds). Shared by the live and replay paths; returns nullptr with a
+// message on stderr when the configuration is unusable.
+std::unique_ptr<pipeline::ExtrinsicCalibSession>
+build_excal_session(const config::MainOptions& opts, std::size_t n_cams) {
     const std::string intr_path = opts.excal_intrinsics.empty()
                                   ? opts.calib : opts.excal_intrinsics;
     FITRA_LOG_INFO("extrinsic-calib: loading intrinsics from {}", intr_path);
@@ -57,7 +54,7 @@ int run_mode_calib_extrinsic(const config::MainOptions& opts,
         std::fprintf(stderr,
             "extrinsic-calib: intrinsics file has %zu cameras, need >= %zu\n",
             ec.intrinsics.cameras.size(), n_cams);
-        return EXIT_FAILURE;
+        return nullptr;
     }
     // Parse "0,1,2" face ids; uniform tag size for the skeleton. Parse
     // strictly: a non-numeric token (typo, stray char) must fail loudly
@@ -73,7 +70,7 @@ int run_mode_calib_extrinsic(const config::MainOptions& opts,
                 "extrinsic-calib: invalid --excal-faces token '%s' "
                 "(expected non-negative integers, e.g. \"0,1,2\")\n",
                 tok.c_str());
-            return EXIT_FAILURE;
+            return nullptr;
         }
         lift::MarkerFace f;
         f.face_id = face_id;
@@ -85,8 +82,55 @@ int run_mode_calib_extrinsic(const config::MainOptions& opts,
     ec.burst_min              = opts.excal_burst_min;
     ec.min_samples_per_group  = opts.excal_min_samples;
     ec.out_path               = opts.excal_out;
-    auto excal_session = std::make_unique<pipeline::ExtrinsicCalibSession>(
-        std::move(ec));
+    return std::make_unique<pipeline::ExtrinsicCalibSession>(std::move(ec));
+}
+
+// Unattended replay: a tools/excal_record session in, an extrinsics YAML
+// out. No cameras, no SteamVR, no web server — collect→solve runs to
+// completion and the exit code is the result.
+int run_excal_replay(const config::MainOptions& opts, std::atomic<bool>& stop) {
+    pipeline::ExcalReplayInput input{opts.excal_replay};
+    const std::size_t n_cams = input.camera_count();
+    if (input.size() == 0) {
+        std::fprintf(stderr, "excal-replay: %s has no frames\n",
+                     opts.excal_replay.c_str());
+        return EXIT_FAILURE;
+    }
+    FITRA_LOG_INFO("excal-replay: {} frames across {} cameras from {}",
+                   input.size(), n_cams, opts.excal_replay);
+
+    auto session = build_excal_session(opts, n_cams);
+    if (!session) return EXIT_FAILURE;
+
+    session->start();
+    run_excal_loop(input, *session, stop);
+
+    FITRA_LOG_INFO("excal-replay: collected {} samples; solving...",
+                   session->sample_count());
+    std::string err;
+    if (!session->solve_and_write(err)) {
+        FITRA_LOG_ERROR("excal-replay: solve/write failed: {}", err);
+        return EXIT_FAILURE;
+    }
+    FITRA_LOG_INFO("excal-replay: wrote extrinsics to {}", opts.excal_out);
+    return EXIT_SUCCESS;
+}
+
+}  // namespace
+
+int run_mode_calib_extrinsic(const config::MainOptions& opts,
+                             std::atomic<bool>& stop) {
+    if (!opts.excal_replay.empty()) {
+        return run_excal_replay(opts, stop);
+    }
+
+    // Decode-only FrameSources (no YOLOX, no RTMPose prebake): the capture
+    // loop only needs CPU BGR frames for AprilTag detection.
+    auto cams = make_frame_sources(opts, nullptr, nullptr);
+    const std::size_t n_cams = cams.sources.size();
+
+    auto excal_session = build_excal_session(opts, n_cams);
+    if (!excal_session) return EXIT_FAILURE;
 
     // Unified VMT pose relay receiver: the selected controller is the
     // calibration input; the HMD feeds the /extrinsic-calib scene.
