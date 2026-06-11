@@ -1442,6 +1442,20 @@ if (vmtAutoContToggle) {
   });
 }
 
+// Calibration entry points only exist in their dedicated modes
+// (docs/design/pose-3d-calib-mode-separation.md); show the matching link.
+(async () => {
+  try {
+    const res = await fetch("/api/state");
+    if (!res.ok) return;
+    const s = await res.json();
+    const calibLink = document.getElementById("calib-link");
+    const excalLink = document.getElementById("excal-link");
+    if (calibLink && s.mode === "calib-subject")   calibLink.hidden = false;
+    if (excalLink && s.mode === "calib-extrinsic") excalLink.hidden = false;
+  } catch (e) { /* state probe is best-effort */ }
+})();
+
 connect();
 connect3d();
 loadVmtAlignment();

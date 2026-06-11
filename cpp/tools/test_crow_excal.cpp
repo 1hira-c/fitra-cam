@@ -159,6 +159,7 @@ int main() {
     opts.host = "127.0.0.1";
     opts.port = kPort;
     opts.publish_hz = 5.0;
+    opts.mode_label = "calib-extrinsic";
 #ifdef FITRA_EXCAL_WEB_DIR
     opts.excal_static_dir = FITRA_EXCAL_WEB_DIR;
 #endif
@@ -215,25 +216,25 @@ int main() {
         CHECK(body.find("\"timestamp_s\":13.25") != std::string::npos);
         CHECK(body.find("\"pos\":[-0.5,1,2.25]") != std::string::npos);
 
-#ifdef FITRA_SUBJECT_WEB_DIR
-        // Subject calibration UI is static and remains reachable even when
-        // the CalibrationSession is not attached (for example non-3D runs).
-        CHECK(http("GET", "/subject-calib", status, body));
+        // /api/state reports the mode label so the frontends can show the
+        // right calibration entry points.
+        CHECK(http("GET", "/api/state", status, body));
         CHECK(status == 200);
-        CHECK(body.find("Subject Profile Calibration") != std::string::npos);
-        CHECK(http("GET", "/subject-calib/app.js", status, body));
-        CHECK(status == 200);
-        CHECK(body.find("/api/calib/state") != std::string::npos);
-        // /api/calib/* only exist in calib-subject mode. With no session
-        // attached the routes are never registered, so requests fall through
-        // to the GET-only static catchall: GET → 404 (no such file), POST →
-        // 405 (no POST rule). Either way there is no 503 JSON stub anymore
+        CHECK(body.find("\"mode\":\"calib-extrinsic\"") != std::string::npos);
+        CHECK(body.find("\"enable_3d\":false") != std::string::npos);
+
+        // The subject-calib group (static pages AND /api/calib/*) only exists
+        // in calib-subject mode. With no CalibrationSession attached nothing
+        // is registered, so requests fall through to the GET-only static
+        // catchall: GET → 404 (no such file), POST → 405 (no POST rule).
+        // No 503 JSON stub anymore
         // (docs/design/pose-3d-calib-mode-separation.md).
+        CHECK(http("GET", "/subject-calib", status, body));
+        CHECK(status == 404);
         CHECK(http("GET", "/api/calib/state", status, body));
         CHECK(status == 404);
         CHECK(http("POST", "/api/calib/start", status, body));
         CHECK(status == 405);
-#endif
 
 #ifdef FITRA_EXCAL_WEB_DIR
         // Static frontend is served (collect page + 3D scene).

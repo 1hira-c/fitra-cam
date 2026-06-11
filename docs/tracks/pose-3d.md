@@ -67,6 +67,18 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-11 — composition root 抽出 + Crow ルートのモード別モジュール化 (専念モード化 M3)
+main.cpp (~1030 行) の構築シーケンスを `cpp/src/app/` の builder
+(trt_stack / camera_builder / threed_builder / pose_relay_builder / output_builder /
+server_builder / stats_loop) + モード runner (mode_run / mode_calib_subject /
+mode_calib_extrinsic) へ抽出。main.cpp は config parse → validate → RunMode dispatch のみ
+(~260 行、ほぼ help テキスト)。Crow は calib/excal ルート群を `web/crow_routes_setup.cpp` に
+分離し (deps 構造体渡し、session 未 attach なら静的ページ含め未登録)、共有 JSON helper を
+`web/crow_util.hpp` へ。`GET /api/state` を常設し mode ラベルを返す — viewer の calib 導線は
+mode に応じて表示。挙動変更は web 表面のみ: run モードで `/subject-calib`・`/extrinsic-calib`
+静的ページも 404 に、calib-subject での hmd-listen 受信は廃止 (消費者が存在しなかった)。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
 ### 2026-06-11 — ライブ再注入の物理削除 + calib-extrinsic 軽量ループ化 (専念モード化 M2)
 calib↔runtime のプロセス内再注入経路をコンパイルレベルで削除:
 `MultiCameraDriver::set_triangulator` (triangulator ホットスワップ)、`IkSolver::reload_from_profile`

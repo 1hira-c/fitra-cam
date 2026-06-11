@@ -48,6 +48,11 @@ struct ServerOptions {
     double      publish_hz = 30.0;
     int         crow_threads = 2;
 
+    // RunMode label reported by GET /api/state ("run" / "calib-subject" /
+    // "calib-extrinsic"); the frontends use it to show or hide the
+    // calibration entry points.
+    std::string mode_label = "run";
+
     // Directory that contains web/calibration/{index.html,app.js,...}.
     // When non-empty (and a CalibrationSession is attached) /calib serves
     // the wizard frontend and /api/calib/* exposes the orchestrator.

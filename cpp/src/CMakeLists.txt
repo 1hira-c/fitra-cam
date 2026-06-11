@@ -188,6 +188,7 @@ target_link_libraries(fitra_vmt PUBLIC
 # Crow HTTP+WebSocket server.
 add_library(fitra_web STATIC
     web/crow_server.cpp
+    web/crow_routes_setup.cpp
 )
 
 target_link_libraries(fitra_web PUBLIC
@@ -197,14 +198,24 @@ target_link_libraries(fitra_web PUBLIC
     Crow::Crow
 )
 
-# Mode composition pieces for cpp/build/main (calib-extrinsic live input +
-# capture loop; the M3 builders join here). Separate from fitra_pipeline
-# because the live input needs fitra_vmt (ControllerPoseBus), and fitra_vmt
-# already links fitra_pipeline via fitra_slimevr — the dependency must point
-# this way.
+# Composition root for cpp/build/main: per-mode runners (run / calib-subject /
+# calib-extrinsic) and the builders they share. Separate from fitra_pipeline
+# because the runners need fitra_vmt/fitra_web, and fitra_vmt already links
+# fitra_pipeline via fitra_slimevr — the dependency must point this way.
 add_library(fitra_app STATIC
+    app/camera_builder.cpp
     app/excal_live_input.cpp
     app/excal_runner.cpp
+    app/mode_calib_extrinsic.cpp
+    app/mode_calib_subject.cpp
+    app/mode_run.cpp
+    app/output_builder.cpp
+    app/paths.cpp
+    app/pose_relay_builder.cpp
+    app/server_builder.cpp
+    app/stats_loop.cpp
+    app/threed_builder.cpp
+    app/trt_stack.cpp
 )
 
 target_include_directories(fitra_app PUBLIC
@@ -212,8 +223,10 @@ target_include_directories(fitra_app PUBLIC
 )
 
 target_link_libraries(fitra_app PUBLIC
+    fitra_config
     fitra_pipeline
     fitra_vmt
+    fitra_web
 )
 
 # Runtime config loader for cpp/build/main (`--config PATH` YAML).
