@@ -26,6 +26,7 @@ namespace fitra::web::detail {
 struct CalibRouteDeps {
     pipeline::CalibrationSession* session = nullptr;   // nullptr → no routes
     pipeline::CalibPreflight      defaults;
+    std::string                   next_step;  // spliced into a successful approve
     std::string                   static_dir;
 };
 void register_calib_routes(crow::SimpleApp& app, const CalibRouteDeps& deps);

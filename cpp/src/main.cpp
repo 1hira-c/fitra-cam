@@ -25,6 +25,7 @@
 #include <NvInfer.h>
 #include <NvInferVersion.h>
 
+#include "app/flow.hpp"
 #include "app/mode_calib_extrinsic.hpp"
 #include "app/mode_calib_subject.hpp"
 #include "app/mode_run.hpp"
@@ -88,6 +89,7 @@ void print_help() {
         "\n"
         "SlimeVR native Firmware UDP output (requires --enable-3d + --keypoint-format=halpe26):\n"
         "  --slimevr-out             enable the native Firmware UDP publisher (10 trackers)\n"
+        "  --no-slimevr-out          negate slimevr.slimevr_out from --config (calib spawns)\n"
         "  --slimevr-host ADDR       SlimeVR Server host (default 127.0.0.1; typically the Windows IP)\n"
         "  --slimevr-port N          UDP port (default 6969 — SlimeVR firmware port)\n"
         "  --slimevr-rate-hz F       RotationData send rate (default 60.0)\n"
@@ -97,6 +99,7 @@ void print_help() {
         "\n"
         "Virtual Motion Tracker (VMT) → SteamVR direct (requires --enable-3d + --keypoint-format=halpe26):\n"
         "  --vmt-out                 enable the VMT OSC publisher (10 trackers, /VMT/Room/Driver)\n"
+        "  --no-vmt-out              negate vmt.vmt_out from --config (calib spawns)\n"
         "  --vmt-host ADDR           VMT Manager host (default 127.0.0.1; typically the Windows IP)\n"
         "  --vmt-port N              UDP port (default 39570 — VMT receive port)\n"
         "  --vmt-rate-hz F           send rate (default 60.0)\n"
@@ -150,6 +153,10 @@ void print_help() {
         "  --excal-controller-port N   deprecated legacy controller UDP port (default 39572)\n"
         "  --excal-controller-bind ADDR  deprecated legacy bind address (default 0.0.0.0)\n"
         "  --excal-controller-stale-ms F  controller pose staleness threshold (default 200)\n"
+        "\n"
+        "  --flow-managed            mark this process as flow-daemon-spawned: enables\n"
+        "                            POST /api/flow/switch and the calib auto-chain exit codes\n"
+        "                            (set by the daemon; not meant for manual use)\n"
         "\n"
         "  --config PATH             runtime YAML config (see docs/backlog-main-yaml-config.md).\n"
         "                            Precedence (low -> high): code defaults < --config < CLI flags.\n"
@@ -246,18 +253,34 @@ int main(int argc, char** argv) {
         // builds only what it needs; the contract between modes is the YAML
         // artifacts on disk (docs/design/pose-3d-calib-mode-separation.md).
         const auto mode = fitra::config::run_mode(opts);
-        FITRA_LOG_INFO("[fitra] mode={}", fitra::config::run_mode_name(mode));
+        FITRA_LOG_INFO("[fitra] mode={}{}", fitra::config::run_mode_name(mode),
+                       opts.flow_managed ? " (flow-managed)" : "");
         std::signal(SIGINT, on_signal);
 
+        // Daemon-managed modules report a requested mode switch through
+        // their exit code; standalone runs never set next_mode and keep the
+        // conventional 0/1 exits (docs/design/pose-3d-flow-daemon.md).
+        fitra::app::FlowControl flow{g_stop, opts.flow_managed};
+        int rc = EXIT_FAILURE;
         switch (mode) {
             case fitra::config::RunMode::CalibExtrinsic:
-                return fitra::app::run_mode_calib_extrinsic(opts, g_stop);
+                rc = fitra::app::run_mode_calib_extrinsic(opts, flow);
+                break;
             case fitra::config::RunMode::CalibSubject:
-                return fitra::app::run_mode_calib_subject(opts, g_stop);
+                rc = fitra::app::run_mode_calib_subject(opts, flow);
+                break;
             case fitra::config::RunMode::Run:
+                rc = fitra::app::run_mode_run(opts, flow);
                 break;
         }
-        return fitra::app::run_mode_run(opts, g_stop);
+        const int next = flow.next_mode.load();
+        if (rc == EXIT_SUCCESS && next >= 0) {
+            const auto next_mode = static_cast<fitra::config::RunMode>(next);
+            FITRA_LOG_INFO("[fitra] flow: requesting next mode {}",
+                           fitra::config::run_mode_name(next_mode));
+            return fitra::app::flow_exit_code(next_mode);
+        }
+        return rc;
     } catch (const std::exception& e) {
         FITRA_LOG_ERROR("fatal: {}", e.what());
         return EXIT_FAILURE;

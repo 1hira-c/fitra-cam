@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "app/flow.hpp"
 #include "config/main_config.hpp"
 #include "pipeline/snapshot.hpp"
 #include "web/crow_server.hpp"
@@ -14,9 +15,13 @@
 namespace fitra::app {
 
 // Returns nullptr when --no-web. bus3d may be null (2D-only / calib-extrinsic).
+// When `flow` is daemon-managed, the server gets the /api/flow/switch handler
+// (mode-switch requests stop the loop and surface as a flow exit code); the
+// pointer must outlive the returned server.
 std::unique_ptr<web::CrowServer> make_server(const config::MainOptions& opts,
                                              config::RunMode mode,
                                              pipeline::SnapshotBus& bus,
-                                             pipeline::Skeleton3DBus* bus3d);
+                                             pipeline::Skeleton3DBus* bus3d,
+                                             FlowControl* flow);
 
 }  // namespace fitra::app

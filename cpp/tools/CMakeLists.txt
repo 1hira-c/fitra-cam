@@ -256,6 +256,7 @@ add_executable(fitra_test_crow_excal
 target_link_libraries(fitra_test_crow_excal PRIVATE
     fitra_web
     fitra_pipeline
+    fitra_config      # parse_run_mode_name for the /api/flow/switch contract
 )
 
 # CMAKE_SOURCE_DIR is the cpp/ tree; the web assets live at <repo>/web.

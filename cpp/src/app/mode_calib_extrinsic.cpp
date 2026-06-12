@@ -88,7 +88,7 @@ build_excal_session(const config::MainOptions& opts, std::size_t n_cams) {
 // Unattended replay: a tools/excal_record session in, an extrinsics YAML
 // out. No cameras, no SteamVR, no web server — collect→solve runs to
 // completion and the exit code is the result.
-int run_excal_replay(const config::MainOptions& opts, std::atomic<bool>& stop) {
+int run_excal_replay(const config::MainOptions& opts, FlowControl& flow) {
     pipeline::ExcalReplayInput input{opts.excal_replay};
     const std::size_t n_cams = input.camera_count();
     if (input.size() == 0) {
@@ -103,7 +103,7 @@ int run_excal_replay(const config::MainOptions& opts, std::atomic<bool>& stop) {
     if (!session) return EXIT_FAILURE;
 
     session->start();
-    run_excal_loop(input, *session, stop);
+    run_excal_loop(input, *session, flow.stop);
 
     FITRA_LOG_INFO("excal-replay: collected {} samples; solving...",
                    session->sample_count());
@@ -118,10 +118,9 @@ int run_excal_replay(const config::MainOptions& opts, std::atomic<bool>& stop) {
 
 }  // namespace
 
-int run_mode_calib_extrinsic(const config::MainOptions& opts,
-                             std::atomic<bool>& stop) {
+int run_mode_calib_extrinsic(const config::MainOptions& opts, FlowControl& flow) {
     if (!opts.excal_replay.empty()) {
-        return run_excal_replay(opts, stop);
+        return run_excal_replay(opts, flow);
     }
 
     // Decode-only FrameSources (no YOLOX, no RTMPose prebake): the capture
@@ -136,24 +135,29 @@ int run_mode_calib_extrinsic(const config::MainOptions& opts,
     // calibration input; the HMD feeds the /extrinsic-calib scene.
     auto relay = make_pose_relay(opts, /*listen=*/true);
 
-    const std::string guidance =
-        "extrinsics written to " + opts.excal_out
-        + ". Next: restart in subject-calib mode — ./main --calibrate"
-          " --enable-3d --calib " + opts.excal_out
-        + " --calib-subject-id <ID> --calib-subject-height-m <H> ...";
+    const std::string guidance = flow.managed
+        ? "extrinsics written to " + opts.excal_out
+          + ". Flow daemon switches to subject-calib mode."
+        : "extrinsics written to " + opts.excal_out
+          + ". Next: restart in subject-calib mode — ./main --calibrate"
+            " --enable-3d --calib " + opts.excal_out
+          + " --calib-subject-id <ID> --calib-subject-height-m <H> ...";
 
     // Auto-exit on solve: the YAML is the mode's whole output, so once it is
     // written there is nothing left to run. Fires from the Crow worker (or
     // the shutdown fallback below); the capture loop notices `stop` promptly,
-    // after the solve response has been written.
-    excal_session->set_on_solved([&guidance, &stop]() {
+    // after the solve response has been written. Under the flow daemon the
+    // exit doubles as the auto-chain into subject calibration.
+    excal_session->set_on_solved([&guidance, &flow]() {
         FITRA_LOG_INFO("extrinsic-calib: solved. {}", guidance);
-        stop.store(true);
+        if (flow.managed) flow.request_switch(config::RunMode::CalibSubject);
+        else              flow.stop.store(true);
     });
 
     // Inert snapshot bus: no driver feeds it; /stats serves an empty bundle.
     pipeline::SnapshotBus bus{n_cams};
-    auto server = make_server(opts, config::RunMode::CalibExtrinsic, bus, nullptr);
+    auto server = make_server(opts, config::RunMode::CalibExtrinsic, bus, nullptr,
+                              &flow);
     if (server) {
         server->set_extrinsic_calib_session(excal_session.get());
         server->set_extrinsic_calib_next_step(guidance);
@@ -174,7 +178,7 @@ int run_mode_calib_extrinsic(const config::MainOptions& opts,
     ExcalLiveInput input{std::move(cams.sources), *relay.controller_bus,
                          opts.excal_controller_stale_ms};
     input.start();
-    run_excal_loop(input, *excal_session, stop);
+    run_excal_loop(input, *excal_session, flow.stop);
     input.stop();
 
     if (server) server->stop();

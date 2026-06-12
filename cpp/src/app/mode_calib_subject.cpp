@@ -16,8 +16,7 @@
 
 namespace fitra::app {
 
-int run_mode_calib_subject(const config::MainOptions& opts,
-                           std::atomic<bool>& stop) {
+int run_mode_calib_subject(const config::MainOptions& opts, FlowControl& flow) {
     // For the headless --calibrate path, prime the live IkSolver with the
     // calibration height up-front. Without this, the IK is unlocked at boot
     // and the 3D angle recognizer would have to wait for ~150 frames of
@@ -77,11 +76,17 @@ int run_mode_calib_subject(const config::MainOptions& opts,
     });
     // No in-process reinjection: the approved profile is a YAML artifact
     // consumed by the next run-mode boot (--subject-id).
-    calib_session.set_on_approved([&opts](const lift::SubjectProfile& p) {
-        FITRA_LOG_INFO(
-            "profile approved (id={}). Restart in run mode to use it: "
-            "./main --enable-3d --calib {} --subject-id {} ...",
-            p.subject_id, opts.calib, p.subject_id);
+    calib_session.set_on_approved([&opts, &flow](const lift::SubjectProfile& p) {
+        if (flow.managed) {
+            FITRA_LOG_INFO(
+                "profile approved (id={}). Flow daemon switches to run mode.",
+                p.subject_id);
+        } else {
+            FITRA_LOG_INFO(
+                "profile approved (id={}). Restart in run mode to use it: "
+                "./main --enable-3d --calib {} --subject-id {} ...",
+                p.subject_id, opts.calib, p.subject_id);
+        }
     });
     // Prime the live IK with the subject's height the moment preflight
     // succeeds, so the 3D angle recognizer has a sensible bone-length lock
@@ -96,8 +101,12 @@ int run_mode_calib_subject(const config::MainOptions& opts,
         [calib_recording_flag](bool active) {
             calib_recording_flag->store(active, std::memory_order_relaxed);
         });
-    calib_session.set_on_exit_requested([&stop]() {
-        stop.store(true);
+    // --calib-auto-exit path. Under the flow daemon this is the auto-chain:
+    // the exit request becomes a "switch to run" so the daemon respawns into
+    // tracker output with the just-approved profile.
+    calib_session.set_on_exit_requested([&flow]() {
+        if (flow.managed) flow.request_switch(config::RunMode::Run);
+        else              flow.stop.store(true);
     });
 
     calib_defaults.subject_id = "";
@@ -140,9 +149,15 @@ int run_mode_calib_subject(const config::MainOptions& opts,
     } extractor_stop{tracker_extractor.get()};
 
     auto server = make_server(opts, config::RunMode::CalibSubject, bus,
-                              threed.bus3d.get());
+                              threed.bus3d.get(), &flow);
     if (server) {
         server->set_calibration_session(&calib_session, calib_defaults);
+        server->set_calibration_next_step(
+            flow.managed
+            ? "profile written. Flow daemon switches to run mode."
+            : "profile written. Restart in run mode: ./main --enable-3d"
+              " --calib " + opts.calib + " --subject-id "
+              + opts.calib_subject_id + " ...");
         server->set_tracker_bus(threed.tracker_bus.get());
         server->start();
     }
@@ -165,7 +180,7 @@ int run_mode_calib_subject(const config::MainOptions& opts,
                        opts.calib_subject_id, opts.calib_subject_height_m);
     }
 
-    run_stats_loop(*driver, opts.log_every_s, stop);
+    run_stats_loop(*driver, opts.log_every_s, flow.stop);
 
     if (server) server->stop();
     driver->stop();   // taps quiesce here — safe for the session to wind down
