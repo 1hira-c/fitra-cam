@@ -3,7 +3,9 @@
 (着手日 2026-06-10 / **M1–M5 実装完了 2026-06-11** (実機検証は残、下記実装記録参照) /
 関連: [pose-3d-controller-marker-extrinsic.md](pose-3d-controller-marker-extrinsic.md),
 [vr-output-continuous-hmd-calibration.md](vr-output-continuous-hmd-calibration.md) /
-前提合意: **初期設定・キャリブレーション中に他モジュールが動く必要はない** — 専念してよい)
+前提合意: **初期設定・キャリブレーション中に他モジュールが動く必要はない** — 専念してよい /
+後続: モード間のプロセス再起動は [pose-3d-flow-daemon.md](pose-3d-flow-daemon.md) の
+flow daemon が自動化 (2026-06-12) — 本 doc の「手動再起動」記述は非 daemon 運用の話)
 
 ## 背景 / 動機
 
