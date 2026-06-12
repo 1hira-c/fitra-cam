@@ -421,6 +421,8 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--excal-controller-port")   { out.excal_controller_port = std::atoi(need(i, "--excal-controller-port")); }
         else if (a == "--excal-controller-bind")   { out.excal_controller_bind = need(i, "--excal-controller-bind"); }
         else if (a == "--excal-controller-stale-ms"){ out.excal_controller_stale_ms = std::stod(need(i, "--excal-controller-stale-ms")); }
+        else if (a == "--daemon")            { out.daemon = true; }
+        else if (a == "--daemon-initial")    { out.daemon_initial = need(i, "--daemon-initial"); }
         else if (a == "--flow-managed")      { out.flow_managed = true; }
         else {
             fail(std::string("unknown arg: ") + argv[i]);
@@ -608,6 +610,23 @@ void validate_options(const MainOptions& opts) {
         }
         if (opts.excal_lin_vel_max <= 0.0 || opts.excal_ang_vel_max <= 0.0) {
             fail("--excal-lin-vel-max / --excal-ang-vel-max must be > 0");
+        }
+    }
+    if (opts.daemon) {
+        // The daemon owns mode selection — it spawns modules with the mode
+        // flags itself (docs/design/pose-3d-flow-daemon.md).
+        if (mode != RunMode::Run) {
+            fail("--daemon cannot be combined with --calibrate/--extrinsic-calib"
+                 "/--excal-replay (use --daemon-initial to pick the first mode)");
+        }
+        if (opts.flow_managed) {
+            fail("--daemon cannot be combined with --flow-managed");
+        }
+        RunMode initial;
+        if (opts.daemon_initial != "auto"
+            && !parse_run_mode_name(opts.daemon_initial, initial)) {
+            fail("--daemon-initial must be one of auto|run|calib-subject"
+                 "|calib-extrinsic");
         }
     }
 }

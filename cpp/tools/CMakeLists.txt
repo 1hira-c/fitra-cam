@@ -472,3 +472,21 @@ set_target_properties(fitra_test_main_config PROPERTIES
 )
 
 add_test(NAME test_main_config COMMAND fitra_test_main_config)
+
+# Flow daemon: module_argv / next_action / initial_mode decision helpers and
+# the run_daemon() spawn loop against a stub module script. Links fitra_app
+# for daemon.cpp; the test itself never touches CUDA/TRT/sockets.
+add_executable(fitra_test_flow_daemon
+    test_flow_daemon.cpp
+)
+
+target_link_libraries(fitra_test_flow_daemon PRIVATE
+    fitra_app
+)
+
+set_target_properties(fitra_test_flow_daemon PROPERTIES
+    OUTPUT_NAME "test_flow_daemon"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_flow_daemon COMMAND fitra_test_flow_daemon)

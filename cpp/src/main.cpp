@@ -25,6 +25,7 @@
 #include <NvInfer.h>
 #include <NvInferVersion.h>
 
+#include "app/daemon.hpp"
 #include "app/flow.hpp"
 #include "app/mode_calib_extrinsic.hpp"
 #include "app/mode_calib_subject.hpp"
@@ -154,6 +155,13 @@ void print_help() {
         "  --excal-controller-bind ADDR  deprecated legacy bind address (default 0.0.0.0)\n"
         "  --excal-controller-stale-ms F  controller pose staleness threshold (default 200)\n"
         "\n"
+        "Flow daemon (spawns one mode module at a time and chains them via exit codes;\n"
+        "all module settings come from --config — other CLI flags are not forwarded):\n"
+        "  --daemon                  run as the flow daemon: calib-extrinsic -> calib-subject\n"
+        "                            -> run auto-chain + /api/flow/switch mode switching;\n"
+        "                            crashes restart run mode (3 consecutive failures stop)\n"
+        "  --daemon-initial MODE     first module: auto (default; picks the first stage whose\n"
+        "                            artifact is missing) | run | calib-subject | calib-extrinsic\n"
         "  --flow-managed            mark this process as flow-daemon-spawned: enables\n"
         "                            POST /api/flow/switch and the calib auto-chain exit codes\n"
         "                            (set by the daemon; not meant for manual use)\n"
@@ -247,6 +255,15 @@ int main(int argc, char** argv) {
                 print_help();
             }
             return EXIT_FAILURE;
+        }
+
+        // Flow daemon: spawn one mode module at a time and chain via exit
+        // codes. Dispatched before anything heavy — the daemon process never
+        // touches CUDA/TRT/sockets (docs/design/pose-3d-flow-daemon.md).
+        if (opts.daemon) {
+            std::signal(SIGINT, on_signal);
+            return fitra::app::run_daemon(opts, early.config_path, argv[0],
+                                          g_stop);
         }
 
         // Exclusive run mode, derived from the validated flags. Each mode

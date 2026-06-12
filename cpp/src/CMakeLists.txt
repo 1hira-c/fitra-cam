@@ -205,6 +205,7 @@ target_link_libraries(fitra_web PUBLIC
 # fitra_pipeline via fitra_slimevr — the dependency must point this way.
 add_library(fitra_app STATIC
     app/camera_builder.cpp
+    app/daemon.cpp
     app/excal_live_input.cpp
     app/excal_runner.cpp
     app/mode_calib_extrinsic.cpp
