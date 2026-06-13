@@ -1,6 +1,7 @@
 #include "vmt/tracked_pose_receiver.hpp"
 
 #include "vmt/osc_decode.hpp"
+#include "vmt/osc_writer.hpp"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -170,6 +171,31 @@ bool TrackedPoseReceiver::start() {
         return false;
     }
 
+    // Resolve the optional punch destination (VMT host). The punch goes out
+    // from this same bound socket so the VMT driver sees our real source IP.
+    punch_enabled_ = false;
+    if (!opts_.punch_host.empty() && opts_.punch_port != 0) {
+        punch_addr_ = sockaddr_in{};
+        punch_addr_.sin_family = AF_INET;
+        punch_addr_.sin_port = htons(opts_.punch_port);
+        if (::inet_pton(AF_INET, opts_.punch_host.c_str(),
+                        &punch_addr_.sin_addr) == 1) {
+            OscWriter w;
+            w.begin_message("/fitra/punch");
+            w.end_message();
+            auto sp = w.data();
+            punch_packet_.assign(sp.begin(), sp.end());
+            punch_enabled_ = true;
+            std::printf("[tracked_pose_receiver] punch -> %s:%u every %.0f ms "
+                        "(makes VMT learn our IP)\n",
+                        opts_.punch_host.c_str(), opts_.punch_port,
+                        opts_.punch_interval_ms);
+        } else {
+            std::fprintf(stderr, "[tracked_pose_receiver] invalid punch_host "
+                         "'%s' — punch disabled\n", opts_.punch_host.c_str());
+        }
+    }
+
     stop_.store(false);
     recv_thread_ = std::thread([this]() { recv_loop(); });
     std::printf("[tracked_pose_receiver] listening on %s:%u "
@@ -177,6 +203,14 @@ bool TrackedPoseReceiver::start() {
                 opts_.bind.c_str(), opts_.port, opts_.stale_ms,
                 tracked_pose_role_name(opts_.controller_role));
     return true;
+}
+
+void TrackedPoseReceiver::send_punch_() {
+    if (!punch_enabled_ || sock_fd_ < 0) return;
+    // Best-effort: a down host / transient error is fine, the next tick retries.
+    ::sendto(sock_fd_, punch_packet_.data(), punch_packet_.size(), 0,
+             reinterpret_cast<const sockaddr*>(&punch_addr_),
+             sizeof(punch_addr_));
 }
 
 void TrackedPoseReceiver::stop() {
@@ -268,8 +302,21 @@ bool TrackedPoseReceiver::dispatch_packet_(const std::uint8_t* data,
 }
 
 void TrackedPoseReceiver::recv_loop() {
+    using clock = std::chrono::steady_clock;
+    const auto punch_interval =
+        std::chrono::duration<double, std::milli>(opts_.punch_interval_ms);
+    // Initialize in the past so the first punch fires immediately at start-up.
+    auto last_punch = clock::now() - std::chrono::hours(1);
+
     std::uint8_t buf[2048];
     while (!stop_.load()) {
+        if (punch_enabled_) {
+            const auto now = clock::now();
+            if (now - last_punch >= punch_interval) {
+                send_punch_();
+                last_punch = now;
+            }
+        }
         sockaddr_in src{};
         socklen_t src_len = sizeof(src);
         ssize_t n = ::recvfrom(sock_fd_, buf, sizeof(buf), 0,

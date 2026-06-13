@@ -86,6 +86,17 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-13 — pose relay punch (calib で controller pose が来ない問題の修正)
+カスタム VMT driver は受信パケットの送信元 IP を学習して pose を返す構成
+(`refs/VirtualMotionTracker` CommunicationManager.cpp Phase 15.5)。VMT publisher を
+持たない calib-extrinsic は Jetson から一切送信せず IP が学習されないため、controller/
+HMD pose relay が一切来なかった。対処: relay receiver (`TrackedPoseReceiver`) の bind
+ソケットから `vmt.host:vmt.port` へ定期 OSC punch (`/fitra/punch`) を送り、VMT に IP を
+学習させる。全 relay 経路 (calib-extrinsic / run / hmd-listen) で有効。ローカル UDP で
+punch 送信 (src=受信ポート 39571・OSC 20B・1s 間隔) を実証。将来は broadcast/multicast
+での自動ディスカバリ (PC IP 設定不要化) が残課題。
+→ [design/pose-3d-flow-daemon.md](../design/pose-3d-flow-daemon.md)
+
 ### 2026-06-12 — flow daemon: main の常駐 daemon 化とモードのモジュール起動 (M1–M4 完了)
 `./main --daemon --config session.yaml` で main が常駐 daemon になり、モードモジュール
 (同一バイナリ + モードフラグ) を fork/exec して exit code (80/81/82) で連鎖する。

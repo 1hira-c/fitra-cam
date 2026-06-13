@@ -120,6 +120,24 @@ daemon の他の CLI override は転送しない (help / runbook に明記、起
   ため再 bind 不可 — CrowServer オブジェクトの破棄が必要 (test_crow_excal で実証・
   コメント化済み。daemon 設計には影響しない)。
 
+### pose relay punch (calib で controller/HMD pose が来ない問題)
+
+カスタム VMT driver は **受信した OSC パケットの送信元 IP が非ループバックなら、
+アドレス解釈の前に無条件で「Jetson IP」として学習し Manager に通報する**
+(`refs/VirtualMotionTracker/vmt_driver/CommunicationManager.cpp:240-254`,
+"Phase 15.5")。Manager がその IP へ pose を返す = 「Jetson から送って初めて返ってくる」
+構成。run は `vmt_out` publisher が PC:39570 へ送るので学習されるが、**publisher を
+持たない calib-extrinsic は Jetson から一切送信せず、IP が学習されず controller/HMD
+pose relay が一切来ない** (calib-extrinsic はまさに controller pose 必須のモード)。
+
+対処: relay receiver (`TrackedPoseReceiver`) の **bind 済みソケットから** VMT host
+(`vmt.host:vmt.port`) へ定期的に最小 OSC (`/fitra/punch`, no-arg, 20 bytes) を
+`sendto` する (`punch_interval_ms`, 既定 1s)。同一ソケット送受信なので VMT が学習する
+送信元は受信ポート (Jetson:39571) と一致し、返信が確実にここへ戻る。punch の中身は
+無関係 (VMT は IP しか見ない)。`make_pose_relay` が全 relay 経路 (calib-extrinsic /
+run / hmd-listen) で punch を有効化するので、`vmt_out` を切った run でも HMD listen が
+効く。loopback host への punch は VMT 側で no-op (害なし)。
+
 ### web (`web/dual_rtmpose/flow.js`)
 
 ルート静的 dir は全モードで配信されるので、calib ページも `/flow.js` で共有ロード。
@@ -171,6 +189,9 @@ daemon の他の CLI override は転送しない (help / runbook に明記、起
 
 ## 残課題
 
+- **pose relay の自動ディスカバリ**: 現状 punch は `vmt.host` へのユニキャストで、PC の
+  IP を config に書く必要がある。将来はブロードキャスト/マルチキャストで相手を自動検出
+  して握手する (PC IP 設定不要にする)。punch の枠組みはその下地。
 - **calib-extrinsic 起動途中 SIGINT の稀な SIGABRT** (別軸・低優先): モジュールが
   起動シーケンス途中 (Crow / nvjpeg 立ち上げ中) に SIGINT を受けると、稀に
   `signal 6` で異常終了することを 1 度観測 (3 回の追試では再現せず)。安定起動後の

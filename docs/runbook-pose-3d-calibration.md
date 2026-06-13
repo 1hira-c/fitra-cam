@@ -171,6 +171,11 @@ vmt:
   足して手動起動するとエラーが直接見える。
 - run モードで calib ページを開きたい → 該当モードで再起動する。導線はトップページが
   `/api/state` の mode を見て出し分ける。
-- excal で `gate_reason` が `NO_POSE` のまま → pose relay 未着 (sender / ポート 39571 /
-  `--excal-controller-role` を確認)。`MOVING` のまま → 静止待ちの motion gate
-  (`--excal-lin-vel-max` / `--excal-ang-vel-max`)。
+- excal で `gate_reason` が `NO_POSE` のまま / コントローラー姿勢が一切来ない →
+  **`vmt.host` が PC の実 IP になっているか確認**。Jetson→PC を自動返信させる構成では、
+  Jetson が PC へ punch (`/fitra/punch`) を送って初めて VMT が返信先 IP を学習する。
+  publisher を持たない calib-extrinsic は punch だけが送信なので、`vmt.host` が
+  `127.0.0.1` のままだと VMT 側が loopback 扱いで学習せず pose が返らない。
+  起動ログの `[tracked_pose_receiver] punch -> <host>:<port> ...` で宛先を確認。
+  その他: sender / ポート 39571 / `--excal-controller-role`。`MOVING` のまま →
+  静止待ちの motion gate (`--excal-lin-vel-max` / `--excal-ang-vel-max`)。
