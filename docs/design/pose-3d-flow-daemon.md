@@ -101,9 +101,20 @@ daemon の他の CLI override は転送しない (help / runbook に明記、起
 
 ### シグナル / ポート引き継ぎ
 
-- 端末 Ctrl-C はプロセスグループ全体に届く → モジュールが clean exit(0) → daemon も
-  終了 (自然成立)。SIGTERM (systemd / docker stop) は daemon だけに来るので、子へ
-  SIGINT を転送して waitpid。waitpid は EINTR リトライ。
+- daemon は **SIGINT と SIGTERM を同一ハンドラ**で受け、(1) stop フラグを立てる +
+  (2) 現在の子へ SIGINT を転送する、の両方を必ず行う (`on_daemon_signal`)。
+  どちらか片方だけだと止まらない:
+  - stop だけ立てて子に転送しないと、daemon は `waitpid` でブロックし続け子も終わらない
+    (端末 Ctrl-C はプロセスグループ全体に届くので子も SIGINT を受け「偶然」動くが、
+    `kill -INT <daemon>` 単独や systemd 停止では止まらない)。
+  - 子に転送するだけで stop を立てないと、子終了後に next_action が crash 扱いして
+    run を spawn し続ける。
+  共通ハンドラなので SIGTERM (systemd / docker stop) と SIGINT は同じ挙動になり、
+  子が clean に終わろうが異常終了しようが `stop` で必ず 1 サイクルで rc 0 終了する。
+  waitpid は EINTR リトライ。`test_flow_daemon` が ready ファイル同期で SIGTERM →
+  rc 0 を決定的に固定。
+  > 実装中の検証で当初 SIGTERM ハンドラが stop を立てず・SIGINT ハンドラが子へ
+  > 転送しない実装だったのを上記に統一 (2026-06-12)。
 - ポート引き継ぎはプロセス跨ぎでは fd がプロセス終了で閉じるので問題なし。
   **同一プロセス内では Crow の App が stop() 後も Server (listening fd) を保持する**
   ため再 bind 不可 — CrowServer オブジェクトの破棄が必要 (test_crow_excal で実証・
@@ -160,6 +171,12 @@ daemon の他の CLI override は転送しない (help / runbook に明記、起
 
 ## 残課題
 
+- **calib-extrinsic 起動途中 SIGINT の稀な SIGABRT** (別軸・低優先): モジュールが
+  起動シーケンス途中 (Crow / nvjpeg 立ち上げ中) に SIGINT を受けると、稀に
+  `signal 6` で異常終了することを 1 度観測 (3 回の追試では再現せず)。安定起動後の
+  SIGINT は clean (solve 試行 → サンプル不足で exit 1)。daemon は子の終了コード/
+  シグナルに関わらず stop で break するので**停止保証には無影響**。calib-extrinsic の
+  shutdown レース (calib-mode-separation トラック) として要調査。
 - 実機 3 段通し検証 (上記)。
 - systemd unit / docker-compose に `--daemon` を主経路として載せる (vr-output 側の
   運用整備と合わせて)。

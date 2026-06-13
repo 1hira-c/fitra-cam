@@ -19,12 +19,18 @@ namespace fitra::app {
 
 namespace {
 
-// Child pid for the SIGTERM forwarder. The terminal's Ctrl-C reaches the
-// child by itself (same process group); SIGTERM (systemd, docker stop) goes
-// to the daemon only, so forward it as the module's usual SIGINT shutdown.
+// Signal plumbing for the wait loop. A daemon-directed SIGINT/SIGTERM must do
+// two things together: set the stop flag so the loop exits after the child is
+// reaped, AND forward SIGINT to the current child so it shuts down (the daemon
+// otherwise blocks in waitpid forever — a terminal Ctrl-C reaches the child
+// only because it is delivered to the whole process group, which a lone
+// `kill`/systemd stop is not). Both signals share one handler so SIGTERM
+// (docker/systemd stop) and SIGINT behave identically.
 std::atomic<pid_t> g_child_pid{0};
+std::atomic<bool>* g_daemon_stop = nullptr;
 
-void forward_term(int) {
+void on_daemon_signal(int) {
+    if (g_daemon_stop) g_daemon_stop->store(true);
     const pid_t child = g_child_pid.load();
     if (child > 0) ::kill(child, SIGINT);
 }
@@ -162,7 +168,11 @@ int run_daemon(const config::MainOptions& opts,
                    extrinsics_exists ? "present" : "missing",
                    profile_now() ? "present" : "missing");
 
-    std::signal(SIGTERM, forward_term);
+    // Own both signals: main() leaves them to us for the daemon path so the
+    // handler can forward to the child and set stop in one place.
+    g_daemon_stop = &stop;
+    std::signal(SIGINT, on_daemon_signal);
+    std::signal(SIGTERM, on_daemon_signal);
 
     int consecutive_failures = 0;
     while (!stop.load()) {

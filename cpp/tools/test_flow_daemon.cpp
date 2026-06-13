@@ -4,15 +4,19 @@
 // the module binary. No cameras, no GPU, no sockets.
 
 #include <atomic>
+#include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "app/daemon.hpp"
 #include "app/flow.hpp"
@@ -259,6 +263,58 @@ void test_run_daemon_crash_fallback_and_give_up() {
           "exactly kMaxConsecutiveFailures spawns before giving up");
 }
 
+// A daemon-directed SIGINT/SIGTERM must stop the loop cleanly (rc 0): set the
+// stop flag AND forward SIGINT to the running child so waitpid returns. This
+// stub installs its own INT trap and exits 0, then idles until signalled —
+// it touches `ready` first so the test can signal only after the child (and
+// thus the daemon's signal handlers) are up.
+void test_run_daemon_signal_clean_stop() {
+    auto dir = std::filesystem::temp_directory_path()
+               / "fitra_test_flow_daemon" / "signal";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    auto script = dir / "idle_module.sh";
+    auto ready  = dir / "ready";
+    {
+        std::ofstream f(script);
+        f << "#!/usr/bin/env bash\n"
+          << "trap 'exit 0' INT\n"
+          << "touch '" << ready.string() << "'\n"
+          << "while true; do sleep 0.1; done\n";
+    }
+    ::chmod(script.c_str(), 0755);
+
+    MainOptions opts;
+    opts.daemon = true;
+    opts.daemon_initial = "run";
+
+    std::atomic<bool> stop{false};
+    int rc = -999;
+    std::thread th([&]() {
+        rc = run_daemon(opts, "", script.c_str(), stop, /*crash_backoff_ms=*/10);
+    });
+
+    // Wait for the child to come up (bounded), then deliver SIGTERM to our own
+    // process — run_daemon's handler forwards SIGINT to the child.
+    bool up = false;
+    for (int i = 0; i < 200; ++i) {
+        if (std::filesystem::exists(ready)) { up = true; break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+    check(up, "signal stub child came up (ready file)");
+    ::kill(::getpid(), SIGTERM);
+
+    th.join();
+    check(rc == EXIT_SUCCESS,
+          "SIGTERM stops the daemon cleanly (rc 0, no crash-respawn): rc="
+          + std::to_string(rc));
+
+    // Restore the default disposition so a stray signal later in the run does
+    // not hit run_daemon's now-dangling handler state.
+    std::signal(SIGTERM, SIG_DFL);
+    std::signal(SIGINT, SIG_DFL);
+}
+
 struct TestCase {
     const char* name;
     void (*fn)();
@@ -270,6 +326,7 @@ const TestCase kTests[] = {
     {"initial_mode",                      test_initial_mode},
     {"run_daemon_chain",                  test_run_daemon_chain},
     {"run_daemon_crash_fallback_give_up", test_run_daemon_crash_fallback_and_give_up},
+    {"run_daemon_signal_clean_stop",      test_run_daemon_signal_clean_stop},
 };
 
 }  // namespace

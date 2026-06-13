@@ -259,9 +259,10 @@ int main(int argc, char** argv) {
 
         // Flow daemon: spawn one mode module at a time and chain via exit
         // codes. Dispatched before anything heavy — the daemon process never
-        // touches CUDA/TRT/sockets (docs/design/pose-3d-flow-daemon.md).
+        // touches CUDA/TRT/sockets (docs/design/pose-3d-flow-daemon.md). It
+        // installs its own SIGINT/SIGTERM handlers (forward-to-child + stop),
+        // so we don't pre-arm on_signal here.
         if (opts.daemon) {
-            std::signal(SIGINT, on_signal);
             return fitra::app::run_daemon(opts, early.config_path, argv[0],
                                           g_stop);
         }

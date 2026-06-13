@@ -98,6 +98,9 @@ spawn 連鎖まで固定)。M3 = web (`/flow.js` の /api/state 追従: calib �
 遷移、ビューワはバナー + managed 時の再キャリブ切替ボタン)。M4 = 本ドキュメント群。
 検討した代替 (外部 supervisor スクリプト / self-exec / reverse-proxy / 制御別ポート) の
 棄却理由と union YAML 運用規約は設計 doc 参照。実機 3 段通しはユーザー後日。
+M2 後の検証で SIGINT/SIGTERM 停止の不具合 (SIGINT が子に非転送で waitpid block /
+SIGTERM が stop を立てず crash respawn) を発見し、両シグナルを「stop 設定 + 子へ
+SIGINT 転送」の共通ハンドラに統一して修正 (`test_flow_daemon` に SIGTERM→rc0 を追加)。
 → [design/pose-3d-flow-daemon.md](../design/pose-3d-flow-daemon.md)
 
 ### 2026-06-11 — 専念モード化のドキュメント整備 (M5、M1–M5 完了)
