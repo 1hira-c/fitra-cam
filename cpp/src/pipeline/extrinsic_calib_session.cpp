@@ -275,9 +275,12 @@ bool ExtrinsicCalibSession::solve_and_write(std::string& err) {
         return false;
     }
 
-    std::lock_guard<std::mutex> g(mu_);
-    solution_ = sol;
-    state_ = ExtrinsicCalibState::kSolved;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        solution_ = sol;
+        state_ = ExtrinsicCalibState::kSolved;
+    }
+    if (on_solved_) on_solved_();
     return true;
 }
 

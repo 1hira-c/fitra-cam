@@ -133,6 +133,7 @@ add_library(fitra_pipeline STATIC
     pipeline/snapshot.cpp
     pipeline/calibration_session.cpp
     pipeline/extrinsic_calib_session.cpp
+    pipeline/excal_replay_input.cpp
 )
 
 target_link_libraries(fitra_pipeline PUBLIC
@@ -188,6 +189,7 @@ target_link_libraries(fitra_vmt PUBLIC
 # Crow HTTP+WebSocket server.
 add_library(fitra_web STATIC
     web/crow_server.cpp
+    web/crow_routes_setup.cpp
 )
 
 target_link_libraries(fitra_web PUBLIC
@@ -195,6 +197,37 @@ target_link_libraries(fitra_web PUBLIC
     fitra_slimevr     # /stats3d reads NativePublisher::stats() when attached
     fitra_vmt         # /stats3d also splices VmtPublisher::stats()
     Crow::Crow
+)
+
+# Composition root for cpp/build/main: per-mode runners (run / calib-subject /
+# calib-extrinsic) and the builders they share. Separate from fitra_pipeline
+# because the runners need fitra_vmt/fitra_web, and fitra_vmt already links
+# fitra_pipeline via fitra_slimevr — the dependency must point this way.
+add_library(fitra_app STATIC
+    app/camera_builder.cpp
+    app/excal_live_input.cpp
+    app/excal_runner.cpp
+    app/mode_calib_extrinsic.cpp
+    app/mode_calib_subject.cpp
+    app/mode_run.cpp
+    app/output_builder.cpp
+    app/paths.cpp
+    app/pose_relay_builder.cpp
+    app/server_builder.cpp
+    app/stats_loop.cpp
+    app/threed_builder.cpp
+    app/trt_stack.cpp
+)
+
+target_include_directories(fitra_app PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(fitra_app PUBLIC
+    fitra_config
+    fitra_pipeline
+    fitra_vmt
+    fitra_web
 )
 
 # Runtime config loader for cpp/build/main (`--config PATH` YAML).
@@ -217,6 +250,7 @@ add_executable(fitra_cam_main
 )
 
 target_link_libraries(fitra_cam_main PRIVATE
+    fitra_app
     fitra_config
     fitra_pipeline
     fitra_web

@@ -3,11 +3,22 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-05-29)
+## 現状 (2026-06-11)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
 **kinematic-tree (root = hip_center, children = parent-relative offset)** で動く。
+
+**プロセスは排他 RunMode (`run` / `calib-subject` / `calib-extrinsic`) で動く**
+([design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md) M1–M4
+実装済み)。mode は既存フラグから導出 (`--calibrate` → calib-subject、`--extrinsic-calib` or
+`--excal-replay` → calib-extrinsic)。calib↔runtime の契約は **YAML 成果物のみ**
+(CalibrationSet / SubjectProfile) + プロセス再起動 — ライブ再注入 (triangulator ホットスワップ /
+IK ホットリロード / tap mux) はコンパイルレベルで存在しない。構築は `cpp/src/app/` の
+builder + モード runner (main.cpp は dispatch のみ)。calib-extrinsic は TRT 非依存の
+decode-only で、`--excal-replay <dir>` により `tools/excal_record` セッションから実機レスで
+solve まで再現できる (live↔replay 等価性は `test_excal_replay` で固定)。
+運用手順は [runbook-pose-3d-calibration.md](../runbook-pose-3d-calibration.md)。
 
 ### 設計原則 / live な制約
 
@@ -66,6 +77,77 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-06-11 — 専念モード化のドキュメント整備 (M5、M1–M5 完了)
+track doc 現状節をモード分離後アーキへ更新、`cpp-migration-plan.md` のレイアウト節に
+`app/` composition root の注記を追加、設計 doc に実装記録 (doc 未記載だった実装判断 +
+意図的挙動変更 + 残検証) を追記。3 段フロー (excal → subject → run) と
+`excal_record` / `--excal-replay` の運用手順を
+[runbook-pose-3d-calibration.md](../runbook-pose-3d-calibration.md) として新設。
+**残**: 実機での 3 段フロー通し確認と実録 fixture からの solve 再現。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
+### 2026-06-11 — calib-extrinsic オフライン replay (--excal-replay) + live↔replay 等価性 ctest (専念モード化 M4)
+`tools/excal_record` セッション (JPEG 連番 + ペア済み frames.jsonl) を `ExcalInputSource` の
+replay 実装 (`pipeline/excal_replay_input`) として再生し、`--excal-replay <dir>` 単独で
+calib-extrinsic を無人実行 (collect→solve→YAML、カメラ・SteamVR・web 不要、solve 失敗は
+EXIT_FAILURE)。決定性の要: frames.jsonl の**行順逐次投入** (velocity 推定の prev 状態が
+セッション全体で 1 本のため per-cam 分割や ts 再ソートは等価性を壊す) と、記録時確定の
+`running_ok` を再判定しないこと。等価性 ctest (`test_excal_replay`) は合成 AprilTag フレームを
+recorder フォーマットで一時 dir に書き、同一 JPEG バイト列を on_frame 直叩きと replay 経路の
+両方に通して sample 列の bit-exact 一致を固定 (`samples_snapshot()` を比較用に追加)。
+parser (`parse_excal_frame_line`) の strict reject も固定。実録 fixture での solve 再現確認は
+実機作業として残 (M5 runbook に手順)。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
+### 2026-06-11 — composition root 抽出 + Crow ルートのモード別モジュール化 (専念モード化 M3)
+main.cpp (~1030 行) の構築シーケンスを `cpp/src/app/` の builder
+(trt_stack / camera_builder / threed_builder / pose_relay_builder / output_builder /
+server_builder / stats_loop) + モード runner (mode_run / mode_calib_subject /
+mode_calib_extrinsic) へ抽出。main.cpp は config parse → validate → RunMode dispatch のみ
+(~260 行、ほぼ help テキスト)。Crow は calib/excal ルート群を `web/crow_routes_setup.cpp` に
+分離し (deps 構造体渡し、session 未 attach なら静的ページ含め未登録)、共有 JSON helper を
+`web/crow_util.hpp` へ。`GET /api/state` を常設し mode ラベルを返す — viewer の calib 導線は
+mode に応じて表示。挙動変更は web 表面のみ: run モードで `/subject-calib`・`/extrinsic-calib`
+静的ページも 404 に、calib-subject での hmd-listen 受信は廃止 (消費者が存在しなかった)。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
+### 2026-06-11 — ライブ再注入の物理削除 + calib-extrinsic 軽量ループ化 (専念モード化 M2)
+calib↔runtime のプロセス内再注入経路をコンパイルレベルで削除:
+`MultiCameraDriver::set_triangulator` (triangulator ホットスワップ)、`IkSolver::reload_from_profile`
+(approve 後の IK ホットリロード)、`CrowServer::set_extrinsic_calib_solved_callback`、frame tap の
+excal/calib 状態分岐 mux。calib-extrinsic は `ExcalInputSource` 抽象 (新 `pipeline/excal_input_source.hpp`)
+越しの軽量 capture ループ (`app/excal_live_input` + `app/excal_runner`、新 static lib `fitra_app`) に
+載せ替え、TRT 初期化・MultiCameraDriver・publisher を一切構築しない (decode-only。
+`--det-engine`/`--pose-engine` も不要に)。solve 成功は `ExtrinsicCalibSession::set_on_solved` 経由で
+auto-exit し、`/api/excal/solve` 応答と web UI に再起動コマンド (`next_step`) を提示。
+approve 後の wizard も run モード再起動のガイダンスログに置換。replay (M4) は同じ
+`ExcalInputSource` 経路に載る。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
+### 2026-06-11 — RunMode 導入 + モード別構築ゲーティング (専念モード化 M1)
+`run_mode(MainOptions)` で排他 RunMode (`run` / `calib-subject` / `calib-extrinsic`) を導出し
+(既存フラグから導出、invocation 互換)、main.cpp の構築をモードでゲート: CalibrationSession +
+`calib_recording_flag` 配布は calib-subject 限定、ExtrinsicCalibSession は calib-extrinsic 限定、
+SlimeVR/VMT publisher は run 限定 (`--slimevr-out`/`--vmt-out` × `--extrinsic-calib` を validate
+で排他化)。run モードの `/api/calib/*` は 503 スタブ廃止で未登録 (GET 404 / POST 405)。
+挙動変更: calib 中の tracker 出力停止、run での wizard API 消滅。ライブ再注入の削除は M2。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
+### 2026-06-10 — キャリブレーション専念モード化の設計 doc (M0、実装は別途)
+「初期設定・キャリブ中に他モジュールは動かなくてよい」という前提合意を受け、subject wizard /
+controller-marker extrinsic と live パイプラインの同居 + ライブ再注入 (IK ホットリロード・
+Triangulator ホットスワップ・frame tap 多重化) を解消する設計を記録。1 バイナリのまま排他
+RunMode (`run` / `calib-subject` / `calib-extrinsic`) に分け、モード間の受け渡しを YAML 成果物
+(CalibrationSet / SubjectProfile) + プロセス再起動のみへ縮退。excal→subject の同一プロセス続行
+UX は再起動ガイダンスへ置換 (案C' 同一プロセス再構築は teardown リスクで没、案B 別バイナリ化は
+build graph 手術が先で将来含み)。到達目標としてオフライン replay を追加: calib-extrinsic を
+サンプル動画 + 記録済み VR 座標 (JSONL) だけで solve まで再現可能にし、live↔replay 等価性を
+ctest で固定する (M4)。記録側の単体ツール `tools/excal_record` (MJPEG パススルー JPEG 連番 +
+frame↔pose ペア済み frames.jsonl、main 非依存・TRT 実行不要) は本エントリで先行実装済み —
+実機 2 カメラ + 擬似 OSC pose でスモーク確認 (30fps×2 維持・ペアリング/単調 ts 検証)。
+モード分離本体の M1〜M5 は別ブランチ。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
 
 ### 2026-06-10 — 座標フレームを型レベルで区別 (split-brain 再発を型で防止)
 3D 数学が素の `cv::Matx44d` / `cv::Vec3d` で、フレーム意味論が変数名とコメントだけに宿っていた問題に対し、

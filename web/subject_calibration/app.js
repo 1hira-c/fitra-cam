@@ -15,11 +15,6 @@ async function postJSON(path, body) {
   return res.json();
 }
 
-async function getJSON(path) {
-  const res = await fetch(path);
-  return res.json();
-}
-
 function clamp01(x) { return Math.max(0, Math.min(1, x)); }
 function pct(x) { return `${(clamp01(x) * 100).toFixed(0)}%`; }
 function fmt(n, d = 1) {
@@ -36,7 +31,14 @@ let lastState = null;
 async function refresh() {
   let s;
   try {
-    s = await getJSON("/api/calib/state");
+    const res = await fetch("/api/calib/state");
+    if (res.status === 404) {
+      // The /api/calib/* routes only exist in calib-subject mode.
+      $("conn").textContent =
+        "unavailable — restart main with --calibrate (calib-subject mode)";
+      return;
+    }
+    s = await res.json();
   } catch (e) {
     $("conn").textContent = "disconnected";
     return;

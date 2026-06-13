@@ -180,6 +180,8 @@ void test_solve_and_write() {
     cv::Matx44d Tcf_off = rigid(0.4, -0.3, 0.0, 0.03, -0.02, 0.05);  // T_controller<-face
 
     ExtrinsicCalibSession s(cfg);
+    int solved_calls = 0;
+    s.set_on_solved([&solved_calls]() { ++solved_calls; });
     s.start();
 
     double ts = 0.0;
@@ -205,6 +207,16 @@ void test_solve_and_write() {
     CHECK(ok);
     if (!ok) { std::fprintf(stderr, "  solve err: %s\n", err.c_str()); return; }
     CHECK(s.state() == ExtrinsicCalibState::kSolved);
+    // The auto-exit hook fires exactly once per successful solve.
+    CHECK(solved_calls == 1);
+
+    // ... and never on a failed solve (no samples).
+    ExtrinsicCalibSession s_fail(cfg);
+    int fail_calls = 0;
+    s_fail.set_on_solved([&fail_calls]() { ++fail_calls; });
+    std::string err_fail;
+    CHECK(!s_fail.solve_and_write(err_fail));
+    CHECK(fail_calls == 0);
 
     // Reload and verify the relative extrinsic matches ground truth.
     auto loaded = fitra::lift::load_calibration(cfg.out_path);

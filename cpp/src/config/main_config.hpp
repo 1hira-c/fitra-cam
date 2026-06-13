@@ -140,6 +140,10 @@ struct MainOptions {
     // receives the controller pose on a parallel UDP channel, taps camera
     // frames into the collection session, and writes extrinsics on solve.
     bool        excal_enabled        = false;
+    // Offline replay: a tools/excal_record session directory (JPEG sequence +
+    // frames.jsonl). Non-empty implies calib-extrinsic mode and runs
+    // collect→solve unattended — no cameras, no SteamVR, no web.
+    std::string excal_replay;
     // Intrinsics-only calibration YAML (extrinsics ignored). Empty → reuse
     // three_d.calib.
     std::string excal_intrinsics;
@@ -160,6 +164,19 @@ struct MainOptions {
     std::string excal_controller_bind = "0.0.0.0";
     double      excal_controller_stale_ms = 200.0;
 };
+
+// Exclusive run mode, derived from the calibration flags (invocation stays
+// flag-compatible; see docs/design/pose-3d-calib-mode-separation.md). Each
+// mode builds only what it needs; the only thing crossing a mode boundary is
+// YAML on disk. Derive after validate_options() — it enforces the flags'
+// mutual exclusivity.
+enum class RunMode { Run, CalibSubject, CalibExtrinsic };
+
+RunMode run_mode(const MainOptions& opts);
+
+// Stable label for logs and /api/state: "run" / "calib-subject" /
+// "calib-extrinsic".
+const char* run_mode_name(RunMode mode);
 
 // Schema version embedded in every YAML config. Bump only when a
 // non-backwards-compatible change to the YAML layout is required.
