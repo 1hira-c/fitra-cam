@@ -1,8 +1,7 @@
 #include "pipeline/excal_replay_input.hpp"
 
 #include <algorithm>
-#include <cerrno>
-#include <cstdlib>
+#include <charconv>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -29,15 +28,16 @@ std::size_t value_pos(std::string_view s, std::string_view key) {
 bool parse_double_at(std::string_view s, std::string_view key, double& out) {
     auto p = value_pos(s, key);
     if (p == std::string_view::npos || p >= s.size()) return false;
-    // strtod needs a NUL-terminated buffer; copy the short numeric span.
     std::size_t end = s.find_first_of(",}", p);
     if (end == std::string_view::npos) return false;
-    std::string num{s.substr(p, end - p)};
+    auto num = s.substr(p, end - p);
     if (num.empty()) return false;
-    errno = 0;
-    char* parsed_end = nullptr;
-    double v = std::strtod(num.c_str(), &parsed_end);
-    if (errno != 0 || parsed_end != num.c_str() + num.size()) return false;
+    // from_chars is locale-independent (always parses '.' as the decimal
+    // point) and needs no NUL-terminated copy — strtod would mis-parse on a
+    // locale that uses ',' as the decimal separator.
+    double v = 0.0;
+    auto [ptr, ec] = std::from_chars(num.data(), num.data() + num.size(), v);
+    if (ec != std::errc{} || ptr != num.data() + num.size()) return false;
     out = v;
     return true;
 }

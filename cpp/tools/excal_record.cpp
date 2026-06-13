@@ -47,7 +47,7 @@
 #include <vector>
 
 #include "camera/v4l2_capture.hpp"
-#include "vmt/controller_pose_receiver.hpp"
+#include "vmt/tracked_pose_receiver.hpp"   // unified relay (also pulls ControllerPoseBus)
 
 namespace fs = std::filesystem;
 
@@ -62,7 +62,12 @@ struct Args {
     int           height   = 1200;
     int           fps      = 30;
     int           n_buffers = 4;
-    std::uint16_t port     = 39572;   // VMT pose relay controller channel
+    // Unified VMT pose relay, same channel/port main's calib-extrinsic uses
+    // (/fitra/tracked_pose on UDP 39571). The legacy /fitra/controller_pose
+    // receiver is gone — runbook configures only the unified relay, so a
+    // recorder on the old port would never see the controller pose.
+    std::uint16_t port     = 39571;
+    std::string   role     = "right";  // controller role to record: left|right
     double        stale_ms = 200.0;
     double        seconds  = 0.0;     // 0 = run until Ctrl-C
     std::string   out;
@@ -80,7 +85,8 @@ void usage(const char* argv0) {
         "  --width N        capture width (default 1920)\n"
         "  --height N       capture height (default 1200)\n"
         "  --fps N          requested fps (default 30)\n"
-        "  --port N         controller pose relay UDP port (default 39572)\n"
+        "  --port N         VMT pose relay UDP port (default 39571, /fitra/tracked_pose)\n"
+        "  --role S         controller role to record: left|right (default right)\n"
         "  --stale-ms X     pose staleness threshold ms (default 200)\n"
         "  --seconds X      stop after X seconds (default: until Ctrl-C)\n",
         argv0);
@@ -103,6 +109,7 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (k == "--height")   { if (!(v = need(i))) return false; a.height = std::atoi(v); }
         else if (k == "--fps")      { if (!(v = need(i))) return false; a.fps = std::atoi(v); }
         else if (k == "--port")     { if (!(v = need(i))) return false; a.port = static_cast<std::uint16_t>(std::atoi(v)); }
+        else if (k == "--role")     { if (!(v = need(i))) return false; a.role = v; }
         else if (k == "--stale-ms") { if (!(v = need(i))) return false; a.stale_ms = std::atof(v); }
         else if (k == "--seconds")  { if (!(v = need(i))) return false; a.seconds = std::atof(v); }
         else if (k == "--help" || k == "-h") { usage(argv[0]); std::exit(EXIT_SUCCESS); }
@@ -140,14 +147,25 @@ int main(int argc, char** argv) {
     for (std::size_t i = 0; i < args.cameras.size(); ++i)
         fs::create_directories(out_dir / ("cam" + std::to_string(i)));
 
-    // Controller pose relay receiver (same channel main's excal mode uses).
+    // Unified VMT pose relay receiver — identical to main's calib-extrinsic
+    // path: /fitra/tracked_pose on UDP 39571, filtered to the selected
+    // controller role. The HMD bus is unused here (the recorder pairs frames
+    // with the controller pose only) but the receiver requires one.
+    fitra::vmt::TrackedPoseRole role;
+    if (!fitra::vmt::parse_tracked_pose_role(args.role, role)) {
+        std::fprintf(stderr, "invalid --role '%s' (expected left|right)\n",
+                     args.role.c_str());
+        return EXIT_FAILURE;
+    }
+    fitra::vmt::HmdPoseBus hmd_bus;        // unused; receiver needs it
     fitra::vmt::ControllerPoseBus bus;
-    fitra::vmt::ControllerPoseReceiverOptions ropts;
-    ropts.port     = args.port;
-    ropts.stale_ms = args.stale_ms;
-    fitra::vmt::ControllerPoseReceiver receiver{bus, ropts};
+    fitra::vmt::TrackedPoseReceiverOptions ropts;
+    ropts.port            = args.port;
+    ropts.stale_ms        = args.stale_ms;
+    ropts.controller_role = role;
+    fitra::vmt::TrackedPoseReceiver receiver{hmd_bus, bus, ropts};
     if (!receiver.start()) {
-        std::fprintf(stderr, "cannot bind controller pose receiver on port %u\n",
+        std::fprintf(stderr, "cannot bind pose relay receiver on port %u\n",
                      static_cast<unsigned>(args.port));
         return EXIT_FAILURE;
     }
