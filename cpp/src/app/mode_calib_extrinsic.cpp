@@ -135,9 +135,20 @@ int run_mode_calib_extrinsic(const config::MainOptions& opts, FlowControl& flow)
     // calibration input; the HMD feeds the /extrinsic-calib scene.
     auto relay = make_pose_relay(opts, /*listen=*/true);
 
+    // A daemon without a subject stage (no calib_subject_id) skips
+    // calib-subject — the daemon treats the profile as "present" — so the
+    // auto-chain must go straight to run. Otherwise we would spawn a
+    // calib-subject child that dies on "--calibrate requires
+    // --calib-subject-id" and only reach run via the crash fallback.
+    const bool has_subject_stage = !opts.calib_subject_id.empty();
+    const config::RunMode next_after_solve =
+        has_subject_stage ? config::RunMode::CalibSubject : config::RunMode::Run;
     const std::string guidance = flow.managed
-        ? "extrinsics written to " + opts.excal_out
-          + ". Flow daemon switches to subject-calib mode."
+        ? (has_subject_stage
+              ? "extrinsics written to " + opts.excal_out
+                + ". Flow daemon switches to subject-calib mode."
+              : "extrinsics written to " + opts.excal_out
+                + ". Flow daemon switches to run mode.")
         : "extrinsics written to " + opts.excal_out
           + ". Next: restart in subject-calib mode — ./main --calibrate"
             " --enable-3d --calib " + opts.excal_out
@@ -147,10 +158,10 @@ int run_mode_calib_extrinsic(const config::MainOptions& opts, FlowControl& flow)
     // written there is nothing left to run. Fires from the Crow worker (or
     // the shutdown fallback below); the capture loop notices `stop` promptly,
     // after the solve response has been written. Under the flow daemon the
-    // exit doubles as the auto-chain into subject calibration.
-    excal_session->set_on_solved([&guidance, &flow]() {
+    // exit doubles as the auto-chain into the next stage.
+    excal_session->set_on_solved([&guidance, &flow, next_after_solve]() {
         FITRA_LOG_INFO("extrinsic-calib: solved. {}", guidance);
-        if (flow.managed) flow.request_switch(config::RunMode::CalibSubject);
+        if (flow.managed) flow.request_switch(next_after_solve);
         else              flow.stop.store(true);
     });
 
