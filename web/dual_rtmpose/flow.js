@@ -26,12 +26,23 @@ window.FitraFlow = (() => {
   //  - onDown(): every failed poll (module restarting / process gone)
   function watch(opts) {
     let down = false;
+    let timer = null;
     const tick = async () => {
       let s = null;
+      let unsupported = false;
       try {
         const res = await fetch("/api/state", { cache: "no-store" });
         if (res.ok) s = await res.json();
+        // 404 = the server serves these static files but has no /api/state:
+        // the Python fallback (dual_rtmpose_web.py) is not flow-aware. That is
+        // a healthy server, not a restart — disable the watcher rather than
+        // flashing the "restarting" banner forever.
+        else if (res.status === 404) unsupported = true;
       } catch (e) { /* connection refused while the daemon swaps modules */ }
+      if (unsupported) {
+        if (timer) clearInterval(timer);
+        return;
+      }
       if (!s) {
         down = true;
         if (opts.onDown) opts.onDown();
@@ -47,7 +58,8 @@ window.FitraFlow = (() => {
       if (opts.onState) opts.onState(s, recovered);
     };
     tick();
-    return setInterval(tick, 1000);
+    timer = setInterval(tick, 1000);
+    return timer;
   }
 
   // POST /api/flow/switch — daemon-managed modules only (404/405 otherwise).

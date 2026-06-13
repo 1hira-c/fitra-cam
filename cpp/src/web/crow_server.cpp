@@ -378,8 +378,14 @@ void CrowServer::start() {
         CROW_ROUTE(app, "/api/flow/switch").methods(crow::HTTPMethod::POST)
         ([handler = flow_switch_](const crow::request& req) {
             auto body = crow::json::load(req.body);
-            std::string mode = body && body.has("mode")
-                               ? std::string(body["mode"].s()) : std::string{};
+            // Guard the type: body["mode"].s() throws on a non-string value
+            // ({"mode":123}), which Crow would surface as a 500. Treat a
+            // missing/non-string mode as an empty string the handler rejects.
+            std::string mode;
+            if (body && body.has("mode")
+                && body["mode"].t() == crow::json::type::String) {
+                mode = body["mode"].s();
+            }
             std::string err;
             const bool ok = handler(mode, err);
             std::ostringstream o;

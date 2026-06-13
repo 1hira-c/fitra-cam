@@ -112,6 +112,10 @@ public:
     std::filesystem::path session_dir() const;
     bool has_been_started() const { return started_once_.load(); }
 
+    // Profile dirs are written under <subjects_dir>/<sanitize_id(subject_id)>/.
+    // Exposed so the flow daemon resolves the same path the wizard wrote.
+    static std::string sanitize_id(const std::string& in);
+
 private:
     void log_line(const std::string& s) const;
     void set_state_(CalibState s);
@@ -124,7 +128,6 @@ private:
     void launch_analyzer_();
     void analyzer_thread_main_();
     void try_auto_approve_();
-    static std::string sanitize_id(const std::string& in);
     static std::string iso_timestamp_now();
 
     static constexpr std::size_t kPoseCount = 4;

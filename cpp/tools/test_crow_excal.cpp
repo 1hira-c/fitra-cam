@@ -374,6 +374,14 @@ int main() {
             CHECK(body.find("unknown mode") != std::string::npos);
             CHECK(switched.load() == -1);
 
+            // Non-string mode → treated as empty (no .s() throw → no 500).
+            switched.store(-1);
+            CHECK(http("POST", "/api/flow/switch", status, body,
+                       "{\"mode\":123}"));
+            CHECK(status == 200);
+            CHECK(body.find("\"ok\":false") != std::string::npos);
+            CHECK(switched.load() == -1);
+
             // Missing/empty body → empty mode label → refused the same way.
             CHECK(http("POST", "/api/flow/switch", status, body));
             CHECK(status == 200);

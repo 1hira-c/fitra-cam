@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "app/flow.hpp"
+#include "pipeline/calibration_session.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::app {
@@ -60,7 +61,10 @@ std::vector<std::string> module_argv(config::RunMode mode,
         case config::RunMode::Run:
             if (profile_exists && !opts.calib_subject_id.empty()) {
                 args.push_back("--subject-id");
-                args.push_back(opts.calib_subject_id);
+                // Same sanitize the wizard applied when writing the profile,
+                // so run reads the directory the wizard actually created.
+                args.push_back(pipeline::CalibrationSession::sanitize_id(
+                    opts.calib_subject_id));
             }
             break;
         case config::RunMode::CalibSubject:
@@ -131,8 +135,14 @@ config::RunMode initial_mode(const config::MainOptions& opts,
 
 std::string profile_path(const config::MainOptions& opts) {
     if (opts.calib_subject_id.empty()) return {};
+    // The wizard sanitizes the id before writing <subjects_dir>/<id>/..., so
+    // the daemon must look at (and pass on) the same sanitized form — an id
+    // like "alice.v1" or a non-ASCII name otherwise yields a path the wizard
+    // never wrote, and run never gets --subject-id.
+    const std::string id =
+        pipeline::CalibrationSession::sanitize_id(opts.calib_subject_id);
     return (std::filesystem::path{opts.subjects_dir}
-            / opts.calib_subject_id / "latest_profile.yaml").string();
+            / id / "latest_profile.yaml").string();
 }
 
 int run_daemon(const config::MainOptions& opts,
@@ -157,10 +167,14 @@ int run_daemon(const config::MainOptions& opts,
         // Empty id = no profile stage configured; treat as present so auto
         // initial mode (and run argv synthesis) skips it.
         if (opts.calib_subject_id.empty()) return true;
-        return std::filesystem::exists(profile_path(opts));
+        // error_code overload: a permission/encoding error must not throw
+        // out of a long-running daemon.
+        std::error_code ec;
+        return std::filesystem::exists(profile_path(opts), ec) && !ec;
     };
+    std::error_code ec;
     const bool extrinsics_exists =
-        !opts.calib.empty() && std::filesystem::exists(opts.calib);
+        !opts.calib.empty() && std::filesystem::exists(opts.calib, ec) && !ec;
 
     config::RunMode mode = initial_mode(opts, extrinsics_exists, profile_now());
     FITRA_LOG_INFO("[daemon] initial mode: {} (extrinsics {}, profile {})",
@@ -169,15 +183,38 @@ int run_daemon(const config::MainOptions& opts,
                    profile_now() ? "present" : "missing");
 
     // Own both signals: main() leaves them to us for the daemon path so the
-    // handler can forward to the child and set stop in one place.
-    g_daemon_stop = &stop;
-    std::signal(SIGINT, on_daemon_signal);
-    std::signal(SIGTERM, on_daemon_signal);
+    // handler can forward to the child and set stop in one place. Restore the
+    // previous dispositions and clear the stop pointer on every exit path —
+    // otherwise a signal after run_daemon returns (e.g. between tests) would
+    // dereference the now-dangling &stop.
+    struct SignalGuard {
+        void (*old_int)(int);
+        void (*old_term)(int);
+        explicit SignalGuard(std::atomic<bool>* s) {
+            g_daemon_stop = s;
+            old_int  = std::signal(SIGINT, on_daemon_signal);
+            old_term = std::signal(SIGTERM, on_daemon_signal);
+        }
+        ~SignalGuard() {
+            std::signal(SIGINT, old_int);
+            std::signal(SIGTERM, old_term);
+            g_daemon_stop = nullptr;
+        }
+    } signal_guard{&stop};
 
     int consecutive_failures = 0;
     while (!stop.load()) {
         const auto args = module_argv(mode, opts, config_path, profile_now());
         FITRA_LOG_INFO("[daemon] spawning: {}", join_argv(argv0, args));
+
+        // Build argv BEFORE fork: the child between fork and exec must avoid
+        // heap allocation (not async-signal-safe). c_str() on the existing
+        // strings allocates nothing.
+        std::vector<char*> cargv;
+        cargv.reserve(args.size() + 2);
+        cargv.push_back(const_cast<char*>(argv0));
+        for (const auto& a : args) cargv.push_back(const_cast<char*>(a.c_str()));
+        cargv.push_back(nullptr);
 
         const pid_t pid = ::fork();
         if (pid < 0) {
@@ -185,14 +222,10 @@ int run_daemon(const config::MainOptions& opts,
             return EXIT_FAILURE;
         }
         if (pid == 0) {
-            // Child: exec the module. No heap discipline needed — execv
-            // replaces the image, _exit(127) only on exec failure.
-            std::vector<char*> cargv;
-            cargv.push_back(const_cast<char*>(argv0));
-            for (const auto& a : args) cargv.push_back(const_cast<char*>(a.c_str()));
-            cargv.push_back(nullptr);
-            ::execv(argv0, cargv.data());
-            std::perror("[daemon] execv");
+            // execvp searches PATH when argv0 has no slash (installed binary)
+            // and behaves like execv for a path-qualified argv0.
+            ::execvp(argv0, cargv.data());
+            std::perror("[daemon] execvp");
             ::_exit(127);
         }
         g_child_pid.store(pid);

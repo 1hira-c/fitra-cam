@@ -73,6 +73,21 @@ void test_module_argv() {
     check(!has_arg(run_nosubj, "--subject-id"),
           "run argv omits --subject-id when calib_subject_id is empty");
 
+    // run, non-sanitized id: --subject-id must match the wizard's sanitized
+    // directory ("alice.v1" -> "alicev1"), else run loads nothing.
+    MainOptions dotted;
+    dotted.calib_subject_id = "alice.v1";
+    auto run_dotted = module_argv(RunMode::Run, dotted, "/tmp/s.yaml", true);
+    bool found_sanitized = false;
+    for (std::size_t i = 0; i + 1 < run_dotted.size(); ++i) {
+        if (run_dotted[i] == "--subject-id") {
+            found_sanitized = (run_dotted[i + 1] == "alicev1");
+        }
+    }
+    check(found_sanitized,
+          "run argv sanitizes --subject-id to match the wizard: "
+          + join(run_dotted));
+
     // calib-subject: mode flag + auto-exit + publisher negations.
     auto subj_args = module_argv(RunMode::CalibSubject, opts,
                                  "/tmp/session.yaml", false);
@@ -166,6 +181,9 @@ void test_initial_mode() {
     p.calib_subject_id = "alice";
     check(profile_path(p) == "/data/subjects/alice/latest_profile.yaml",
           "profile_path layout");
+    p.calib_subject_id = "alice.v1";  // sanitized to alicev1 (wizard's rule)
+    check(profile_path(p) == "/data/subjects/alicev1/latest_profile.yaml",
+          "profile_path sanitizes the id like the wizard");
     p.calib_subject_id.clear();
     check(profile_path(p).empty(), "profile_path empty without a subject id");
 }

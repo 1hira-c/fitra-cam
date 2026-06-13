@@ -86,6 +86,19 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-14 — flow daemon PR29 レビュー対応 (堅牢化 + 特殊 ID / subject 省略時の遷移修正)
+PR #29 のレビュー指摘 (Gemini + self-review) への後追い対応。(1) `daemon.cpp`: シグナル
+ハンドラを `SignalGuard` RAII 化し復帰時に旧 disposition を戻す (dangling `&stop` 防止)、
+fork 前に argv を構築 + `execv`→`execvp` (PATH 探索 / async-signal-safe)、
+`std::filesystem::exists` を `error_code` 版へ (常駐中の throw 防止)。(2) `subject_id` を
+wizard と同じ `CalibrationSession::sanitize_id` で正規化 (`alice.v1`→`alicev1` 等で run が
+profile を読めない不具合)、`sanitize_id` を public 化。(3) subject 未設定 daemon では
+extrinsic solve 後に calib-subject を飛ばし run へ直接遷移 (子の `--calibrate requires
+--calib-subject-id` クラッシュ回避)。(4) `/api/flow/switch` の `mode` 非文字列で 500 を
+返さない型ガード。(5) `flow.js`: `/api/state` 404 (Python fallback) を再起動扱いせず
+watcher 停止。ctest 全 21 件 pass。design doc なし (changelog のみ)。
+→ [design/pose-3d-flow-daemon.md](../design/pose-3d-flow-daemon.md)
+
 ### 2026-06-13 — pose relay punch (calib で controller pose が来ない問題の修正)
 カスタム VMT driver は受信パケットの送信元 IP を学習して pose を返す構成
 (`refs/VirtualMotionTracker` CommunicationManager.cpp Phase 15.5)。VMT publisher を
