@@ -13,8 +13,13 @@
       <div id="conn3d" class="conn">3D connecting…</div>
       <a id="calib-link" class="conn link" href="/subject-calib" hidden>subject calib</a>
       <a id="excal-link" class="conn link" href="/extrinsic-calib" hidden>extrinsic calib</a>
+      <button id="flow-recal-excal" class="conn link" hidden
+              title="restart into extrinsic calibration (flow daemon)">↺ extrinsic calib</button>
+      <button id="flow-recal-subject" class="conn link" hidden
+              title="restart into subject calibration (flow daemon)">↺ subject calib</button>
     </div>
   </header>
+  <div id="flow-banner" class="flow-banner" hidden></div>
   <main>
     <!-- Panes are inserted dynamically by app.js as cameras report in. -->
   </main>
@@ -138,6 +143,7 @@
       }
     }
   </script>
+  <script src="flow.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -83,6 +83,10 @@ USB cam 2 ┘                                 │
 > (`run` / `calib-subject` / `calib-extrinsic`) の dispatch のみで、構築シーケンスは
 > `app/` の builder + モード runner にある。calib↔runtime の契約は YAML ファイルのみ
 > (ライブ再注入なし)。→ [`design/pose-3d-calib-mode-separation.md`](design/pose-3d-calib-mode-separation.md)
+>
+> **2026-06-12 追記**: `app/daemon.{hpp,cpp}` (flow daemon)。`./main --daemon` は
+> モードモジュールを fork/exec して exit code で連鎖する常駐ループで、CUDA/TRT/
+> ソケットに触れない。→ [`design/pose-3d-flow-daemon.md`](design/pose-3d-flow-daemon.md)
 
 ```
 fitra-cam/

@@ -147,7 +147,12 @@ function renderDetections(s) {
 async function refresh() {
   let s;
   try { s = await getJSON("/api/excal/state"); }
-  catch (e) { $("conn").textContent = "disconnected"; return; }
+  catch (e) {
+    // Down during a flow-daemon module swap (or a manual restart). flow.js
+    // navigates away once the next module is up with a different mode.
+    $("conn").textContent = "disconnected — waiting for restart…";
+    return;
+  }
   $("conn").textContent = "ok";
 
   const badge = $("state");
@@ -183,21 +188,33 @@ $("btn_solve").addEventListener("click", async () => {
   setMsg($("ctrl_msg"), "solving…");
   const r = await postJSON("/api/excal/solve");
   // On success the process writes the extrinsics YAML and auto-exits;
-  // r.next_step carries the restart command for the next mode
-  // (docs/design/pose-3d-calib-mode-separation.md). On failure r.err is
+  // r.next_step carries what happens next: the flow daemon's auto-switch
+  // notice, or the manual restart command when running standalone
+  // (docs/design/pose-3d-flow-daemon.md). On failure r.err is
   // self-describing ("solve/write failed: …") — surface it verbatim.
   setMsg($("ctrl_msg"),
-    r.ok ? `solved — ${r.next_step || "extrinsics written"} (this process exits now)`
+    r.ok ? `solved — ${r.next_step || "extrinsics written"}`
          : (r.err || "solve failed"),
     !r.ok);
   refresh();
 });
 $("btn_subject").addEventListener("click", () => {
   // The dedicated calib-extrinsic process has (or is about to) exit after a
-  // successful solve; subject calibration is a separate restart.
-  setMsg($("ctrl_msg"),
-    "restart main with --calibrate (subject-calib mode) — see the solve message");
+  // successful solve. Under the flow daemon the watcher below follows the
+  // swap automatically; standalone needs a manual restart.
+  setMsg($("ctrl_msg"), flowManaged
+    ? "waiting for the flow daemon to switch to subject calibration…"
+    : "restart main with --calibrate (subject-calib mode) — see the solve message");
 });
 
 refresh();
 setInterval(refresh, 200);
+
+// Mode-flow watcher (flow.js): once the next module is up with a different
+// mode, navigate there (solve success → /subject-calib under the daemon).
+// The connection display stays owned by refresh() above.
+let flowManaged = false;
+FitraFlow.watch({
+  page: "calib-extrinsic",
+  onState: (s) => { flowManaged = !!s.managed; },
+});

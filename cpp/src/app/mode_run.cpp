@@ -14,7 +14,7 @@
 
 namespace fitra::app {
 
-int run_mode_run(const config::MainOptions& opts, std::atomic<bool>& stop) {
+int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     auto trt = make_trt_stack(opts);
     auto cams = make_frame_sources(opts, trt.get(), nullptr);
     const std::size_t n_cams = cams.sources.size();
@@ -71,7 +71,8 @@ int run_mode_run(const config::MainOptions& opts, std::atomic<bool>& stop) {
         }
     } output_stop{&outputs, &relay, tracker_extractor.get()};
 
-    auto server = make_server(opts, config::RunMode::Run, bus, threed.bus3d.get());
+    auto server = make_server(opts, config::RunMode::Run, bus, threed.bus3d.get(),
+                              &flow);
     if (server) {
         if (outputs.slime_pub) server->set_native_publisher(outputs.slime_pub.get());
         if (outputs.vmt_pub)   server->set_vmt_publisher(outputs.vmt_pub.get());
@@ -83,7 +84,7 @@ int run_mode_run(const config::MainOptions& opts, std::atomic<bool>& stop) {
         server->start();
     }
 
-    run_stats_loop(*driver, opts.log_every_s, stop);
+    run_stats_loop(*driver, opts.log_every_s, flow.stop);
 
     if (server) server->stop();
     outputs.stop();

@@ -183,14 +183,21 @@ void register_calib_routes(crow::SimpleApp& app, const CalibRouteDeps& deps) {
     });
 
     CROW_ROUTE(app, "/api/calib/approve").methods(crow::HTTPMethod::POST)
-    ([session](const crow::request& req) {
+    ([session, next_step = deps.next_step](const crow::request& req) {
         auto body = crow::json::load(req.body);
         bool force = body && body.has("force") && body["force"].b();
         std::string err;
         bool ok = session->approve(force, err);
         std::ostringstream o;
         o << "{\"ok\":" << (ok ? "true" : "false")
-          << ",\"err\":\"" << err << "\"}";
+          << ",\"err\":\"" << err << "\"";
+        // Same contract as /api/excal/solve: the profile YAML is this mode's
+        // whole output, so a successful approve carries the what-next
+        // guidance (run-mode restart command, or the flow-daemon notice).
+        if (ok && !next_step.empty()) {
+            o << ",\"next_step\":\"" << json_escape(next_step) << "\"";
+        }
+        o << "}";
         crow::response r{o.str()};
         r.set_header("Content-Type", "application/json; charset=utf-8");
         return r;

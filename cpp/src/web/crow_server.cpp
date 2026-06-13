@@ -278,6 +278,14 @@ void CrowServer::set_extrinsic_calib_next_step(std::string guidance) {
     excal_next_step_ = std::move(guidance);
 }
 
+void CrowServer::set_calibration_next_step(std::string guidance) {
+    calib_next_step_ = std::move(guidance);
+}
+
+void CrowServer::set_flow_switch_handler(FlowSwitchFn fn) {
+    flow_switch_ = std::move(fn);
+}
+
 void CrowServer::set_native_publisher(slimevr::NativePublisher* publisher) {
     native_publisher_ = publisher;
 }
@@ -356,9 +364,32 @@ void CrowServer::start() {
     ([this]() {
         std::ostringstream o;
         o << "{\"mode\":\"" << json_escape(opts_.mode_label) << "\""
+          << ",\"managed\":" << (opts_.flow_managed ? "true" : "false")
           << ",\"enable_3d\":" << (bus3d_ ? "true" : "false") << "}";
         return json_response(o.str());
     });
+
+    // POST /api/flow/switch — request the flow daemon to restart this
+    // process in another mode. Registered only when a handler is attached
+    // (daemon-spawned modules); standalone runs keep the manual-restart
+    // contract, so the path falls through to the static catchall
+    // (GET 404 / POST 405).
+    if (flow_switch_) {
+        CROW_ROUTE(app, "/api/flow/switch").methods(crow::HTTPMethod::POST)
+        ([handler = flow_switch_](const crow::request& req) {
+            auto body = crow::json::load(req.body);
+            std::string mode = body && body.has("mode")
+                               ? std::string(body["mode"].s()) : std::string{};
+            std::string err;
+            const bool ok = handler(mode, err);
+            std::ostringstream o;
+            o << "{\"ok\":" << (ok ? "true" : "false");
+            if (ok) o << ",\"mode\":\"" << json_escape(mode) << "\"";
+            else    o << ",\"err\":\"" << json_escape(err) << "\"";
+            o << "}";
+            return json_response(o.str());
+        });
+    }
 
     // GET /stats — current bundle as JSON
     CROW_ROUTE(app, "/stats")
@@ -906,6 +937,7 @@ void CrowServer::register_calibration_routes_() {
     detail::CalibRouteDeps deps;
     deps.session    = calib_session_;
     deps.defaults   = calib_defaults_;
+    deps.next_step  = calib_next_step_;
     deps.static_dir = opts_.calib_static_dir;
     detail::register_calib_routes(impl_->app, deps);
 }

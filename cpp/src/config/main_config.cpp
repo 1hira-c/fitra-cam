@@ -372,6 +372,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--vr-quat-beta")      { out.vr_quat_beta      = std::stod(need(i, "--vr-quat-beta")); }
         else if (a == "--vr-quat-dcutoff")   { out.vr_quat_dcutoff   = std::stod(need(i, "--vr-quat-dcutoff")); }
         else if (a == "--slimevr-out")       { out.slimevr_out = true; }
+        else if (a == "--no-slimevr-out")    { out.slimevr_out = false; }
         else if (a == "--slimevr-host")      { out.slimevr_host = need(i, "--slimevr-host"); }
         else if (a == "--slimevr-port")      { out.slimevr_port = std::atoi(need(i, "--slimevr-port")); }
         else if (a == "--slimevr-rate-hz")   { out.slimevr_rate_hz = std::stod(need(i, "--slimevr-rate-hz")); }
@@ -380,6 +381,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
             out.slimevr_preview_no_reset = true;
         }
         else if (a == "--vmt-out")           { out.vmt_out = true; }
+        else if (a == "--no-vmt-out")        { out.vmt_out = false; }
         else if (a == "--vmt-host")          { out.vmt_host = need(i, "--vmt-host"); }
         else if (a == "--vmt-port")          { out.vmt_port = std::atoi(need(i, "--vmt-port")); }
         else if (a == "--vmt-rate-hz")       { out.vmt_rate_hz = std::stod(need(i, "--vmt-rate-hz")); }
@@ -419,6 +421,9 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--excal-controller-port")   { out.excal_controller_port = std::atoi(need(i, "--excal-controller-port")); }
         else if (a == "--excal-controller-bind")   { out.excal_controller_bind = need(i, "--excal-controller-bind"); }
         else if (a == "--excal-controller-stale-ms"){ out.excal_controller_stale_ms = std::stod(need(i, "--excal-controller-stale-ms")); }
+        else if (a == "--daemon")            { out.daemon = true; }
+        else if (a == "--daemon-initial")    { out.daemon_initial = need(i, "--daemon-initial"); }
+        else if (a == "--flow-managed")      { out.flow_managed = true; }
         else {
             fail(std::string("unknown arg: ") + argv[i]);
         }
@@ -440,6 +445,13 @@ const char* run_mode_name(RunMode mode) {
         case RunMode::Run:            break;
     }
     return "run";
+}
+
+bool parse_run_mode_name(const std::string& name, RunMode& out) {
+    if (name == "run")             { out = RunMode::Run;            return true; }
+    if (name == "calib-subject")   { out = RunMode::CalibSubject;   return true; }
+    if (name == "calib-extrinsic") { out = RunMode::CalibExtrinsic; return true; }
+    return false;
 }
 
 void validate_options(const MainOptions& opts) {
@@ -598,6 +610,23 @@ void validate_options(const MainOptions& opts) {
         }
         if (opts.excal_lin_vel_max <= 0.0 || opts.excal_ang_vel_max <= 0.0) {
             fail("--excal-lin-vel-max / --excal-ang-vel-max must be > 0");
+        }
+    }
+    if (opts.daemon) {
+        // The daemon owns mode selection — it spawns modules with the mode
+        // flags itself (docs/design/pose-3d-flow-daemon.md).
+        if (mode != RunMode::Run) {
+            fail("--daemon cannot be combined with --calibrate/--extrinsic-calib"
+                 "/--excal-replay (use --daemon-initial to pick the first mode)");
+        }
+        if (opts.flow_managed) {
+            fail("--daemon cannot be combined with --flow-managed");
+        }
+        RunMode initial;
+        if (opts.daemon_initial != "auto"
+            && !parse_run_mode_name(opts.daemon_initial, initial)) {
+            fail("--daemon-initial must be one of auto|run|calib-subject"
+                 "|calib-extrinsic");
         }
     }
 }
