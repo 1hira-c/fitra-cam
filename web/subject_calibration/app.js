@@ -33,14 +33,17 @@ async function refresh() {
   try {
     const res = await fetch("/api/calib/state");
     if (res.status === 404) {
-      // The /api/calib/* routes only exist in calib-subject mode.
+      // The /api/calib/* routes only exist in calib-subject mode (flow.js
+      // navigates away once /api/state reports the actual mode).
       $("conn").textContent =
         "unavailable — restart main with --calibrate (calib-subject mode)";
       return;
     }
     s = await res.json();
   } catch (e) {
-    $("conn").textContent = "disconnected";
+    // Down during a flow-daemon module swap (approve → run) or a manual
+    // restart; flow.js follows the swap.
+    $("conn").textContent = "disconnected — waiting for restart…";
     return;
   }
   $("conn").textContent = "ok";
@@ -193,7 +196,13 @@ async function doApprove() {
   setMsg($("review_msg"), "");
   const force = $("force_chk").checked;
   const res = await postJSON("/api/calib/approve", { force });
-  setMsg($("review_msg"), res.ok ? "approved & applied to live IK" : (res.err || "approve failed"), !res.ok);
+  // res.next_step says what happens next: the flow daemon's auto-switch to
+  // run mode, or the manual run-mode restart command when standalone. (No
+  // in-process reinjection — the profile YAML is the mode's whole output.)
+  setMsg($("review_msg"),
+    res.ok ? `approved — ${res.next_step || "profile written"}`
+           : (res.err || "approve failed"),
+    !res.ok);
   refresh();
 }
 
@@ -204,3 +213,8 @@ $("btn_approve").addEventListener("click", doApprove);
 
 refresh();
 setInterval(refresh, 200);
+
+// Mode-flow watcher (flow.js): after approve the flow daemon swaps this
+// module out for run mode; once /api/state reports the new mode, navigate
+// to the viewer. The connection display stays owned by refresh() above.
+FitraFlow.watch({ page: "calib-subject" });

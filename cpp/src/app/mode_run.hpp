@@ -5,12 +5,11 @@
 // at boot are the entire calib→runtime contract
 // (docs/design/pose-3d-calib-mode-separation.md).
 
-#include <atomic>
-
+#include "app/flow.hpp"
 #include "config/main_config.hpp"
 
 namespace fitra::app {
 
-int run_mode_run(const config::MainOptions& opts, std::atomic<bool>& stop);
+int run_mode_run(const config::MainOptions& opts, FlowControl& flow);
 
 }  // namespace fitra::app

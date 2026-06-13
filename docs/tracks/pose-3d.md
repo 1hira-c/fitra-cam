@@ -3,7 +3,7 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-06-11)
+## 現状 (2026-06-12)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
@@ -18,6 +18,14 @@ IK ホットリロード / tap mux) はコンパイルレベルで存在しな�
 builder + モード runner (main.cpp は dispatch のみ)。calib-extrinsic は TRT 非依存の
 decode-only で、`--excal-replay <dir>` により `tools/excal_record` セッションから実機レスで
 solve まで再現できる (live↔replay 等価性は `test_excal_replay` で固定)。
+
+**主経路は flow daemon** ([design/pose-3d-flow-daemon.md](../design/pose-3d-flow-daemon.md))。
+`./main --daemon --config session.yaml` がモードモジュール (同一バイナリ + モードフラグ) を
+1 つずつ fork/exec し、exit code (80/81/82) で連鎖する: excal solve → calib-subject →
+approve → run の自動連鎖、`POST /api/flow/switch` による任意切替、クラッシュ時は run へ
+自動復帰 (3 連続で give-up)。daemon 自身はソケット/CUDA/TRT に触れない。モジュールは
+`--flow-managed` でのみ flow 挙動が有効になり、手動起動は従来どおり (exit 0 + 再起動案内)。
+web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完結する。
 運用手順は [runbook-pose-3d-calibration.md](../runbook-pose-3d-calibration.md)。
 
 ### 設計原則 / live な制約
@@ -77,6 +85,34 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-06-13 — pose relay punch (calib で controller pose が来ない問題の修正)
+カスタム VMT driver は受信パケットの送信元 IP を学習して pose を返す構成
+(`refs/VirtualMotionTracker` CommunicationManager.cpp Phase 15.5)。VMT publisher を
+持たない calib-extrinsic は Jetson から一切送信せず IP が学習されないため、controller/
+HMD pose relay が一切来なかった。対処: relay receiver (`TrackedPoseReceiver`) の bind
+ソケットから `vmt.host:vmt.port` へ定期 OSC punch (`/fitra/punch`) を送り、VMT に IP を
+学習させる。全 relay 経路 (calib-extrinsic / run / hmd-listen) で有効。ローカル UDP で
+punch 送信 (src=受信ポート 39571・OSC 20B・1s 間隔) を実証。将来は broadcast/multicast
+での自動ディスカバリ (PC IP 設定不要化) が残課題。
+→ [design/pose-3d-flow-daemon.md](../design/pose-3d-flow-daemon.md)
+
+### 2026-06-12 — flow daemon: main の常駐 daemon 化とモードのモジュール起動 (M1–M4 完了)
+`./main --daemon --config session.yaml` で main が常駐 daemon になり、モードモジュール
+(同一バイナリ + モードフラグ) を fork/exec して exit code (80/81/82) で連鎖する。
+M1 = flow 基盤 (`app/flow.hpp` FlowControl、`POST /api/flow/switch`、`/api/state.managed`、
+managed 時の calib 自動連鎖、`--flow-managed` / `--no-vmt-out` / `--no-slimevr-out`、
+approve 応答 next_step)。M2 = daemon 本体 (`app/daemon.{hpp,cpp}`: argv 合成 / exit 判定 /
+initial auto 判定の純関数 + spawn/wait ループ、`--daemon` / `--daemon-initial`、SIGTERM 転送、
+crash→run fallback + 3 連続 give-up、新 ctest `test_flow_daemon` は stub スクリプトで実
+spawn 連鎖まで固定)。M3 = web (`/flow.js` の /api/state 追従: calib ページは次モードへ自動
+遷移、ビューワはバナー + managed 時の再キャリブ切替ボタン)。M4 = 本ドキュメント群。
+検討した代替 (外部 supervisor スクリプト / self-exec / reverse-proxy / 制御別ポート) の
+棄却理由と union YAML 運用規約は設計 doc 参照。実機 3 段通しはユーザー後日。
+M2 後の検証で SIGINT/SIGTERM 停止の不具合 (SIGINT が子に非転送で waitpid block /
+SIGTERM が stop を立てず crash respawn) を発見し、両シグナルを「stop 設定 + 子へ
+SIGINT 転送」の共通ハンドラに統一して修正 (`test_flow_daemon` に SIGTERM→rc0 を追加)。
+→ [design/pose-3d-flow-daemon.md](../design/pose-3d-flow-daemon.md)
 
 ### 2026-06-11 — 専念モード化のドキュメント整備 (M5、M1–M5 完了)
 track doc 現状節をモード分離後アーキへ更新、`cpp-migration-plan.md` のレイアウト節に

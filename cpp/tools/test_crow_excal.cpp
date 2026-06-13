@@ -7,6 +7,7 @@
 // "next_step" restart guidance (docs/design/pose-3d-calib-mode-separation.md).
 
 #include "web/crow_server.hpp"
+#include "config/main_config.hpp"
 #include "pipeline/extrinsic_calib_session.hpp"
 #include "pipeline/snapshot.hpp"
 #include "lift/calib_io.hpp"
@@ -23,6 +24,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -37,7 +39,9 @@ constexpr int kPort = 18137;
 
 // Minimal blocking HTTP/1.1 client. Returns false on connect/IO failure;
 // otherwise sets status + body. Uses Connection: close so recv ends at EOF.
-bool http(const char* method, const char* path, int& status, std::string& body) {
+// `payload` (optional) is sent as a JSON request body.
+bool http(const char* method, const char* path, int& status, std::string& body,
+          const std::string& payload = std::string{}) {
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return false;
     sockaddr_in addr{};
@@ -49,8 +53,10 @@ bool http(const char* method, const char* path, int& status, std::string& body) 
         return false;
     }
     std::string req = std::string(method) + " " + path + " HTTP/1.1\r\n"
-                      "Host: 127.0.0.1\r\nContent-Length: 0\r\n"
-                      "Connection: close\r\n\r\n";
+                      "Host: 127.0.0.1\r\n"
+                      "Content-Type: application/json\r\n"
+                      "Content-Length: " + std::to_string(payload.size()) + "\r\n"
+                      "Connection: close\r\n\r\n" + payload;
     ::send(fd, req.data(), req.size(), 0);
     std::string raw;
     char buf[2048];
@@ -166,13 +172,18 @@ int main() {
 #ifdef FITRA_SUBJECT_WEB_DIR
     opts.calib_static_dir = FITRA_SUBJECT_WEB_DIR;
 #endif
-    fitra::web::CrowServer server(bus, nullptr, opts);
-    server.set_extrinsic_calib_session(&session);
-    server.set_extrinsic_calib_next_step(
+    // Heap-allocated so it can be fully destroyed before the managed-server
+    // block below: Crow's App keeps its Server (and the listening fd) alive
+    // after stop(), so an in-process rebind of the same port needs the whole
+    // CrowServer gone. Across processes (the flow daemon's module handover)
+    // the fd closes with the process — no issue there.
+    auto server = std::make_unique<fitra::web::CrowServer>(bus, nullptr, opts);
+    server->set_extrinsic_calib_session(&session);
+    server->set_extrinsic_calib_next_step(
         "restart: ./main --calibrate --enable-3d --calib /tmp/fitra_excal_route_test.yaml ...");
-    server.set_hmd_pose_bus(&hmd_bus, 10000.0);
-    server.set_extrinsic_calib_pose_bus(&controller_bus, "left", 10000.0);
-    server.start();
+    server->set_hmd_pose_bus(&hmd_bus, 10000.0);
+    server->set_extrinsic_calib_pose_bus(&controller_bus, "left", 10000.0);
+    server->start();
 
     // Poll until the server accepts connections.
     int status = 0;
@@ -221,7 +232,15 @@ int main() {
         CHECK(http("GET", "/api/state", status, body));
         CHECK(status == 200);
         CHECK(body.find("\"mode\":\"calib-extrinsic\"") != std::string::npos);
+        CHECK(body.find("\"managed\":false") != std::string::npos);
         CHECK(body.find("\"enable_3d\":false") != std::string::npos);
+
+        // /api/flow/switch only exists on daemon-managed modules. Standalone
+        // runs never attach the handler, so the POST falls through to the
+        // GET-only static catchall → 405 (docs/design/pose-3d-flow-daemon.md).
+        CHECK(http("POST", "/api/flow/switch", status, body,
+                   "{\"mode\":\"run\"}"));
+        CHECK(status == 405);
 
         // The subject-calib group (static pages AND /api/calib/*) only exists
         // in calib-subject mode. With no CalibrationSession attached nothing
@@ -300,7 +319,69 @@ int main() {
         CHECK(solved_calls.load() == 1);
     }
 
-    server.stop();
+    server->stop();
+    server.reset();  // release the listening fd (see the allocation comment)
+
+    // Managed-module contract: /api/state advertises managed:true and
+    // POST /api/flow/switch hands the parsed mode label to the handler
+    // (server_builder wires it to FlowControl::request_switch). Binding the
+    // same port right after stop() also smoke-tests the daemon's
+    // module-to-module port handover.
+    {
+        fitra::web::ServerOptions mopts = opts;
+        mopts.mode_label = "run";
+        mopts.flow_managed = true;
+        fitra::pipeline::SnapshotBus mbus{1};
+        fitra::web::CrowServer managed(mbus, nullptr, mopts);
+        std::atomic<int> switched{-1};
+        managed.set_flow_switch_handler(
+            [&switched](const std::string& mode, std::string& err) {
+                fitra::config::RunMode m;
+                if (!fitra::config::parse_run_mode_name(mode, m)) {
+                    err = "unknown mode: " + mode;
+                    return false;
+                }
+                switched.store(static_cast<int>(m));
+                return true;
+            });
+        managed.start();
+
+        bool up2 = false;
+        for (int i = 0; i < 100; ++i) {
+            if (http("GET", "/api/state", status, body)) { up2 = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        CHECK(up2);
+        if (up2) {
+            CHECK(status == 200);
+            CHECK(body.find("\"mode\":\"run\"") != std::string::npos);
+            CHECK(body.find("\"managed\":true") != std::string::npos);
+
+            CHECK(http("POST", "/api/flow/switch", status, body,
+                       "{\"mode\":\"calib-extrinsic\"}"));
+            CHECK(status == 200);
+            CHECK(body.find("\"ok\":true") != std::string::npos);
+            CHECK(body.find("\"mode\":\"calib-extrinsic\"") != std::string::npos);
+            CHECK(switched.load()
+                  == static_cast<int>(fitra::config::RunMode::CalibExtrinsic));
+
+            // Unknown label → handler refuses, nothing recorded.
+            switched.store(-1);
+            CHECK(http("POST", "/api/flow/switch", status, body,
+                       "{\"mode\":\"bogus\"}"));
+            CHECK(status == 200);
+            CHECK(body.find("\"ok\":false") != std::string::npos);
+            CHECK(body.find("unknown mode") != std::string::npos);
+            CHECK(switched.load() == -1);
+
+            // Missing/empty body → empty mode label → refused the same way.
+            CHECK(http("POST", "/api/flow/switch", status, body));
+            CHECK(status == 200);
+            CHECK(body.find("\"ok\":false") != std::string::npos);
+            CHECK(switched.load() == -1);
+        }
+        managed.stop();
+    }
 
     if (g_fail) {
         std::fprintf(stderr, "test_crow_excal: %d failures\n", g_fail);

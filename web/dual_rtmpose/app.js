@@ -1442,19 +1442,62 @@ if (vmtAutoContToggle) {
   });
 }
 
-// Calibration entry points only exist in their dedicated modes
-// (docs/design/pose-3d-calib-mode-separation.md); show the matching link.
-(async () => {
-  try {
-    const res = await fetch("/api/state");
-    if (!res.ok) return;
-    const s = await res.json();
-    const calibLink = document.getElementById("calib-link");
-    const excalLink = document.getElementById("excal-link");
-    if (calibLink && s.mode === "calib-subject")   calibLink.hidden = false;
-    if (excalLink && s.mode === "calib-extrinsic") excalLink.hidden = false;
-  } catch (e) { /* state probe is best-effort */ }
-})();
+// Mode-flow watcher (flow.js). Keeps the calib entry points in sync with the
+// live module, shows a banner while the flow daemon swaps modules, and (when
+// daemon-managed) offers re-calibration switch buttons. The viewer never
+// auto-redirects — it stays useful as a camera monitor during calib-subject
+// (docs/design/pose-3d-flow-daemon.md).
+{
+  const calibLink   = document.getElementById("calib-link");
+  const excalLink   = document.getElementById("excal-link");
+  const banner      = document.getElementById("flow-banner");
+  const recalExcal  = document.getElementById("flow-recal-excal");
+  const recalSubj   = document.getElementById("flow-recal-subject");
+
+  const setBanner = (text, cls) => {
+    if (!banner) return;
+    banner.hidden = !text;
+    banner.textContent = text || "";
+    banner.className = "flow-banner" + (cls ? ` ${cls}` : "");
+  };
+
+  const requestSwitch = async (mode, label) => {
+    if (!window.confirm(`Restart into ${label}? Tracker output stops until `
+                        + "the calibration finishes.")) return;
+    const r = await FitraFlow.requestSwitch(mode);
+    if (r.ok) setBanner(`switching to ${label}…`, "busy");
+    else      setBanner(`switch failed: ${r.err || "unknown error"}`, "err");
+  };
+  if (recalExcal) recalExcal.addEventListener("click",
+    () => requestSwitch("calib-extrinsic", "extrinsic calibration"));
+  if (recalSubj) recalSubj.addEventListener("click",
+    () => requestSwitch("calib-subject", "subject calibration"));
+
+  FitraFlow.watch({
+    page: "run",
+    redirect: false,
+    onDown: () => {
+      setBanner("module restarting — waiting for the next mode…", "busy");
+      if (recalExcal) recalExcal.hidden = true;
+      if (recalSubj)  recalSubj.hidden  = true;
+    },
+    onState: (s) => {
+      if (calibLink) calibLink.hidden = s.mode !== "calib-subject";
+      if (excalLink) excalLink.hidden = s.mode !== "calib-extrinsic";
+      if (recalExcal) recalExcal.hidden = !(s.managed && s.mode === "run");
+      if (recalSubj)  recalSubj.hidden  = !(s.managed && s.mode === "run");
+      if (s.mode === "calib-subject") {
+        setBanner("calib-subject mode — open the wizard from the "
+                  + "\"subject calib\" link above", "note");
+      } else if (s.mode === "calib-extrinsic") {
+        setBanner("calib-extrinsic mode — open the collection page from the "
+                  + "\"extrinsic calib\" link above", "note");
+      } else {
+        setBanner("");
+      }
+    },
+  });
+}
 
 connect();
 connect3d();

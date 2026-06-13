@@ -19,6 +19,9 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
+
+#include <netinet/in.h>   // sockaddr_in for the punch destination
 
 #include "vmt/controller_pose_receiver.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
@@ -50,6 +53,22 @@ struct TrackedPoseReceiverOptions {
     std::uint16_t   port = 39571;
     double          stale_ms = 200.0;
     TrackedPoseRole controller_role = TrackedPoseRole::RightController;
+
+    // Outbound "punch": periodically send a tiny OSC datagram from the bound
+    // receive socket to the VMT host, so the VMT driver learns our (Jetson)
+    // source IP and starts relaying poses back. VMT's driver records the
+    // source IP of any non-loopback OSC packet it receives, before address
+    // dispatch (see refs/VirtualMotionTracker CommunicationManager.cpp,
+    // "Phase 15.5"), so the punch content is irrelevant — only the round trip
+    // matters. Without this, a mode that runs no VMT publisher (calib-extrinsic)
+    // never sends anything to the host, so no controller/HMD pose ever comes
+    // back. Empty host (or port 0) disables the punch.
+    //
+    // TODO(pose-3d/flow-daemon): replace the unicast punch with broadcast/
+    // multicast auto-discovery so the host IP need not be configured.
+    std::string     punch_host;             // VMT host (PC); empty = disabled
+    std::uint16_t   punch_port = 0;          // VMT OSC receive port (e.g. 39570)
+    double          punch_interval_ms = 1000.0;
 };
 
 struct TrackedPoseReceiverStats {
@@ -87,6 +106,7 @@ private:
     bool dispatch_packet_(const std::uint8_t* data, std::size_t len);
     bool dispatch_message_(const std::uint8_t* data, std::size_t len,
                            TrackedPoseReceiverStats& delta);
+    void send_punch_();   // no-op when punch is disabled
 
     HmdPoseBus&                hmd_bus_;
     ControllerPoseBus&         controller_bus_;
@@ -94,6 +114,11 @@ private:
     int                        sock_fd_ = -1;
     std::thread                recv_thread_;
     std::atomic<bool>          stop_{false};
+
+    // Punch state (resolved in start(); used only by recv_loop's thread).
+    bool                       punch_enabled_ = false;
+    sockaddr_in                punch_addr_{};
+    std::vector<std::uint8_t>  punch_packet_;
 
     mutable std::mutex         stats_mu_;
     TrackedPoseReceiverStats   stats_;

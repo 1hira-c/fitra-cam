@@ -523,6 +523,104 @@ extrinsic_calib:
     check(threw, "--excal-replay + --calibrate must throw");
 }
 
+void test_flow_managed_and_publisher_negation() {
+    using fitra::config::RunMode;
+    using fitra::config::parse_run_mode_name;
+
+    // The daemon's calib-spawn scenario: a union --config YAML carries the
+    // run-mode publisher settings; the spawn argv negates them so the setup
+    // mode passes the publisher-exclusivity validation.
+    auto p = write_tmp("flow_union.yaml", R"(schema: fitra_main_config_v1
+cameras:
+  cam0: /dev/v4l/by-path/cam-A
+  cam1: /dev/v4l/by-path/cam-B
+inference:
+  det_engine: /tmp/yolox.engine
+  pose_engine: /tmp/rtmpose.engine
+  keypoint_format: halpe26
+three_d:
+  enable_3d: true
+  calib: /tmp/extrinsics.yaml
+vmt:
+  vmt_out: true
+slimevr:
+  slimevr_out: true
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    std::vector<std::string> argv_buf{
+        "--flow-managed", "--calibrate", "--calib-auto-exit",
+        "--no-vmt-out", "--no-slimevr-out",
+        "--calib-subject-id", "subj", "--calib-subject-height-m", "1.7",
+    };
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(opts.flow_managed,  "--flow-managed sets flow_managed");
+    check(!opts.vmt_out,      "--no-vmt-out negates vmt.vmt_out from YAML");
+    check(!opts.slimevr_out,  "--no-slimevr-out negates slimevr.slimevr_out from YAML");
+    validate_options(opts);   // must not throw (publishers negated)
+    check(fitra::config::run_mode(opts) == RunMode::CalibSubject,
+          "union YAML + --calibrate -> calib-subject mode");
+
+    // parse_run_mode_name is the /api/flow/switch + --daemon-initial parser.
+    RunMode m;
+    check(parse_run_mode_name("run", m) && m == RunMode::Run, "parse run");
+    check(parse_run_mode_name("calib-subject", m) && m == RunMode::CalibSubject,
+          "parse calib-subject");
+    check(parse_run_mode_name("calib-extrinsic", m) && m == RunMode::CalibExtrinsic,
+          "parse calib-extrinsic");
+    check(!parse_run_mode_name("bogus", m), "parse rejects unknown label");
+    check(!parse_run_mode_name("", m),      "parse rejects empty label");
+}
+
+void test_daemon_flags_and_validate() {
+    // Run-shaped base opts (the daemon validates the union YAML up front).
+    MainOptions opts;
+    opts.cam_paths[0] = "/tmp/a";
+    opts.det_engine   = "/tmp/y";
+    opts.pose_engine  = "/tmp/r";
+
+    std::vector<std::string> argv_buf{"--daemon", "--daemon-initial",
+                                      "calib-extrinsic"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(opts.daemon, "--daemon sets daemon");
+    check(opts.daemon_initial == "calib-extrinsic", "--daemon-initial sets value");
+    validate_options(opts);  // must not throw
+
+    // The daemon picks modes itself — explicit mode flags are rejected.
+    MainOptions bad = opts;
+    bad.excal_enabled = true;
+    bad.excal_intrinsics = "/tmp/intr.yaml";
+    bool threw = false;
+    try { validate_options(bad); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--daemon", "daemon+excal exclusivity msg");
+    }
+    check(threw, "--daemon + --extrinsic-calib must throw");
+
+    bad = opts;
+    bad.flow_managed = true;
+    threw = false;
+    try { validate_options(bad); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--flow-managed", "daemon+managed exclusivity msg");
+    }
+    check(threw, "--daemon + --flow-managed must throw");
+
+    bad = opts;
+    bad.daemon_initial = "bogus";
+    threw = false;
+    try { validate_options(bad); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--daemon-initial", "daemon-initial range msg");
+    }
+    check(threw, "--daemon-initial bogus must throw");
+}
+
 struct TestCase {
     const char* name;
     void (*fn)();
@@ -543,6 +641,8 @@ const TestCase kTests[] = {
     {"run_mode_derivation_and_publisher_exclusivity",
                                                test_run_mode_derivation_and_publisher_exclusivity},
     {"excal_replay_yaml_cli_and_mode",         test_excal_replay_yaml_cli_and_mode},
+    {"flow_managed_and_publisher_negation",    test_flow_managed_and_publisher_negation},
+    {"daemon_flags_and_validate",              test_daemon_flags_and_validate},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},
