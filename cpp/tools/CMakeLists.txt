@@ -99,6 +99,22 @@ set_target_properties(fitra_check_calibration PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
+# Excal replay sample recorder: raw MJPEG passthrough frames + per-frame
+# paired controller poses (frames.jsonl). No TRT execution at runtime.
+add_executable(fitra_excal_record
+    excal_record.cpp
+)
+
+target_link_libraries(fitra_excal_record PRIVATE
+    fitra_camera      # V4l2Capture (link pulls fitra_infer; unused at runtime)
+    fitra_vmt         # ControllerPoseReceiver / ControllerPoseBus
+)
+
+set_target_properties(fitra_excal_record PROPERTIES
+    OUTPUT_NAME "excal_record"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
 # Recorded two-camera 2D -> 3D dump with reprojection overlays.
 add_executable(fitra_dump_keypoints_3d
     dump_keypoints_3d.cpp
@@ -116,6 +132,23 @@ set_target_properties(fitra_dump_keypoints_3d PROPERTIES
     OUTPUT_NAME "dump_keypoints_3d"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
+
+# Typed coordinate-frame layer: Transform composition / inverse / Point3
+# transport and the single fitra<->VMT basis change vs the legacy constant.
+add_executable(fitra_test_geom_frames
+    test_geom_frames.cpp
+)
+
+target_link_libraries(fitra_test_geom_frames PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_geom_frames PROPERTIES
+    OUTPUT_NAME "test_geom_frames"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_geom_frames COMMAND fitra_test_geom_frames)
 
 add_executable(fitra_test_triangulator
     test_triangulator.cpp
@@ -198,6 +231,23 @@ set_target_properties(fitra_test_extrinsic_calib_session PROPERTIES
 
 add_test(NAME test_extrinsic_calib_session COMMAND fitra_test_extrinsic_calib_session)
 
+# Offline replay for calib-extrinsic — frames.jsonl parser + live↔replay
+# sample-stream equivalence on a synthetic recorder-format session.
+add_executable(fitra_test_excal_replay
+    test_excal_replay.cpp
+)
+
+target_link_libraries(fitra_test_excal_replay PRIVATE
+    fitra_pipeline
+)
+
+set_target_properties(fitra_test_excal_replay PROPERTIES
+    OUTPUT_NAME "test_excal_replay"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_excal_replay COMMAND fitra_test_excal_replay)
+
 # Integration smoke test for the /api/excal/* Crow routes (live loopback server).
 add_executable(fitra_test_crow_excal
     test_crow_excal.cpp
@@ -206,6 +256,7 @@ add_executable(fitra_test_crow_excal
 target_link_libraries(fitra_test_crow_excal PRIVATE
     fitra_web
     fitra_pipeline
+    fitra_config      # parse_run_mode_name for the /api/flow/switch contract
 )
 
 # CMAKE_SOURCE_DIR is the cpp/ tree; the web assets live at <repo>/web.
@@ -421,3 +472,21 @@ set_target_properties(fitra_test_main_config PROPERTIES
 )
 
 add_test(NAME test_main_config COMMAND fitra_test_main_config)
+
+# Flow daemon: module_argv / next_action / initial_mode decision helpers and
+# the run_daemon() spawn loop against a stub module script. Links fitra_app
+# for daemon.cpp; the test itself never touches CUDA/TRT/sockets.
+add_executable(fitra_test_flow_daemon
+    test_flow_daemon.cpp
+)
+
+target_link_libraries(fitra_test_flow_daemon PRIVATE
+    fitra_app
+)
+
+set_target_properties(fitra_test_flow_daemon PROPERTIES
+    OUTPUT_NAME "test_flow_daemon"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_flow_daemon COMMAND fitra_test_flow_daemon)

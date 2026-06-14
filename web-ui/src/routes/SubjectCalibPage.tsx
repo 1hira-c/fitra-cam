@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { useFlowWatch } from "../hooks/useFlowWatch";
 import { usePolling } from "../hooks/usePolling";
 import { fetchCalibState, postCalib } from "../lib/api";
 import "../styles/subject-calib.css";
@@ -57,6 +58,7 @@ const ANGLE_ROWS: Array<[string, keyof Angles]> = [
 ];
 
 export function SubjectCalibPage() {
+  const flow = useFlowWatch({ page: "calib-subject" });
   const { data, error } = usePolling<CalibState>(fetchCalibState, 200);
   const s: CalibState = data ?? {};
 
@@ -68,7 +70,14 @@ export function SubjectCalibPage() {
   const [preflightMsg, setPreflightMsg] = useState<{ text: string; err: boolean }>({ text: "", err: false });
   const [reviewMsg, setReviewMsg] = useState<{ text: string; err: boolean }>({ text: "", err: false });
 
-  const conn = error ? "disconnected" : data ? "ok" : "connecting…";
+  const conn =
+    flow.status === "down"
+      ? "disconnected - waiting for restart..."
+      : error
+        ? "unavailable - restart main with --calibrate"
+        : data
+          ? "ok"
+          : "connecting…";
   const stateName = s.state ?? "idle";
   const pidx = s.target_pose_idx ?? 0;
   const tgt = (s.poses || [])[pidx];
@@ -140,9 +149,12 @@ export function SubjectCalibPage() {
 
   const doApprove = async () => {
     setReviewMsg({ text: "", err: false });
-    const res = await postCalib("approve", { force });
+    const res = await postCalib<{ ok?: boolean; err?: string; next_step?: string }>(
+      "approve",
+      { force },
+    );
     setReviewMsg({
-      text: res.ok ? "approved & applied to live IK" : res.err || "approve failed",
+      text: res.ok ? `approved - ${res.next_step || "profile written"}` : res.err || "approve failed",
       err: !res.ok,
     });
   };
@@ -248,7 +260,7 @@ export function SubjectCalibPage() {
             <label className="checkbox">
               <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} /> force (approve warn)
             </label>
-            <button type="button" disabled={approveDisabled} onClick={doApprove}>Approve &amp; apply live</button>
+            <button type="button" disabled={approveDisabled} onClick={doApprove}>Approve &amp; write profile</button>
           </div>
           <div className={`msg ${reviewMsg.err ? "err" : ""}`.trim()}>{reviewMsg.text}</div>
         </section>

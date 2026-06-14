@@ -90,10 +90,11 @@ public:
 
     void set_frame_tap(FrameTapFn fn);
     void set_skeleton3d_tap(Skeleton3DTapFn fn);
-    void set_triangulator(std::shared_ptr<lift::Triangulator> triangulator);
 
-    // For the calibration session approval flow: lets the API layer call
-    // ik().reload_from_profile() once a new profile is approved.
+    // For the calib-subject preflight: primes the live IK with the subject
+    // height (apply_subject_height) so the 3D angle recognizer has a sensible
+    // bone-length lock from frame 1. Profile loading happens at construction
+    // via ThreeDConfig — there is no runtime profile reinjection.
     lift::IkSolver& ik() { return ik_; }
 
 private:

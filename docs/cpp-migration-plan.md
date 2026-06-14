@@ -76,6 +76,18 @@ USB cam 2 ┘                                 │
 
 ## リポジトリレイアウト
 
+> **2026-06-11 更新 (pose-3d トラック)**: 下のツリーは移行計画時点のもの。その後
+> `cpp/src/` には `lift/` (3D lifting / IK / calibration I/O)、`slimevr/`・`vmt/`
+> (VR 出力・pose 受信)、`config/` (YAML/CLI loader)、そして **`app/` (composition root)**
+> が増えた。main.cpp は config parse → validate → 排他 RunMode
+> (`run` / `calib-subject` / `calib-extrinsic`) の dispatch のみで、構築シーケンスは
+> `app/` の builder + モード runner にある。calib↔runtime の契約は YAML ファイルのみ
+> (ライブ再注入なし)。→ [`design/pose-3d-calib-mode-separation.md`](design/pose-3d-calib-mode-separation.md)
+>
+> **2026-06-12 追記**: `app/daemon.{hpp,cpp}` (flow daemon)。`./main --daemon` は
+> モードモジュールを fork/exec して exit code で連鎖する常駐ループで、CUDA/TRT/
+> ソケットに触れない。→ [`design/pose-3d-flow-daemon.md`](design/pose-3d-flow-daemon.md)
+
 ```
 fitra-cam/
 ├── README.md                      (C++ 用に書き直し)

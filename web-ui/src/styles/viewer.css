@@ -19,6 +19,25 @@
 .viewer-page .conn { font-size: 12px; color: #aaa; text-decoration: none; }
 .viewer-page .conn.live { color: #4cf; }
 .viewer-page .conn.dead { color: #f66; }
+.viewer-page button.conn.link {
+  background: none;
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  color: #fc6;
+}
+.viewer-page button.conn.link:hover { border-color: #fc6; }
+.viewer-page .flow-banner {
+  padding: 6px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid #333;
+}
+.viewer-page .flow-banner.note { background: #1c2733; color: #9cf; }
+.viewer-page .flow-banner.busy { background: #332a1c; color: #fc6; }
+.viewer-page .flow-banner.err  { background: #331c1c; color: #f88; }
 .viewer-page .cams {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -26,9 +26,12 @@ export default defineConfig({
       "/ws3d": { target: CROW, ws: true },
       "/stats": { target: CROW },
       "/stats3d": { target: CROW },
+      "/api/state": { target: CROW },
+      "/api/flow": { target: CROW },
       "/api/vmt": { target: CROW },
       "/api/slimevr": { target: CROW },
       "/api/calib": { target: CROW },
+      "/extrinsic-calib": { target: CROW },
     },
   },
 });

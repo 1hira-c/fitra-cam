@@ -70,11 +70,37 @@ void test_extended_elbow_angles_are_measured_pre_ik() {
           "post-IK right elbow flex shows hinge-clamp bias");
 }
 
+// The pipeline feeds the recognizer the measured (pre-IK) skeleton for angles
+// but must pair it with the *post-IK* bone_drift_pct. The post-IK skeleton is
+// clamped to the model so its drift is ~0; raw pre-IK triangulation drifts well
+// past max_bone_drift_pct (~10%). This locks that a perfectly valid T-pose is
+// accepted with low drift but rejected on the bone_drift axis with high drift,
+// so feeding the raw pre-IK drift (as a past regression did) would make pose
+// hold impossible.
+void test_drift_gate_decoupled_from_angles() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    const auto t_pose = make_extended_t_pose();
+
+    fitra::lift::PoseRecognizer rec(30.0);
+    rec.set_target(fitra::lift::TargetPose::kTPose);
+
+    const auto lo = rec.update(t_pose, /*bone_drift_pct=*/2.0, 1.0 / 30.0);
+    check(lo.angles_valid, "T-pose angles must be valid");
+    check(lo.in_band, "valid T-pose with low (post-IK) drift must be in band");
+
+    rec.reset();
+    const auto hi = rec.update(t_pose, /*bone_drift_pct=*/25.0, 1.0 / 30.0);
+    check(!hi.in_band, "high (raw pre-IK) drift must reject the pose");
+    check(hi.failing_axis == "bone_drift",
+          "rejection must be on the bone_drift axis, not an angle");
+}
+
 }  // namespace
 
 int main() {
     try {
         test_extended_elbow_angles_are_measured_pre_ik();
+        test_drift_gate_decoupled_from_angles();
         std::printf("test_pose_recognizer: OK\n");
         return 0;
     } catch (const std::exception& e) {

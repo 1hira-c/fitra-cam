@@ -1,7 +1,10 @@
 #include "pipeline/extrinsic_calib_session.hpp"
 
+#include "geom/world_convention.hpp"
+
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <sstream>
 #include <vector>
 
@@ -24,23 +27,43 @@ cv::Matx44d controller_pose(const ControllerObservation& c) {
     return lift::pose_from_pos_quat(c.x, c.y, c.z, c.qx, c.qy, c.qz, c.qw);
 }
 
+// Minimal JSON string escaper. camera ids come from the calibration file and
+// validate_calibration only guarantees non-empty, so an id containing '"' or
+// '\' (or a control char) would otherwise break the response JSON.
+std::string json_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out;
+}
+
 // The controller poses fed to the hand-eye solver come from the VR runtime in
 // the VMT/SteamVR world frame (Y-up RH, X-right, Z-back; see
-// controller_pose_receiver.hpp), so the solved T_cam<-world lands in those
-// axes. Everything downstream -- floor calibration, triangulation, IK, the
-// WebUI 3D viewer, SlimeVR output -- assumes the fitra world frame (Z-up RH,
-// X-right, Y-forward). Re-express the *world* axes without moving the cameras
-// by right-multiplying with the basis change. This is diag4(M) where
-// M maps fitra coords to VMT coords ((x,y,z)->(x,z,-y), i.e. the inverse of
-// vmt::world_pos_to_vmt's rotation Rx(-90 deg)).
-const cv::Matx44d kVmtWorldToFitra{
-    1,  0, 0, 0,
-    0,  0, 1, 0,
-    0, -1, 0, 0,
-    0,  0, 0, 1};
-
-cv::Matx44d to_fitra_world(const cv::Matx44d& T_cam_vmtworld) {
-    return T_cam_vmtworld * kVmtWorldToFitra;
+// controller_pose_receiver.hpp), so the solved T_cam<-world is in those axes
+// (typed geom::T_cam_vmtworld). Everything downstream -- floor calibration,
+// triangulation, IK, the WebUI 3D viewer, SlimeVR output -- assumes the fitra
+// world frame (Z-up RH, X-right, Y-forward). Re-express the *world* axes without
+// moving the cameras by right-composing the single basis change
+// geom::fitra_to_vmt_basis() (Vmt<-Fitra); the type system then enforces
+// Cam<-Vmt * Vmt<-Fitra = Cam<-Fitra (a direction mistake won't compile).
+geom::T_cam_world to_fitra_world(const geom::T_cam_vmtworld& T_cam_vmtworld) {
+    return T_cam_vmtworld * geom::fitra_to_vmt_basis();
 }
 
 }  // namespace
@@ -88,7 +111,7 @@ void ExtrinsicCalibSession::update_velocity_(const ControllerObservation& ctrl) 
 }
 
 bool ExtrinsicCalibSession::ingest(std::size_t cam_idx, int face_id,
-                                   const cv::Matx44d& T_cam_face,
+                                   const geom::T_cam_marker& T_cam_face,
                                    const ControllerObservation& ctrl) {
     std::lock_guard<std::mutex> g(mu_);
     if (state_ != ExtrinsicCalibState::kCollecting) return false;
@@ -118,7 +141,7 @@ bool ExtrinsicCalibSession::ingest(std::size_t cam_idx, int face_id,
         }
     }
     Burst& b = bursts_[key];
-    b.T_cam_face.push_back(T_cam_face);
+    b.T_cam_face.push_back(T_cam_face.raw());
     b.T_world_controller.push_back(controller_pose(ctrl));
     b.last_ts_ms = ctrl.ts_ms;
     if (static_cast<int>(b.T_cam_face.size()) >= cfg_.burst_max) {
@@ -135,8 +158,11 @@ void ExtrinsicCalibSession::flush_burst_(const GroupKey& k) {
         lift::ExtrinsicSample s;
         s.cam_index = static_cast<int>(k.cam);
         s.face_id   = k.face;
-        s.T_cam_marker       = lift::average_poses(b.T_cam_face);
-        s.T_world_controller = lift::average_poses(b.T_world_controller);
+        // Burst buffers stay raw (internal accumulation); wrap into the typed
+        // sample at this single boundary.
+        s.T_cam_marker = geom::T_cam_marker::from_raw(lift::average_poses(b.T_cam_face));
+        s.T_world_controller =
+            geom::T_world_controller::from_raw(lift::average_poses(b.T_world_controller));
         samples_.push_back(s);
         ++coverage_[k];
     }
@@ -204,18 +230,20 @@ bool ExtrinsicCalibSession::solve_and_write(std::string& err) {
         return false;
     }
 
-    // Convert every solved T_cam<-world from the VMT (Y-up) world frame the
-    // solver produced into the fitra (Z-up) world frame at this single
-    // boundary, so the written file, the live WebUI JSON (extrinsics_json),
-    // and the hot-swapped Triangulator all agree on Z-up. The per-face
-    // T_marker<-controller (X) is frame-independent and left untouched.
-    for (auto& ce : sol.cameras) ce.T_cam_world = to_fitra_world(ce.T_cam_world);
-    for (auto& fs : sol.faces)   fs.T_cam_world = to_fitra_world(fs.T_cam_world);
+    // The solver works in the VMT (Y-up) world frame the controller poses live
+    // in. Keep `solution_` (→ extrinsics_json → the /extrinsic-calib scene) in
+    // that frame: that verification scene overlays the solved cameras with the
+    // live HMD/controller poses (also VMT Y-up) and a floor at Y=0, so the
+    // cameras must stay in the same frame as the poses. Only the *persisted*
+    // YAML is re-expressed into the fitra (Z-up) world frame below, since the
+    // downstream pipeline (triangulation, IK, main ws3d viewer via the
+    // hot-swap that reloads the written file, SlimeVR output) assumes Z-up.
 
     // Build the output CalibrationSet: copy intrinsics, fill in extrinsics.
     lift::CalibrationSet result = cfg_.intrinsics;
-    // Extrinsics are now in the fitra Z-up world frame, so label the file
-    // accordingly regardless of what the intrinsics source claimed.
+    // Persisted extrinsics are converted to the fitra Z-up world frame below,
+    // so label the file accordingly regardless of what the intrinsics source
+    // claimed.
     result.coordinate_system = "world: x/y measured on floor, z up; extrinsics are T_cw";
     for (auto& cam : result.cameras) cam.has_extrinsics = false;
 
@@ -227,7 +255,9 @@ bool ExtrinsicCalibSession::solve_and_write(std::string& err) {
         auto& cam = result.cameras[ce.cam_index];
         cam.has_extrinsics = true;
         cam.extrinsics.method = "controller_marker_handeye";
-        cam.extrinsics.T_cw = cv::Mat(ce.T_cam_world).clone();  // 4x4 CV_64F
+        // VMT (Y-up) world → fitra (Z-up) world, persisted-file only.
+        cam.extrinsics.T_cw =
+            cv::Mat(to_fitra_world(ce.T_cam_world).raw()).clone();  // 4x4 CV_64F
         cv::Mat R = cam.extrinsics.T_cw(cv::Rect(0, 0, 3, 3));
         cv::Mat t = cam.extrinsics.T_cw(cv::Rect(3, 0, 1, 3));
         cv::Mat c = -R.t() * t;
@@ -245,9 +275,12 @@ bool ExtrinsicCalibSession::solve_and_write(std::string& err) {
         return false;
     }
 
-    std::lock_guard<std::mutex> g(mu_);
-    solution_ = sol;
-    state_ = ExtrinsicCalibState::kSolved;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        solution_ = sol;
+        state_ = ExtrinsicCalibState::kSolved;
+    }
+    if (on_solved_) on_solved_();
     return true;
 }
 
@@ -264,7 +297,9 @@ std::string ExtrinsicCalibSession::extrinsics_json() const {
         }
         const auto& cam = cfg_.intrinsics.cameras[ce.cam_index];
         const cv::Mat& K = cam.intrinsics.K;
-        const cv::Matx44d& T = ce.T_cam_world;
+        // extrinsics_json stays in the solver's VMT Y-up frame (the verification
+        // scene overlays live VMT poses) — raw out, no basis change here.
+        const cv::Matx44d& T = ce.T_cam_world.raw();
         // camera centre in world = -R^T t.
         cv::Matx33d R(T(0,0),T(0,1),T(0,2), T(1,0),T(1,1),T(1,2), T(2,0),T(2,1),T(2,2));
         cv::Vec3d t(T(0,3), T(1,3), T(2,3));
@@ -273,7 +308,7 @@ std::string ExtrinsicCalibSession::extrinsics_json() const {
         if (!first) os << ",";
         first = false;
         os << "{\"cam\":" << ce.cam_index
-           << ",\"id\":\"" << cam.id << "\""
+           << ",\"id\":\"" << json_escape(cam.id) << "\""
            << ",\"width\":" << cam.intrinsics.width
            << ",\"height\":" << cam.intrinsics.height
            << ",\"fx\":" << K.at<double>(0, 0)

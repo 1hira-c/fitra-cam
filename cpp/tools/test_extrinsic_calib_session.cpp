@@ -121,7 +121,8 @@ void test_gate_and_burst() {
     s.start();
 
     cv::Matx44d still = rigid(0, 0, 0, 0.1, 1.0, 1.5);
-    cv::Matx44d Tcf   = rigid(0.1, 0.2, 0.0, 0.0, 0.0, 1.0);
+    fitra::geom::T_cam_marker Tcf =
+        fitra::geom::T_cam_marker::from_raw(rigid(0.1, 0.2, 0.0, 0.0, 0.0, 1.0));
     double ts = 0.0;
 
     // First still frame primes velocity (no velocity yet → rejected).
@@ -179,6 +180,8 @@ void test_solve_and_write() {
     cv::Matx44d Tcf_off = rigid(0.4, -0.3, 0.0, 0.03, -0.02, 0.05);  // T_controller<-face
 
     ExtrinsicCalibSession s(cfg);
+    int solved_calls = 0;
+    s.set_on_solved([&solved_calls]() { ++solved_calls; });
     s.start();
 
     double ts = 0.0;
@@ -190,7 +193,8 @@ void test_solve_and_write() {
         ts += 200.0;
         for (int c = 0; c < 2; ++c) {
             // forward chain: A = T_cam<-world · B · T_controller<-face
-            cv::Matx44d A = Tcw[c] * B * Tcf_off;
+            fitra::geom::T_cam_marker A =
+                fitra::geom::T_cam_marker::from_raw(Tcw[c] * B * Tcf_off);
             for (int k = 0; k < cfg.burst_min + 1; ++k) {
                 s.ingest(c, 0, A, ctrl_at(B, ts));
                 ts += 10.0;
@@ -203,6 +207,16 @@ void test_solve_and_write() {
     CHECK(ok);
     if (!ok) { std::fprintf(stderr, "  solve err: %s\n", err.c_str()); return; }
     CHECK(s.state() == ExtrinsicCalibState::kSolved);
+    // The auto-exit hook fires exactly once per successful solve.
+    CHECK(solved_calls == 1);
+
+    // ... and never on a failed solve (no samples).
+    ExtrinsicCalibSession s_fail(cfg);
+    int fail_calls = 0;
+    s_fail.set_on_solved([&fail_calls]() { ++fail_calls; });
+    std::string err_fail;
+    CHECK(!s_fail.solve_and_write(err_fail));
+    CHECK(fail_calls == 0);
 
     // Reload and verify the relative extrinsic matches ground truth.
     auto loaded = fitra::lift::load_calibration(cfg.out_path);
@@ -251,6 +265,26 @@ void test_solve_and_write() {
     CHECK(ex.find("\"id\":\"cam1\"") != std::string::npos);
     CHECK(ex.find("\"T_cam_world\":[") != std::string::npos);
     CHECK(ex.find("\"center\":[") != std::string::npos);
+
+    // extrinsics_json feeds the /extrinsic-calib verification scene, which
+    // overlays the cameras with the live HMD/controller poses in the VMT (Y-up)
+    // frame. It must therefore stay UN-converted (VMT frame), unlike the
+    // persisted file (e0, Z-up). Lock that cam0's reported centre matches the
+    // VMT-frame centre of the ground-truth Tcw[0], not the Z-up file centre.
+    const std::string key = "\"center\":[";
+    auto kpos = ex.find(key);
+    cv::Vec3d c_json{};
+    CHECK(kpos != std::string::npos);
+    if (kpos != std::string::npos) {
+        std::sscanf(ex.c_str() + kpos + key.size(), "%lf,%lf,%lf",
+                    &c_json[0], &c_json[1], &c_json[2]);
+    }
+    cv::Matx33d Rg(Tcw[0](0,0),Tcw[0](0,1),Tcw[0](0,2),
+                   Tcw[0](1,0),Tcw[0](1,1),Tcw[0](1,2),
+                   Tcw[0](2,0),Tcw[0](2,1),Tcw[0](2,2));
+    cv::Vec3d tg(Tcw[0](0,3), Tcw[0](1,3), Tcw[0](2,3));
+    cv::Vec3d c_vmt = -(Rg.t() * tg);
+    CHECK_LT(cv::norm(c_json - c_vmt), 1e-4);
 }
 
 // 3) calib_io write/read round-trip with extrinsics.

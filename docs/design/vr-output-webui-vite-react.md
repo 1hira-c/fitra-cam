@@ -60,16 +60,24 @@ web-ui/  (Vite + React + TS, web/ と並置, dist は .gitignore)
     hooks/useWebSocketJson.ts  自動再接続 + 5s ping + 1.5s backoff
     hooks/useRafLoop.ts        ref'd callback を rAF 駆動
     hooks/usePolling.ts        subject-calib の 200ms ポーリング
+    hooks/useFlowWatch.ts      /api/state polling + mode mismatch redirect (viewer は redirect しない)
     routes/ViewerPage.tsx      ref に WS データ保持 → rAF で 2D 描画 + viewer.update/render + ~6Hz で stats state 更新
     routes/SubjectCalibPage.tsx 状態機械をポーリング結果から純関数的に描画
     components/  CameraPane / ThreeDView / VmtAlignForm(imperative writeForm) / VmtAutoForm / SlimeCorrectionTable / TrackerStatsTable
+  public/
+    flow.js           legacy web/extrinsic_calibration 用の /flow.js 互換 helper
 ```
 
 不変条件/要点:
 - WS/REST スキーマは `types/bundle.ts` に固定（フィールド名は backend `snapshot.cpp` と一致, リネーム禁止）。
 - VMT auto-align の結果は `VmtAlignForm` の `writeForm()`（`useImperativeHandle`）経由で手動フォームに反映（旧 `writeVmtAlignmentForm`）。
-- Crow 側変更は最小: `guess_static_dir()`/`guess_subject_calib_static_dir()` を共に `<repo>/web-ui/dist` に向けるのみ
-  （`crow_server.cpp` のルートは無改修。`/subject-calib` は `calib_root/index.html` を読むので dist/index.html を返す）。
+- Crow 側の既定 static path は `app/paths.cpp` で `guess_static_dir()` / `guess_subject_calib_static_dir()` を
+  `<repo>/web-ui/dist` に向ける。`/subject-calib` は dist の `index.html` を返し React Router が描画する。
+- pose-3d flow daemon (`/api/state`, `/api/flow/switch`) は React の `useFlowWatch` が担当する。
+  Viewer は mode mismatch で自動遷移せず、calib 中の案内 banner と managed run の再キャリブ切替だけを出す。
+  Subject wizard は approve 後の `next_step` を表示し、daemon 管理下では run への自動遷移を追従する。
+- `web/extrinsic_calibration` はまだ vanilla JS のため、`web-ui/public/flow.js` を root asset として残して
+  `/flow.js` を配信する。`web/dual_rtmpose` / `web/subject_calibration` は復活させない。
 - Python 2D フォールバック (`dual_rtmpose_web.py`) も `WEB_DIR` を `web-ui/dist` に（3D 無しでも graceful degrade）。
 
 ## 将来計画（今回スコープ外・設計だけ通す）
@@ -93,5 +101,8 @@ web-ui/  (Vite + React + TS, web/ と並置, dist は .gitignore)
 - **別ホスト/デスクトップ想定**: `localStorage['fitra.apiBase']='http://<jetson-ip>:8000'` を設定し、proxy 無しでも実 Jetson に接続できる。
 - **prod (dist 配信)**: `pnpm build` → Crow 再起動し `/` と `/subject-calib` が同一 SPA を配信、全機能
   （VMT alignment 適用 / SlimeVR correction / calib state 遷移）が動作。
+- **flow daemon**: `GET /api/state` に応じて viewer の banner / calib link / managed run の再キャリブボタンが切り替わる。
+  subject approve 後は `next_step` 表示から run へ自動遷移する。`/extrinsic-calib` は legacy UI のまま `/flow.js`
+  を読み、solve 後に calib-subject へ追従する。
 - ビルド: `cd web-ui && pnpm build`（tsc -b + vite build）が通る / `cmake --build cpp/build -j` がパス差し替え後も通る。
 - スキーマ互換: 旧 UI と同一バンドルで 2D/3D 描画・stats 値が一致（目視 + 主要数値突合）。

@@ -5,9 +5,29 @@ import { getJson, postJson } from "./transport";
 import type {
   AutoAlignResponse,
   CorrectionsResponse,
+  FlowMode,
+  FlowState,
+  FlowSwitchResponse,
   VmtAlignment,
   VmtAlignmentResponse,
 } from "../types/bundle";
+
+// ---- Flow daemon -----------------------------------------------------------
+
+export function fetchFlowState(): Promise<FlowState> {
+  return getJson<FlowState>("/api/state");
+}
+
+export async function requestFlowSwitch(mode: FlowMode): Promise<FlowSwitchResponse> {
+  const { res, data } = await postJson<FlowSwitchResponse>(
+    "/api/flow/switch",
+    { mode },
+  );
+  if (!res.ok || (data && data.ok === false)) {
+    return { ok: false, err: data?.err || `HTTP ${res.status}` };
+  }
+  return data ?? { ok: true };
+}
 
 // ---- VMT alignment ---------------------------------------------------------
 
@@ -91,7 +111,7 @@ export function fetchCalibState<T = Record<string, unknown>>(): Promise<T> {
   return getJson<T>("/api/calib/state");
 }
 
-export async function postCalib<T = { ok?: boolean; err?: string }>(
+export async function postCalib<T = { ok?: boolean; err?: string; next_step?: string }>(
   action: "preflight" | "start" | "cancel" | "retake" | "approve",
   body?: unknown,
 ): Promise<T> {

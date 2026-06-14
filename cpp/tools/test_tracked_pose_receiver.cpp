@@ -193,6 +193,43 @@ void test_bundle_dispatch() {
     CHECK(stats.tracked_pose_messages == 3);
 }
 
+// Hardened dispatch_packet_: a bundle element whose 32-bit size would overflow
+// off+elem_size must be rejected (not bypass the bound), null/empty data must
+// not crash, and stats must record the rejection.
+void test_malformed_bundle_rejected() {
+    HmdPoseBus hmd_bus;
+    ControllerPoseBus controller_bus;
+    fitra::vmt::TrackedPoseReceiverOptions opts;
+    fitra::vmt::TrackedPoseReceiver rx(hmd_bus, controller_bus, opts);
+
+    // Bundle header + one element claiming a near-UINT32_MAX size. With the old
+    // off+elem_size check this overflowed and bypassed the bound; now rejected.
+    std::vector<std::uint8_t> b;
+    b.insert(b.end(), {'#','b','u','n','d','l','e','\0'});
+    for (int i = 0; i < 8; ++i) b.push_back(0);  // timetag
+    be32(b, 0xfffffff0u);                        // bogus element size
+    b.insert(b.end(), 8, 0);                      // a few payload bytes
+    CHECK(!rx.ingest_packet(b.data(), b.size()));
+
+    // A zero-size element is also rejected.
+    std::vector<std::uint8_t> z;
+    z.insert(z.end(), {'#','b','u','n','d','l','e','\0'});
+    for (int i = 0; i < 8; ++i) z.push_back(0);
+    be32(z, 0u);
+    CHECK(!rx.ingest_packet(z.data(), z.size()));
+
+    // Null / empty input must not dereference.
+    CHECK(!rx.ingest_packet(nullptr, 0));
+    CHECK(!rx.ingest_packet(b.data(), 0));
+
+    // No element was ever accepted, so no pose reached the buses and no packet
+    // counted as delivered.
+    auto stats = rx.stats();
+    CHECK(stats.packets_total == 0);
+    CHECK(!hmd_bus.snapshot(100.0).have_any);
+    CHECK(!controller_bus.snapshot(100.0).have_any);
+}
+
 void test_legacy_parse_still_works() {
     HmdPose h;
     h.valid = true;
@@ -222,6 +259,7 @@ int main() {
     test_tracked_roundtrip();
     test_role_parser();
     test_bundle_dispatch();
+    test_malformed_bundle_rejected();
     test_legacy_parse_still_works();
     if (g_fail) {
         std::fprintf(stderr, "test_tracked_pose_receiver: %d failures\n", g_fail);

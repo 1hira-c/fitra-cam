@@ -10,6 +10,7 @@
 
 #include "vmt/vmt_protocol.hpp"
 #include "slimevr/tracker_extract.hpp"
+#include "geom/world_convention.hpp"
 
 namespace {
 
@@ -40,6 +41,26 @@ void test_pos_cardinals() {
     expect_near(z.x,  0.0f, 1e-6f, "pos +Z.x");
     expect_near(z.y,  1.0f, 1e-6f, "pos +Z.y");
     expect_near(z.z,  0.0f, 1e-6f, "pos +Z.z");
+}
+
+// Regression net: the wire position helper must agree byte-for-byte with the
+// single geom::fitra_to_vmt_basis() (the one source of truth). If someone
+// edits one without the other, this fails. Checks arbitrary (non-cardinal)
+// coordinates so it pins the full basis, not just the axes.
+void test_pos_matches_geom_basis() {
+    using fitra::vmt::world_pos_to_vmt;
+    const double pts[][3] = {
+        {1.3, -2.1, 0.7}, {-0.4, 0.9, -1.6}, {2.5, 2.5, 2.5}, {0.0, -3.3, 1.1}};
+    for (const auto& p : pts) {
+        auto wire = world_pos_to_vmt(static_cast<float>(p[0]),
+                                     static_cast<float>(p[1]),
+                                     static_cast<float>(p[2]));
+        fitra::geom::Point3<fitra::geom::frame::FitraWorld> pf(p[0], p[1], p[2]);
+        auto pv = fitra::geom::fitra_to_vmt_basis() * pf;
+        expect_near(wire.x, static_cast<float>(pv.v[0]), 1e-5f, "geom basis pos.x");
+        expect_near(wire.y, static_cast<float>(pv.v[1]), 1e-5f, "geom basis pos.y");
+        expect_near(wire.z, static_cast<float>(pv.v[2]), 1e-5f, "geom basis pos.z");
+    }
 }
 
 void test_quat_cardinals() {
@@ -170,6 +191,7 @@ void test_alignment_yaw_quat_left_multiply() {
 int main() {
     try {
         test_pos_cardinals();
+        test_pos_matches_geom_basis();
         test_quat_cardinals();
         test_index_mapping();
         test_index_base_mapping();

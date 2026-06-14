@@ -20,6 +20,8 @@
 #include <opencv2/core.hpp>
 #include <opencv2/objdetect/aruco_detector.hpp>
 
+#include "geom/frames.hpp"
+
 namespace fitra::lift {
 
 // One configured marker face: an AprilTag 36h11 ID and the physical side length
@@ -41,7 +43,7 @@ struct MarkerBoardConfig {
 struct TagDetection {
     int                        face_id = 0;
     std::array<cv::Point2f, 4> corners{};      // image px, aruco order (TL,TR,BR,BL)
-    cv::Matx44d                T_cam_face{};    // object(face) → camera (from PnP)
+    geom::T_cam_marker         T_cam_face{};    // object(face) → camera (from PnP)
     double                     reproj_rms_px = 0.0;
     bool                       pose_ok = false;
 };
@@ -77,7 +79,7 @@ bool solve_tag_pose(const std::array<cv::Point2f, 4>& corners,
                     double tag_size_m,
                     const cv::Mat& K,
                     const cv::Mat& dist,
-                    cv::Matx44d& T_cam_face,
+                    geom::T_cam_marker& T_cam_face,
                     double& reproj_rms_px);
 
 // Object-space corners of a square tag (side `s`) centred at the face origin,

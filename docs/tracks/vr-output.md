@@ -40,6 +40,15 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-14 — React WebUI を flow daemon に追従
+`Develop` の pose-3d flow daemon 取り込みに合わせ、旧 `web/dual_rtmpose` / `web/subject_calibration`
+へ入っていた mode 追従 UI を Vite/React SPA へ移植。`GET /api/state` / `POST /api/flow/switch`
+を `web-ui` の typed API + `useFlowWatch` で扱い、viewer は自動 redirect せず banner と
+再キャリブ切替ボタンを表示、subject wizard は approve 後の `next_step` と run への自動遷移を追従する。
+legacy の `/extrinsic-calib` は未移植のため、`web-ui/public/flow.js` を root static asset として残し
+`/flow.js` 互換を維持。Crow の既定 static path は `app/paths` 側で `web-ui/dist` に統一。
+→ [design/vr-output-webui-vite-react.md](../design/vr-output-webui-vite-react.md)
+
 ### 2026-06-08 — VMT pose relay wire spec (HMD + 左右 controller の統合受信)
 controller-marker extrinsic calibration で controller pose が必要になり、旧 PoC の
 `/fitra/hmd_pose` + `/fitra/controller_pose` 別ポート構成は運用に乗らないと判断。VMT Manager 側から

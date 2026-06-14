@@ -3,11 +3,30 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-05-29)
+## 現状 (2026-06-12)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
 **kinematic-tree (root = hip_center, children = parent-relative offset)** で動く。
+
+**プロセスは排他 RunMode (`run` / `calib-subject` / `calib-extrinsic`) で動く**
+([design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md) M1–M4
+実装済み)。mode は既存フラグから導出 (`--calibrate` → calib-subject、`--extrinsic-calib` or
+`--excal-replay` → calib-extrinsic)。calib↔runtime の契約は **YAML 成果物のみ**
+(CalibrationSet / SubjectProfile) + プロセス再起動 — ライブ再注入 (triangulator ホットスワップ /
+IK ホットリロード / tap mux) はコンパイルレベルで存在しない。構築は `cpp/src/app/` の
+builder + モード runner (main.cpp は dispatch のみ)。calib-extrinsic は TRT 非依存の
+decode-only で、`--excal-replay <dir>` により `tools/excal_record` セッションから実機レスで
+solve まで再現できる (live↔replay 等価性は `test_excal_replay` で固定)。
+
+**主経路は flow daemon** ([design/pose-3d-flow-daemon.md](../design/pose-3d-flow-daemon.md))。
+`./main --daemon --config session.yaml` がモードモジュール (同一バイナリ + モードフラグ) を
+1 つずつ fork/exec し、exit code (80/81/82) で連鎖する: excal solve → calib-subject →
+approve → run の自動連鎖、`POST /api/flow/switch` による任意切替、クラッシュ時は run へ
+自動復帰 (3 連続で give-up)。daemon 自身はソケット/CUDA/TRT に触れない。モジュールは
+`--flow-managed` でのみ flow 挙動が有効になり、手動起動は従来どおり (exit 0 + 再起動案内)。
+web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完結する。
+運用手順は [runbook-pose-3d-calibration.md](../runbook-pose-3d-calibration.md)。
 
 ### 設計原則 / live な制約
 
@@ -67,6 +86,139 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-14 — flow daemon PR29 レビュー対応 (堅牢化 + 特殊 ID / subject 省略時の遷移修正)
+PR #29 のレビュー指摘 (Gemini + self-review) への後追い対応。(1) `daemon.cpp`: シグナル
+ハンドラを `SignalGuard` RAII 化し復帰時に旧 disposition を戻す (dangling `&stop` 防止)、
+fork 前に argv を構築 + `execv`→`execvp` (PATH 探索 / async-signal-safe)、
+`std::filesystem::exists` を `error_code` 版へ (常駐中の throw 防止)。(2) `subject_id` を
+wizard と同じ `CalibrationSession::sanitize_id` で正規化 (`alice.v1`→`alicev1` 等で run が
+profile を読めない不具合)、`sanitize_id` を public 化。(3) subject 未設定 daemon では
+extrinsic solve 後に calib-subject を飛ばし run へ直接遷移 (子の `--calibrate requires
+--calib-subject-id` クラッシュ回避)。(4) `/api/flow/switch` の `mode` 非文字列で 500 を
+返さない型ガード。(5) `flow.js`: `/api/state` 404 (Python fallback) を再起動扱いせず
+watcher 停止。ctest 全 21 件 pass。design doc なし (changelog のみ)。
+→ [design/pose-3d-flow-daemon.md](../design/pose-3d-flow-daemon.md)
+
+### 2026-06-13 — pose relay punch (calib で controller pose が来ない問題の修正)
+カスタム VMT driver は受信パケットの送信元 IP を学習して pose を返す構成
+(`refs/VirtualMotionTracker` CommunicationManager.cpp Phase 15.5)。VMT publisher を
+持たない calib-extrinsic は Jetson から一切送信せず IP が学習されないため、controller/
+HMD pose relay が一切来なかった。対処: relay receiver (`TrackedPoseReceiver`) の bind
+ソケットから `vmt.host:vmt.port` へ定期 OSC punch (`/fitra/punch`) を送り、VMT に IP を
+学習させる。全 relay 経路 (calib-extrinsic / run / hmd-listen) で有効。ローカル UDP で
+punch 送信 (src=受信ポート 39571・OSC 20B・1s 間隔) を実証。将来は broadcast/multicast
+での自動ディスカバリ (PC IP 設定不要化) が残課題。
+→ [design/pose-3d-flow-daemon.md](../design/pose-3d-flow-daemon.md)
+
+### 2026-06-12 — flow daemon: main の常駐 daemon 化とモードのモジュール起動 (M1–M4 完了)
+`./main --daemon --config session.yaml` で main が常駐 daemon になり、モードモジュール
+(同一バイナリ + モードフラグ) を fork/exec して exit code (80/81/82) で連鎖する。
+M1 = flow 基盤 (`app/flow.hpp` FlowControl、`POST /api/flow/switch`、`/api/state.managed`、
+managed 時の calib 自動連鎖、`--flow-managed` / `--no-vmt-out` / `--no-slimevr-out`、
+approve 応答 next_step)。M2 = daemon 本体 (`app/daemon.{hpp,cpp}`: argv 合成 / exit 判定 /
+initial auto 判定の純関数 + spawn/wait ループ、`--daemon` / `--daemon-initial`、SIGTERM 転送、
+crash→run fallback + 3 連続 give-up、新 ctest `test_flow_daemon` は stub スクリプトで実
+spawn 連鎖まで固定)。M3 = web (`/flow.js` の /api/state 追従: calib ページは次モードへ自動
+遷移、ビューワはバナー + managed 時の再キャリブ切替ボタン)。M4 = 本ドキュメント群。
+検討した代替 (外部 supervisor スクリプト / self-exec / reverse-proxy / 制御別ポート) の
+棄却理由と union YAML 運用規約は設計 doc 参照。実機 3 段通しはユーザー後日。
+M2 後の検証で SIGINT/SIGTERM 停止の不具合 (SIGINT が子に非転送で waitpid block /
+SIGTERM が stop を立てず crash respawn) を発見し、両シグナルを「stop 設定 + 子へ
+SIGINT 転送」の共通ハンドラに統一して修正 (`test_flow_daemon` に SIGTERM→rc0 を追加)。
+→ [design/pose-3d-flow-daemon.md](../design/pose-3d-flow-daemon.md)
+
+### 2026-06-11 — 専念モード化のドキュメント整備 (M5、M1–M5 完了)
+track doc 現状節をモード分離後アーキへ更新、`cpp-migration-plan.md` のレイアウト節に
+`app/` composition root の注記を追加、設計 doc に実装記録 (doc 未記載だった実装判断 +
+意図的挙動変更 + 残検証) を追記。3 段フロー (excal → subject → run) と
+`excal_record` / `--excal-replay` の運用手順を
+[runbook-pose-3d-calibration.md](../runbook-pose-3d-calibration.md) として新設。
+**残**: 実機での 3 段フロー通し確認と実録 fixture からの solve 再現。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
+### 2026-06-11 — calib-extrinsic オフライン replay (--excal-replay) + live↔replay 等価性 ctest (専念モード化 M4)
+`tools/excal_record` セッション (JPEG 連番 + ペア済み frames.jsonl) を `ExcalInputSource` の
+replay 実装 (`pipeline/excal_replay_input`) として再生し、`--excal-replay <dir>` 単独で
+calib-extrinsic を無人実行 (collect→solve→YAML、カメラ・SteamVR・web 不要、solve 失敗は
+EXIT_FAILURE)。決定性の要: frames.jsonl の**行順逐次投入** (velocity 推定の prev 状態が
+セッション全体で 1 本のため per-cam 分割や ts 再ソートは等価性を壊す) と、記録時確定の
+`running_ok` を再判定しないこと。等価性 ctest (`test_excal_replay`) は合成 AprilTag フレームを
+recorder フォーマットで一時 dir に書き、同一 JPEG バイト列を on_frame 直叩きと replay 経路の
+両方に通して sample 列の bit-exact 一致を固定 (`samples_snapshot()` を比較用に追加)。
+parser (`parse_excal_frame_line`) の strict reject も固定。実録 fixture での solve 再現確認は
+実機作業として残 (M5 runbook に手順)。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
+### 2026-06-11 — composition root 抽出 + Crow ルートのモード別モジュール化 (専念モード化 M3)
+main.cpp (~1030 行) の構築シーケンスを `cpp/src/app/` の builder
+(trt_stack / camera_builder / threed_builder / pose_relay_builder / output_builder /
+server_builder / stats_loop) + モード runner (mode_run / mode_calib_subject /
+mode_calib_extrinsic) へ抽出。main.cpp は config parse → validate → RunMode dispatch のみ
+(~260 行、ほぼ help テキスト)。Crow は calib/excal ルート群を `web/crow_routes_setup.cpp` に
+分離し (deps 構造体渡し、session 未 attach なら静的ページ含め未登録)、共有 JSON helper を
+`web/crow_util.hpp` へ。`GET /api/state` を常設し mode ラベルを返す — viewer の calib 導線は
+mode に応じて表示。挙動変更は web 表面のみ: run モードで `/subject-calib`・`/extrinsic-calib`
+静的ページも 404 に、calib-subject での hmd-listen 受信は廃止 (消費者が存在しなかった)。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
+### 2026-06-11 — ライブ再注入の物理削除 + calib-extrinsic 軽量ループ化 (専念モード化 M2)
+calib↔runtime のプロセス内再注入経路をコンパイルレベルで削除:
+`MultiCameraDriver::set_triangulator` (triangulator ホットスワップ)、`IkSolver::reload_from_profile`
+(approve 後の IK ホットリロード)、`CrowServer::set_extrinsic_calib_solved_callback`、frame tap の
+excal/calib 状態分岐 mux。calib-extrinsic は `ExcalInputSource` 抽象 (新 `pipeline/excal_input_source.hpp`)
+越しの軽量 capture ループ (`app/excal_live_input` + `app/excal_runner`、新 static lib `fitra_app`) に
+載せ替え、TRT 初期化・MultiCameraDriver・publisher を一切構築しない (decode-only。
+`--det-engine`/`--pose-engine` も不要に)。solve 成功は `ExtrinsicCalibSession::set_on_solved` 経由で
+auto-exit し、`/api/excal/solve` 応答と web UI に再起動コマンド (`next_step`) を提示。
+approve 後の wizard も run モード再起動のガイダンスログに置換。replay (M4) は同じ
+`ExcalInputSource` 経路に載る。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
+### 2026-06-11 — RunMode 導入 + モード別構築ゲーティング (専念モード化 M1)
+`run_mode(MainOptions)` で排他 RunMode (`run` / `calib-subject` / `calib-extrinsic`) を導出し
+(既存フラグから導出、invocation 互換)、main.cpp の構築をモードでゲート: CalibrationSession +
+`calib_recording_flag` 配布は calib-subject 限定、ExtrinsicCalibSession は calib-extrinsic 限定、
+SlimeVR/VMT publisher は run 限定 (`--slimevr-out`/`--vmt-out` × `--extrinsic-calib` を validate
+で排他化)。run モードの `/api/calib/*` は 503 スタブ廃止で未登録 (GET 404 / POST 405)。
+挙動変更: calib 中の tracker 出力停止、run での wizard API 消滅。ライブ再注入の削除は M2。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
+### 2026-06-10 — キャリブレーション専念モード化の設計 doc (M0、実装は別途)
+「初期設定・キャリブ中に他モジュールは動かなくてよい」という前提合意を受け、subject wizard /
+controller-marker extrinsic と live パイプラインの同居 + ライブ再注入 (IK ホットリロード・
+Triangulator ホットスワップ・frame tap 多重化) を解消する設計を記録。1 バイナリのまま排他
+RunMode (`run` / `calib-subject` / `calib-extrinsic`) に分け、モード間の受け渡しを YAML 成果物
+(CalibrationSet / SubjectProfile) + プロセス再起動のみへ縮退。excal→subject の同一プロセス続行
+UX は再起動ガイダンスへ置換 (案C' 同一プロセス再構築は teardown リスクで没、案B 別バイナリ化は
+build graph 手術が先で将来含み)。到達目標としてオフライン replay を追加: calib-extrinsic を
+サンプル動画 + 記録済み VR 座標 (JSONL) だけで solve まで再現可能にし、live↔replay 等価性を
+ctest で固定する (M4)。記録側の単体ツール `tools/excal_record` (MJPEG パススルー JPEG 連番 +
+frame↔pose ペア済み frames.jsonl、main 非依存・TRT 実行不要) は本エントリで先行実装済み —
+実機 2 カメラ + 擬似 OSC pose でスモーク確認 (30fps×2 維持・ペアリング/単調 ts 検証)。
+モード分離本体の M1〜M5 は別ブランチ。
+→ [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)
+
+### 2026-06-10 — 座標フレームを型レベルで区別 (split-brain 再発を型で防止)
+3D 数学が素の `cv::Matx44d` / `cv::Vec3d` で、フレーム意味論が変数名とコメントだけに宿っていた問題に対し、
+SE(3) レイヤ (extrinsic solver / triangulation / calib I/O / calib session) へ phantom-typed
+`geom::Transform<To,From>` 代数を導入。中間フレーム不一致の合成と world 種別 (fitra Z-up / VMT Y-up) の
+取り違えをコンパイルエラー化する。3 箇所に散在していた Z-up↔Y-up 変換を単一の `geom::fitra_to_vmt_basis()` /
+`vmt_to_fitra_basis()` に集約 (`extrinsic_calib_session` の `kVmtWorldToFitra` を置換、wire 変換は実装据置で
+test クロスチェック)。leaf (`Joint3D`/kalman/IK/wire) は現状維持し「常に fitra Z-up」を不変条件で固定。
+2026-06-09 の split-brain リグレッションの根因 (型で防げない frame 混同) を構造的に塞ぐ。挙動・数値は不変。
+→ [design/pose-3d-typed-coordinate-frames.md](../design/pose-3d-typed-coordinate-frames.md)
+
+### 2026-06-10 — subject calib の drift ゲートを post-IK 値へ戻す (pose 判定不能を修正)
+2026-06-09 の pre-IK skeleton 化で、calibration tap に渡す `bone_drift_pct` まで pre-IK の
+measured 値に変えてしまい、`PoseRecognizer` の `max_bone_drift_pct` (~10%) ゲートを毎フレーム超過
+→ ポーズが永久に検出されず IK 較正に入れない回帰を生んでいた (身長入力済みでも不可)。post-IK
+skeleton は bone 長が model にクランプされ drift ≈ 0 (=従来動いていた緩いゲート) なのに対し、生の
+pre-IK 三角測量は容易に 10% を超えるのが原因。**角度の算出元は measured (pre-IK) skeleton のまま**
+(hinge clamp バイアス回避は維持) で、**tap に渡す drift だけ post-IK 値へ戻す**よう
+`MultiCameraDriver::maybe_update_3d` を修正。measured skeleton のコピーは tap がある時だけ取得し
+live path のコストは増やさない。`test_pose_recognizer` に「有効な T-pose は低 drift で in_band、
+高 drift では `bone_drift` 軸で reject」を固定。
+
 ### 2026-06-09 — extrinsic (研究) — 床 AprilTag SfM マップ方式を検討
 共視不要の静的アンカー代替を整理。床 + 可搬スタンド (壁不要) に大判 AprilTag を配置し、スマホ全景
 撮影で SfM マップを自動復元 → 各カメラを共通マップに localize する。案A/案B の却下理由 (同時共視不能
@@ -76,16 +228,22 @@ drift 実測リファレンスにも使える。未実装・設計フェーズ�
 → [research/floor-apriltag-sfm-map.md](../research/floor-apriltag-sfm-map.md)
 (設計doc 案D に相互リンク: [design/pose-3d-controller-marker-extrinsic.md](../design/pose-3d-controller-marker-extrinsic.md))
 
-### 2026-06-09 — hand-eye extrinsics を fitra Z-up world frame で書き出し
+### 2026-06-09 — hand-eye extrinsics を fitra Z-up で書き出し (検証シーンは VMT Y-up 維持)
 controller-marker hand-eye の解 `T_cam←world` は controller pose と同じ VMT/SteamVR **Y-up** frame
-で出るため、Z-up 前提の WebUI 3D viewer で床が垂直に表示され (カメラ中心 z が負)、live 3D / SlimeVR
-出力も誤った frame に乗っていた。`ExtrinsicCalibSession::solve_and_write` の単一境界で各 `T_cw` に
-基底変換 (`world_pos_to_vmt` の回転 Rx(−90°) の逆 = 世界軸の付け替え) を右から掛け、fitra Z-up へ
-再表現してから書き出すよう修正。`coordinate_system` ラベルも z-up へ上書き。世界軸の回転なので相対
-extrinsic・基線長は不変、絶対姿勢だけが Z-up に揃う。`extrinsics_json` (WebUI live preview) も同じ
-変換済み解を参照。`test_extrinsic_calib_session` に「絶対 `T_cw` が ground truth×basis change と一致
-(回転 ~0°)・未変換とは ~90° 異なる・ラベルが z-up」を固定。詳細は
+で出るため、Z-up 前提の downstream (triangulation・IK・メイン ws3d viewer・SlimeVR・solve 後の live
+hot-swap) で床が垂直に表示され (カメラ中心 z が負) 誤った frame に乗っていた。`solve_and_write` で
+**永続化 YAML を作るときだけ** 各 `T_cw` に基底変換 (`world_pos_to_vmt` の回転 Rx(−90°) の逆 = 世界軸
+の付け替え) を右から掛け fitra Z-up へ再表現し、`coordinate_system` ラベルも z-up へ上書き。一方
+`/extrinsic-calib` の 3D 検証シーン (`scene.js`) は `/api/excal/extrinsics` のカメラと
+`/api/excal/poses` の live HMD/コントローラ姿勢を同一 frame に重ねる道具で、live 姿勢が VMT Y-up・床
+Y=0 のため、`extrinsics_json` (=`solution_`) は **無変換 (VMT Y-up) のまま** 維持する。世界軸の回転
+なので相対 extrinsic・基線長は不変、永続化側の絶対姿勢だけが Z-up に揃う。`test_extrinsic_calib_session`
+に「書き出し `T_cw` が ground truth×basis change と一致 (回転 ~0°)・未変換とは ~90° 異なる・ラベルが
+z-up」と「`extrinsics_json` の cam 中心が VMT frame のまま」を固定。詳細は
 `docs/design/pose-3d-controller-marker-extrinsic.md`。
+
+> 注: 当初 `extrinsics_json` も Z-up に変換したが、検証シーンでカメラだけ Z-up・live 姿勢が Y-up と
+> なりカメラが別位置に出る回帰を生んだため、変換を永続化 YAML 限定へ修正 (同日)。
 
 ### 2026-06-09 — subject calibration の角度判定を pre-IK skeleton 化
 subject calib の `PoseRecognizer` が live publish と同じ post-IK skeleton を見ていたため、身長 prior

@@ -140,6 +140,10 @@ struct MainOptions {
     // receives the controller pose on a parallel UDP channel, taps camera
     // frames into the collection session, and writes extrinsics on solve.
     bool        excal_enabled        = false;
+    // Offline replay: a tools/excal_record session directory (JPEG sequence +
+    // frames.jsonl). Non-empty implies calib-extrinsic mode and runs
+    // collect→solve unattended — no cameras, no SteamVR, no web.
+    std::string excal_replay;
     // Intrinsics-only calibration YAML (extrinsics ignored). Empty → reuse
     // three_d.calib.
     std::string excal_intrinsics;
@@ -159,7 +163,32 @@ struct MainOptions {
     int         excal_controller_port = 39572;
     std::string excal_controller_bind = "0.0.0.0";
     double      excal_controller_stale_ms = 200.0;
+
+    // Flow daemon (docs/design/pose-3d-flow-daemon.md). CLI-only — how the
+    // process is launched is not part of the YAML schema. `flow_managed` is
+    // set by the daemon on spawned mode modules; it enables the
+    // /api/flow/switch route and the calib auto-chain exit codes.
+    bool        daemon         = false;   // --daemon: spawn mode modules
+    std::string daemon_initial = "auto";  // auto|run|calib-subject|calib-extrinsic
+    bool        flow_managed   = false;   // --flow-managed (daemon-spawned)
 };
+
+// Exclusive run mode, derived from the calibration flags (invocation stays
+// flag-compatible; see docs/design/pose-3d-calib-mode-separation.md). Each
+// mode builds only what it needs; the only thing crossing a mode boundary is
+// YAML on disk. Derive after validate_options() — it enforces the flags'
+// mutual exclusivity.
+enum class RunMode { Run, CalibSubject, CalibExtrinsic };
+
+RunMode run_mode(const MainOptions& opts);
+
+// Stable label for logs and /api/state: "run" / "calib-subject" /
+// "calib-extrinsic".
+const char* run_mode_name(RunMode mode);
+
+// Inverse of run_mode_name(): parse a mode label (e.g. from
+// /api/flow/switch or --daemon-initial). Returns false on an unknown label.
+bool parse_run_mode_name(const std::string& name, RunMode& out);
 
 // Schema version embedded in every YAML config. Bump only when a
 // non-backwards-compatible change to the YAML layout is required.

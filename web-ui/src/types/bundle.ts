@@ -142,6 +142,18 @@ export interface Bundle3D {
 
 // ---- REST payloads ---------------------------------------------------------
 
+export type FlowMode = "run" | "calib-subject" | "calib-extrinsic";
+
+export interface FlowState {
+  mode: FlowMode;
+  managed?: boolean;
+}
+
+export interface FlowSwitchResponse {
+  ok?: boolean;
+  err?: string;
+}
+
 export interface VmtAlignmentResponse {
   alignment?: VmtAlignment;
   enabled?: boolean;

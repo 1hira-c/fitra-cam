@@ -19,6 +19,7 @@
 // from the Crow / main thread. All shared state is mutex-guarded.
 
 #include <cstddef>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -103,7 +104,7 @@ public:
     // through the motion gate and burst accumulator (no image / PnP). Returns
     // true if the observation passed the motion gate (was buffered).
     bool ingest(std::size_t cam_idx, int face_id,
-                const cv::Matx44d& T_cam_face,
+                const geom::T_cam_marker& T_cam_face,
                 const ControllerObservation& ctrl);
 
     // A single face decoded in one camera's most recent frame (for the live UI).
@@ -116,8 +117,20 @@ public:
     // Solve from accumulated samples; on success write the extrinsics YAML.
     bool solve_and_write(std::string& err);
 
+    // Invoked once per successful solve_and_write() (state → kSolved), after
+    // the session mutex is released. Wire before frames start flowing; main
+    // uses it to auto-exit calib-extrinsic mode once the YAML is written
+    // (docs/design/pose-3d-calib-mode-separation.md).
+    void set_on_solved(std::function<void()> fn) { on_solved_ = std::move(fn); }
+
     ExtrinsicCalibState state() const;
     std::size_t         sample_count() const;
+    // Copy of the accumulated samples (flushed bursts only). Used by the
+    // live↔replay equivalence test to compare sample streams element-wise.
+    std::vector<lift::ExtrinsicSample> samples_snapshot() const {
+        std::lock_guard<std::mutex> g(mu_);
+        return samples_;
+    }
     std::string         state_json() const;        // self-contained, for Crow
     // Per-camera intrinsics + solved T_cam_world (world→camera) for the 3D
     // verification scene. Empty `cameras` until a solve succeeds.
@@ -171,6 +184,7 @@ private:
 
     lift::ExtrinsicSolution solution_;
     std::string             last_error_;
+    std::function<void()>   on_solved_;
 
     // Pre-built AprilTag detector. The inner cv::aruco::ArucoDetector is heavy
     // to construct (dictionary lookup + parameter setup); on_frame() is the hot

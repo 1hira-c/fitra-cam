@@ -29,7 +29,7 @@ bool solve_tag_pose(const std::array<cv::Point2f, 4>& corners,
                     double tag_size_m,
                     const cv::Mat& K,
                     const cv::Mat& dist,
-                    cv::Matx44d& T_cam_face,
+                    geom::T_cam_marker& T_cam_face,
                     double& reproj_rms_px) {
     if (tag_size_m <= 0.0 || K.empty()) return false;
 
@@ -44,11 +44,12 @@ bool solve_tag_pose(const std::array<cv::Point2f, 4>& corners,
 
     cv::Mat R;
     cv::Rodrigues(rvec, R);  // 3x3 CV_64F
-    T_cam_face = cv::Matx44d::eye();
+    cv::Matx44d raw = cv::Matx44d::eye();
     for (int r = 0; r < 3; ++r) {
-        for (int c = 0; c < 3; ++c) T_cam_face(r, c) = R.at<double>(r, c);
-        T_cam_face(r, 3) = tvec.at<double>(r);
+        for (int c = 0; c < 3; ++c) raw(r, c) = R.at<double>(r, c);
+        raw(r, 3) = tvec.at<double>(r);
     }
+    T_cam_face = geom::T_cam_marker::from_raw(raw);
 
     // Reprojection RMS over the 4 corners.
     std::vector<cv::Point2f> proj;
