@@ -1,0 +1,139 @@
+/* Ported from legacy web/subject_calibration/styles.css, scoped under .subject-page. */
+.subject-page {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+               "Noto Sans CJK JP", "Yu Gothic", sans-serif;
+  background: #0e1116;
+  color: #e6e6e6;
+  min-height: 100vh;
+}
+.subject-page header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5em 1em;
+  background: #181e26;
+  border-bottom: 1px solid #2a323d;
+}
+.subject-page header h1 { margin: 0; font-size: 1.1em; }
+.subject-page .conn-group { display: flex; gap: 0.5em; }
+.subject-page .conn {
+  font-size: 0.85em;
+  padding: 0.15em 0.6em;
+  background: #2a323d;
+  border-radius: 0.25em;
+  color: #e6e6e6;
+  text-decoration: none;
+}
+.subject-page .conn.link { background: #2d4762; }
+.subject-page main { padding: 1em; display: flex; flex-direction: column; gap: 1em; }
+.subject-page .card {
+  background: #181e26;
+  border: 1px solid #2a323d;
+  border-radius: 0.4em;
+  padding: 1em;
+}
+.subject-page .card h2 { margin: 0 0 0.4em 0; font-size: 1em; color: #6cf; }
+.subject-page .card h3 { margin: 0 0 0.3em 0; font-size: 0.95em; color: #ccc; }
+
+.subject-page .form-row { display: flex; flex-wrap: wrap; gap: 0.8em; align-items: end; }
+.subject-page .form-row label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.85em;
+  color: #aab2bc;
+}
+.subject-page .form-row input {
+  margin-top: 0.2em;
+  padding: 0.3em 0.5em;
+  background: #0e1116;
+  color: #e6e6e6;
+  border: 1px solid #2a323d;
+  border-radius: 0.25em;
+  width: 10em;
+}
+
+.subject-page .actions { margin-top: 0.7em; display: flex; gap: 0.5em; align-items: center; }
+.subject-page .actions button {
+  padding: 0.4em 0.9em;
+  background: #2d4762;
+  color: #fff;
+  border: 1px solid #3b5e85;
+  border-radius: 0.3em;
+  cursor: pointer;
+}
+.subject-page .actions button:hover:not(:disabled) { background: #3b5e85; }
+.subject-page .actions button:disabled { background: #2a323d; color: #777; cursor: not-allowed; border-color: #2a323d; }
+.subject-page .checkbox { font-size: 0.85em; color: #aab2bc; user-select: none; }
+
+.subject-page .msg { margin-top: 0.5em; font-size: 0.85em; color: #ffa; min-height: 1.1em; }
+.subject-page .msg.err { color: #f88; }
+
+.subject-page .capture-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1em;
+}
+.subject-page .bar {
+  height: 0.6em;
+  background: #0e1116;
+  border: 1px solid #2a323d;
+  border-radius: 0.3em;
+  overflow: hidden;
+  margin: 0.2em 0 0.1em 0;
+}
+.subject-page .bar-fill { height: 100%; transition: width 0.1s linear; }
+.subject-page .bar-fill.hold { background: linear-gradient(90deg, #6cf, #6f6); }
+.subject-page .bar-fill.rec  { background: linear-gradient(90deg, #fa6, #f88); }
+.subject-page .bar-label { font-size: 0.8em; color: #aab2bc; }
+.subject-page .status-line { font-size: 0.85em; color: #aab2bc; margin-top: 0.4em; }
+
+.subject-page .angles { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+.subject-page .angles td { padding: 0.2em 0.4em; border-bottom: 1px solid #2a323d; }
+.subject-page .angles td:nth-child(2) { text-align: right; font-variant-numeric: tabular-nums; }
+
+.subject-page .poses-list {
+  margin-top: 0.6em;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5em;
+}
+.subject-page .pose-item {
+  padding: 0.4em;
+  border: 1px solid #2a323d;
+  border-radius: 0.3em;
+  font-size: 0.85em;
+}
+.subject-page .pose-item.recorded { background: #163; border-color: #2a5; }
+.subject-page .pose-item.current { outline: 2px solid #6cf; }
+.subject-page .pose-item .name { font-weight: bold; }
+.subject-page .pose-item button {
+  margin-top: 0.3em;
+  padding: 0.15em 0.5em;
+  background: #2a323d;
+  color: #e6e6e6;
+  border: 1px solid #3a4350;
+  border-radius: 0.25em;
+  cursor: pointer;
+  font-size: 0.8em;
+}
+
+.subject-page .badge {
+  padding: 0.05em 0.5em;
+  border-radius: 0.3em;
+  background: #2a323d;
+  font-weight: bold;
+}
+.subject-page .badge.pass { background: #163; color: #afa; }
+.subject-page .badge.warn { background: #642; color: #fc8; }
+.subject-page .badge.fail { background: #511; color: #f88; }
+
+.subject-page .log {
+  background: #0e1116;
+  border: 1px solid #2a323d;
+  border-radius: 0.3em;
+  padding: 0.5em;
+  font-size: 0.78em;
+  max-height: 14em;
+  overflow: auto;
+  white-space: pre-wrap;
+}

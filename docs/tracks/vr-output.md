@@ -40,6 +40,35 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-15 — React WebUI の Gemini レビュー堅牢化 (バグ修正)
+PR #33 の Gemini Code Assist 指摘対応。(1) `SkeletonViewer.dispose()` が geometry/material
+を解放しておらず、route 往来 (`/` ↔ `/subject-calib`) の度に GPU リソースが蓄積していたのを、
+`scene.traverse` で全 geometry/material を一度ずつ dispose するよう修正 (Jetson の共有メモリでは
+OOM 要因)。(2) `draw2d` で黒背景塗り後に `canvas.width/height` を代入していたため寸法変更フレームで
+背景がクリアされていたのを、リサイズを塗り前へ移動。(3) `useWebSocketJson` のクリーンアップで
+`onclose` のみ null 化していたのを全ハンドラ (onopen/onerror/onmessage) を null 化し、unmount 後の
+遅延発火を防止。(4) `SubjectCalibPage` / `VmtAutoForm` / `ViewerPage` の各 API 呼び出しに try-catch
+を追加し、`fetch` reject 時の未ハンドル例外と `switchPending` のスタックを解消。preflight に hold/frames
+の NaN バリデーションを追加。なお commitBase の race 指摘は React 18 の discrete event flush 順
+(state flush → macrotask) で実害なく、既存実装を維持。
+
+### 2026-06-15 — Vite dev proxy / VMT 数値欄のレビュー修正 (バグ修正)
+Codex レビュー対応。(1) HMR dev で `/extrinsic-calib` を開いた際、legacy SPA が叩く
+`/api/excal/*` が Vite proxy 未登録で Crow に届かず start/stop/solve が失敗していたのを、
+`web-ui/vite.config.ts` に `/api/excal` を追加して解消。(2) `VmtAlignForm` の base 数値欄が
+React `onChange`(毎キーストローク発火) で `Number()` 即時送信していたため、入力途中の空文字 / `-`
+が `0` / `NaN`(→JSON null) として live alignment に流れていた。編集中テキストを `baseDraft` で
+保持し、blur/Enter の commit 時のみ有限値を検証して送信する旧 UI 挙動 (DOM `change` 相当) へ戻した。
+
+### 2026-06-14 — React WebUI を flow daemon に追従
+`Develop` の pose-3d flow daemon 取り込みに合わせ、旧 `web/dual_rtmpose` / `web/subject_calibration`
+へ入っていた mode 追従 UI を Vite/React SPA へ移植。`GET /api/state` / `POST /api/flow/switch`
+を `web-ui` の typed API + `useFlowWatch` で扱い、viewer は自動 redirect せず banner と
+再キャリブ切替ボタンを表示、subject wizard は approve 後の `next_step` と run への自動遷移を追従する。
+legacy の `/extrinsic-calib` は未移植のため、`web-ui/public/flow.js` を root static asset として残し
+`/flow.js` 互換を維持。Crow の既定 static path は `app/paths` 側で `web-ui/dist` に統一。
+→ [design/vr-output-webui-vite-react.md](../design/vr-output-webui-vite-react.md)
+
 ### 2026-06-08 — VMT pose relay wire spec (HMD + 左右 controller の統合受信)
 controller-marker extrinsic calibration で controller pose が必要になり、旧 PoC の
 `/fitra/hmd_pose` + `/fitra/controller_pose` 別ポート構成は運用に乗らないと判断。VMT Manager 側から
@@ -80,6 +109,19 @@ hold・外れ値ゲート(8–16 m/s freeze)は温存(swing/twist 本体を per-
 CLI を追加。新規 ctest(位置 6 / 回転 3 / config 1)。Phase 14 で見送った One Euro の昇格。
 → [design/vr-output-one-euro-filter.md](../design/vr-output-one-euro-filter.md)
 
+### 2026-06-03 — 継続キャリブ「自動追従」トグルを React UI へ移植 (バグ修正)
+Develop マージで判明した移行漏れの解消。WebUI 移行 (2026-06-01) 時点では新 Vite/React UI の
+「自動追従」チェックボックスが `disabled` プレースホルダ (`未接続`) のままで、レガシー JS
+(`web/dual_rtmpose/app.js`) にあった継続キャリブ操作が未配線だった。design doc なし(既存の
+[design/vr-output-continuous-hmd-calibration.md](../design/vr-output-continuous-hmd-calibration.md) /
+[design/vr-output-webui-vite-react.md](../design/vr-output-webui-vite-react.md) の範囲、changelog のみ)。
+- `api.ts`: `postContinuousAlign(enabled)` を追加(`/api/vmt/alignment/auto/continuous/{start,stop}`)。
+- `VmtAutoForm.tsx`: チェックボックスを `continuous_align` ブロックで制御。null=disabled (`未接続`)、
+  present=有効でラベルに `ON (cells n/m)` / `OFF` を表示、`onChange` で start/stop POST、失敗は `<output>` に表示。
+- `statsText.ts`: 3D stats に `cont_align` / `cont_cells` / `cont_resid_m` / `cont_updates` 行を復元(レガシー版と同レイアウト)。
+- `ViewerPage.tsx`: ws3d バンドルの `continuous_align` を ~6Hz スロットル state 経由で `VmtAutoForm` へ供給。
+- バックエンド側 (`publisher_loop` の ws3d fragment) は 2026-06-03 レビュー修正で対応済み、フロント無改修で接続。
+
 ### 2026-06-03 — 継続キャリブのレビュー修正 (バグ修正)
 Codex + GitHub (gemini / Copilot) レビューで顕在化した点を修正。design doc なし(changelog のみ)。
 - `SampleReservoir::key_of`: 負座標で符号付き左シフト UB(VMT x/z は通常移動で負になる)→ uint32 経由 pack。負4象限が別セルになる回帰テスト追加。
@@ -88,6 +130,18 @@ Codex + GitHub (gemini / Copilot) レビューで顕在化した点を修正。d
 - `ramp`: `zero_at == full_at` の退化帯を step 関数化(「full_at で 1」契約を満たす)。
 - 自動追従 OFF 時に reservoir を `clear()`(OFF→ON で古セルを使った solve を防止)。HMD 速度計算の dt に下限(`>1e-4`)。
 - gemini の「`joints[19]` で範囲外アクセス」指摘は誤検知(`joints` は固定長 `std::array<,26>`、coco17 でも index 19 は valid=false の zero-init)。
+
+### 2026-06-01 — WebUI を Vite/React (TypeScript) へ移行
+旧バニラ JS フロント (`web/dual_rtmpose` 1450 行 + `web/subject_calibration`) を Vite/React/TS の単一 SPA
+(`web-ui/`) に移植。`BrowserRouter` で `/`→viewer・`/subject-calib`→wizard を出し分け、Crow は両ルートで
+同一 `dist/index.html` を返す (SPA fallback)。接続先は `lib/config.ts` の `httpUrl()`/`wsUrl()` に集約し、
+同一オリジン (Crow 配信/dev proxy) と絶対 URL (別ホスト/将来の Tauri/Wails デスクトップ) を 1 コードで賄う。
+HMR 開発は Vite dev server の proxy (`/ws`・`/ws3d` は `ws:true`) 経由で実データ表示。30Hz バンドルは ref +
+`requestAnimationFrame` で命令的描画、stats のみ ~6Hz スロットルで React state 更新。Three.js は依存パッケージ化
+(vendored 破棄)。WS/REST スキーマは不変。Crow は `guess_static_dir`/`guess_subject_calib_static_dir` を
+`web-ui/dist` に向けるのみ (ルート無改修)。Python キャリブ系 (`web/calibration`, :8010/:8020) は将来 C++ 化
+予定のため対象外。最終目標の VMT Manager 統合 (Tauri/Wails 単一 Windows アプリ) を見据えた設計。
+→ [design/vr-output-webui-vite-react.md](../design/vr-output-webui-vite-react.md)
 
 ### 2026-05-30 — 継続キャリブの cold-start ブースト
 初期収束が遅すぎる(実機で 1 分以上歩かないと位置が合わない)問題に対処。原因は fine の

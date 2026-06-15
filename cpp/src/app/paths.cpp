@@ -13,11 +13,11 @@ std::filesystem::path repo_root() {
 }  // namespace
 
 std::filesystem::path guess_static_dir() {
-    return repo_root() / "web" / "dual_rtmpose";
+    return repo_root() / "web-ui" / "dist";
 }
 
 std::filesystem::path guess_subject_calib_static_dir() {
-    return repo_root() / "web" / "subject_calibration";
+    return repo_root() / "web-ui" / "dist";
 }
 
 std::filesystem::path guess_extrinsic_calib_static_dir() {

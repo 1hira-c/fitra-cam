@@ -1,0 +1,29 @@
+{
+  "name": "fitra-cam-web-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "fitra-cam WebUI (Vite + React + TypeScript). Served by the C++ Crow server from dist/; built to migrate from the legacy vanilla web/ frontends.",
+  "packageManager": "pnpm@11.5.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.0",
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.169.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "~5.6.3",
+    "vite": "^6.0.3"
+  }
+}

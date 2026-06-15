@@ -1,0 +1,13 @@
+:root {
+  --bg: #111;
+  --fg: #eee;
+  --panel: #1a1a1a;
+  --accent: #4cf;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+#root { min-height: 100vh; }

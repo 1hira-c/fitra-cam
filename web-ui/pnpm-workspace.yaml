@@ -1,0 +1,5 @@
+# pnpm 11+ reads build-script allowlists here (no longer from package.json's
+# "pnpm" field). esbuild ships its native binary via a postinstall script that
+# pnpm blocks by default; vite's build needs it.
+allowBuilds:
+  esbuild: true

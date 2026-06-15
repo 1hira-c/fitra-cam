@@ -25,7 +25,11 @@ from fastapi.staticfiles import StaticFiles
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-WEB_DIR = REPO_ROOT / "web" / "dual_rtmpose"
+# Serve the Vite SPA build (shared with the C++ Crow server). This fallback is
+# 2D-only; the SPA degrades gracefully when /ws3d is absent. Build it first with
+# `pnpm build` in web-ui/. REPO_ROOT here is the python/ dir, so go up one
+# more to reach the actual repo root.
+WEB_DIR = REPO_ROOT.parent / "web-ui" / "dist"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 

@@ -32,8 +32,11 @@ x-volumes: &common-volumes
     - /dev/v4l:/dev/v4l:ro
     # engine cache (ホストと共有)。初回ビルド後はここに残り、再起動が秒オーダーになる。
     - ./outputs:/workspace/outputs
-    # 静的フロントエンドはホスト側を即時反映できるよう ro マウント。
+    # web/calibration (レガシーキャリブツール) はホスト側を即時反映できるよう ro マウント。
     - ./web:/workspace/web:ro
+    # SPA (web-ui/dist) はイメージ内ビルド済みを使う。ホストで `pnpm build` して
+    # 即時反映したい場合のみ以下を有効化 (ホストに dist が存在することが前提):
+    # - ./web-ui/dist:/workspace/web-ui/dist:ro
 
 x-devices: &common-devices
   devices:

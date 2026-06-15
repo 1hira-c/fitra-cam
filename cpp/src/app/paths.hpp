@@ -11,8 +11,8 @@
 
 namespace fitra::app {
 
-std::filesystem::path guess_static_dir();                 // <repo>/web/dual_rtmpose
-std::filesystem::path guess_subject_calib_static_dir();   // <repo>/web/subject_calibration
+std::filesystem::path guess_static_dir();                 // <repo>/web-ui/dist
+std::filesystem::path guess_subject_calib_static_dir();   // <repo>/web-ui/dist
 std::filesystem::path guess_extrinsic_calib_static_dir(); // <repo>/web/extrinsic_calibration
 std::filesystem::path guess_dump_tool_path();             // build/tools/dump_keypoints_3d
 
