@@ -263,6 +263,40 @@ set_target_properties(fitra_test_extrinsic_calib_session PROPERTIES
 
 add_test(NAME test_extrinsic_calib_session COMMAND fitra_test_extrinsic_calib_session)
 
+# Floor-AprilTag calibration session — ingest → solve → write → reload, with
+# the persisted T_cw checked against ground truth in fitra Z-up (no basis change).
+add_executable(fitra_test_floor_calib_session
+    test_floor_calib_session.cpp
+)
+
+target_link_libraries(fitra_test_floor_calib_session PRIVATE
+    fitra_pipeline
+)
+
+set_target_properties(fitra_test_floor_calib_session PROPERTIES
+    OUTPUT_NAME "test_floor_calib_session"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_floor_calib_session COMMAND fitra_test_floor_calib_session)
+
+# Floor-AprilTag replay equivalence — direct imdecode+on_frame vs ExcalReplayInput
+# must reach the identical accumulator state.
+add_executable(fitra_test_floor_calib_replay
+    test_floor_calib_replay.cpp
+)
+
+target_link_libraries(fitra_test_floor_calib_replay PRIVATE
+    fitra_pipeline
+)
+
+set_target_properties(fitra_test_floor_calib_replay PROPERTIES
+    OUTPUT_NAME "test_floor_calib_replay"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_floor_calib_replay COMMAND fitra_test_floor_calib_replay)
+
 # Offline replay for calib-extrinsic — frames.jsonl parser + live↔replay
 # sample-stream equivalence on a synthetic recorder-format session.
 add_executable(fitra_test_excal_replay

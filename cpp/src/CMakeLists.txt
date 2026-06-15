@@ -135,6 +135,7 @@ add_library(fitra_pipeline STATIC
     pipeline/snapshot.cpp
     pipeline/calibration_session.cpp
     pipeline/extrinsic_calib_session.cpp
+    pipeline/floor_calib_session.cpp
     pipeline/excal_replay_input.cpp
 )
 
@@ -210,6 +211,7 @@ add_library(fitra_app STATIC
     app/daemon.cpp
     app/excal_live_input.cpp
     app/excal_runner.cpp
+    app/floor_calib_runner.cpp
     app/mode_calib_extrinsic.cpp
     app/mode_calib_subject.cpp
     app/mode_run.cpp
