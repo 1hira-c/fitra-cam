@@ -40,6 +40,14 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-15 — Vite dev proxy / VMT 数値欄のレビュー修正 (バグ修正)
+Codex レビュー対応。(1) HMR dev で `/extrinsic-calib` を開いた際、legacy SPA が叩く
+`/api/excal/*` が Vite proxy 未登録で Crow に届かず start/stop/solve が失敗していたのを、
+`web-ui/vite.config.ts` に `/api/excal` を追加して解消。(2) `VmtAlignForm` の base 数値欄が
+React `onChange`(毎キーストローク発火) で `Number()` 即時送信していたため、入力途中の空文字 / `-`
+が `0` / `NaN`(→JSON null) として live alignment に流れていた。編集中テキストを `baseDraft` で
+保持し、blur/Enter の commit 時のみ有限値を検証して送信する旧 UI 挙動 (DOM `change` 相当) へ戻した。
+
 ### 2026-06-14 — React WebUI を flow daemon に追従
 `Develop` の pose-3d flow daemon 取り込みに合わせ、旧 `web/dual_rtmpose` / `web/subject_calibration`
 へ入っていた mode 追従 UI を Vite/React SPA へ移植。`GET /api/state` / `POST /api/flow/switch`

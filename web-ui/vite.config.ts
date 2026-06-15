@@ -31,6 +31,10 @@ export default defineConfig({
       "/api/vmt": { target: CROW },
       "/api/slimevr": { target: CROW },
       "/api/calib": { target: CROW },
+      // Legacy extrinsic-calib SPA (served at /extrinsic-calib) talks to the
+      // C++ Crow server via /api/excal/* — proxy it too or its fetches fall
+      // through to Vite and fail to parse as JSON during HMR dev.
+      "/api/excal": { target: CROW },
       "/extrinsic-calib": { target: CROW },
     },
   },

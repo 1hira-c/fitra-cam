@@ -31,6 +31,13 @@ export interface VmtAlignHandle {
 type Axes = Record<AxisKey, number>;
 const ZERO: Axes = { x: 0, y: 0, z: 0, yaw_deg: 0 };
 
+// In-progress text for each base <input>. While null the field shows the
+// committed numeric base; while a string the user is mid-edit and nothing is
+// sent. Mirrors the old UI which only posted on the DOM `change` (commit)
+// event, never on every keystroke.
+type Drafts = Record<AxisKey, string | null>;
+const NO_DRAFT: Drafts = { x: null, y: null, z: null, yaw_deg: null };
+
 function splitValue(key: AxisKey, total: number): { base: number; fine: number } {
   const step = BASE_STEP[key];
   const value = Number.isFinite(total) ? total : 0;
@@ -52,6 +59,7 @@ export const VmtAlignForm = forwardRef<VmtAlignHandle>(function VmtAlignForm(_pr
   const [status, setStatus] = useState<{ text: string; cls: string }>({ text: "loading", cls: "" });
   const [base, setBase] = useState<Axes>({ ...ZERO });
   const [fine, setFine] = useState<Axes>({ ...ZERO });
+  const [baseDraft, setBaseDraft] = useState<Drafts>({ ...NO_DRAFT });
   const baseRef = useRef(base);
   const fineRef = useRef(fine);
   baseRef.current = base;
@@ -72,6 +80,7 @@ export const VmtAlignForm = forwardRef<VmtAlignHandle>(function VmtAlignForm(_pr
     }
     setBase(nb);
     setFine(nf);
+    setBaseDraft({ ...NO_DRAFT });
   }, []);
 
   useImperativeHandle(ref, () => ({ writeForm }), [writeForm]);
@@ -117,6 +126,18 @@ export const VmtAlignForm = forwardRef<VmtAlignHandle>(function VmtAlignForm(_pr
         setStatus({ text: (e as Error).message || "apply failed", cls: "dead" });
       }
     }, delayMs);
+  };
+
+  // Commit a base field on blur/Enter, matching the old `change`-event timing.
+  // Empty / partial ("-", "1.") / non-finite input is rejected and the field
+  // reverts to the committed base instead of posting 0 or NaN (→ JSON null).
+  const commitBase = (key: AxisKey, raw: string) => {
+    const n = Number(raw);
+    if (raw.trim() !== "" && Number.isFinite(n)) {
+      setBase((b) => ({ ...b, [key]: n }));
+      if (enabled) schedulePost(0);
+    }
+    setBaseDraft((d) => ({ ...d, [key]: null }));
   };
 
   const onSubmit = async (ev: FormEvent) => {
@@ -186,12 +207,21 @@ export const VmtAlignForm = forwardRef<VmtAlignHandle>(function VmtAlignForm(_pr
               className="vmt-align-number"
               type="number"
               step={NUMBER_STEP[key]}
-              value={base[key]}
+              value={baseDraft[key] ?? formatInputNumber(base[key])}
               disabled={!enabled}
               aria-label={`${LABELS[key]} base`}
+              // Hold raw text while editing; only commit (and post) on
+              // blur/Enter so partial/invalid input never reaches live align.
               onChange={(e) => {
-                setBase((b) => ({ ...b, [key]: Number(e.target.value) }));
-                if (enabled) schedulePost(0);
+                const v = e.target.value;
+                setBaseDraft((d) => ({ ...d, [key]: v }));
+              }}
+              onBlur={(e) => commitBase(key, e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitBase(key, (e.target as HTMLInputElement).value);
+                }
               }}
             />
             <output className="vmt-align-total">{formatInputNumber(total(key))}</output>
