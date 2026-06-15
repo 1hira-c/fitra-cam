@@ -162,12 +162,18 @@ export function ViewerPage() {
     }
     setSwitchBanner(null);
     setSwitchPending(true);
-    const res = await requestFlowSwitch(mode);
-    if (res.ok) {
-      setSwitchPending(true);
-    } else {
+    try {
+      const res = await requestFlowSwitch(mode);
+      if (res.ok) {
+        setSwitchPending(true);
+      } else {
+        setSwitchPending(false);
+        setSwitchBanner({ text: `switch failed: ${res.err || "unknown error"}`, cls: "err" });
+      }
+    } catch (e) {
+      // A rejected fetch (backend down) must not leave switchPending stuck true.
       setSwitchPending(false);
-      setSwitchBanner({ text: `switch failed: ${res.err || "unknown error"}`, cls: "err" });
+      setSwitchBanner({ text: `switch failed: ${(e as Error).message || "unknown error"}`, cls: "err" });
     }
   }, []);
 

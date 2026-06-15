@@ -40,6 +40,18 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-15 — React WebUI の Gemini レビュー堅牢化 (バグ修正)
+PR #33 の Gemini Code Assist 指摘対応。(1) `SkeletonViewer.dispose()` が geometry/material
+を解放しておらず、route 往来 (`/` ↔ `/subject-calib`) の度に GPU リソースが蓄積していたのを、
+`scene.traverse` で全 geometry/material を一度ずつ dispose するよう修正 (Jetson の共有メモリでは
+OOM 要因)。(2) `draw2d` で黒背景塗り後に `canvas.width/height` を代入していたため寸法変更フレームで
+背景がクリアされていたのを、リサイズを塗り前へ移動。(3) `useWebSocketJson` のクリーンアップで
+`onclose` のみ null 化していたのを全ハンドラ (onopen/onerror/onmessage) を null 化し、unmount 後の
+遅延発火を防止。(4) `SubjectCalibPage` / `VmtAutoForm` / `ViewerPage` の各 API 呼び出しに try-catch
+を追加し、`fetch` reject 時の未ハンドル例外と `switchPending` のスタックを解消。preflight に hold/frames
+の NaN バリデーションを追加。なお commitBase の race 指摘は React 18 の discrete event flush 順
+(state flush → macrotask) で実害なく、既存実装を維持。
+
 ### 2026-06-15 — Vite dev proxy / VMT 数値欄のレビュー修正 (バグ修正)
 Codex レビュー対応。(1) HMR dev で `/extrinsic-calib` を開いた際、legacy SPA が叩く
 `/api/excal/*` が Vite proxy 未登録で Crow に届かず start/stop/solve が失敗していたのを、

@@ -128,20 +128,32 @@ export function SubjectCalibPage() {
     setPreflightMsg({ text: "", err: false });
     const sid = subjectId.trim();
     const h = parseFloat(heightCm) / 100.0;
+    const hold = parseFloat(holdSec);
+    const f = parseInt(frames, 10);
     if (!sid) return setPreflightMsg({ text: "subject_id is required", err: true });
     if (!(h > 0)) return setPreflightMsg({ text: "height invalid", err: true });
-    const res = await postCalib("preflight", {
-      subject_id: sid,
-      subject_height_m: h,
-      required_hold_sec: parseFloat(holdSec),
-      recording_frames_per_cam: parseInt(frames, 10),
-    });
-    setPreflightMsg({ text: res.ok ? "ready" : res.err || "failed", err: !res.ok });
+    if (!(hold > 0)) return setPreflightMsg({ text: "hold time invalid", err: true });
+    if (!(f > 0)) return setPreflightMsg({ text: "frames invalid", err: true });
+    try {
+      const res = await postCalib("preflight", {
+        subject_id: sid,
+        subject_height_m: h,
+        required_hold_sec: hold,
+        recording_frames_per_cam: f,
+      });
+      setPreflightMsg({ text: res.ok ? "ready" : res.err || "failed", err: !res.ok });
+    } catch (e) {
+      setPreflightMsg({ text: (e as Error).message || "network error", err: true });
+    }
   };
 
   const doStart = async () => {
-    const res = await postCalib("start", {});
-    if (!res.ok) setPreflightMsg({ text: res.err || "start failed", err: true });
+    try {
+      const res = await postCalib("start", {});
+      if (!res.ok) setPreflightMsg({ text: res.err || "start failed", err: true });
+    } catch (e) {
+      setPreflightMsg({ text: (e as Error).message || "start failed", err: true });
+    }
   };
 
   const doCancel = () => void postCalib("cancel", {});
@@ -149,14 +161,18 @@ export function SubjectCalibPage() {
 
   const doApprove = async () => {
     setReviewMsg({ text: "", err: false });
-    const res = await postCalib<{ ok?: boolean; err?: string; next_step?: string }>(
-      "approve",
-      { force },
-    );
-    setReviewMsg({
-      text: res.ok ? `approved - ${res.next_step || "profile written"}` : res.err || "approve failed",
-      err: !res.ok,
-    });
+    try {
+      const res = await postCalib<{ ok?: boolean; err?: string; next_step?: string }>(
+        "approve",
+        { force },
+      );
+      setReviewMsg({
+        text: res.ok ? `approved - ${res.next_step || "profile written"}` : res.err || "approve failed",
+        err: !res.ok,
+      });
+    } catch (e) {
+      setReviewMsg({ text: (e as Error).message || "approve failed", err: true });
+    }
   };
 
   return (

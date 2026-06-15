@@ -67,7 +67,13 @@ export function useWebSocketJson<T>(
       clearPing();
       if (reconnectTimer !== null) clearTimeout(reconnectTimer);
       if (ws) {
+        // Detach every handler, not just onclose: a buffered onmessage or a
+        // late onerror could otherwise fire after unmount and invoke the
+        // callback / setState on a dead component.
+        ws.onopen = null;
         ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
         ws.close();
       }
     };

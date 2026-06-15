@@ -45,13 +45,17 @@ export function VmtAutoForm({ hmdStatus, continuousAlign, onAlignmentResolved }:
 
   const onTpose = async () => {
     setResult("solving…");
-    const data = await postAutoTpose();
-    if (data.ok === false) {
-      setResult(data.err || "request failed");
-      return;
+    try {
+      const data = await postAutoTpose();
+      if (data.ok === false) {
+        setResult(data.err || "request failed");
+        return;
+      }
+      setResult(describeAutoResult(data.result));
+      if (data.result?.alignment) onAlignmentResolved(data.result.alignment);
+    } catch (e) {
+      setResult((e as Error).message || "request failed");
     }
-    setResult(describeAutoResult(data.result));
-    if (data.result?.alignment) onAlignmentResolved(data.result.alignment);
   };
 
   const stopMotion = async () => {
@@ -59,14 +63,18 @@ export function VmtAutoForm({ hmdStatus, continuousAlign, onAlignmentResolved }:
       clearTimeout(motionTimer.current);
       motionTimer.current = null;
     }
-    const data = await postMotionStop();
-    if (data.ok === false) {
-      setResult(data.err || "request failed");
-    } else {
-      setResult(describeAutoResult(data.result));
-      if (data.result?.status === "ok" && data.result.alignment) {
-        onAlignmentResolved(data.result.alignment);
+    try {
+      const data = await postMotionStop();
+      if (data.ok === false) {
+        setResult(data.err || "request failed");
+      } else {
+        setResult(describeAutoResult(data.result));
+        if (data.result?.status === "ok" && data.result.alignment) {
+          onAlignmentResolved(data.result.alignment);
+        }
       }
+    } catch (e) {
+      setResult((e as Error).message || "request failed");
     }
     setCollecting(false);
   };
@@ -74,16 +82,21 @@ export function VmtAutoForm({ hmdStatus, continuousAlign, onAlignmentResolved }:
   const startMotion = async () => {
     setCollecting(true);
     setResult("collecting…");
-    const data = await postMotionStart(DURATION_S, SAMPLE_HZ);
-    if (data.ok === false) {
+    try {
+      const data = await postMotionStart(DURATION_S, SAMPLE_HZ);
+      if (data.ok === false) {
+        setCollecting(false);
+        setResult(data.err || "request failed");
+        return;
+      }
+      motionTimer.current = setTimeout(
+        () => void stopMotion(),
+        Math.round((DURATION_S + 0.4) * 1000),
+      );
+    } catch (e) {
       setCollecting(false);
-      setResult(data.err || "request failed");
-      return;
+      setResult((e as Error).message || "request failed");
     }
-    motionTimer.current = setTimeout(
-      () => void stopMotion(),
-      Math.round((DURATION_S + 0.4) * 1000),
-    );
   };
 
   return (

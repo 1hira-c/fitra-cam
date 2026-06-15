@@ -142,6 +142,22 @@ export class SkeletonViewer {
   dispose(): void {
     window.removeEventListener("resize", this.onResize);
     this.controls?.dispose();
+
+    // Geometries/materials are GPU resources that survive scene removal; on a
+    // shared-memory device (Jetson) leaking them across route remounts can OOM
+    // the tab. Walk the scene and dispose each unique resource once.
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    this.scene.traverse((obj) => {
+      const mesh = obj as Partial<THREE.Mesh> & Partial<THREE.Line>;
+      if (mesh.geometry) geometries.add(mesh.geometry as THREE.BufferGeometry);
+      const mat = mesh.material;
+      if (Array.isArray(mat)) for (const m of mat) materials.add(m);
+      else if (mat) materials.add(mat as THREE.Material);
+    });
+    for (const g of geometries) g.dispose();
+    for (const m of materials) m.dispose();
+
     this.renderer?.dispose();
   }
 

@@ -11,6 +11,13 @@ export function drawCamera(
 ): void {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
+  // Resize BEFORE any painting: assigning canvas.width/height clears the bitmap
+  // and resets the 2D context state, so doing it after the black fill would wipe
+  // the background on every frame the dimensions change.
+  if (bundle && (canvas.width !== bundle.w || canvas.height !== bundle.h)) {
+    canvas.width = bundle.w;
+    canvas.height = bundle.h;
+  }
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (!bundle) {
@@ -18,10 +25,6 @@ export function drawCamera(
     ctx.font = "16px monospace";
     ctx.fillText("(no data)", 16, 32);
     return;
-  }
-  if (canvas.width !== bundle.w || canvas.height !== bundle.h) {
-    canvas.width = bundle.w;
-    canvas.height = bundle.h;
   }
   const color = CAM_COLORS[bundle.id % CAM_COLORS.length];
   ctx.strokeStyle = color;
