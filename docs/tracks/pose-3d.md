@@ -9,10 +9,16 @@ subject calibration。vr-output トラックの上流 (= tracker の単一 produ
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
 **kinematic-tree (root = hip_center, children = parent-relative offset)** で動く。
 
-**プロセスは排他 RunMode (`run` / `calib-subject` / `calib-extrinsic`) で動く**
+**プロセスは排他 RunMode (`run` / `calib-subject` / `calib-extrinsic` /
+`calib-extrinsic-floor`) で動く**
 ([design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md) M1–M4
 実装済み)。mode は既存フラグから導出 (`--calibrate` → calib-subject、`--extrinsic-calib` or
-`--excal-replay` → calib-extrinsic)。calib↔runtime の契約は **YAML 成果物のみ**
+`--excal-replay` → calib-extrinsic、`--floor-calib` or `--floor-replay` → calib-extrinsic-floor)。
+**extrinsic 校正は 2 方式**: controller-marker hand-eye (案C、VR コントローラ固定マーカー) と
+floor-apriltag PnP (案D、床に既知配置したタグへ各カメラを個別 localize・VR 不要、
+[design/pose-3d-floor-apriltag-extrinsic.md](../design/pose-3d-floor-apriltag-extrinsic.md))。
+WebUI `/extrinsic-calib` の方式トグル (= flow-switch) で選択でき、案D は出力 `T_cw` を
+fitra Z-up で無変換書出。calib↔runtime の契約は **YAML 成果物のみ**
 (CalibrationSet / SubjectProfile) + プロセス再起動 — ライブ再注入 (triangulator ホットスワップ /
 IK ホットリロード / tap mux) はコンパイルレベルで存在しない。構築は `cpp/src/app/` の
 builder + モード runner (main.cpp は dispatch のみ)。calib-extrinsic は TRT 非依存の
@@ -85,6 +91,23 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-06-15 — 床 AprilTag 既知配置 PnP による extrinsic 校正 (案D) コア実装
+VR を extrinsic チェーンから外す 2 つ目の extrinsic 方式。床に既知配置した AprilTag マップへ
+各カメラを多タグ PnP で個別 localize し、`T_cam←world` を **fitra Z-up で無変換書出** (案C の
+VmtWorld→FitraWorld 基底変換が無い)。新規: `lift/floor_tag_map` (FileStorage マップ I/O +
+grid)、`lift/floor_extrinsic_solver` (集約 solvePnP + 再投影 + 平面縮退検出、案a/b 共有の
+localize コア)、`pipeline/floor_calib_session` (静的前提のコーナー算術平均)、
+`RunMode::CalibExtrinsicFloor` + `app/mode_calib_extrinsic_floor` (`--floor-calib` live /
+`--floor-replay` 無人) + `floor_calib_runner`/`floor_live_input`。AprilTag 検出に CLAHE
+オプション追加 (案C/D 共通、検出律速の局所コントラスト不足対策)。WebUI は flow-switch で
+案C/案D を選択式に (`/extrinsic-calib` 方式トグル + Crow floor ルート、`PAGE_FOR_MODE` 追加、
+redirect を target ページ比較化)。intrinsics は校正解像度で PnP、出力 YAML はランタイム解像度
+(`T_cw` 解像度非依存)。設計 = [design/pose-3d-floor-apriltag-extrinsic.md](../design/pose-3d-floor-apriltag-extrinsic.md)
+(research [floor-apriltag-sfm-map.md](../research/floor-apriltag-sfm-map.md) から昇格、(b) スマホ
+SfM は research 残置)。ctest: test_floor_tag_map / test_floor_extrinsic_solver /
+test_floor_calib_session / test_floor_calib_replay / test_main_config (floor ケース追加)。
+実機の再投影 RMS / 平面縮退実値は高解像度 intrinsics 取得後に確定 (前提工程)。
 
 ### 2026-06-14 — flow daemon PR29 レビュー対応 (堅牢化 + 特殊 ID / subject 省略時の遷移修正)
 PR #29 のレビュー指摘 (Gemini + self-review) への後追い対応。(1) `daemon.cpp`: シグナル
