@@ -33,8 +33,10 @@ const ZERO: Axes = { x: 0, y: 0, z: 0, yaw_deg: 0 };
 
 // In-progress text for each base <input>. While null the field shows the
 // committed numeric base; while a string the user is mid-edit and nothing is
-// sent. Mirrors the old UI which only posted on the DOM `change` (commit)
-// event, never on every keystroke.
+// posted until commit (blur/Enter), never on every keystroke. Note an
+// <input type=number> reports "" (not "1." or "-") for intermediate-invalid
+// states, so a draft is always either a complete numeric string or "" — the
+// latter rejected on commit.
 type Drafts = Record<AxisKey, string | null>;
 const NO_DRAFT: Drafts = { x: null, y: null, z: null, yaw_deg: null };
 
@@ -128,14 +130,17 @@ export const VmtAlignForm = forwardRef<VmtAlignHandle>(function VmtAlignForm(_pr
     }, delayMs);
   };
 
-  // Commit a base field on blur/Enter, matching the old `change`-event timing.
-  // Empty / partial ("-", "1.") / non-finite input is rejected and the field
-  // reverts to the committed base instead of posting 0 or NaN (→ JSON null).
+  // Commit a base field on blur/Enter. Only acts when an edit is pending
+  // (baseDraft non-null), so a focus→blur with no change never re-commits the
+  // display-rounded value (formatInputNumber trims to 3 decimals). Empty /
+  // non-finite input is rejected and the field reverts to the committed base
+  // instead of posting 0 or NaN (→ JSON null).
   const commitBase = (key: AxisKey, raw: string) => {
+    if (baseDraft[key] === null) return;
     const n = Number(raw);
     if (raw.trim() !== "" && Number.isFinite(n)) {
       setBase((b) => ({ ...b, [key]: n }));
-      if (enabled) schedulePost(0);
+      schedulePost(0); // schedulePost re-checks enabledRef.current itself
     }
     setBaseDraft((d) => ({ ...d, [key]: null }));
   };
