@@ -9,6 +9,9 @@ window.FitraFlow = (() => {
     "run": "/",
     "calib-subject": "/subject-calib",
     "calib-extrinsic": "/extrinsic-calib",
+    // The floor (案D) and controller (案C) extrinsic methods share one page;
+    // it branches on the state JSON's "method" field.
+    "calib-extrinsic-floor": "/extrinsic-calib",
   };
 
   function watch(opts) {
@@ -35,9 +38,13 @@ window.FitraFlow = (() => {
       }
       const recovered = down;
       down = false;
-      if (state.mode !== opts.page && opts.redirect !== false
-          && PAGE_FOR_MODE[state.mode]) {
-        location.href = PAGE_FOR_MODE[state.mode];
+      // Redirect by target page, not mode label: two modes (calib-extrinsic /
+      // calib-extrinsic-floor) map to the same page, so comparing the target
+      // against the current path avoids a reload loop when only the method
+      // differs.
+      const target = PAGE_FOR_MODE[state.mode];
+      if (opts.redirect !== false && target && target !== location.pathname) {
+        location.href = target;
         return;
       }
       if (opts.onState) opts.onState(state, recovered);

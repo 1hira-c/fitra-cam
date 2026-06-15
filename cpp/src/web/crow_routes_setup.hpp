@@ -18,7 +18,7 @@
 
 #include "pipeline/calibration_session.hpp"
 
-namespace fitra::pipeline { class ExtrinsicCalibSession; }
+namespace fitra::pipeline { class ExtrinsicCalibSession; class FloorCalibSession; }
 namespace fitra::vmt { class HmdPoseBus; class ControllerPoseBus; }
 
 namespace fitra::web::detail {
@@ -42,5 +42,18 @@ struct ExcalRouteDeps {
     std::string             static_dir;
 };
 void register_excal_routes(crow::SimpleApp& app, const ExcalRouteDeps& deps);
+
+// Floor-AprilTag calibration (案D). Reuses the same /extrinsic-calib page and
+// /api/excal/{state,start,stop,solve} names as the controller path — the two
+// run in separate processes (a flow-switch respawn), and the shared page
+// branches on the state JSON's "method" field. There is no controller pose, so
+// /api/excal/poses is not registered for the floor path.
+struct FloorCalibRouteDeps {
+    pipeline::FloorCalibSession* session = nullptr;  // nullptr → no routes
+    std::string                  next_step;
+    std::string                  static_dir;
+};
+void register_floor_calib_routes(crow::SimpleApp& app,
+                                 const FloorCalibRouteDeps& deps);
 
 }  // namespace fitra::web::detail

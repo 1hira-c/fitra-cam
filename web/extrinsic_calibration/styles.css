@@ -47,6 +47,9 @@ main { padding: 1em; display: flex; flex-direction: column; gap: 1em; max-width:
 }
 .actions button:hover:not(:disabled) { background: #3b5e85; }
 .actions button:disabled { background: #2a323d; color: #777; cursor: not-allowed; border-color: #2a323d; }
+/* Active method in the method selector (the disabled current-method button). */
+.actions button.active { background: #1f7a4d; border-color: #2fae6f; color: #fff; }
+.actions button.active:disabled { background: #1f7a4d; color: #cfe; border-color: #2fae6f; }
 
 .msg { margin-top: 0.5em; font-size: 0.85em; color: #ffa; min-height: 1.1em; }
 .msg.err { color: #f88; }

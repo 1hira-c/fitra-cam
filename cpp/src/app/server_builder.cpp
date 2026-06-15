@@ -29,7 +29,8 @@ std::unique_ptr<web::CrowServer> make_server(const config::MainOptions& opts,
                 config::RunMode next;
                 if (!config::parse_run_mode_name(mode_name, next)) {
                     err = "unknown mode: " + mode_name
-                          + " (expected run|calib-subject|calib-extrinsic)";
+                          + " (expected run|calib-subject|calib-extrinsic"
+                            "|calib-extrinsic-floor)";
                     return false;
                 }
                 flow->request_switch(next);

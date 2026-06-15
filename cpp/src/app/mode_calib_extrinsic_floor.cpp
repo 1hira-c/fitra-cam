@@ -9,11 +9,14 @@
 #include "app/camera_builder.hpp"
 #include "app/floor_calib_runner.hpp"
 #include "app/floor_live_input.hpp"
+#include "app/server_builder.hpp"
 #include "lift/calib_io.hpp"
 #include "lift/floor_tag_map.hpp"
 #include "pipeline/excal_replay_input.hpp"
 #include "pipeline/floor_calib_session.hpp"
+#include "pipeline/snapshot.hpp"
 #include "util/logging.hpp"
+#include "web/crow_server.hpp"
 
 namespace fitra::app {
 
@@ -125,25 +128,43 @@ int run_mode_calib_extrinsic_floor(const config::MainOptions& opts,
     auto session = build_floor_session(opts, n_cams);
     if (!session) return EXIT_FAILURE;
 
+    const bool has_subject_stage = !opts.calib_subject_id.empty();
     const config::RunMode next_after_solve =
-        !opts.calib_subject_id.empty() ? config::RunMode::CalibSubject
-                                       : config::RunMode::Run;
-    session->set_on_solved([&flow, next_after_solve, &opts]() {
-        FITRA_LOG_INFO("floor-calib: solved. extrinsics written to {}", opts.floor_out);
+        has_subject_stage ? config::RunMode::CalibSubject : config::RunMode::Run;
+    const std::string guidance = flow.managed
+        ? (has_subject_stage
+              ? "extrinsics written to " + opts.floor_out
+                + ". Flow daemon switches to subject-calib mode."
+              : "extrinsics written to " + opts.floor_out
+                + ". Flow daemon switches to run mode.")
+        : "extrinsics written to " + opts.floor_out + ". Restart in the next mode.";
+    session->set_on_solved([&flow, next_after_solve, guidance]() {
+        FITRA_LOG_INFO("floor-calib: solved. {}", guidance);
         if (flow.managed) flow.request_switch(next_after_solve);
         else              flow.stop.store(true);
     });
 
-    // M7 attaches a Crow server here for web start/solve. For now collection
-    // runs headless and solves on stop (Ctrl-C / flow stop).
+    // Crow server for web start/solve (the /extrinsic-calib page, floor branch).
+    pipeline::SnapshotBus bus{n_cams};
+    auto server = make_server(opts, config::RunMode::CalibExtrinsicFloor, bus,
+                              nullptr, &flow);
+    if (server) {
+        server->set_floor_calib_session(session.get());
+        server->set_floor_calib_next_step(guidance);
+        server->start();
+    }
+
     session->start();
-    FITRA_LOG_INFO("floor-calib: collecting (map={}, out={}). Stop the process "
-                   "to solve + write.", opts.floor_map, opts.floor_out);
+    FITRA_LOG_INFO("floor-calib: collecting (map={}, out={}). Solve from the web "
+                   "UI, or stop the process to solve + write.",
+                   opts.floor_map, opts.floor_out);
 
     FloorLiveInput input{std::move(cams.sources)};
     input.start();
     run_floor_calib_loop(input, *session, flow.stop);
     input.stop();
+
+    if (server) server->stop();
 
     if (session->state() == pipeline::FloorCalibState::kSolved) {
         FITRA_LOG_INFO("floor-calib: already solved; keeping {}", opts.floor_out);
