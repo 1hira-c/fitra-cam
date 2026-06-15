@@ -78,6 +78,15 @@ std::vector<std::string> module_argv(config::RunMode mode,
             args.push_back("--no-vmt-out");
             args.push_back("--no-slimevr-out");
             break;
+        case config::RunMode::CalibExtrinsicFloor:
+            // VR-free floor path: --floor-map / --floor-intrinsics come from
+            // --config (extrinsic_calib.floor_*). --floor-calib forces the mode
+            // regardless of the config's default method, so a flow switch into
+            // floor works even when the file selects controller.
+            args.push_back("--floor-calib");
+            args.push_back("--no-vmt-out");
+            args.push_back("--no-slimevr-out");
+            break;
     }
     return args;
 }
@@ -94,9 +103,10 @@ DaemonAction next_action(bool exited_normally, int exit_code,
         config::RunMode next;
         bool is_flow = true;
         switch (exit_code) {
-            case kExitFlowToRun:            next = config::RunMode::Run; break;
-            case kExitFlowToCalibSubject:   next = config::RunMode::CalibSubject; break;
-            case kExitFlowToCalibExtrinsic: next = config::RunMode::CalibExtrinsic; break;
+            case kExitFlowToRun:                 next = config::RunMode::Run; break;
+            case kExitFlowToCalibSubject:        next = config::RunMode::CalibSubject; break;
+            case kExitFlowToCalibExtrinsic:      next = config::RunMode::CalibExtrinsic; break;
+            case kExitFlowToCalibExtrinsicFloor: next = config::RunMode::CalibExtrinsicFloor; break;
             default: is_flow = false; break;
         }
         if (is_flow) {
@@ -128,7 +138,12 @@ config::RunMode initial_mode(const config::MainOptions& opts,
         && config::parse_run_mode_name(opts.daemon_initial, m)) {
         return m;
     }
-    if (!extrinsics_exists) return config::RunMode::CalibExtrinsic;
+    if (!extrinsics_exists) {
+        // The configured method (extrinsic_calib.method: floor) picks which
+        // extrinsic stage to enter first.
+        return opts.floor_calib_enabled ? config::RunMode::CalibExtrinsicFloor
+                                        : config::RunMode::CalibExtrinsic;
+    }
     if (!profile_exists)    return config::RunMode::CalibSubject;
     return config::RunMode::Run;
 }

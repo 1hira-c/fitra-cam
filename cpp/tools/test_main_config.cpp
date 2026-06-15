@@ -523,6 +523,62 @@ extrinsic_calib:
     check(threw, "--excal-replay + --calibrate must throw");
 }
 
+void test_floor_calib_yaml_cli_and_mode() {
+    using fitra::config::RunMode;
+    using fitra::config::parse_run_mode_name;
+    using fitra::config::run_mode;
+    using fitra::config::run_mode_name;
+
+    // YAML: method: floor flips the floor path on; floor_* keys load.
+    auto p = write_tmp("floor_calib.yaml", R"(schema: fitra_main_config_v1
+extrinsic_calib:
+  method: floor
+  floor_map: /tmp/floor_map.yaml
+  floor_intrinsics: /tmp/intr.yaml
+  floor_fisheye: true
+  out: /tmp/extr.yaml
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(opts.floor_calib_enabled, "method: floor sets floor_calib_enabled");
+    check(opts.floor_map == "/tmp/floor_map.yaml", "floor_map loads");
+    check(opts.floor_fisheye, "floor_fisheye loads");
+    check(opts.floor_out == "/tmp/extr.yaml", "floor shares extrinsic_calib.out");
+    check(run_mode(opts) == RunMode::CalibExtrinsicFloor,
+          "method: floor -> calib-extrinsic-floor mode");
+
+    // CLI replay path: validates with no cameras (replay brings frames), but
+    // still needs --floor-map and intrinsics.
+    MainOptions o2;
+    std::vector<std::string> argv_buf{"--floor-replay", "/tmp/sess",
+                                      "--floor-map", "/tmp/m.yaml",
+                                      "--floor-intrinsics", "/tmp/intr.yaml"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(o2, static_cast<int>(argv.size()), argv.data());
+    check(run_mode(o2) == RunMode::CalibExtrinsicFloor,
+          "--floor-replay -> calib-extrinsic-floor mode");
+    validate_options(o2);  // must not throw
+
+    check(std::string(run_mode_name(RunMode::CalibExtrinsicFloor)) ==
+              "calib-extrinsic-floor", "calib-extrinsic-floor label");
+    RunMode m;
+    check(parse_run_mode_name("calib-extrinsic-floor", m) &&
+              m == RunMode::CalibExtrinsicFloor, "parse calib-extrinsic-floor");
+
+    // --floor-map missing must throw.
+    MainOptions o3;
+    o3.floor_calib_enabled = true;
+    o3.cam_paths[0] = "/dev/null";
+    o3.floor_intrinsics = "/tmp/intr.yaml";
+    bool threw = false;
+    try { validate_options(o3); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--floor-map", "floor missing map msg");
+    }
+    check(threw, "floor without --floor-map must throw");
+}
+
 void test_flow_managed_and_publisher_negation() {
     using fitra::config::RunMode;
     using fitra::config::parse_run_mode_name;
@@ -641,6 +697,7 @@ const TestCase kTests[] = {
     {"run_mode_derivation_and_publisher_exclusivity",
                                                test_run_mode_derivation_and_publisher_exclusivity},
     {"excal_replay_yaml_cli_and_mode",         test_excal_replay_yaml_cli_and_mode},
+    {"floor_calib_yaml_cli_and_mode",          test_floor_calib_yaml_cli_and_mode},
     {"flow_managed_and_publisher_negation",    test_flow_managed_and_publisher_negation},
     {"daemon_flags_and_validate",              test_daemon_flags_and_validate},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},

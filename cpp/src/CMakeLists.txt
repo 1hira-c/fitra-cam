@@ -212,7 +212,9 @@ add_library(fitra_app STATIC
     app/excal_live_input.cpp
     app/excal_runner.cpp
     app/floor_calib_runner.cpp
+    app/floor_live_input.cpp
     app/mode_calib_extrinsic.cpp
+    app/mode_calib_extrinsic_floor.cpp
     app/mode_calib_subject.cpp
     app/mode_run.cpp
     app/output_builder.cpp

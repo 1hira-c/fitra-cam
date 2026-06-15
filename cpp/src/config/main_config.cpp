@@ -232,6 +232,11 @@ void load_extrinsic_calib(const YAML::Node& section, MainOptions& out) {
         "lin_vel_max", "ang_vel_max", "burst_min", "min_samples",
         "controller_role",
         "controller_port", "controller_bind", "controller_stale_ms",
+        // Method selector + floor-AprilTag path (案D).
+        "method",
+        "floor_map", "floor_replay_dir", "floor_intrinsics",
+        "floor_out_intrinsics", "floor_burst_min", "floor_max_reproj_px",
+        "floor_fisheye",
     };
     check_keys(section, allowed, "extrinsic_calib");
     if (section["enabled"])         out.excal_enabled        = parse_scalar<bool>(section["enabled"],               "extrinsic_calib.enabled");
@@ -248,6 +253,25 @@ void load_extrinsic_calib(const YAML::Node& section, MainOptions& out) {
     if (section["controller_port"]) out.excal_controller_port = parse_scalar<int>(section["controller_port"],      "extrinsic_calib.controller_port");
     if (section["controller_bind"]) out.excal_controller_bind = parse_scalar<std::string>(section["controller_bind"], "extrinsic_calib.controller_bind");
     if (section["controller_stale_ms"]) out.excal_controller_stale_ms = parse_scalar<double>(section["controller_stale_ms"], "extrinsic_calib.controller_stale_ms");
+
+    // Method selector: "controller" (default, 案C) | "floor" (案D). Selecting
+    // floor flips the floor path on so run_mode() routes to calib-extrinsic-floor;
+    // the floor.* keys below configure it. `out` is shared by both methods.
+    if (section["method"]) {
+        const std::string m = parse_scalar<std::string>(section["method"], "extrinsic_calib.method");
+        if (m == "floor")           out.floor_calib_enabled = true;
+        else if (m == "controller") out.floor_calib_enabled = false;
+        else throw std::runtime_error("extrinsic_calib.method must be 'controller' or 'floor'");
+    }
+    if (section["floor_map"])            out.floor_map            = parse_scalar<std::string>(section["floor_map"],            "extrinsic_calib.floor_map");
+    if (section["floor_replay_dir"])     out.floor_replay         = parse_scalar<std::string>(section["floor_replay_dir"],     "extrinsic_calib.floor_replay_dir");
+    if (section["floor_intrinsics"])     out.floor_intrinsics     = parse_scalar<std::string>(section["floor_intrinsics"],     "extrinsic_calib.floor_intrinsics");
+    if (section["floor_out_intrinsics"]) out.floor_out_intrinsics = parse_scalar<std::string>(section["floor_out_intrinsics"], "extrinsic_calib.floor_out_intrinsics");
+    if (section["floor_burst_min"])      out.floor_burst_min      = parse_scalar<int>(section["floor_burst_min"],              "extrinsic_calib.floor_burst_min");
+    if (section["floor_max_reproj_px"])  out.floor_max_reproj_px  = parse_scalar<double>(section["floor_max_reproj_px"],       "extrinsic_calib.floor_max_reproj_px");
+    if (section["floor_fisheye"])        out.floor_fisheye        = parse_scalar<bool>(section["floor_fisheye"],               "extrinsic_calib.floor_fisheye");
+    // The floor path shares extrinsic_calib.out as its output target.
+    if (section["out"])                  out.floor_out            = out.excal_out;
 }
 
 }  // namespace
@@ -421,6 +445,15 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--excal-controller-port")   { out.excal_controller_port = std::atoi(need(i, "--excal-controller-port")); }
         else if (a == "--excal-controller-bind")   { out.excal_controller_bind = need(i, "--excal-controller-bind"); }
         else if (a == "--excal-controller-stale-ms"){ out.excal_controller_stale_ms = std::stod(need(i, "--excal-controller-stale-ms")); }
+        else if (a == "--floor-calib")             { out.floor_calib_enabled = true; }
+        else if (a == "--floor-map")               { out.floor_map = need(i, "--floor-map"); }
+        else if (a == "--floor-replay")            { out.floor_replay = need(i, "--floor-replay"); }
+        else if (a == "--floor-intrinsics")        { out.floor_intrinsics = need(i, "--floor-intrinsics"); }
+        else if (a == "--floor-out-intrinsics")    { out.floor_out_intrinsics = need(i, "--floor-out-intrinsics"); }
+        else if (a == "--floor-out")               { out.floor_out = need(i, "--floor-out"); }
+        else if (a == "--floor-burst-min")         { out.floor_burst_min = std::atoi(need(i, "--floor-burst-min")); }
+        else if (a == "--floor-max-reproj-px")     { out.floor_max_reproj_px = std::stod(need(i, "--floor-max-reproj-px")); }
+        else if (a == "--floor-fisheye")           { out.floor_fisheye = true; }
         else if (a == "--daemon")            { out.daemon = true; }
         else if (a == "--daemon-initial")    { out.daemon_initial = need(i, "--daemon-initial"); }
         else if (a == "--flow-managed")      { out.flow_managed = true; }
@@ -431,6 +464,9 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
 }
 
 RunMode run_mode(const MainOptions& opts) {
+    if (opts.floor_calib_enabled || !opts.floor_replay.empty()) {
+        return RunMode::CalibExtrinsicFloor;
+    }
     if (opts.excal_enabled || !opts.excal_replay.empty()) {
         return RunMode::CalibExtrinsic;
     }
@@ -440,17 +476,19 @@ RunMode run_mode(const MainOptions& opts) {
 
 const char* run_mode_name(RunMode mode) {
     switch (mode) {
-        case RunMode::CalibSubject:   return "calib-subject";
-        case RunMode::CalibExtrinsic: return "calib-extrinsic";
-        case RunMode::Run:            break;
+        case RunMode::CalibSubject:        return "calib-subject";
+        case RunMode::CalibExtrinsic:      return "calib-extrinsic";
+        case RunMode::CalibExtrinsicFloor: return "calib-extrinsic-floor";
+        case RunMode::Run:                 break;
     }
     return "run";
 }
 
 bool parse_run_mode_name(const std::string& name, RunMode& out) {
-    if (name == "run")             { out = RunMode::Run;            return true; }
-    if (name == "calib-subject")   { out = RunMode::CalibSubject;   return true; }
-    if (name == "calib-extrinsic") { out = RunMode::CalibExtrinsic; return true; }
+    if (name == "run")                   { out = RunMode::Run;                 return true; }
+    if (name == "calib-subject")         { out = RunMode::CalibSubject;        return true; }
+    if (name == "calib-extrinsic")       { out = RunMode::CalibExtrinsic;      return true; }
+    if (name == "calib-extrinsic-floor") { out = RunMode::CalibExtrinsicFloor; return true; }
     return false;
 }
 
@@ -462,6 +500,18 @@ void validate_options(const MainOptions& opts) {
         // a replay session brings its own frames.
         if (opts.excal_replay.empty() && opts.cam_paths[0].empty()) {
             fail("missing required option (need --cam0)");
+        }
+    } else if (mode == RunMode::CalibExtrinsicFloor) {
+        // Floor path: also decode-only. Live collection needs cameras; replay
+        // brings its own. A known tag map and PnP intrinsics are mandatory.
+        if (opts.floor_replay.empty() && opts.cam_paths[0].empty()) {
+            fail("missing required option (need --cam0)");
+        }
+        if (opts.floor_map.empty()) {
+            fail("calib-extrinsic-floor requires --floor-map PATH");
+        }
+        if (opts.floor_intrinsics.empty() && opts.calib.empty()) {
+            fail("calib-extrinsic-floor requires --floor-intrinsics PATH (or --calib)");
         }
     } else if (opts.cam_paths[0].empty() || opts.det_engine.empty()
                || opts.pose_engine.empty()) {

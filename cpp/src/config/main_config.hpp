@@ -164,6 +164,29 @@ struct MainOptions {
     std::string excal_controller_bind = "0.0.0.0";
     double      excal_controller_stale_ms = 200.0;
 
+    // Floor-AprilTag extrinsic calibration (see
+    // docs/design/pose-3d-floor-apriltag-extrinsic.md). A VR-free path: each
+    // camera localises against a known floor tag map via multi-tag PnP. Selected
+    // by --floor-calib (live) or --floor-replay (offline). Distinct from the
+    // controller-marker path above (different solver / world frame).
+    bool        floor_calib_enabled  = false;
+    // Known tag layout YAML (lift::FloorTagMap). Required for the floor path.
+    std::string floor_map;
+    // Offline replay session directory (tools/excal_record format). Non-empty
+    // implies calib-extrinsic-floor and runs collect→solve unattended.
+    std::string floor_replay;
+    // Calibration-resolution intrinsics used for detection + PnP. Empty → reuse
+    // three_d.calib. The recovered T_cw is resolution-independent, so the
+    // written YAML carries the runtime intrinsics (floor_out_intrinsics / calib).
+    std::string floor_intrinsics;
+    // Runtime-resolution intrinsics to embed in the output YAML. Empty → write
+    // the same intrinsics used for PnP.
+    std::string floor_out_intrinsics;
+    std::string floor_out            = "calibrations/extrinsics.yaml";
+    int         floor_burst_min      = 10;
+    double      floor_max_reproj_px  = 3.0;     // per-frame detection filter (px)
+    bool        floor_fisheye        = false;   // intrinsics use the fisheye model
+
     // Flow daemon (docs/design/pose-3d-flow-daemon.md). CLI-only — how the
     // process is launched is not part of the YAML schema. `flow_managed` is
     // set by the daemon on spawned mode modules; it enables the
@@ -178,7 +201,7 @@ struct MainOptions {
 // mode builds only what it needs; the only thing crossing a mode boundary is
 // YAML on disk. Derive after validate_options() — it enforces the flags'
 // mutual exclusivity.
-enum class RunMode { Run, CalibSubject, CalibExtrinsic };
+enum class RunMode { Run, CalibSubject, CalibExtrinsic, CalibExtrinsicFloor };
 
 RunMode run_mode(const MainOptions& opts);
 
