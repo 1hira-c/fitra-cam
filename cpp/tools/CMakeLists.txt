@@ -214,6 +214,38 @@ set_target_properties(fitra_test_apriltag_marker PROPERTIES
 
 add_test(NAME test_apriltag_marker COMMAND fitra_test_apriltag_marker)
 
+# Floor AprilTag map: data structure + FileStorage YAML I/O round-trip.
+add_executable(fitra_test_floor_tag_map
+    test_floor_tag_map.cpp
+)
+
+target_link_libraries(fitra_test_floor_tag_map PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_floor_tag_map PROPERTIES
+    OUTPUT_NAME "test_floor_tag_map"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_floor_tag_map COMMAND fitra_test_floor_tag_map)
+
+# Floor AprilTag extrinsic solver: multi-tag PnP localisation against the map.
+add_executable(fitra_test_floor_extrinsic_solver
+    test_floor_extrinsic_solver.cpp
+)
+
+target_link_libraries(fitra_test_floor_extrinsic_solver PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_floor_extrinsic_solver PROPERTIES
+    OUTPUT_NAME "test_floor_extrinsic_solver"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_floor_extrinsic_solver COMMAND fitra_test_floor_extrinsic_solver)
+
 # Extrinsic calibration collection loop — motion gate / burst mechanics,
 # end-to-end solve+write+reload, and calib_io write round-trip.
 add_executable(fitra_test_extrinsic_calib_session

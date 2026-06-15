@@ -7,6 +7,8 @@ add_library(fitra_lift STATIC
     lift/triangulator.cpp
     lift/extrinsic_solver.cpp
     lift/apriltag_marker.cpp
+    lift/floor_tag_map.cpp
+    lift/floor_extrinsic_solver.cpp
     lift/kalman.cpp
     lift/ik.cpp
     lift/subject_profile.cpp
