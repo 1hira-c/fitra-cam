@@ -129,11 +129,62 @@ void test_detect_roundtrip() {
     }
 }
 
+// 3) CLAHE front-end: a low-contrast (soft, mid-gray) rendering decodes when
+//    use_clahe is on. Mirrors the floor-AprilTag feasibility finding that
+//    contrast — not distortion or JPEG — gates detection on soft-focus lenses.
+void test_clahe_recovers_low_contrast() {
+    const int   face_id = 12;
+    const int   side_px = 240;
+    const int   quiet   = 80;
+    const double tag_m   = 0.10;
+
+    cv::aruco::Dictionary dict =
+        cv::aruco::getPredefinedDictionary(cv::aruco::DICT_APRILTAG_36h11);
+    cv::Mat marker;
+    dict.generateImageMarker(face_id, side_px, marker, 1);
+
+    cv::Mat canvas(side_px + 2 * quiet, side_px + 2 * quiet, CV_8UC1,
+                   cv::Scalar(255));
+    marker.copyTo(canvas(cv::Rect(quiet, quiet, side_px, side_px)));
+
+    // Compress the dynamic range toward a narrow band centred on mid-gray:
+    // out = 116 + in * (24/255), so black→116, white→140 (≈24 levels span).
+    cv::Mat low;
+    canvas.convertTo(low, CV_8UC1, 24.0 / 255.0, 116.0);
+
+    int W = low.cols, H = low.rows;
+    cv::Mat K = make_K(800.0, W * 0.5, H * 0.5);
+    cv::Mat dist = cv::Mat::zeros(1, 5, CV_64F);
+
+    MarkerBoardConfig cfg;
+    cfg.faces.push_back(MarkerFace{face_id, tag_m});
+    cfg.use_clahe  = true;
+    cfg.clahe_clip = 2.0;
+    cfg.clahe_grid = 8;
+    AprilTagDetector detector(cfg);
+
+    auto dets = detector.detect(low, K, dist);
+    CHECK(dets.size() == 1);
+    if (!dets.empty()) {
+        CHECK(dets[0].face_id == face_id);
+        CHECK(dets[0].pose_ok);
+        CHECK_LT(dets[0].reproj_rms_px, 1.0);
+    }
+
+    // Sanity: full-contrast detection is unaffected by the default (off).
+    MarkerBoardConfig cfg_off;
+    cfg_off.faces.push_back(MarkerFace{face_id, tag_m});
+    AprilTagDetector detector_off(cfg_off);
+    auto dets_full = detector_off.detect(canvas, K, dist);
+    CHECK(dets_full.size() == 1);
+}
+
 }  // namespace
 
 int main() {
     test_solve_tag_pose();
     test_detect_roundtrip();
+    test_clahe_recovers_low_contrast();
     if (g_fail) {
         std::fprintf(stderr, "test_apriltag_marker: %d failures\n", g_fail);
         return 1;

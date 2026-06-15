@@ -36,6 +36,16 @@ struct MarkerBoardConfig {
     int dictionary = -1;            // -1 → resolved to DICT_APRILTAG_36h11 in ctor
     std::vector<MarkerFace> faces;
 
+    // Optional CLAHE (contrast-limited adaptive histogram equalisation) applied
+    // to the grayscale image before detection. The floor-AprilTag feasibility
+    // test (2026-06-13, docs/research/floor-apriltag-sfm-map.md) found soft-focus
+    // fisheye lenses lose low-contrast tags that CLAHE(2.0,(8,8)) recovers; it
+    // also helps the controller-marker path. Off by default to preserve the
+    // exact prior decode behaviour.
+    bool   use_clahe  = false;
+    double clahe_clip = 2.0;
+    int    clahe_grid = 8;          // (clahe_grid × clahe_grid) tiles
+
     const MarkerFace* find(int id) const;
 };
 

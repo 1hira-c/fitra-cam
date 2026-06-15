@@ -99,6 +99,18 @@ std::vector<TagDetection> AprilTagDetector::detect(const cv::Mat& image,
         cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
     }
 
+    if (cfg_.use_clahe) {
+        const int grid = cfg_.clahe_grid > 0 ? cfg_.clahe_grid : 8;
+        auto clahe = cv::createCLAHE(cfg_.clahe_clip, cv::Size(grid, grid));
+        // clahe->apply requires a single-channel 8-bit image; `gray` is one of
+        // the input channel (channels()==1) or the BGR2GRAY result above. Write
+        // to a separate Mat so we never mutate a caller-owned single-channel
+        // image passed in by reference.
+        cv::Mat eq;
+        clahe->apply(gray, eq);
+        gray = eq;
+    }
+
     std::vector<std::vector<cv::Point2f>> corners, rejected;
     std::vector<int> ids;
     detector_.detectMarkers(gray, corners, ids, rejected);
