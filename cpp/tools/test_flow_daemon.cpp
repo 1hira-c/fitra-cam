@@ -251,6 +251,11 @@ void test_run_daemon_chain() {
     opts.daemon = true;
     opts.daemon_initial = "calib-extrinsic";
     opts.calib_subject_id = "subj";
+    // calib-extrinsic's precheck needs intrinsics present (extrinsic_calib.intrinsics
+    // or three_d.calib). Point calib at an existing file so the initial-mode
+    // precheck passes and the spawn chain under test actually runs.
+    std::ofstream(stub.dir / "calib.yaml") << "x: 1\n";
+    opts.calib = (stub.dir / "calib.yaml").string();
     // Profile "exists": point subjects_dir at the stub dir and create it, so
     // the run spawn carries --subject-id.
     opts.subjects_dir = stub.dir.string();

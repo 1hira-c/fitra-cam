@@ -51,13 +51,6 @@ lift::MarkerBoardConfig board_from(const FloorCalibConfig& cfg) {
         }
     }
     b.use_clahe = true;
-    // Per-frame PnP (the reproj quality gate) must match the intrinsics model.
-    // Cameras share lenses here; treat fisheye if forced or any camera is fisheye.
-    bool any_fisheye = cfg.fisheye;
-    for (const auto& cam : cfg.intrinsics.cameras) {
-        any_fisheye = any_fisheye || cam.intrinsics.is_fisheye();
-    }
-    b.fisheye = any_fisheye;
     return b;
 }
 
@@ -99,8 +92,11 @@ void FloorCalibSession::on_frame(std::size_t cam_idx, const cv::Mat& bgr,
         if (cam_idx >= cfg_.intrinsics.cameras.size()) return;
     }
     const auto& cam = cfg_.intrinsics.cameras[cam_idx];
+    // Per-camera distortion model (cfg_.fisheye forces all): the per-frame PnP
+    // reproj gate must match THIS camera's intrinsics, not a board-wide flag.
+    const bool fisheye = cfg_.fisheye || cam.intrinsics.is_fisheye();
     // detector_ is not thread-safe; on_frame runs on the single capture thread.
-    auto dets = detector_->detect(bgr, cam.intrinsics.K, cam.intrinsics.dist);
+    auto dets = detector_->detect(bgr, cam.intrinsics.K, cam.intrinsics.dist, fisheye);
 
     {
         std::lock_guard<std::mutex> g(mu_);

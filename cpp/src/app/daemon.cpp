@@ -217,6 +217,22 @@ int run_daemon(const config::MainOptions& opts,
                    extrinsics_exists ? "present" : "missing",
                    profile_now() ? "present" : "missing");
 
+    // Pre-flight the chosen initial mode's config the same way the flow-switch
+    // route does — otherwise a misconfigured calib stage (e.g. method: floor
+    // with no floor_map) spawns a child that dies at validate, next_action sees
+    // a non-flow exit and treats it as a crash, and the daemon silently falls
+    // back to run. Surface the reason and start in run instead (the rig comes up
+    // usable; the user fixes the config and re-switches from the viewer).
+    {
+        std::string perr;
+        if (!config::precheck_mode_switch(opts, mode, perr)) {
+            FITRA_LOG_ERROR("[daemon] initial mode {} is misconfigured: {} — starting "
+                            "in run mode; fix the config and re-switch from the viewer",
+                            config::run_mode_name(mode), perr);
+            mode = config::RunMode::Run;
+        }
+    }
+
     // Own both signals: main() leaves them to us for the daemon path so the
     // handler can forward to the child and set stop in one place. Restore the
     // previous dispositions and clear the stop pointer on every exit path —

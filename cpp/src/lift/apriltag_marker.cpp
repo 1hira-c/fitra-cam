@@ -105,7 +105,8 @@ AprilTagDetector::AprilTagDetector(MarkerBoardConfig cfg)
 
 std::vector<TagDetection> AprilTagDetector::detect(const cv::Mat& image,
                                                    const cv::Mat& K,
-                                                   const cv::Mat& dist) {
+                                                   const cv::Mat& dist,
+                                                   bool fisheye) {
     std::vector<TagDetection> out;
     if (image.empty()) return out;
 
@@ -141,7 +142,7 @@ std::vector<TagDetection> AprilTagDetector::detect(const cv::Mat& image,
         for (int c = 0; c < 4; ++c) det.corners[c] = corners[i][c];
         det.pose_ok = solve_tag_pose(det.corners, face->tag_size_m, K, dist,
                                      det.T_cam_face, det.reproj_rms_px,
-                                     cfg_.fisheye);
+                                     fisheye);
         out.push_back(std::move(det));
     }
     return out;

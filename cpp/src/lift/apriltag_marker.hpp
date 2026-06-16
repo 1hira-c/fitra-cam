@@ -46,11 +46,6 @@ struct MarkerBoardConfig {
     double clahe_clip = 2.0;
     int    clahe_grid = 8;          // (clahe_grid × clahe_grid) tiles
 
-    // Distortion model of the intrinsics passed to detect(): when true the
-    // per-face PnP undistorts with the fisheye model (cv::fisheye) instead of
-    // the pinhole Brown model, so reproj error / pose are correct under fisheye.
-    bool   fisheye    = false;
-
     const MarkerFace* find(int id) const;
 };
 
@@ -74,9 +69,14 @@ public:
     // Not thread-safe: the internal cv::aruco::ArucoDetector carries state and
     // must not be called from multiple threads concurrently. Call sites that
     // hand frames in serially (the calibration session's frame tap) are fine.
+    //
+    // `fisheye` selects the per-face PnP distortion model and MUST match the
+    // (K,dist) pair: it is per-camera (not a board-wide setting), so a mixed
+    // pinhole+fisheye rig passes the model of the camera that produced `image`.
     std::vector<TagDetection> detect(const cv::Mat& image,
                                      const cv::Mat& K,
-                                     const cv::Mat& dist);
+                                     const cv::Mat& dist,
+                                     bool fisheye = false);
 
     const MarkerBoardConfig& config() const { return cfg_; }
 
