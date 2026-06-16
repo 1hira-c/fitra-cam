@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -490,6 +491,59 @@ bool parse_run_mode_name(const std::string& name, RunMode& out) {
     if (name == "calib-extrinsic")       { out = RunMode::CalibExtrinsic;      return true; }
     if (name == "calib-extrinsic-floor") { out = RunMode::CalibExtrinsicFloor; return true; }
     return false;
+}
+
+namespace {
+// A calibration source (intrinsics / extrinsics YAML) is usable if a path is
+// set and the file exists. `label` names it for the error message.
+bool source_ready(const std::string& path, const char* label, std::string& err) {
+    if (path.empty()) {
+        err = std::string("no ") + label + " configured";
+        return false;
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || ec) {
+        err = std::string(label) + " not found: " + path;
+        return false;
+    }
+    return true;
+}
+}  // namespace
+
+bool precheck_mode_switch(const MainOptions& opts, RunMode target,
+                          std::string& err) {
+    switch (target) {
+        case RunMode::CalibExtrinsicFloor: {
+            if (opts.floor_map.empty()) {
+                err = "floor calibration needs a known tag layout — set "
+                      "extrinsic_calib.floor_map (or --floor-map) in the config";
+                return false;
+            }
+            std::error_code ec;
+            if (!std::filesystem::exists(opts.floor_map, ec) || ec) {
+                err = "floor_map not found: " + opts.floor_map;
+                return false;
+            }
+            // PnP intrinsics: floor_intrinsics, else three_d.calib.
+            const std::string pnp =
+                opts.floor_intrinsics.empty() ? opts.calib : opts.floor_intrinsics;
+            return source_ready(pnp, "floor PnP intrinsics "
+                                "(extrinsic_calib.floor_intrinsics or three_d.calib)", err);
+        }
+        case RunMode::CalibExtrinsic: {
+            const std::string intr =
+                opts.excal_intrinsics.empty() ? opts.calib : opts.excal_intrinsics;
+            return source_ready(intr, "intrinsics "
+                                "(extrinsic_calib.intrinsics or three_d.calib)", err);
+        }
+        case RunMode::CalibSubject:
+            // Subject calibration triangulates, so it needs the extrinsics YAML.
+            return source_ready(opts.calib, "extrinsics (three_d.calib)", err);
+        case RunMode::Run:
+            // Run is the safe fallback; it tolerates a missing calib (2D only).
+            return true;
+    }
+    return true;
 }
 
 void validate_options(const MainOptions& opts) {

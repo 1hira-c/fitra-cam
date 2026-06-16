@@ -579,6 +579,61 @@ extrinsic_calib:
     check(threw, "floor without --floor-map must throw");
 }
 
+void test_precheck_mode_switch() {
+    using fitra::config::MainOptions;
+    using fitra::config::RunMode;
+    using fitra::config::precheck_mode_switch;
+
+    auto intr = write_tmp("precheck_intr.yaml", "schema: x\n");
+    auto mapf = write_tmp("precheck_map.yaml", "%YAML:1.0\n");
+    std::string err;
+
+    // Floor: missing floor_map → refused with a floor_map reason.
+    MainOptions o;
+    o.calib = intr.string();
+    err.clear();
+    check(!precheck_mode_switch(o, RunMode::CalibExtrinsicFloor, err),
+          "floor switch refused without floor_map");
+    check_contains(err, "floor_map", "floor precheck names floor_map");
+
+    // Floor: floor_map points at a missing file → refused with "not found".
+    o.floor_map = "/no/such/floor_map.yaml";
+    err.clear();
+    check(!precheck_mode_switch(o, RunMode::CalibExtrinsicFloor, err),
+          "floor switch refused on missing map file");
+    check_contains(err, "not found", "floor precheck reports missing file");
+
+    // Floor: map present + PnP intrinsics via three_d.calib → allowed.
+    o.floor_map = mapf.string();
+    err.clear();
+    check(precheck_mode_switch(o, RunMode::CalibExtrinsicFloor, err),
+          "floor switch allowed with map + calib intrinsics");
+
+    // Floor: floor_intrinsics set but missing → refused.
+    o.floor_intrinsics = "/no/such/intr.yaml";
+    err.clear();
+    check(!precheck_mode_switch(o, RunMode::CalibExtrinsicFloor, err),
+          "floor switch refused on missing floor_intrinsics");
+
+    // Controller: needs intrinsics (excal_intrinsics or calib).
+    MainOptions c;
+    err.clear();
+    check(!precheck_mode_switch(c, RunMode::CalibExtrinsic, err),
+          "controller switch refused without intrinsics");
+    c.calib = intr.string();
+    err.clear();
+    check(precheck_mode_switch(c, RunMode::CalibExtrinsic, err),
+          "controller switch allowed with calib");
+
+    // Run is always reachable (safe fallback, tolerates missing calib).
+    MainOptions r;
+    err.clear();
+    check(precheck_mode_switch(r, RunMode::Run, err), "run switch always allowed");
+
+    std::remove(intr.string().c_str());
+    std::remove(mapf.string().c_str());
+}
+
 void test_flow_managed_and_publisher_negation() {
     using fitra::config::RunMode;
     using fitra::config::parse_run_mode_name;
@@ -698,6 +753,7 @@ const TestCase kTests[] = {
                                                test_run_mode_derivation_and_publisher_exclusivity},
     {"excal_replay_yaml_cli_and_mode",         test_excal_replay_yaml_cli_and_mode},
     {"floor_calib_yaml_cli_and_mode",          test_floor_calib_yaml_cli_and_mode},
+    {"precheck_mode_switch",                   test_precheck_mode_switch},
     {"flow_managed_and_publisher_negation",    test_flow_managed_and_publisher_negation},
     {"daemon_flags_and_validate",              test_daemon_flags_and_validate},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},

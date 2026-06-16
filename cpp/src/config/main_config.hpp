@@ -213,6 +213,16 @@ const char* run_mode_name(RunMode mode);
 // /api/flow/switch or --daemon-initial). Returns false on an unknown label.
 bool parse_run_mode_name(const std::string& name, RunMode& out);
 
+// Pre-flight check before a flow-switch respawns into `target`: verifies the
+// shared config carries everything that mode needs (required files present /
+// readable), so the /api/flow/switch handler can refuse with a clear reason
+// instead of respawning a child that dies at validate_options() and silently
+// falls the daemon back to run. Returns true if `target` should be reachable;
+// on false, `err` holds a human-facing reason. Checks config preconditions
+// only — not runtime resources (cameras, pose relay).
+bool precheck_mode_switch(const MainOptions& opts, RunMode target,
+                          std::string& err);
+
 // Schema version embedded in every YAML config. Bump only when a
 // non-backwards-compatible change to the YAML layout is required.
 inline constexpr const char* kMainConfigSchema = "fitra_main_config_v1";
