@@ -47,17 +47,31 @@ CharucoBoardConfig board_cfg() {
     return b;
 }
 
-// Generate diverse board poses (tilts + translations) for calibration.
+// Generate diverse board poses for calibration. The diversity gate accepts a
+// view only if its corner centroid/scale differs from every prior one, so the
+// poses must spread the board ACROSS the image (distinct tx/ty → distinct
+// centroids) — not just re-tilt it in place. Each pose also carries a varying
+// tilt so cv::calibrateCamera can observe K.
 std::vector<cv::Vec6d> gen_poses() {
     std::vector<cv::Vec6d> poses;  // rx,ry,rz, tx,ty,tz
-    const double rxs[] = {-0.35, 0.0, 0.35};
-    const double rys[] = {-0.35, 0.0, 0.35};
-    const double tzs[] = {0.45, 0.7};
-    for (double tz : tzs)
-        for (double rx : rxs)
-            for (double ry : rys)
-                poses.push_back({rx, ry, 0.05, -0.05, -0.03, tz});
-    return poses;  // 18 poses
+    // Wide tx/ty spacing so centroids stay distinct even at the fisheye test's
+    // shorter focal length; two tz layers add scale diversity (area differs) so
+    // the gate accepts every pose. Per-pose tilt gives K observability.
+    const double txs[] = {-0.15, 0.0, 0.15};
+    const double tys[] = {-0.10, 0.10};
+    const double tzs[] = {0.50, 0.80};
+    int i = 0;
+    for (double tz : tzs) {
+        for (double tx : txs) {
+            for (double ty : tys) {
+                const double rx = 0.30 * std::sin(0.7 * i);
+                const double ry = 0.30 * std::cos(0.5 * i);
+                poses.push_back({rx, ry, 0.05, tx, ty, tz});
+                ++i;
+            }
+        }
+    }
+    return poses;  // 12 poses, distinct centroids + 2 scale layers
 }
 
 template <class ProjFn>

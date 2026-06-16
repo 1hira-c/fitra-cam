@@ -466,7 +466,7 @@ void test_run_mode_derivation_and_publisher_exclusivity() {
     try { validate_options(bad); }
     catch (const std::exception& e) {
         threw = true;
-        check_contains(e.what(), "--slimevr-out cannot be combined with --extrinsic-calib",
+        check_contains(e.what(), "--slimevr-out cannot be combined with a calibration mode",
                        "slimevr+excal exclusivity msg");
     }
     check(threw, "--slimevr-out + --extrinsic-calib must throw");
@@ -477,10 +477,24 @@ void test_run_mode_derivation_and_publisher_exclusivity() {
     try { validate_options(bad); }
     catch (const std::exception& e) {
         threw = true;
-        check_contains(e.what(), "--vmt-out cannot be combined with --extrinsic-calib",
+        check_contains(e.what(), "--vmt-out cannot be combined with a calibration mode",
                        "vmt+excal exclusivity msg");
     }
     check(threw, "--vmt-out + --extrinsic-calib must throw");
+
+    // The exclusivity now covers the floor + intrinsic calib modes too.
+    MainOptions floorbad;
+    floorbad.cam_paths[0] = "/dev/null";
+    floorbad.floor_calib_enabled = true;
+    floorbad.floor_map = "/tmp/m.yaml";
+    floorbad.calib = "/tmp/cam.yaml";
+    floorbad.enable_3d = true;
+    floorbad.keypoint_format = "halpe26";
+    floorbad.vmt_out = true;
+    threw = false;
+    try { validate_options(floorbad); }
+    catch (const std::exception&) { threw = true; }
+    check(threw, "--vmt-out + --floor-calib must throw");
 }
 
 void test_excal_replay_yaml_cli_and_mode() {

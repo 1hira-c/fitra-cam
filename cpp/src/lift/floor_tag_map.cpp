@@ -23,15 +23,6 @@ cv::Matx33d rpy_deg_to_R(double roll, double pitch, double yaw) {
     return Rz * Ry * Rx;
 }
 
-cv::Matx44d compose44(const cv::Matx33d& R, const cv::Vec3d& t) {
-    cv::Matx44d m = cv::Matx44d::eye();
-    for (int r = 0; r < 3; ++r) {
-        for (int c = 0; c < 3; ++c) m(r, c) = R(r, c);
-        m(r, 3) = t[r];
-    }
-    return m;
-}
-
 cv::Vec3d read_vec3(const cv::FileNode& node) {
     cv::Mat m;
     node >> m;
@@ -114,7 +105,7 @@ FloorTagMap floor_tag_map_load(const std::string& path) {
             R = cv::Matx33d::eye();  // floor tag default: lying flat, +Z normal
         }
 
-        t.T_world_tag = geom::T_world_marker::from_raw(compose44(R, tr));
+        t.T_world_tag = geom::T_world_marker::from_raw(geom::compose(R, tr));
         map.tags.push_back(std::move(t));
     }
 
@@ -172,7 +163,7 @@ FloorTagMap floor_tag_grid(int rows, int cols, double pitch_m,
             t.size_m = size_m;
             cv::Vec3d pos(x0 + c * pitch_m, y0 + r * pitch_m, 0.0);
             t.T_world_tag =
-                geom::T_world_marker::from_raw(compose44(cv::Matx33d::eye(), pos));
+                geom::T_world_marker::from_raw(geom::compose(cv::Matx33d::eye(), pos));
             map.tags.push_back(std::move(t));
         }
     }

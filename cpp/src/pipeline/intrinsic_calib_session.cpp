@@ -23,12 +23,22 @@ namespace {
 
 std::string json_escape(const std::string& s) {
     std::string out;
+    out.reserve(s.size() + 2);
     for (char c : s) {
         switch (c) {
-            case '"': out += "\\\""; break;
+            case '"':  out += "\\\""; break;
             case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            default: out += c;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += c;
+                }
         }
     }
     return out;
@@ -79,14 +89,17 @@ bool IntrinsicCalibSession::accept_view_(CamData& cam, const lift::CharucoView& 
     const double diag = std::sqrt(static_cast<double>(w) * w + static_cast<double>(h) * h);
     const double sep_min = cfg_.min_center_sep_frac * diag;
 
-    bool novel = cam.views.empty();
-    for (std::size_t i = 0; i < cam.centroids.size() && !novel; ++i) {
+    // Reject a view only if some already-accepted view is BOTH at ~the same
+    // image region AND ~the same scale — i.e. it adds no new pose information.
+    // (A view far from one prior view but a near-duplicate of another must
+    // still be rejected, so the test is "redundant vs the nearest", not "novel
+    // vs any".)
+    for (std::size_t i = 0; i < cam.centroids.size(); ++i) {
         const double d = cv::norm(c - cam.centroids[i]);
         const double a0 = cam.areas[i];
         const double area_diff = a0 > 0 ? std::abs(area - a0) / a0 : 1.0;
-        if (d >= sep_min || area_diff >= cfg_.min_area_ratio_diff) novel = true;
+        if (d < sep_min && area_diff < cfg_.min_area_ratio_diff) return false;
     }
-    if (!novel) return false;
 
     cam.views.push_back(v);
     cam.centroids.push_back(c);

@@ -10,9 +10,16 @@ const $ = (id) => document.getElementById(id);
 let flowManaged = false;
 
 async function postJSON(path) {
-  const res = await fetch(path, { method: "POST",
-    headers: { "Content-Type": "application/json" }, body: "{}" });
-  return res.json();
+  // Tolerate a non-JSON / unreachable response (e.g. a flow-daemon module swap):
+  // return a structured failure so callers always get {ok:false} instead of an
+  // unhandled rejection that leaves the UI stuck (e.g. on "solving…").
+  try {
+    const res = await fetch(path, { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: "{}" });
+    return await res.json();
+  } catch (e) {
+    return { ok: false, err: e.message || "request failed" };
+  }
 }
 async function getJSON(path) { return (await fetch(path)).json(); }
 

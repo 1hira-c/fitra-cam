@@ -984,6 +984,16 @@ void CrowServer::register_floor_calib_routes_() {
     deps.session    = floor_session_;
     deps.next_step  = floor_next_step_;
     deps.static_dir = opts_.excal_static_dir;
+    // Floor reuses the controller path's routes (/extrinsic-calib, /api/excal/*).
+    // The two are meant to run in separate processes; if both sessions were ever
+    // attached to one server, registering both would hit Crow's duplicate-route
+    // check inside run()→validate() on the server thread and std::terminate the
+    // process. Guard defensively: never register floor routes alongside excal.
+    if (deps.session && excal_session_) {
+        FITRA_LOG_ERROR("crow: both extrinsic-calib and floor-calib sessions "
+                        "attached; skipping floor routes (they share /api/excal/*)");
+        return;
+    }
     detail::register_floor_calib_routes(impl_->app, deps);
 }
 

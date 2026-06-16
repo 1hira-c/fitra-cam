@@ -587,8 +587,24 @@ bool precheck_mode_switch(const MainOptions& opts, RunMode target,
                                 "(extrinsic_calib.intrinsics or three_d.calib)", err);
         }
         case RunMode::CalibIntrinsic:
-            // Produces the intrinsics YAML from scratch; needs only a sane board
-            // (validated at parse). Always reachable as the first setup step.
+            // Produces the intrinsics YAML from scratch — no input file needed.
+            // But the board params are only validated by validate_options when
+            // the process IS in CalibIntrinsic mode; the daemon parent is Run,
+            // so re-check them here, else a flow-switch respawns a child that
+            // dies at validate and the daemon silently falls back to run.
+            if (opts.charuco_squares_x < 2 || opts.charuco_squares_y < 2) {
+                err = "calib-intrinsic needs charuco squares_x/y >= 2 (intrinsic_calib.*)";
+                return false;
+            }
+            if (opts.charuco_marker_len_m <= 0.0 ||
+                opts.charuco_marker_len_m >= opts.charuco_square_len_m) {
+                err = "calib-intrinsic needs 0 < marker_len < square_len (intrinsic_calib.*)";
+                return false;
+            }
+            if (opts.intrinsic_model != "pinhole" && opts.intrinsic_model != "fisheye") {
+                err = "intrinsic_calib.model must be 'pinhole' or 'fisheye'";
+                return false;
+            }
             return true;
         case RunMode::CalibSubject:
             // Subject calibration triangulates, so it needs the extrinsics YAML.
@@ -667,8 +683,9 @@ void validate_options(const MainOptions& opts) {
         if (opts.calibrate) {
             fail("--slimevr-out cannot be combined with --calibrate");
         }
-        if (mode == RunMode::CalibExtrinsic) {
-            fail("--slimevr-out cannot be combined with --extrinsic-calib/--excal-replay");
+        if (mode != RunMode::Run) {
+            fail("--slimevr-out cannot be combined with a calibration mode "
+                 "(--extrinsic-calib/--floor-calib/--calib-intrinsic/--calibrate)");
         }
         if (opts.slimevr_port <= 0 || opts.slimevr_port > 65535) {
             fail("--slimevr-port must be in [1, 65535]");
@@ -690,8 +707,9 @@ void validate_options(const MainOptions& opts) {
         if (opts.calibrate) {
             fail("--vmt-out cannot be combined with --calibrate");
         }
-        if (mode == RunMode::CalibExtrinsic) {
-            fail("--vmt-out cannot be combined with --extrinsic-calib/--excal-replay");
+        if (mode != RunMode::Run) {
+            fail("--vmt-out cannot be combined with a calibration mode "
+                 "(--extrinsic-calib/--floor-calib/--calib-intrinsic/--calibrate)");
         }
         if (opts.vmt_port <= 0 || opts.vmt_port > 65535) {
             fail("--vmt-port must be in [1, 65535]");
@@ -800,7 +818,7 @@ void validate_options(const MainOptions& opts) {
         if (opts.daemon_initial != "auto"
             && !parse_run_mode_name(opts.daemon_initial, initial)) {
             fail("--daemon-initial must be one of auto|run|calib-subject"
-                 "|calib-extrinsic");
+                 "|calib-extrinsic|calib-extrinsic-floor|calib-intrinsic");
         }
     }
 }

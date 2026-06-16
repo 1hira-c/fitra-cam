@@ -180,10 +180,21 @@ bool FloorCalibSession::solve_and_write(std::string& err) {
     for (const auto& ce : sol.cameras) {
         if (!ce.solved) continue;
         if (ce.cam_index < 0 ||
-            ce.cam_index >= static_cast<int>(result.cameras.size())) {
+            ce.cam_index >= static_cast<int>(cfg_.intrinsics.cameras.size())) {
             continue;
         }
-        auto& cam = result.cameras[ce.cam_index];
+        // Match by camera id, not index: `result` may be a SEPARATE
+        // out_intrinsics file whose camera order/count need not match the PnP
+        // intrinsics the solver indexed. Index-based assignment would attach a
+        // pose to the wrong camera (or out of range) silently.
+        const std::string& id = cfg_.intrinsics.cameras[ce.cam_index].id;
+        auto it = std::find_if(result.cameras.begin(), result.cameras.end(),
+                               [&](const lift::CameraCalibration& c) { return c.id == id; });
+        if (it == result.cameras.end()) {
+            err += "output intrinsics has no camera '" + id + "'; ";
+            continue;
+        }
+        auto& cam = *it;
         cam.has_extrinsics = true;
         cam.extrinsics.method = "floor_apriltag_pnp";
         cam.extrinsics.T_cw = cv::Mat(ce.T_cam_world.raw()).clone();  // 4x4 CV_64F
@@ -191,6 +202,15 @@ bool FloorCalibSession::solve_and_write(std::string& err) {
         cv::Mat t = cam.extrinsics.T_cw(cv::Rect(3, 0, 1, 3));
         cv::Mat c = -R.t() * t;
         cam.extrinsics.camera_center_w = {c.at<double>(0), c.at<double>(1), c.at<double>(2)};
+    }
+    // If a separate out_intrinsics dropped any solved camera, fail loudly rather
+    // than writing a calibration that silently lacks an extrinsic.
+    if (!err.empty()) {
+        std::lock_guard<std::mutex> g(mu_);
+        solution_ = sol;
+        state_ = FloorCalibState::kFailed;
+        last_error_ = err;
+        return false;
     }
 
     try {
