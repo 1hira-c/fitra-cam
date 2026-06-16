@@ -255,14 +255,18 @@ void load_extrinsic_calib(const YAML::Node& section, MainOptions& out) {
     if (section["controller_bind"]) out.excal_controller_bind = parse_scalar<std::string>(section["controller_bind"], "extrinsic_calib.controller_bind");
     if (section["controller_stale_ms"]) out.excal_controller_stale_ms = parse_scalar<double>(section["controller_stale_ms"], "extrinsic_calib.controller_stale_ms");
 
-    // Method selector: "controller" (default, 案C) | "floor" (案D). Selecting
-    // floor flips the floor path on so run_mode() routes to calib-extrinsic-floor;
-    // the floor.* keys below configure it. `out` is shared by both methods.
+    // Method selector: "controller" (default, 案C) | "floor" (案D). Sets the
+    // daemon-only stage selector — NOT the run_mode flag (floor_calib_enabled).
+    // The shared daemon config must not carry a run_mode-deriving flag (that
+    // would make the parent + run child derive a calib mode); the daemon uses
+    // excal_method to choose the extrinsic stage and module_argv injects
+    // --floor-calib into that child. Standalone floor uses --floor-calib.
     if (section["method"]) {
         const std::string m = parse_scalar<std::string>(section["method"], "extrinsic_calib.method");
-        if (m == "floor")           out.floor_calib_enabled = true;
-        else if (m == "controller") out.floor_calib_enabled = false;
-        else throw std::runtime_error("extrinsic_calib.method must be 'controller' or 'floor'");
+        if (m != "controller" && m != "floor") {
+            throw std::runtime_error("extrinsic_calib.method must be 'controller' or 'floor'");
+        }
+        out.excal_method = m;
     }
     if (section["floor_map"])            out.floor_map            = parse_scalar<std::string>(section["floor_map"],            "extrinsic_calib.floor_map");
     if (section["floor_replay_dir"])     out.floor_replay         = parse_scalar<std::string>(section["floor_replay_dir"],     "extrinsic_calib.floor_replay_dir");
@@ -283,7 +287,10 @@ void load_intrinsic_calib(const YAML::Node& section, MainOptions& out) {
         "min_views", "min_corners",
     };
     check_keys(section, allowed, "intrinsic_calib");
-    if (section["enabled"])      out.intrinsic_calib_enabled = parse_scalar<bool>(section["enabled"], "intrinsic_calib.enabled");
+    // enabled sets the daemon-only step selector, NOT the run_mode flag
+    // (intrinsic_calib_enabled, set only by --calib-intrinsic). See the field
+    // docs: the shared daemon config stays free of run_mode-deriving flags.
+    if (section["enabled"])      out.intrinsic_step_enabled = parse_scalar<bool>(section["enabled"], "intrinsic_calib.enabled");
     if (section["replay_dir"])   out.intrinsic_replay        = parse_scalar<std::string>(section["replay_dir"], "intrinsic_calib.replay_dir");
     if (section["out"])          out.intrinsic_out           = parse_scalar<std::string>(section["out"], "intrinsic_calib.out");
     if (section["model"]) {

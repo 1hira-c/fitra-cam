@@ -529,7 +529,9 @@ void test_floor_calib_yaml_cli_and_mode() {
     using fitra::config::run_mode;
     using fitra::config::run_mode_name;
 
-    // YAML: method: floor flips the floor path on; floor_* keys load.
+    // YAML: method: floor sets the daemon-only selector (excal_method), NOT the
+    // run_mode flag — so a shared daemon config does not derive a calib mode in
+    // the parent / run child. floor_* keys load.
     auto p = write_tmp("floor_calib.yaml", R"(schema: fitra_main_config_v1
 extrinsic_calib:
   method: floor
@@ -540,12 +542,17 @@ extrinsic_calib:
 )");
     MainOptions opts;
     load_main_config(p.string(), opts);
-    check(opts.floor_calib_enabled, "method: floor sets floor_calib_enabled");
+    check(opts.excal_method == "floor", "method: floor sets excal_method");
+    check(!opts.floor_calib_enabled, "method: floor does NOT set the run_mode flag");
     check(opts.floor_map == "/tmp/floor_map.yaml", "floor_map loads");
     check(opts.floor_fisheye, "floor_fisheye loads");
     check(opts.floor_out == "/tmp/extr.yaml", "floor shares extrinsic_calib.out");
+    check(run_mode(opts) == RunMode::Run,
+          "method: floor alone stays run-mode (daemon injects --floor-calib)");
+    // --floor-calib (CLI / module_argv) is what selects the floor run mode.
+    opts.floor_calib_enabled = true;
     check(run_mode(opts) == RunMode::CalibExtrinsicFloor,
-          "method: floor -> calib-extrinsic-floor mode");
+          "--floor-calib -> calib-extrinsic-floor mode");
 
     // CLI replay path: validates with no cameras (replay brings frames), but
     // still needs --floor-map and intrinsics.
@@ -593,6 +600,7 @@ intrinsic_calib:
   squares_y: 7
   square_len_m: 0.04
   marker_len_m: 0.03
+  enabled: true
   min_views: 15
 )");
     MainOptions opts;
@@ -600,6 +608,10 @@ intrinsic_calib:
     check(opts.intrinsic_model == "fisheye", "intrinsic_calib.model loads");
     check(opts.intrinsic_out == "/tmp/intr_hires.yaml", "intrinsic_calib.out loads");
     check(opts.intrinsic_min_views == 15, "intrinsic_calib.min_views loads");
+    // enabled sets the daemon-only step selector, NOT the run_mode flag.
+    check(opts.intrinsic_step_enabled, "intrinsic_calib.enabled sets intrinsic_step_enabled");
+    check(!opts.intrinsic_calib_enabled, "intrinsic_calib.enabled does NOT set the run_mode flag");
+    check(run_mode(opts) == RunMode::Run, "intrinsic enabled alone stays run-mode");
     // CLI --calib-intrinsic selects the mode; replay validates without cameras.
     MainOptions o2;
     std::vector<std::string> argv_buf{"--intrinsic-replay", "/tmp/isess",
@@ -630,12 +642,25 @@ intrinsic_calib:
     }
     check(threw, "calib-intrinsic bad board must throw");
 
-    // Intrinsic takes precedence over extrinsic when both flags set.
+    // Intrinsic takes precedence over extrinsic when both run_mode flags set.
     MainOptions o4;
     o4.intrinsic_calib_enabled = true;
     o4.floor_calib_enabled = true;
     check(run_mode(o4) == RunMode::CalibIntrinsic,
           "intrinsic precedence over floor");
+
+    // Regression (Codex P1): a shared daemon config that selects floor + the
+    // intrinsic step must NOT make --daemon fail. The selectors are excal_method
+    // / intrinsic_step_enabled, which leave run_mode == Run so validate passes.
+    MainOptions d;
+    d.cam_paths[0] = "/tmp/a";
+    d.det_engine = "/tmp/y";
+    d.pose_engine = "/tmp/r";
+    d.daemon = true;
+    d.excal_method = "floor";
+    d.intrinsic_step_enabled = true;
+    check(run_mode(d) == RunMode::Run, "daemon parent with floor+intrinsic stays run-mode");
+    validate_options(d);  // must not throw (--daemon + Run)
 }
 
 void test_precheck_mode_switch() {

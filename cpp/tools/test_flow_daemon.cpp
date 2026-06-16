@@ -171,13 +171,21 @@ void test_initial_mode() {
     check(initial_mode(opts, true, true, true) == RunMode::Run,
           "auto: all artifacts -> run");
 
-    // Intrinsic step 0: enabled + missing output -> calib-intrinsic first.
+    // Intrinsic step 0: step enabled + missing output -> calib-intrinsic first.
+    // Uses the daemon-only selector (intrinsic_step_enabled), not the run_mode
+    // flag, so a shared daemon config does not break the parent.
     MainOptions iopts;
-    iopts.intrinsic_calib_enabled = true;
+    iopts.intrinsic_step_enabled = true;
     check(initial_mode(iopts, false, false, false) == RunMode::CalibIntrinsic,
-          "auto: intrinsic enabled + missing -> calib-intrinsic");
+          "auto: intrinsic step enabled + missing -> calib-intrinsic");
     check(initial_mode(iopts, true, false, false) == RunMode::CalibExtrinsic,
           "auto: intrinsics present -> skip to calib-extrinsic");
+
+    // method: floor selects the floor extrinsic stage via excal_method.
+    MainOptions fopts;
+    fopts.excal_method = "floor";
+    check(initial_mode(fopts, true, false, false) == RunMode::CalibExtrinsicFloor,
+          "auto: excal_method floor -> calib-extrinsic-floor");
 
     opts.daemon_initial = "calib-extrinsic";
     check(initial_mode(opts, true, true, true) == RunMode::CalibExtrinsic,

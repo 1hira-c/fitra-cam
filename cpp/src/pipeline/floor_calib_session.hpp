@@ -54,6 +54,11 @@ struct FloorCalibConfig {
     // triangulator will use). If empty, `intrinsics` is written instead — the
     // recovered T_cw is resolution-independent, so either set pairs validly.
     lift::CalibrationSet out_intrinsics;
+    // Number of cameras actually captured this session. 0 → fall back to the
+    // intrinsics file count. Set this to the live/replay camera count so that
+    // a calibration file with MORE cameras than are in use does not drag empty
+    // (unused) cameras into the solve and fail it.
+    std::size_t num_cams = 0;
     // Known tag layout = the world frame. Required.
     lift::FloorTagMap    map;
     // Detector config. If faces is empty the ctor fills it from `map`. CLAHE is

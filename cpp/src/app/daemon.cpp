@@ -150,14 +150,14 @@ config::RunMode initial_mode(const config::MainOptions& opts,
     // Step 0 of setup: when C++ intrinsic calibration is enabled and its output
     // YAML is missing, calibrate intrinsics first. Disabled (the default) →
     // intrinsics are assumed provided externally and we skip to extrinsic.
-    if (opts.intrinsic_calib_enabled && !intrinsics_exists) {
+    if (opts.intrinsic_step_enabled && !intrinsics_exists) {
         return config::RunMode::CalibIntrinsic;
     }
     if (!extrinsics_exists) {
         // The configured method (extrinsic_calib.method: floor) picks which
         // extrinsic stage to enter first.
-        return opts.floor_calib_enabled ? config::RunMode::CalibExtrinsicFloor
-                                        : config::RunMode::CalibExtrinsic;
+        return opts.excal_method == "floor" ? config::RunMode::CalibExtrinsicFloor
+                                            : config::RunMode::CalibExtrinsic;
     }
     if (!profile_exists)    return config::RunMode::CalibSubject;
     return config::RunMode::Run;

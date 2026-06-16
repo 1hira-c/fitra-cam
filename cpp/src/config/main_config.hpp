@@ -170,6 +170,13 @@ struct MainOptions {
     // by --floor-calib (live) or --floor-replay (offline). Distinct from the
     // controller-marker path above (different solver / world frame).
     bool        floor_calib_enabled  = false;
+    // Daemon-only extrinsic stage selector ("controller" | "floor"), loaded from
+    // extrinsic_calib.method. Distinct from floor_calib_enabled (the run_mode
+    // flag, set only by --floor-calib): the shared daemon config must NOT set a
+    // run_mode-deriving flag, or the parent + run child derive a calib mode and
+    // the flow stalls. The daemon reads excal_method to pick which extrinsic
+    // stage to enter / spawn (--floor-calib injected per-child by module_argv).
+    std::string excal_method = "controller";
     // Known tag layout YAML (lift::FloorTagMap). Required for the floor path.
     std::string floor_map;
     // Offline replay session directory (tools/excal_record format). Non-empty
@@ -193,6 +200,13 @@ struct MainOptions {
     // setup step before extrinsic calibration. Selected by --calib-intrinsic
     // (live) or --intrinsic-replay (offline).
     bool        intrinsic_calib_enabled = false;
+    // Daemon-only: include the intrinsic step (step 0) in the setup chain,
+    // loaded from intrinsic_calib.enabled. Distinct from intrinsic_calib_enabled
+    // (the run_mode flag, set only by --calib-intrinsic) for the same reason as
+    // excal_method above — keeping the shared daemon config free of run_mode
+    // flags. The daemon enters calib-intrinsic first when this is set and the
+    // intrinsics YAML is missing.
+    bool        intrinsic_step_enabled = false;
     std::string intrinsic_replay;
     std::string intrinsic_out      = "calibrations/intrinsics.yaml";
     std::string intrinsic_model    = "pinhole";  // "pinhole" | "fisheye"

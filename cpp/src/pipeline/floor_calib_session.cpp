@@ -128,7 +128,12 @@ bool FloorCalibSession::solve_and_write(std::string& err) {
         accum_copy = accum_;
     }
 
-    const std::size_t n_cams = cfg_.intrinsics.cameras.size();
+    // Only solve the cameras actually in use this session (num_cams), not every
+    // camera the intrinsics file happens to list — an unused camera would have
+    // no observations and fail the whole solve.
+    std::size_t n_cams = cfg_.num_cams != 0 ? cfg_.num_cams
+                                            : cfg_.intrinsics.cameras.size();
+    if (n_cams > cfg_.intrinsics.cameras.size()) n_cams = cfg_.intrinsics.cameras.size();
     std::vector<lift::FloorCameraInput> inputs(n_cams);
     for (std::size_t i = 0; i < n_cams; ++i) {
         const auto& intr = cfg_.intrinsics.cameras[i].intrinsics;

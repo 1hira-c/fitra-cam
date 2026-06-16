@@ -48,6 +48,7 @@ build_floor_session(const config::MainOptions& opts, std::size_t n_cams) {
         return nullptr;
     }
     fc.fisheye           = opts.floor_fisheye;
+    fc.num_cams          = n_cams;  // actual capture count, not the file's camera count
     fc.burst_min         = opts.floor_burst_min;
     fc.max_pnp_reproj_px = opts.floor_max_reproj_px;
     fc.solver.max_reproj_px = opts.floor_max_reproj_px;

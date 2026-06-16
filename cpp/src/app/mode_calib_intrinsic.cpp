@@ -84,8 +84,8 @@ int run_mode_calib_intrinsic(const config::MainOptions& opts, FlowControl& flow)
     // After intrinsics: the setup chain advances to extrinsic calibration. The
     // configured method (extrinsic_calib.method) picks controller vs floor.
     const config::RunMode next_after_solve =
-        opts.floor_calib_enabled ? config::RunMode::CalibExtrinsicFloor
-                                 : config::RunMode::CalibExtrinsic;
+        opts.excal_method == "floor" ? config::RunMode::CalibExtrinsicFloor
+                                     : config::RunMode::CalibExtrinsic;
     const std::string guidance = flow.managed
         ? "intrinsics written to " + opts.intrinsic_out
           + ". Flow daemon switches to extrinsic calibration."

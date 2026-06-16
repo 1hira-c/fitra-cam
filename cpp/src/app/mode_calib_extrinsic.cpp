@@ -82,6 +82,12 @@ build_excal_session(const config::MainOptions& opts, std::size_t n_cams) {
     ec.burst_min              = opts.excal_burst_min;
     ec.min_samples_per_group  = opts.excal_min_samples;
     ec.out_path               = opts.excal_out;
+    // Per-face PnP must match the intrinsics distortion model — otherwise
+    // fisheye coefficients are fed to the pinhole solvePnP and the hand-eye
+    // extrinsic is wrong. Cameras share lenses; treat fisheye if any is.
+    for (const auto& cam : ec.intrinsics.cameras) {
+        if (cam.intrinsics.is_fisheye()) { ec.board.fisheye = true; break; }
+    }
     return std::make_unique<pipeline::ExtrinsicCalibSession>(std::move(ec));
 }
 
