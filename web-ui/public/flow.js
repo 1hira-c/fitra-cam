@@ -12,6 +12,7 @@ window.FitraFlow = (() => {
     // The floor (案D) and controller (案C) extrinsic methods share one page;
     // it branches on the state JSON's "method" field.
     "calib-extrinsic-floor": "/extrinsic-calib",
+    "calib-intrinsic": "/intrinsic-calib",
   };
 
   function watch(opts) {

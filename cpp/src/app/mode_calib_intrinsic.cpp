@@ -8,9 +8,12 @@
 #include "app/camera_builder.hpp"
 #include "app/floor_live_input.hpp"
 #include "app/intrinsic_calib_runner.hpp"
+#include "app/server_builder.hpp"
 #include "pipeline/excal_replay_input.hpp"
 #include "pipeline/intrinsic_calib_session.hpp"
+#include "pipeline/snapshot.hpp"
 #include "util/logging.hpp"
+#include "web/crow_server.hpp"
 
 namespace fitra::app {
 
@@ -83,15 +86,26 @@ int run_mode_calib_intrinsic(const config::MainOptions& opts, FlowControl& flow)
     const config::RunMode next_after_solve =
         opts.floor_calib_enabled ? config::RunMode::CalibExtrinsicFloor
                                  : config::RunMode::CalibExtrinsic;
-    session->set_on_solved([&flow, next_after_solve, &opts]() {
-        FITRA_LOG_INFO("intrinsic-calib: solved. intrinsics written to {}",
-                       opts.intrinsic_out);
+    const std::string guidance = flow.managed
+        ? "intrinsics written to " + opts.intrinsic_out
+          + ". Flow daemon switches to extrinsic calibration."
+        : "intrinsics written to " + opts.intrinsic_out + ". Restart in the next mode.";
+    session->set_on_solved([&flow, next_after_solve, guidance]() {
+        FITRA_LOG_INFO("intrinsic-calib: solved. {}", guidance);
         if (flow.managed) flow.request_switch(next_after_solve);
         else              flow.stop.store(true);
     });
 
-    // I5 attaches a Crow server here for web start/solve. For now collection
-    // runs headless and solves on stop.
+    // Crow server for web start/solve (the /intrinsic-calib page).
+    pipeline::SnapshotBus bus{n_cams};
+    auto server = make_server(opts, config::RunMode::CalibIntrinsic, bus,
+                              nullptr, &flow);
+    if (server) {
+        server->set_intrinsic_calib_session(session.get());
+        server->set_intrinsic_calib_next_step(guidance);
+        server->start();
+    }
+
     session->start();
     FITRA_LOG_INFO("intrinsic-calib: collecting ({} model, board {}x{}, out={}). "
                    "Show the ChArUco board to each camera; stop to solve + write.",
@@ -102,6 +116,7 @@ int run_mode_calib_intrinsic(const config::MainOptions& opts, FlowControl& flow)
     input.start();
     run_intrinsic_calib_loop(input, *session, flow.stop);
     input.stop();
+    if (server) server->stop();
 
     if (session->state() == pipeline::IntrinsicCalibState::kSolved) {
         return EXIT_SUCCESS;

@@ -6,6 +6,7 @@
 
 #include "pipeline/extrinsic_calib_session.hpp"
 #include "pipeline/floor_calib_session.hpp"
+#include "pipeline/intrinsic_calib_session.hpp"
 #include "vmt/auto_alignment.hpp"   // yaw_from_vmt_quat
 #include "vmt/controller_pose_receiver.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
@@ -351,6 +352,64 @@ void register_floor_calib_routes(crow::SimpleApp& app,
         o << "{\"ok\":" << (ok ? "true" : "false")
           << ",\"err\":\"" << json_escape(err) << "\""
           << ",\"state\":\"" << pipeline::floor_calib_state_name(session->state()) << "\"";
+        if (ok && !next_step.empty()) {
+            o << ",\"next_step\":\"" << json_escape(next_step) << "\"";
+        }
+        o << "}";
+        crow::response r{o.str()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+}
+
+void register_intrinsic_calib_routes(crow::SimpleApp& app,
+                                     const IntrinsicCalibRouteDeps& deps) {
+    if (!deps.session) return;
+    auto* session = deps.session;
+
+    std::filesystem::path root{deps.static_dir};
+    CROW_ROUTE(app, "/intrinsic-calib")
+    ([root]() {
+        return serve_static_index(root, "intrinsic-calib UI not installed");
+    });
+    CROW_ROUTE(app, "/intrinsic-calib/<path>")
+    ([root](const std::string& sub) {
+        return serve_static_sub(root, sub);
+    });
+
+    CROW_ROUTE(app, "/api/incal/state")
+    ([session]() {
+        crow::response r{session->state_json()};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/incal/start").methods(crow::HTTPMethod::POST)
+    ([session](const crow::request& /*req*/) {
+        session->start();
+        crow::response r{"{\"ok\":true,\"state\":\""
+                         + std::string(pipeline::intrinsic_calib_state_name(session->state()))
+                         + "\"}"};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/incal/stop").methods(crow::HTTPMethod::POST)
+    ([session](const crow::request& /*req*/) {
+        session->stop_collecting();
+        crow::response r{"{\"ok\":true}"};
+        r.set_header("Content-Type", "application/json; charset=utf-8");
+        return r;
+    });
+
+    CROW_ROUTE(app, "/api/incal/solve").methods(crow::HTTPMethod::POST)
+    ([session, next_step = deps.next_step](const crow::request& /*req*/) {
+        std::string err;
+        bool ok = session->solve_and_write(err);
+        std::ostringstream o;
+        o << "{\"ok\":" << (ok ? "true" : "false")
+          << ",\"err\":\"" << json_escape(err) << "\""
+          << ",\"state\":\"" << pipeline::intrinsic_calib_state_name(session->state()) << "\"";
         if (ok && !next_step.empty()) {
             o << ",\"next_step\":\"" << json_escape(next_step) << "\"";
         }

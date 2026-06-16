@@ -286,6 +286,14 @@ void CrowServer::set_floor_calib_next_step(std::string guidance) {
     floor_next_step_ = std::move(guidance);
 }
 
+void CrowServer::set_intrinsic_calib_session(pipeline::IntrinsicCalibSession* session) {
+    intrinsic_session_ = session;
+}
+
+void CrowServer::set_intrinsic_calib_next_step(std::string guidance) {
+    intrinsic_next_step_ = std::move(guidance);
+}
+
 void CrowServer::set_calibration_next_step(std::string guidance) {
     calib_next_step_ = std::move(guidance);
 }
@@ -874,6 +882,7 @@ void CrowServer::start() {
     register_calibration_routes_();
     register_extrinsic_calib_routes_();
     register_floor_calib_routes_();
+    register_intrinsic_calib_routes_();
 
     // Static files under opts_.static_dir
     std::filesystem::path static_root{opts_.static_dir};
@@ -976,6 +985,14 @@ void CrowServer::register_floor_calib_routes_() {
     deps.next_step  = floor_next_step_;
     deps.static_dir = opts_.excal_static_dir;
     detail::register_floor_calib_routes(impl_->app, deps);
+}
+
+void CrowServer::register_intrinsic_calib_routes_() {
+    detail::IntrinsicCalibRouteDeps deps;
+    deps.session    = intrinsic_session_;
+    deps.next_step  = intrinsic_next_step_;
+    deps.static_dir = opts_.incal_static_dir;
+    detail::register_intrinsic_calib_routes(impl_->app, deps);
 }
 
 void CrowServer::publisher_loop() {

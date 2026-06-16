@@ -146,7 +146,8 @@ export type FlowMode =
   | "run"
   | "calib-subject"
   | "calib-extrinsic"
-  | "calib-extrinsic-floor";
+  | "calib-extrinsic-floor"
+  | "calib-intrinsic";
 
 export interface FlowState {
   mode: FlowMode;

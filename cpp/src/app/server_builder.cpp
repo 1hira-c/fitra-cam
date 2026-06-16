@@ -22,6 +22,7 @@ std::unique_ptr<web::CrowServer> make_server(const config::MainOptions& opts,
                         ? guess_subject_calib_static_dir().string()
                         : opts.calib_static_dir;
     sopts.excal_static_dir = guess_extrinsic_calib_static_dir().string();
+    sopts.incal_static_dir = guess_intrinsic_calib_static_dir().string();
     auto server = std::make_unique<web::CrowServer>(bus, bus3d, sopts);
     if (sopts.flow_managed) {
         // Capture a copy of opts so the precheck sees the same config the

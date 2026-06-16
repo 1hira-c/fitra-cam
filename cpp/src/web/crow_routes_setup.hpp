@@ -18,7 +18,11 @@
 
 #include "pipeline/calibration_session.hpp"
 
-namespace fitra::pipeline { class ExtrinsicCalibSession; class FloorCalibSession; }
+namespace fitra::pipeline {
+class ExtrinsicCalibSession;
+class FloorCalibSession;
+class IntrinsicCalibSession;
+}
 namespace fitra::vmt { class HmdPoseBus; class ControllerPoseBus; }
 
 namespace fitra::web::detail {
@@ -55,5 +59,14 @@ struct FloorCalibRouteDeps {
 };
 void register_floor_calib_routes(crow::SimpleApp& app,
                                  const FloorCalibRouteDeps& deps);
+
+// Intrinsic (ChArUco) calibration: /intrinsic-calib page + /api/incal/*.
+struct IntrinsicCalibRouteDeps {
+    pipeline::IntrinsicCalibSession* session = nullptr;  // nullptr → no routes
+    std::string                      next_step;
+    std::string                      static_dir;
+};
+void register_intrinsic_calib_routes(crow::SimpleApp& app,
+                                     const IntrinsicCalibRouteDeps& deps);
 
 }  // namespace fitra::web::detail

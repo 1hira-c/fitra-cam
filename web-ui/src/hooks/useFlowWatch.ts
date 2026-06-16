@@ -8,6 +8,7 @@ export const PAGE_FOR_MODE: Record<FlowMode, string> = {
   "calib-extrinsic": "/extrinsic-calib",
   // 案D shares the /extrinsic-calib page with 案C; the page branches on method.
   "calib-extrinsic-floor": "/extrinsic-calib",
+  "calib-intrinsic": "/intrinsic-calib",
 };
 
 export type FlowWatchStatus = "unknown" | "unsupported" | "down" | "up";
@@ -28,7 +29,8 @@ function isFlowMode(mode: string): mode is FlowMode {
     mode === "run" ||
     mode === "calib-subject" ||
     mode === "calib-extrinsic" ||
-    mode === "calib-extrinsic-floor"
+    mode === "calib-extrinsic-floor" ||
+    mode === "calib-intrinsic"
   );
 }
 

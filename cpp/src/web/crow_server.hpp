@@ -26,6 +26,7 @@
 namespace fitra::pipeline {
 class ExtrinsicCalibSession;   // fwd decl; full header included in crow_server.cpp
 class FloorCalibSession;       // fwd decl; full header included in crow_server.cpp
+class IntrinsicCalibSession;   // fwd decl; full header included in crow_server.cpp
 }
 
 namespace fitra::slimevr {
@@ -68,6 +69,11 @@ struct ServerOptions {
     // When non-empty (and an ExtrinsicCalibSession is attached) /extrinsic-calib
     // serves the collection frontend; /api/excal/* exposes the session.
     std::string excal_static_dir;
+
+    // Directory that contains web/intrinsic_calibration/{index.html,app.js,...}.
+    // When non-empty (and an IntrinsicCalibSession is attached) /intrinsic-calib
+    // serves the collection frontend; /api/incal/* exposes the session.
+    std::string incal_static_dir;
 };
 
 class CrowServer {
@@ -99,6 +105,11 @@ public:
     void set_floor_calib_session(pipeline::FloorCalibSession* session);
     // Guidance spliced into a successful floor /api/excal/solve as "next_step".
     void set_floor_calib_next_step(std::string guidance);
+
+    // Attach the intrinsic (ChArUco) calibration session; /api/incal/* exposes
+    // its state + start/stop/solve. Must be called before start().
+    void set_intrinsic_calib_session(pipeline::IntrinsicCalibSession* session);
+    void set_intrinsic_calib_next_step(std::string guidance);
 
     // Human-facing guidance spliced into a successful /api/excal/solve
     // response as "next_step" (the subject-calib restart command). Replaces
@@ -171,6 +182,7 @@ private:
     void register_calibration_routes_();
     void register_extrinsic_calib_routes_();
     void register_floor_calib_routes_();
+    void register_intrinsic_calib_routes_();
 
     pipeline::SnapshotBus& bus_;
     pipeline::Skeleton3DBus* bus3d_ = nullptr;
@@ -186,6 +198,8 @@ private:
     std::string                    excal_next_step_;
     pipeline::FloorCalibSession*   floor_session_ = nullptr;
     std::string                    floor_next_step_;
+    pipeline::IntrinsicCalibSession* intrinsic_session_ = nullptr;
+    std::string                    intrinsic_next_step_;
     FlowSwitchFn                   flow_switch_;
     slimevr::NativePublisher*      native_publisher_ = nullptr;
     slimevr::SlimeTrackerBus*      tracker_bus_     = nullptr;
