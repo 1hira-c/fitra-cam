@@ -161,19 +161,29 @@ void test_next_action() {
 
 void test_initial_mode() {
     MainOptions opts;  // daemon_initial defaults to "auto"
+    // initial_mode(opts, intrinsics_exists, extrinsics_exists, profile_exists).
+    // Intrinsic step is disabled by default, so intrinsics_exists is moot here.
 
-    check(initial_mode(opts, false, false) == RunMode::CalibExtrinsic,
+    check(initial_mode(opts, true, false, false) == RunMode::CalibExtrinsic,
           "auto: no extrinsics -> calib-extrinsic");
-    check(initial_mode(opts, true, false) == RunMode::CalibSubject,
+    check(initial_mode(opts, true, true, false) == RunMode::CalibSubject,
           "auto: extrinsics ok, no profile -> calib-subject");
-    check(initial_mode(opts, true, true) == RunMode::Run,
-          "auto: both artifacts -> run");
+    check(initial_mode(opts, true, true, true) == RunMode::Run,
+          "auto: all artifacts -> run");
+
+    // Intrinsic step 0: enabled + missing output -> calib-intrinsic first.
+    MainOptions iopts;
+    iopts.intrinsic_calib_enabled = true;
+    check(initial_mode(iopts, false, false, false) == RunMode::CalibIntrinsic,
+          "auto: intrinsic enabled + missing -> calib-intrinsic");
+    check(initial_mode(iopts, true, false, false) == RunMode::CalibExtrinsic,
+          "auto: intrinsics present -> skip to calib-extrinsic");
 
     opts.daemon_initial = "calib-extrinsic";
-    check(initial_mode(opts, true, true) == RunMode::CalibExtrinsic,
+    check(initial_mode(opts, true, true, true) == RunMode::CalibExtrinsic,
           "explicit --daemon-initial wins over artifacts");
     opts.daemon_initial = "run";
-    check(initial_mode(opts, false, false) == RunMode::Run,
+    check(initial_mode(opts, false, false, false) == RunMode::Run,
           "explicit run wins even with artifacts missing");
 
     MainOptions p;

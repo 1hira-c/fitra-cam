@@ -10,7 +10,7 @@ Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有す�
 **kinematic-tree (root = hip_center, children = parent-relative offset)** で動く。
 
 **プロセスは排他 RunMode (`run` / `calib-subject` / `calib-extrinsic` /
-`calib-extrinsic-floor`) で動く**
+`calib-extrinsic-floor` / `calib-intrinsic`) で動く**
 ([design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md) M1–M4
 実装済み)。mode は既存フラグから導出 (`--calibrate` → calib-subject、`--extrinsic-calib` or
 `--excal-replay` → calib-extrinsic、`--floor-calib` or `--floor-replay` → calib-extrinsic-floor)。
@@ -91,6 +91,24 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-06-16 — C++ 内部パラメータ (intrinsic) 校正 + 歪みモデル明示
+extrinsic の前提工程だった intrinsic 校正を C++/WebUI に取り込み、setup の step0 に
+据えた。(1) **歪みモデル基盤**: intrinsics YAML に `distortion_model` (pinhole|fisheye)
+を追加し、consumer (triangulator / apriltag PnP / floor solver) を係数数でなくモデルで
+分岐。案D の `floor_fisheye` が“裏付けのないフラグ”でなくなり魚眼 intrinsics を正しく
+食える。(2) **ChArUco 検出** (`lift/charuco_board`) + **収集 session**
+(`pipeline/intrinsic_calib_session`、多様性ゲートで per-camera ビュー収集、pinhole=
+cv::calibrateCamera / fisheye=cv::fisheye::calibrate)。(3) **RunMode::CalibIntrinsic** +
+`--calib-intrinsic`/`--intrinsic-replay`/`--charuco-*` + mode runner (live Crow / replay
+無人) + **WebUI** `/intrinsic-calib` (`/api/incal/*`、per-camera views/被覆/rms)。
+(4) **flow 統合**: `kExitFlowToCalibIntrinsic(84)`、daemon `initial_mode` が
+intrinsic_calib.enabled かつ出力不在で step0 に入り intrinsic→extrinsic→subject→run と
+連鎖。**切替前 precheck** (`precheck_mode_switch`) も追加し、設定不備のモード切替を
+respawn 前に WebUI へ理由表示 (静かな run フォールバックを解消)。設計 =
+[design/pose-3d-intrinsic-calibration.md](../design/pose-3d-intrinsic-calibration.md)。
+ctest: test_calib_io / test_charuco_board / test_intrinsic_calib_session /
+test_main_config (precheck + intrinsic ケース)。実機 rms は ChArUco 撮影後に確定。
 
 ### 2026-06-15 — 床 AprilTag 既知配置 PnP による extrinsic 校正 (案D) コア実装
 VR を extrinsic チェーンから外す 2 つ目の extrinsic 方式。床に既知配置した AprilTag マップへ

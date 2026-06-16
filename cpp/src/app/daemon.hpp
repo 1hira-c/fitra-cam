@@ -46,9 +46,11 @@ DaemonAction next_action(bool exited_normally, int exit_code,
                          int& consecutive_failures);
 
 // First mode to spawn. --daemon-initial wins when not "auto"; auto picks the
-// first stage whose input artifact is missing: no extrinsics YAML →
-// calib-extrinsic, no subject profile → calib-subject, both present → run.
+// first stage whose input artifact is missing: intrinsic calib enabled + no
+// intrinsics YAML → calib-intrinsic, no extrinsics YAML → calib-extrinsic(-floor),
+// no subject profile → calib-subject, all present → run.
 config::RunMode initial_mode(const config::MainOptions& opts,
+                             bool intrinsics_exists,
                              bool extrinsics_exists,
                              bool profile_exists);
 

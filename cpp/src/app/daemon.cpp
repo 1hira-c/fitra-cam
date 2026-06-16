@@ -139,12 +139,19 @@ DaemonAction next_action(bool exited_normally, int exit_code,
 }
 
 config::RunMode initial_mode(const config::MainOptions& opts,
+                             bool intrinsics_exists,
                              bool extrinsics_exists,
                              bool profile_exists) {
     config::RunMode m;
     if (opts.daemon_initial != "auto"
         && config::parse_run_mode_name(opts.daemon_initial, m)) {
         return m;
+    }
+    // Step 0 of setup: when C++ intrinsic calibration is enabled and its output
+    // YAML is missing, calibrate intrinsics first. Disabled (the default) →
+    // intrinsics are assumed provided externally and we skip to extrinsic.
+    if (opts.intrinsic_calib_enabled && !intrinsics_exists) {
+        return config::RunMode::CalibIntrinsic;
     }
     if (!extrinsics_exists) {
         // The configured method (extrinsic_calib.method: floor) picks which
@@ -198,10 +205,15 @@ int run_daemon(const config::MainOptions& opts,
     std::error_code ec;
     const bool extrinsics_exists =
         !opts.calib.empty() && std::filesystem::exists(opts.calib, ec) && !ec;
+    const bool intrinsics_exists =
+        !opts.intrinsic_out.empty() &&
+        std::filesystem::exists(opts.intrinsic_out, ec) && !ec;
 
-    config::RunMode mode = initial_mode(opts, extrinsics_exists, profile_now());
-    FITRA_LOG_INFO("[daemon] initial mode: {} (extrinsics {}, profile {})",
+    config::RunMode mode =
+        initial_mode(opts, intrinsics_exists, extrinsics_exists, profile_now());
+    FITRA_LOG_INFO("[daemon] initial mode: {} (intrinsics {}, extrinsics {}, profile {})",
                    config::run_mode_name(mode),
+                   intrinsics_exists ? "present" : "missing",
                    extrinsics_exists ? "present" : "missing",
                    profile_now() ? "present" : "missing");
 

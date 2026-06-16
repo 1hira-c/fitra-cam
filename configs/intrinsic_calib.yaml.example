@@ -1,0 +1,37 @@
+# Intrinsic (ChArUco) calibration config EXAMPLE for the medium 2-camera setup.
+# See docs/design/pose-3d-intrinsic-calibration.md.
+#
+# Produces calibrations/intrinsics.yaml (per-camera K + dist + distortion_model).
+# Calibrate at the SAME field-of-view but the HIGHEST resolution you can — tags
+# project to more pixels → robust corners. The recovered K/dist record that
+# resolution; the extrinsic/run steps then read this file.
+#
+# model: pinhole (cv::calibrateCamera, dist k1,k2,p1,p2,k3) or fisheye
+# (cv::fisheye::calibrate, dist k1..k4). Strong fisheye lenses (ELP AR0234) want
+# model: fisheye for accurate edges.
+
+schema: fitra_main_config_v1
+
+cameras:
+    cam0: /dev/v4l/by-path/platform-3610000.usb-usb-0:2.3:1.0-video-index0
+    cam1: /dev/v4l/by-path/platform-3610000.usb-usb-0:2.4:1.0-video-index0
+    height: 960
+    width: 1280
+    fps: 30
+    pixel_format: mjpeg
+
+web:
+    port: 8000
+
+intrinsic_calib:
+    enabled: true
+    model: fisheye
+    out: calibrations/intrinsics.yaml
+    # ChArUco board geometry (must match the printed board).
+    squares_x: 5
+    squares_y: 7
+    square_len_m: 0.04
+    marker_len_m: 0.03
+    # dict: -1 → DICT_4X4_50 (python calibrate_intrinsics_charuco.py default)
+    min_views: 15
+    min_corners: 8
