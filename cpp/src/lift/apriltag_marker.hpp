@@ -46,6 +46,11 @@ struct MarkerBoardConfig {
     double clahe_clip = 2.0;
     int    clahe_grid = 8;          // (clahe_grid × clahe_grid) tiles
 
+    // Distortion model of the intrinsics passed to detect(): when true the
+    // per-face PnP undistorts with the fisheye model (cv::fisheye) instead of
+    // the pinhole Brown model, so reproj error / pose are correct under fisheye.
+    bool   fisheye    = false;
+
     const MarkerFace* find(int id) const;
 };
 
@@ -90,7 +95,8 @@ bool solve_tag_pose(const std::array<cv::Point2f, 4>& corners,
                     const cv::Mat& K,
                     const cv::Mat& dist,
                     geom::T_cam_marker& T_cam_face,
-                    double& reproj_rms_px);
+                    double& reproj_rms_px,
+                    bool fisheye = false);
 
 // Object-space corners of a square tag (side `s`) centred at the face origin,
 // Z=0 plane, matching aruco corner order: TL(-,+), TR(+,+), BR(+,-), BL(-,-).

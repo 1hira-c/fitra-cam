@@ -47,6 +47,7 @@ private:
         std::string id;
         cv::Mat K;       // 3x3 CV_64F
         cv::Mat dist;    // 1xN CV_64F
+        bool    fisheye = false;  // undistort/project with the fisheye model
         cv::Mat R;       // 3x3 CV_64F world -> camera
         cv::Mat t;       // 3x1 CV_64F world -> camera
         cv::Mat rvec;    // 3x1 CV_64F

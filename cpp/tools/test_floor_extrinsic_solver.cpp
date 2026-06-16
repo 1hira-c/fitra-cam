@@ -207,6 +207,60 @@ void test_noise() {
     }
 }
 
+// world->camera looking down at the floor (tags in front, zcam>0) — required
+// for the fisheye model (unlike pinhole, fisheye project/undistort are not clean
+// inverses for points behind the camera).
+cv::Matx44d gt_pose_down() {
+    const double tilt = 20.0 * 3.14159265 / 180.0;
+    cv::Matx33d down(1, 0, 0, 0, -1, 0, 0, 0, -1);
+    cv::Matx33d Rx(1, 0, 0, 0, std::cos(tilt), -std::sin(tilt), 0, std::sin(tilt), std::cos(tilt));
+    cv::Matx33d Rcw = Rx * down;
+    cv::Vec3d c(0.3, 0.3, 2.2);
+    cv::Vec3d t = -(Rcw * c);
+    cv::Matx44d T = cv::Matx44d::eye();
+    for (int r = 0; r < 3; ++r) {
+        for (int cc = 0; cc < 3; ++cc) T(r, cc) = Rcw(r, cc);
+        T(r, 3) = t[r];
+    }
+    return T;
+}
+
+// Fisheye branch: synthesize corners with cv::fisheye::projectPoints and a
+// 4-coefficient model, then recover via the solver's fisheye path.
+void test_fisheye_roundtrip() {
+    cv::Mat K = make_K(700.0, 640.0, 480.0);
+    cv::Mat D = (cv::Mat_<double>(1, 4) << 0.05, -0.01, 0.002, -0.0005);
+    FloorTagMap map = layout_with_stand();
+    cv::Matx44d gt = gt_pose_down();
+    cv::Mat R = (cv::Mat_<double>(3, 3) <<
+        gt(0,0),gt(0,1),gt(0,2), gt(1,0),gt(1,1),gt(1,2), gt(2,0),gt(2,1),gt(2,2));
+    cv::Mat rvec; cv::Rodrigues(R, rvec);
+    cv::Mat tvec = (cv::Mat_<double>(3, 1) << gt(0,3), gt(1,3), gt(2,3));
+
+    FloorCameraInput cam;
+    cam.cam_index = 0; cam.K = K; cam.dist = D; cam.fisheye = true;
+    for (const auto& tag : map.tags) {
+        auto wc = map.world_corners(tag);
+        std::vector<cv::Point3d> objp;
+        for (int i = 0; i < 4; ++i)
+            objp.emplace_back(wc[i].v[0], wc[i].v[1], wc[i].v[2]);
+        std::vector<cv::Point2d> proj;
+        cv::fisheye::projectPoints(objp, proj, rvec, tvec, K, D);
+        FloorTagObservation ob; ob.id = tag.id;
+        for (int i = 0; i < 4; ++i)
+            ob.corners[i] = cv::Point2f((float)proj[i].x, (float)proj[i].y);
+        cam.obs.push_back(ob);
+    }
+    auto sol = solve_floor_extrinsics({cam}, map);
+    CHECK(sol.ok);
+    if (!sol.cameras.empty()) {
+        const auto& c = sol.cameras[0];
+        CHECK(c.solved);
+        CHECK_LT(c.reproj_rms_px, 1e-1);
+        CHECK_LT(rot_angle_deg(c.T_cam_world.raw(), gt), 1e-1);
+    }
+}
+
 void test_too_few() {
     cv::Mat K = make_K(900.0, 640.0, 360.0);
     FloorTagMap map = layout_with_stand();
@@ -230,6 +284,7 @@ int main() {
     test_roundtrip_noisefree();
     test_planar_degenerate();
     test_noise();
+    test_fisheye_roundtrip();
     test_too_few();
     if (g_fail) {
         std::fprintf(stderr, "test_floor_extrinsic_solver: %d failures\n", g_fail);

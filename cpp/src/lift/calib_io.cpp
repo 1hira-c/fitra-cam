@@ -73,6 +73,10 @@ CalibrationSet load_calibration(const std::string& path) {
         cam.intrinsics.height = static_cast<int>(node_real(node["height"]));
         cam.intrinsics.rms_px = node_real(node["rms_px"]);
         cam.intrinsics.source = node_string(node["source"]);
+        {
+            const std::string model = node_string(node["distortion_model"]);
+            cam.intrinsics.distortion_model = model.empty() ? "pinhole" : model;
+        }
         cam.intrinsics.K = read_matrix(node, "K");
         cam.intrinsics.dist = read_matrix(node, "dist").reshape(1, 1);
 
@@ -125,6 +129,9 @@ void write_calibration(const std::string& path, const CalibrationSet& calib) {
         fs << "height" << cam.intrinsics.height;
         fs << "rms_px" << cam.intrinsics.rms_px;
         if (!cam.intrinsics.source.empty()) fs << "source" << cam.intrinsics.source;
+        fs << "distortion_model"
+           << (cam.intrinsics.distortion_model.empty() ? std::string("pinhole")
+                                                        : cam.intrinsics.distortion_model);
         fs << "K" << cam.intrinsics.K;
         fs << "dist" << cam.intrinsics.dist;
         fs << "}";
@@ -175,6 +182,18 @@ void validate_calibration(const CalibrationSet& calib) {
         if (cam.intrinsics.dist.empty() || cam.intrinsics.dist.type() != CV_64F ||
             !all_finite(cam.intrinsics.dist)) {
             throw std::runtime_error("invalid dist coefficients for " + cam.id);
+        }
+        const std::string& model = cam.intrinsics.distortion_model;
+        if (model != "pinhole" && model != "fisheye") {
+            throw std::runtime_error("distortion_model must be 'pinhole' or 'fisheye' for "
+                                     + cam.id);
+        }
+        const int ncoef = cam.intrinsics.dist.rows * cam.intrinsics.dist.cols;
+        if (model == "fisheye" && ncoef != 4) {
+            throw std::runtime_error("fisheye dist must have 4 coefficients for " + cam.id);
+        }
+        if (model == "pinhole" && ncoef < 4) {
+            throw std::runtime_error("pinhole dist needs >= 4 coefficients for " + cam.id);
         }
         if (cam.has_extrinsics) {
             if (cam.extrinsics.T_cw.rows != 4 || cam.extrinsics.T_cw.cols != 4 ||

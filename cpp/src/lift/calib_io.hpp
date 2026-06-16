@@ -19,8 +19,16 @@ struct Intrinsics {
     int height = 0;
     double rms_px = 0.0;
     std::string source;
+    // Lens distortion model the K/dist pair was fit under: "pinhole"
+    // (cv::calibrateCamera, dist = k1,k2,p1,p2[,k3...]) or "fisheye"
+    // (cv::fisheye::calibrate, dist = k1,k2,k3,k4). Consumers branch on this —
+    // NOT on the coefficient count — so a fisheye calibration is undistorted
+    // with the matching model. Absent in the YAML → "pinhole" (back-compat).
+    std::string distortion_model = "pinhole";
     cv::Mat K;     // 3x3 CV_64F
     cv::Mat dist;  // 1xN CV_64F
+
+    bool is_fisheye() const { return distortion_model == "fisheye"; }
 };
 
 struct Extrinsics {

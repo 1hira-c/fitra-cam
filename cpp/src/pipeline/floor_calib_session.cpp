@@ -51,6 +51,13 @@ lift::MarkerBoardConfig board_from(const FloorCalibConfig& cfg) {
         }
     }
     b.use_clahe = true;
+    // Per-frame PnP (the reproj quality gate) must match the intrinsics model.
+    // Cameras share lenses here; treat fisheye if forced or any camera is fisheye.
+    bool any_fisheye = cfg.fisheye;
+    for (const auto& cam : cfg.intrinsics.cameras) {
+        any_fisheye = any_fisheye || cam.intrinsics.is_fisheye();
+    }
+    b.fisheye = any_fisheye;
     return b;
 }
 
@@ -124,10 +131,13 @@ bool FloorCalibSession::solve_and_write(std::string& err) {
     const std::size_t n_cams = cfg_.intrinsics.cameras.size();
     std::vector<lift::FloorCameraInput> inputs(n_cams);
     for (std::size_t i = 0; i < n_cams; ++i) {
+        const auto& intr = cfg_.intrinsics.cameras[i].intrinsics;
         inputs[i].cam_index = static_cast<int>(i);
-        inputs[i].K       = cfg_.intrinsics.cameras[i].intrinsics.K;
-        inputs[i].dist    = cfg_.intrinsics.cameras[i].intrinsics.dist;
-        inputs[i].fisheye = cfg_.fisheye;
+        inputs[i].K       = intr.K;
+        inputs[i].dist    = intr.dist;
+        // Data-driven from the calibration's distortion model; cfg_.fisheye is a
+        // legacy force-all override.
+        inputs[i].fisheye = cfg_.fisheye || intr.is_fisheye();
     }
     for (const auto& [key, acc] : accum_copy) {
         if (acc.count < cfg_.burst_min) continue;

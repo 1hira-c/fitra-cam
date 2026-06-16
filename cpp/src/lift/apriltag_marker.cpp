@@ -30,7 +30,8 @@ bool solve_tag_pose(const std::array<cv::Point2f, 4>& corners,
                     const cv::Mat& K,
                     const cv::Mat& dist,
                     geom::T_cam_marker& T_cam_face,
-                    double& reproj_rms_px) {
+                    double& reproj_rms_px,
+                    bool fisheye) {
     if (tag_size_m <= 0.0 || K.empty()) return false;
 
     std::array<cv::Point3f, 4> obj = tag_object_corners(tag_size_m);
@@ -38,8 +39,19 @@ bool solve_tag_pose(const std::array<cv::Point2f, 4>& corners,
     std::vector<cv::Point2f> imgv(corners.begin(), corners.end());
 
     cv::Mat rvec, tvec;
-    bool ok = cv::solvePnP(objv, imgv, K, dist, rvec, tvec, false,
-                           cv::SOLVEPNP_IPPE_SQUARE);
+    bool ok;
+    if (fisheye) {
+        // The fisheye Brown model is incompatible with solvePnP's pinhole
+        // assumption: undistort to normalised rays first, then PnP with an
+        // identity camera and no distortion.
+        std::vector<cv::Point2f> norm;
+        cv::fisheye::undistortPoints(imgv, norm, K, dist);
+        ok = cv::solvePnP(objv, norm, cv::Mat::eye(3, 3, CV_64F), cv::Mat(),
+                          rvec, tvec, false, cv::SOLVEPNP_IPPE_SQUARE);
+    } else {
+        ok = cv::solvePnP(objv, imgv, K, dist, rvec, tvec, false,
+                          cv::SOLVEPNP_IPPE_SQUARE);
+    }
     if (!ok) return false;
 
     cv::Mat R;
@@ -51,9 +63,14 @@ bool solve_tag_pose(const std::array<cv::Point2f, 4>& corners,
     }
     T_cam_face = geom::T_cam_marker::from_raw(raw);
 
-    // Reprojection RMS over the 4 corners.
+    // Reprojection RMS over the 4 corners (in the camera's own model).
     std::vector<cv::Point2f> proj;
-    cv::projectPoints(objv, rvec, tvec, K, dist, proj);
+    if (fisheye) {
+        std::vector<cv::Point3d> objd(obj.begin(), obj.end());
+        cv::fisheye::projectPoints(objd, proj, rvec, tvec, K, dist);
+    } else {
+        cv::projectPoints(objv, rvec, tvec, K, dist, proj);
+    }
     double s2 = 0.0;
     for (int i = 0; i < 4; ++i) {
         cv::Point2f d = proj[i] - imgv[i];
@@ -123,7 +140,8 @@ std::vector<TagDetection> AprilTagDetector::detect(const cv::Mat& image,
         det.face_id = ids[i];
         for (int c = 0; c < 4; ++c) det.corners[c] = corners[i][c];
         det.pose_ok = solve_tag_pose(det.corners, face->tag_size_m, K, dist,
-                                     det.T_cam_face, det.reproj_rms_px);
+                                     det.T_cam_face, det.reproj_rms_px,
+                                     cfg_.fisheye);
         out.push_back(std::move(det));
     }
     return out;

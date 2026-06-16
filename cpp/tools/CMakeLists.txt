@@ -214,6 +214,22 @@ set_target_properties(fitra_test_apriltag_marker PROPERTIES
 
 add_test(NAME test_apriltag_marker COMMAND fitra_test_apriltag_marker)
 
+# calib_io: distortion_model round-trip + validation.
+add_executable(fitra_test_calib_io
+    test_calib_io.cpp
+)
+
+target_link_libraries(fitra_test_calib_io PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_calib_io PROPERTIES
+    OUTPUT_NAME "test_calib_io"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_calib_io COMMAND fitra_test_calib_io)
+
 # Floor AprilTag map: data structure + FileStorage YAML I/O round-trip.
 add_executable(fitra_test_floor_tag_map
     test_floor_tag_map.cpp
