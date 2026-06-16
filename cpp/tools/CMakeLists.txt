@@ -230,6 +230,22 @@ set_target_properties(fitra_test_calib_io PROPERTIES
 
 add_test(NAME test_calib_io COMMAND fitra_test_calib_io)
 
+# ChArUco board detection + object/image point matching.
+add_executable(fitra_test_charuco_board
+    test_charuco_board.cpp
+)
+
+target_link_libraries(fitra_test_charuco_board PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_charuco_board PROPERTIES
+    OUTPUT_NAME "test_charuco_board"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_charuco_board COMMAND fitra_test_charuco_board)
+
 # Floor AprilTag map: data structure + FileStorage YAML I/O round-trip.
 add_executable(fitra_test_floor_tag_map
     test_floor_tag_map.cpp
