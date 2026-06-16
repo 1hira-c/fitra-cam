@@ -29,6 +29,7 @@
 #include "app/flow.hpp"
 #include "app/mode_calib_extrinsic.hpp"
 #include "app/mode_calib_extrinsic_floor.hpp"
+#include "app/mode_calib_intrinsic.hpp"
 #include "app/mode_calib_subject.hpp"
 #include "app/mode_run.hpp"
 #include "app/trt_stack.hpp"
@@ -287,6 +288,9 @@ int main(int argc, char** argv) {
                 break;
             case fitra::config::RunMode::CalibExtrinsicFloor:
                 rc = fitra::app::run_mode_calib_extrinsic_floor(opts, flow);
+                break;
+            case fitra::config::RunMode::CalibIntrinsic:
+                rc = fitra::app::run_mode_calib_intrinsic(opts, flow);
                 break;
             case fitra::config::RunMode::CalibSubject:
                 rc = fitra::app::run_mode_calib_subject(opts, flow);

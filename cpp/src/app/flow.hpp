@@ -20,12 +20,14 @@ inline constexpr int kExitFlowToRun                 = 80;
 inline constexpr int kExitFlowToCalibSubject        = 81;
 inline constexpr int kExitFlowToCalibExtrinsic      = 82;
 inline constexpr int kExitFlowToCalibExtrinsicFloor = 83;
+inline constexpr int kExitFlowToCalibIntrinsic      = 84;
 
 inline int flow_exit_code(config::RunMode m) {
     switch (m) {
         case config::RunMode::CalibSubject:        return kExitFlowToCalibSubject;
         case config::RunMode::CalibExtrinsic:      return kExitFlowToCalibExtrinsic;
         case config::RunMode::CalibExtrinsicFloor: return kExitFlowToCalibExtrinsicFloor;
+        case config::RunMode::CalibIntrinsic:      return kExitFlowToCalibIntrinsic;
         case config::RunMode::Run:                 break;
     }
     return kExitFlowToRun;

@@ -187,6 +187,23 @@ struct MainOptions {
     double      floor_max_reproj_px  = 3.0;     // per-frame detection filter (px)
     bool        floor_fisheye        = false;   // intrinsics use the fisheye model
 
+    // Intrinsic (per-camera K + distortion) calibration (see
+    // docs/design/pose-3d-intrinsic-calibration.md). ChArUco board capture →
+    // cv::calibrateCamera (pinhole) or cv::fisheye::calibrate (fisheye). The
+    // setup step before extrinsic calibration. Selected by --calib-intrinsic
+    // (live) or --intrinsic-replay (offline).
+    bool        intrinsic_calib_enabled = false;
+    std::string intrinsic_replay;
+    std::string intrinsic_out      = "calibrations/intrinsics.yaml";
+    std::string intrinsic_model    = "pinhole";  // "pinhole" | "fisheye"
+    int         charuco_squares_x  = 5;
+    int         charuco_squares_y  = 7;
+    double      charuco_square_len_m = 0.04;
+    double      charuco_marker_len_m = 0.03;
+    int         charuco_dict       = -1;   // -1 → DICT_4X4_50
+    int         intrinsic_min_views   = 12;
+    int         intrinsic_min_corners = 8;
+
     // Flow daemon (docs/design/pose-3d-flow-daemon.md). CLI-only — how the
     // process is launched is not part of the YAML schema. `flow_managed` is
     // set by the daemon on spawned mode modules; it enables the
@@ -201,7 +218,9 @@ struct MainOptions {
 // mode builds only what it needs; the only thing crossing a mode boundary is
 // YAML on disk. Derive after validate_options() — it enforces the flags'
 // mutual exclusivity.
-enum class RunMode { Run, CalibSubject, CalibExtrinsic, CalibExtrinsicFloor };
+enum class RunMode {
+    Run, CalibSubject, CalibExtrinsic, CalibExtrinsicFloor, CalibIntrinsic
+};
 
 RunMode run_mode(const MainOptions& opts);
 

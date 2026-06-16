@@ -275,6 +275,32 @@ void load_extrinsic_calib(const YAML::Node& section, MainOptions& out) {
     if (section["out"])                  out.floor_out            = out.excal_out;
 }
 
+void load_intrinsic_calib(const YAML::Node& section, MainOptions& out) {
+    ensure_map(section, "intrinsic_calib");
+    static const std::set<std::string> allowed{
+        "enabled", "replay_dir", "out", "model",
+        "squares_x", "squares_y", "square_len_m", "marker_len_m", "dict",
+        "min_views", "min_corners",
+    };
+    check_keys(section, allowed, "intrinsic_calib");
+    if (section["enabled"])      out.intrinsic_calib_enabled = parse_scalar<bool>(section["enabled"], "intrinsic_calib.enabled");
+    if (section["replay_dir"])   out.intrinsic_replay        = parse_scalar<std::string>(section["replay_dir"], "intrinsic_calib.replay_dir");
+    if (section["out"])          out.intrinsic_out           = parse_scalar<std::string>(section["out"], "intrinsic_calib.out");
+    if (section["model"]) {
+        out.intrinsic_model = parse_scalar<std::string>(section["model"], "intrinsic_calib.model");
+        if (out.intrinsic_model != "pinhole" && out.intrinsic_model != "fisheye") {
+            throw std::runtime_error("intrinsic_calib.model must be 'pinhole' or 'fisheye'");
+        }
+    }
+    if (section["squares_x"])    out.charuco_squares_x    = parse_scalar<int>(section["squares_x"], "intrinsic_calib.squares_x");
+    if (section["squares_y"])    out.charuco_squares_y    = parse_scalar<int>(section["squares_y"], "intrinsic_calib.squares_y");
+    if (section["square_len_m"]) out.charuco_square_len_m = parse_scalar<double>(section["square_len_m"], "intrinsic_calib.square_len_m");
+    if (section["marker_len_m"]) out.charuco_marker_len_m = parse_scalar<double>(section["marker_len_m"], "intrinsic_calib.marker_len_m");
+    if (section["dict"])         out.charuco_dict         = parse_scalar<int>(section["dict"], "intrinsic_calib.dict");
+    if (section["min_views"])    out.intrinsic_min_views  = parse_scalar<int>(section["min_views"], "intrinsic_calib.min_views");
+    if (section["min_corners"])  out.intrinsic_min_corners = parse_scalar<int>(section["min_corners"], "intrinsic_calib.min_corners");
+}
+
 }  // namespace
 
 void load_main_config(const std::string& path, MainOptions& out) {
@@ -302,7 +328,7 @@ void load_main_config(const std::string& path, MainOptions& out) {
     static const std::set<std::string> top_allowed{
         "schema", "cameras", "inference", "web", "three_d",
         "subject", "calibration", "logging", "slimevr", "vmt",
-        "extrinsic_calib",
+        "extrinsic_calib", "intrinsic_calib",
     };
     for (auto it = root.begin(); it != root.end(); ++it) {
         const auto key = it->first.as<std::string>();
@@ -321,6 +347,7 @@ void load_main_config(const std::string& path, MainOptions& out) {
     if (root["slimevr"])     load_slimevr   (root["slimevr"],     out);
     if (root["vmt"])         load_vmt       (root["vmt"],         out);
     if (root["extrinsic_calib"]) load_extrinsic_calib(root["extrinsic_calib"], out);
+    if (root["intrinsic_calib"]) load_intrinsic_calib(root["intrinsic_calib"], out);
 }
 
 EarlyArgs scan_early_args(int argc, char** argv) {
@@ -455,6 +482,17 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--floor-burst-min")         { out.floor_burst_min = std::atoi(need(i, "--floor-burst-min")); }
         else if (a == "--floor-max-reproj-px")     { out.floor_max_reproj_px = std::stod(need(i, "--floor-max-reproj-px")); }
         else if (a == "--floor-fisheye")           { out.floor_fisheye = true; }
+        else if (a == "--calib-intrinsic")         { out.intrinsic_calib_enabled = true; }
+        else if (a == "--intrinsic-replay")        { out.intrinsic_replay = need(i, "--intrinsic-replay"); }
+        else if (a == "--intrinsic-out")           { out.intrinsic_out = need(i, "--intrinsic-out"); }
+        else if (a == "--intrinsic-model")         { out.intrinsic_model = need(i, "--intrinsic-model"); }
+        else if (a == "--charuco-squares-x")       { out.charuco_squares_x = std::atoi(need(i, "--charuco-squares-x")); }
+        else if (a == "--charuco-squares-y")       { out.charuco_squares_y = std::atoi(need(i, "--charuco-squares-y")); }
+        else if (a == "--charuco-square-len-m")    { out.charuco_square_len_m = std::stod(need(i, "--charuco-square-len-m")); }
+        else if (a == "--charuco-marker-len-m")    { out.charuco_marker_len_m = std::stod(need(i, "--charuco-marker-len-m")); }
+        else if (a == "--charuco-dict")            { out.charuco_dict = std::atoi(need(i, "--charuco-dict")); }
+        else if (a == "--intrinsic-min-views")     { out.intrinsic_min_views = std::atoi(need(i, "--intrinsic-min-views")); }
+        else if (a == "--intrinsic-min-corners")   { out.intrinsic_min_corners = std::atoi(need(i, "--intrinsic-min-corners")); }
         else if (a == "--daemon")            { out.daemon = true; }
         else if (a == "--daemon-initial")    { out.daemon_initial = need(i, "--daemon-initial"); }
         else if (a == "--flow-managed")      { out.flow_managed = true; }
@@ -465,6 +503,9 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
 }
 
 RunMode run_mode(const MainOptions& opts) {
+    if (opts.intrinsic_calib_enabled || !opts.intrinsic_replay.empty()) {
+        return RunMode::CalibIntrinsic;
+    }
     if (opts.floor_calib_enabled || !opts.floor_replay.empty()) {
         return RunMode::CalibExtrinsicFloor;
     }
@@ -480,6 +521,7 @@ const char* run_mode_name(RunMode mode) {
         case RunMode::CalibSubject:        return "calib-subject";
         case RunMode::CalibExtrinsic:      return "calib-extrinsic";
         case RunMode::CalibExtrinsicFloor: return "calib-extrinsic-floor";
+        case RunMode::CalibIntrinsic:      return "calib-intrinsic";
         case RunMode::Run:                 break;
     }
     return "run";
@@ -490,6 +532,7 @@ bool parse_run_mode_name(const std::string& name, RunMode& out) {
     if (name == "calib-subject")         { out = RunMode::CalibSubject;        return true; }
     if (name == "calib-extrinsic")       { out = RunMode::CalibExtrinsic;      return true; }
     if (name == "calib-extrinsic-floor") { out = RunMode::CalibExtrinsicFloor; return true; }
+    if (name == "calib-intrinsic")       { out = RunMode::CalibIntrinsic;      return true; }
     return false;
 }
 
@@ -536,6 +579,10 @@ bool precheck_mode_switch(const MainOptions& opts, RunMode target,
             return source_ready(intr, "intrinsics "
                                 "(extrinsic_calib.intrinsics or three_d.calib)", err);
         }
+        case RunMode::CalibIntrinsic:
+            // Produces the intrinsics YAML from scratch; needs only a sane board
+            // (validated at parse). Always reachable as the first setup step.
+            return true;
         case RunMode::CalibSubject:
             // Subject calibration triangulates, so it needs the extrinsics YAML.
             return source_ready(opts.calib, "extrinsics (three_d.calib)", err);
@@ -566,6 +613,22 @@ void validate_options(const MainOptions& opts) {
         }
         if (opts.floor_intrinsics.empty() && opts.calib.empty()) {
             fail("calib-extrinsic-floor requires --floor-intrinsics PATH (or --calib)");
+        }
+    } else if (mode == RunMode::CalibIntrinsic) {
+        // Intrinsic path: decode-only, produces the intrinsics YAML. Live needs
+        // cameras; replay brings its own. The ChArUco board must be sane.
+        if (opts.intrinsic_replay.empty() && opts.cam_paths[0].empty()) {
+            fail("missing required option (need --cam0)");
+        }
+        if (opts.charuco_squares_x < 2 || opts.charuco_squares_y < 2) {
+            fail("calib-intrinsic needs --charuco-squares-x/y >= 2");
+        }
+        if (opts.charuco_marker_len_m <= 0.0 ||
+            opts.charuco_marker_len_m >= opts.charuco_square_len_m) {
+            fail("calib-intrinsic needs 0 < --charuco-marker-len-m < --charuco-square-len-m");
+        }
+        if (opts.intrinsic_model != "pinhole" && opts.intrinsic_model != "fisheye") {
+            fail("--intrinsic-model must be 'pinhole' or 'fisheye'");
         }
     } else if (opts.cam_paths[0].empty() || opts.det_engine.empty()
                || opts.pose_engine.empty()) {

@@ -87,6 +87,13 @@ std::vector<std::string> module_argv(config::RunMode mode,
             args.push_back("--no-vmt-out");
             args.push_back("--no-slimevr-out");
             break;
+        case config::RunMode::CalibIntrinsic:
+            // Intrinsic (ChArUco) calibration: board params + out come from
+            // --config (intrinsic_calib.*). --calib-intrinsic forces the mode.
+            args.push_back("--calib-intrinsic");
+            args.push_back("--no-vmt-out");
+            args.push_back("--no-slimevr-out");
+            break;
     }
     return args;
 }
@@ -107,6 +114,7 @@ DaemonAction next_action(bool exited_normally, int exit_code,
             case kExitFlowToCalibSubject:        next = config::RunMode::CalibSubject; break;
             case kExitFlowToCalibExtrinsic:      next = config::RunMode::CalibExtrinsic; break;
             case kExitFlowToCalibExtrinsicFloor: next = config::RunMode::CalibExtrinsicFloor; break;
+            case kExitFlowToCalibIntrinsic:      next = config::RunMode::CalibIntrinsic; break;
             default: is_flow = false; break;
         }
         if (is_flow) {

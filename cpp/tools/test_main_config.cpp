@@ -579,6 +579,65 @@ extrinsic_calib:
     check(threw, "floor without --floor-map must throw");
 }
 
+void test_intrinsic_calib_yaml_cli_and_mode() {
+    using fitra::config::RunMode;
+    using fitra::config::run_mode;
+    using fitra::config::run_mode_name;
+    using fitra::config::parse_run_mode_name;
+
+    auto p = write_tmp("intrinsic_calib.yaml", R"(schema: fitra_main_config_v1
+intrinsic_calib:
+  model: fisheye
+  out: /tmp/intr_hires.yaml
+  squares_x: 5
+  squares_y: 7
+  square_len_m: 0.04
+  marker_len_m: 0.03
+  min_views: 15
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(opts.intrinsic_model == "fisheye", "intrinsic_calib.model loads");
+    check(opts.intrinsic_out == "/tmp/intr_hires.yaml", "intrinsic_calib.out loads");
+    check(opts.intrinsic_min_views == 15, "intrinsic_calib.min_views loads");
+    // CLI --calib-intrinsic selects the mode; replay validates without cameras.
+    MainOptions o2;
+    std::vector<std::string> argv_buf{"--intrinsic-replay", "/tmp/isess",
+                                      "--intrinsic-model", "pinhole"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(o2, static_cast<int>(argv.size()), argv.data());
+    check(run_mode(o2) == RunMode::CalibIntrinsic,
+          "--intrinsic-replay -> calib-intrinsic mode");
+    validate_options(o2);  // must not throw
+
+    check(std::string(run_mode_name(RunMode::CalibIntrinsic)) == "calib-intrinsic",
+          "calib-intrinsic label");
+    RunMode m;
+    check(parse_run_mode_name("calib-intrinsic", m) && m == RunMode::CalibIntrinsic,
+          "parse calib-intrinsic");
+
+    // Bad board (marker >= square) must throw.
+    MainOptions o3;
+    o3.intrinsic_calib_enabled = true;
+    o3.cam_paths[0] = "/dev/null";
+    o3.charuco_marker_len_m = 0.05;
+    o3.charuco_square_len_m = 0.04;
+    bool threw = false;
+    try { validate_options(o3); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "marker-len", "intrinsic board validation msg");
+    }
+    check(threw, "calib-intrinsic bad board must throw");
+
+    // Intrinsic takes precedence over extrinsic when both flags set.
+    MainOptions o4;
+    o4.intrinsic_calib_enabled = true;
+    o4.floor_calib_enabled = true;
+    check(run_mode(o4) == RunMode::CalibIntrinsic,
+          "intrinsic precedence over floor");
+}
+
 void test_precheck_mode_switch() {
     using fitra::config::MainOptions;
     using fitra::config::RunMode;
@@ -753,6 +812,7 @@ const TestCase kTests[] = {
                                                test_run_mode_derivation_and_publisher_exclusivity},
     {"excal_replay_yaml_cli_and_mode",         test_excal_replay_yaml_cli_and_mode},
     {"floor_calib_yaml_cli_and_mode",          test_floor_calib_yaml_cli_and_mode},
+    {"intrinsic_calib_yaml_cli_and_mode",      test_intrinsic_calib_yaml_cli_and_mode},
     {"precheck_mode_switch",                   test_precheck_mode_switch},
     {"flow_managed_and_publisher_negation",    test_flow_managed_and_publisher_negation},
     {"daemon_flags_and_validate",              test_daemon_flags_and_validate},
