@@ -137,6 +137,7 @@ add_library(fitra_pipeline STATIC
     pipeline/calibration_session.cpp
     pipeline/extrinsic_calib_session.cpp
     pipeline/floor_calib_session.cpp
+    pipeline/intrinsic_calib_session.cpp
     pipeline/excal_replay_input.cpp
 )
 

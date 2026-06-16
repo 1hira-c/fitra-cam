@@ -246,6 +246,22 @@ set_target_properties(fitra_test_charuco_board PROPERTIES
 
 add_test(NAME test_charuco_board COMMAND fitra_test_charuco_board)
 
+# Intrinsic calibration session — synthetic ChArUco views → solve → K recovery.
+add_executable(fitra_test_intrinsic_calib_session
+    test_intrinsic_calib_session.cpp
+)
+
+target_link_libraries(fitra_test_intrinsic_calib_session PRIVATE
+    fitra_pipeline
+)
+
+set_target_properties(fitra_test_intrinsic_calib_session PROPERTIES
+    OUTPUT_NAME "test_intrinsic_calib_session"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_intrinsic_calib_session COMMAND fitra_test_intrinsic_calib_session)
+
 # Floor AprilTag map: data structure + FileStorage YAML I/O round-trip.
 add_executable(fitra_test_floor_tag_map
     test_floor_tag_map.cpp
