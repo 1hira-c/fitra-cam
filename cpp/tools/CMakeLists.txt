@@ -13,6 +13,40 @@ set_target_properties(fitra_build_engines PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
+# Offline smartphone intrinsic calibration from a recorded ChArUco video.
+add_executable(fitra_charuco_intrinsic_video
+    charuco_intrinsic_video.cpp
+)
+
+target_link_libraries(fitra_charuco_intrinsic_video PRIVATE
+    fitra_pipeline
+    opencv_videoio
+    opencv_imgproc
+    opencv_core
+)
+
+set_target_properties(fitra_charuco_intrinsic_video PROPERTIES
+    OUTPUT_NAME "charuco_intrinsic_video"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+# Offline SfM floor marker-map builder from a recorded AprilTag video.
+add_executable(fitra_sfm_floor_map
+    sfm_floor_map.cpp
+)
+
+target_link_libraries(fitra_sfm_floor_map PRIVATE
+    fitra_lift
+    opencv_videoio
+    opencv_imgproc
+    opencv_core
+)
+
+set_target_properties(fitra_sfm_floor_map PROPERTIES
+    OUTPUT_NAME "sfm_floor_map"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
 # Correctness driver: video -> JSONL of per-frame YOLOX/RTMPose results.
 add_executable(fitra_dump_keypoints
     dump_keypoints.cpp
@@ -307,6 +341,24 @@ set_target_properties(fitra_test_floor_extrinsic_solver PROPERTIES
 )
 
 add_test(NAME test_floor_extrinsic_solver COMMAND fitra_test_floor_extrinsic_solver)
+
+# Floor AprilTag SfM map builder: multi-frame pose-graph chaining of per-tag PnP
+# observations into one FloorTagMap, with floor-plane re-gauge + round-trip
+# through solve_floor_extrinsics. Pure geometry on synthetic observations.
+add_executable(fitra_test_floor_map_sfm
+    test_floor_map_sfm.cpp
+)
+
+target_link_libraries(fitra_test_floor_map_sfm PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_floor_map_sfm PROPERTIES
+    OUTPUT_NAME "test_floor_map_sfm"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_floor_map_sfm COMMAND fitra_test_floor_map_sfm)
 
 # Extrinsic calibration collection loop — motion gate / burst mechanics,
 # end-to-end solve+write+reload, and calib_io write round-trip.
