@@ -92,6 +92,21 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-17 — スマホ動画から床 AprilTag マップを SfM 生成 (案D mode (b))
+案D の `FloorTagMap` を**巻尺実測なしで動画から自動生成**する mode (b) を実装
+(floor-apriltag-extrinsic doc が予告した拡張点。コア `floor_extrinsic_solver` は無改変)。
+(1) **pose-graph コア** `lift/floor_map_sfm` (純幾何): フレーム毎の共可視タグ相対姿勢を
+蓄積 → 各エッジ MAD トリム平均 → アンカー BFS で配置 → pose 平均緩和 → 床平面再ゲージ
+(FitraWorld z-up, 床=z=0)。スケールは各タグ実寸 (114.5mm) の PnP が固定。(2) オフライン
+ツール 2 本: `charuco_intrinsic_video` (ChArUco 動画 → スマホ intrinsics、`IntrinsicCalibSession`
+無改変流用) と `sfm_floor_map` (マーカー動画 + intrinsics → `floor_tag_map.yaml` + holdout 再投影
+検証)。C++ 4.8 の既存検出/PnP/IO を再利用 (Python cv2 は 4.5.4 legacy のため不採用)。設計 =
+[design/pose-3d-smartphone-sfm-marker-map.md](../design/pose-3d-smartphone-sfm-marker-map.md)。
+ctest: `test_floor_map_sfm` (連結復元 < 1e-3deg・床フィット・スケール保存・ノイズ・分割報告・
+`solve_floor_extrinsics` 往復)。実サンプル (iPhone 2160×1214): intrinsic RMS 0.83px、8/8 タグ
+連結マップ (plane_rms 6.7mm)、3+ タグ holdout 再投影 median 5.3px。**注意**: ChArUco 盤面は実物
+`7×5` で `configs/intrinsic_calib.yaml` の `5×7` は転置 — リグ intrinsic 退化の疑い (要再校正確認)。
+
 ### 2026-06-16 — C++ 内部パラメータ (intrinsic) 校正 + 歪みモデル明示
 extrinsic の前提工程だった intrinsic 校正を C++/WebUI に取り込み、setup の step0 に
 据えた。(1) **歪みモデル基盤**: intrinsics YAML に `distortion_model` (pinhole|fisheye)
