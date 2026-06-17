@@ -76,4 +76,15 @@ void validate_calibration(const CalibrationSet& calib);
 // failure. Used by the extrinsic calibration session to persist results.
 void write_calibration(const std::string& path, const CalibrationSet& calib);
 
+// Rescale an intrinsics block from its calibrated resolution to (new_w, new_h),
+// for the common "calibrate high (robust marker/charuco detection), run low
+// (latency/fps)" split. Valid ONLY for a same-FOV resize (uniform downscale,
+// not a crop): fx,fy and the principal point scale by new/old (with the OpenCV
+// pixel-centre −0.5 convention); distortion coefficients are defined on
+// normalised coordinates and are therefore scale-invariant (unchanged). The
+// triangulator does NOT rescale K, so the runtime resolution must match the
+// intrinsics it is handed — produce a matching file with this. Throws if the
+// input width/height are unset or the aspect ratio is not preserved.
+Intrinsics scale_intrinsics(const Intrinsics& in, int new_w, int new_h);
+
 }  // namespace fitra::lift

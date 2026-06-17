@@ -99,6 +99,20 @@ set_target_properties(fitra_check_calibration PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
+# Rescale calibration intrinsics to a runtime resolution (calibrate high, run low).
+add_executable(fitra_scale_intrinsics
+    scale_intrinsics.cpp
+)
+
+target_link_libraries(fitra_scale_intrinsics PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_scale_intrinsics PROPERTIES
+    OUTPUT_NAME "scale_intrinsics"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
 # Excal replay sample recorder: raw MJPEG passthrough frames + per-frame
 # paired controller poses (frames.jsonl). No TRT execution at runtime.
 add_executable(fitra_excal_record

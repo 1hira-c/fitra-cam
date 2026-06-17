@@ -14,6 +14,7 @@ namespace {
 using fitra::lift::CalibrationSet;
 using fitra::lift::CameraCalibration;
 using fitra::lift::load_calibration;
+using fitra::lift::scale_intrinsics;
 using fitra::lift::validate_calibration;
 using fitra::lift::write_calibration;
 
@@ -106,12 +107,41 @@ void test_validate_rejects() {
     CHECK(!threw);
 }
 
+void test_scale_intrinsics() {
+    using fitra::lift::Intrinsics;
+    Intrinsics in;
+    in.width = 1280;
+    in.height = 960;
+    in.distortion_model = "fisheye";
+    in.K = (cv::Mat_<double>(3, 3) << 680.0, 0, 628.0, 0, 681.0, 490.0, 0, 0, 1);
+    in.dist = (cv::Mat_<double>(1, 4) << 0.05, -0.01, 0.002, -0.0005);
+    in.rms_px = 0.2;
+
+    // 1280x960 -> 640x480 is a uniform 0.5x downscale.
+    Intrinsics out = scale_intrinsics(in, 640, 480);
+    CHECK(out.width == 640 && out.height == 480);
+    CHECK(std::abs(out.K.at<double>(0, 0) - 340.0) < 1e-9);   // fx * 0.5
+    CHECK(std::abs(out.K.at<double>(1, 1) - 340.5) < 1e-9);   // fy * 0.5
+    CHECK(std::abs(out.K.at<double>(0, 2) - ((628.0 + 0.5) * 0.5 - 0.5)) < 1e-9);
+    CHECK(std::abs(out.K.at<double>(1, 2) - ((490.0 + 0.5) * 0.5 - 0.5)) < 1e-9);
+    // Distortion is scale-invariant → unchanged.
+    for (int i = 0; i < 4; ++i)
+        CHECK(std::abs(out.dist.at<double>(0, i) - in.dist.at<double>(0, i)) < 1e-12);
+    CHECK(out.distortion_model == "fisheye");
+
+    // Aspect-ratio change (crop, not resize) → reject.
+    bool threw = false;
+    try { scale_intrinsics(in, 640, 360); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+}
+
 }  // namespace
 
 int main() {
     test_roundtrip();
     test_default_pinhole_backcompat();
     test_validate_rejects();
+    test_scale_intrinsics();
     if (g_fail) {
         std::fprintf(stderr, "test_calib_io: %d failures\n", g_fail);
         return 1;

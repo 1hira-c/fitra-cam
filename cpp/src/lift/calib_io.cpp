@@ -214,4 +214,41 @@ void validate_calibration(const CalibrationSet& calib) {
     }
 }
 
+Intrinsics scale_intrinsics(const Intrinsics& in, int new_w, int new_h) {
+    if (in.width <= 0 || in.height <= 0) {
+        throw std::runtime_error("scale_intrinsics: source width/height unset");
+    }
+    if (new_w <= 0 || new_h <= 0) {
+        throw std::runtime_error("scale_intrinsics: target width/height must be > 0");
+    }
+    const double sx = static_cast<double>(new_w) / in.width;
+    const double sy = static_cast<double>(new_h) / in.height;
+    // Same-FOV resize only: a differing aspect ratio means a crop/letterbox, not
+    // a uniform downscale, and a single scale factor no longer applies.
+    if (std::abs(sx - sy) > 1e-3) {
+        throw std::runtime_error(
+            "scale_intrinsics: aspect ratio not preserved (crop, not resize)");
+    }
+    if (in.K.rows != 3 || in.K.cols != 3 || in.K.type() != CV_64F) {
+        throw std::runtime_error("scale_intrinsics: K must be 3x3 CV_64F");
+    }
+
+    Intrinsics out = in;
+    out.width = new_w;
+    out.height = new_h;
+    out.K = in.K.clone();
+    // fx,fy scale; principal point scales with the OpenCV pixel-centre (−0.5)
+    // convention so the optical axis stays the same physical ray.
+    out.K.at<double>(0, 0) = in.K.at<double>(0, 0) * sx;
+    out.K.at<double>(1, 1) = in.K.at<double>(1, 1) * sy;
+    out.K.at<double>(0, 2) = (in.K.at<double>(0, 2) + 0.5) * sx - 0.5;
+    out.K.at<double>(1, 2) = (in.K.at<double>(1, 2) + 0.5) * sy - 0.5;
+    // Distortion coefficients act on normalised coordinates → scale-invariant.
+    out.dist = in.dist.clone();
+    // rms is a px metric at the source resolution; report it at the new scale.
+    out.rms_px = in.rms_px * sx;
+    out.source = in.source + "_scaled";
+    return out;
+}
+
 }  // namespace fitra::lift
