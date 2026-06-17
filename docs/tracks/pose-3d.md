@@ -92,6 +92,18 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-17 — intrinsic 校正に受け入れゲート (退化解の書き出し防止)
+盤面寸法の転置 (squares_x/y) や square/marker/dict の取り違えは intrinsic solve が「通る」のに
+rms 数百 px・異方 K の退化解になり、書き出すと extrinsic/triangulation を静かに壊す (実例:
+ChArUco 5×7↔7×5 転置で rms 203px↔0.72px、リグの `intrinsics.yaml` も同転置で 137px 退化)。
+`IntrinsicCalibSession::solve_and_write` に **受け入れゲート**を追加: `rms_px > max_rms_px`
+(既定 1.5) または `|fx-fy|/max(fx,fy) > max_fxfy_aniso` (既定 0.25) なら**そのカメラを失敗扱い**に
+して書き出さず、理由 (盤面転置の可能性を含む) を `state_json`/stdout に出す。CLI
+`--intrinsic-max-rms` / YAML `intrinsic_calib.max_rms_px` で調整可。`configs/intrinsic_calib.yaml`
+の盤面を実物に合わせ 7×5 に修正 + 向きの注意コメント。ctest: `test_intrinsic_calib_session`
+(rms ゲートで clean solve も閾値次第で失敗することを固定) / `test_main_config`。
+設計 = [design/pose-3d-intrinsic-calibration.md](../design/pose-3d-intrinsic-calibration.md)。
+
 ### 2026-06-16 — C++ 内部パラメータ (intrinsic) 校正 + 歪みモデル明示
 extrinsic の前提工程だった intrinsic 校正を C++/WebUI に取り込み、setup の step0 に
 据えた。(1) **歪みモデル基盤**: intrinsics YAML に `distortion_model` (pinhole|fisheye)

@@ -67,6 +67,11 @@ CLAUDE.md「python/ に機能追加しない」方針に従い、producer は C+
   pinhole=`calibrateCamera` / fisheye=`fisheye::calibrate`(`RECOMPUTE_EXTRINSIC|FIX_SKEW`) → K/dist/
   rms → `CalibrationSet` (distortion_model 付き) を `write_calibration`。`state_json` は per-camera
   の採用ビュー数・被覆・rms。
+- **受け入れゲート (2026-06-17 追加)**: solve 後、`rms_px > max_rms_px` (既定 1.5) または K の
+  `|fx-fy|/max(fx,fy) > max_fxfy_aniso` (既定 0.25) なら **そのカメラを失敗扱いにして書き出さない**。
+  盤面寸法の転置 (squares_x/y) や square/marker/dict の取り違えは「solve は通るが rms 数百 px・
+  異方 K」の退化解になり、これを書き出すと extrinsic/triangulation を静かに壊す (実例: ChArUco
+  盤面 5×7↔7×5 転置で rms 203px↔0.72px)。CLI `--intrinsic-max-rms` / YAML `intrinsic_calib.max_rms_px`。
 
 ### RunMode / CLI / replay (I4)
 - `RunMode::CalibIntrinsic`、`--calib-intrinsic` / `--intrinsic-out` / `--intrinsic-model

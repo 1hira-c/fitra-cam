@@ -217,6 +217,9 @@ struct MainOptions {
     int         charuco_dict       = -1;   // -1 → DICT_4X4_50
     int         intrinsic_min_views   = 12;
     int         intrinsic_min_corners = 8;
+    // Acceptance gate: reject a solve above this rms (a transposed/ wrong board
+    // still "solves" with a huge rms). 0 disables. See IntrinsicCalibConfig.
+    double      intrinsic_max_rms_px  = 1.5;
 
     // Flow daemon (docs/design/pose-3d-flow-daemon.md). CLI-only — how the
     // process is launched is not part of the YAML schema. `flow_managed` is

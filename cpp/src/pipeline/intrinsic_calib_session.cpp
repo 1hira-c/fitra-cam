@@ -207,6 +207,28 @@ bool IntrinsicCalibSession::solve_and_write(std::string& err) {
 
         if (K.type() != CV_64F) K.convertTo(K, CV_64F);
         if (dist.type() != CV_64F) dist.convertTo(dist, CV_64F);
+
+        // Plausibility gate — a wrong board (transpose / square|marker / dict)
+        // completes the solve but lands here with a huge RMS or an anisotropic
+        // K. Reject so the degenerate result is never written.
+        const double fx = K.at<double>(0, 0), fy = K.at<double>(1, 1);
+        const double aniso = (fx > 0.0 && fy > 0.0)
+                                 ? std::abs(fx - fy) / std::max(fx, fy) : 1.0;
+        char buf[160];
+        if (cfg_.max_rms_px > 0.0 && rms > cfg_.max_rms_px) {
+            std::snprintf(buf, sizeof(buf),
+                "%s: rms %.2fpx > %.2fpx — board spec likely wrong "
+                "(squares_x/y transposed? square/marker/dict?); ",
+                cam.id.c_str(), rms, cfg_.max_rms_px);
+            all_ok = false; msg += buf; continue;
+        }
+        if (cfg_.max_fxfy_aniso > 0.0 && aniso > cfg_.max_fxfy_aniso) {
+            std::snprintf(buf, sizeof(buf),
+                "%s: anisotropic K fx=%.0f fy=%.0f (%.0f%%) — board geometry "
+                "likely wrong; ", cam.id.c_str(), fx, fy, aniso * 100.0);
+            all_ok = false; msg += buf; continue;
+        }
+
         cam.intrinsics.width = cd.img_w;
         cam.intrinsics.height = cd.img_h;
         cam.intrinsics.rms_px = rms;

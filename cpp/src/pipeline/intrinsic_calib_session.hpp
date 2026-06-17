@@ -45,6 +45,13 @@ struct IntrinsicCalibConfig {
     int    min_corners = 8;       // per accepted view
     int    min_views   = 12;      // per camera to solve
     int    max_views   = 40;      // cap per camera
+    // Acceptance gate: a wrong board spec (squares_x/y transposed, wrong
+    // square/marker length, wrong dictionary) still "solves" but lands a huge
+    // reprojection RMS and/or an anisotropic K. Reject above these so a
+    // degenerate calibration never gets written and silently poison the
+    // downstream extrinsic / triangulation. 0 disables the RMS gate.
+    double max_rms_px        = 1.5;   // reject solve whose rms_px exceeds this
+    double max_fxfy_aniso    = 0.25;  // reject |fx-fy|/max(fx,fy) above this
     // View-diversity gate: accept a view only if its corner centroid is far
     // enough from all accepted views (spread across the image) or its scale
     // (bbox area) differs enough (spread across distance).

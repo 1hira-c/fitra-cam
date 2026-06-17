@@ -182,6 +182,41 @@ void test_fisheye_recovery() {
     std::remove(cfg.out_path.c_str());
 }
 
+// The acceptance gate must reject an otherwise-good solve whose rms exceeds the
+// configured ceiling — this is what stops a wrong/transposed board (which
+// "solves" with a huge rms) from being written. Drive it deterministically by
+// setting an impossibly tight ceiling on a clean synthetic solve.
+void test_rms_gate() {
+    const int W = 640, H = 480;
+    cv::Mat Kgt = (cv::Mat_<double>(3, 3) << 600, 0, 320, 0, 600, 240, 0, 0, 1);
+    cv::Mat Dgt = cv::Mat::zeros(1, 5, CV_64F);
+    cv::aruco::Dictionary dict = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_4X4_50);
+    cv::aruco::CharucoBoard board(cv::Size(5, 7), 0.04f, 0.03f, dict);
+    std::vector<cv::Point3f> board3d = board.getChessboardCorners();
+
+    IntrinsicCalibConfig cfg;
+    cfg.board = board_cfg();
+    cfg.distortion_model = "pinhole";
+    cfg.num_cams = 1;
+    cfg.min_views = 10;
+    cfg.max_rms_px = 1e-6;  // impossibly tight → a clean ~0.x px solve is rejected
+    cfg.out_path = tmp_path("fitra_intr_gate.yaml");
+
+    IntrinsicCalibSession s(cfg);
+    s.start();
+    feed_views(s, 0, board3d, W, H,
+        [&](const std::vector<cv::Point3f>& o, const cv::Mat& rv, const cv::Mat& tv) {
+            std::vector<cv::Point2f> img;
+            cv::projectPoints(o, rv, tv, Kgt, Dgt, img);
+            return img;
+        });
+    std::string err;
+    CHECK(!s.solve_and_write(err));                       // rejected by the gate
+    CHECK(s.state() == IntrinsicCalibState::kFailed);
+    CHECK(err.find("rms") != std::string::npos);          // reason mentions rms
+    std::remove(cfg.out_path.c_str());
+}
+
 void test_too_few_views() {
     IntrinsicCalibConfig cfg;
     cfg.board = board_cfg();
@@ -203,6 +238,7 @@ void test_too_few_views() {
 int main() {
     test_pinhole_recovery();
     test_fisheye_recovery();
+    test_rms_gate();
     test_too_few_views();
     if (g_fail) {
         std::fprintf(stderr, "test_intrinsic_calib_session: %d failures\n", g_fail);

@@ -27,7 +27,11 @@ intrinsic_calib:
     enabled: true
     model: fisheye
     out: calibrations/intrinsics.yaml
-    # ChArUco board geometry (must match the printed board).
+    # ChArUco board geometry (MUST match the printed board, including
+    # orientation). squares_x = columns, squares_y = rows. Transposing them
+    # (e.g. 5x7 vs 7x5) makes the marker-id → 3D mapping wrong → an anisotropic
+    # K (fx≠fy) and a huge rms. If your solve lands a large rms, try swapping
+    # squares_x/squares_y first.
     squares_x: 5
     squares_y: 7
     square_len_m: 0.04
@@ -35,3 +39,7 @@ intrinsic_calib:
     # dict: -1 → DICT_4X4_50 (python calibrate_intrinsics_charuco.py default)
     min_views: 15
     min_corners: 8
+    # Reject a solve whose reprojection rms exceeds this (px). Catches a wrong
+    # board spec (transpose / square|marker / dict) that otherwise "solves" with
+    # a garbage K. 0 disables. Default 1.5.
+    max_rms_px: 1.5

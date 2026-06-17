@@ -306,6 +306,7 @@ void load_intrinsic_calib(const YAML::Node& section, MainOptions& out) {
     if (section["dict"])         out.charuco_dict         = parse_scalar<int>(section["dict"], "intrinsic_calib.dict");
     if (section["min_views"])    out.intrinsic_min_views  = parse_scalar<int>(section["min_views"], "intrinsic_calib.min_views");
     if (section["min_corners"])  out.intrinsic_min_corners = parse_scalar<int>(section["min_corners"], "intrinsic_calib.min_corners");
+    if (section["max_rms_px"])   out.intrinsic_max_rms_px = parse_scalar<double>(section["max_rms_px"], "intrinsic_calib.max_rms_px");
 }
 
 }  // namespace
@@ -500,6 +501,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--charuco-dict")            { out.charuco_dict = std::atoi(need(i, "--charuco-dict")); }
         else if (a == "--intrinsic-min-views")     { out.intrinsic_min_views = std::atoi(need(i, "--intrinsic-min-views")); }
         else if (a == "--intrinsic-min-corners")   { out.intrinsic_min_corners = std::atoi(need(i, "--intrinsic-min-corners")); }
+        else if (a == "--intrinsic-max-rms")       { out.intrinsic_max_rms_px = std::stod(need(i, "--intrinsic-max-rms")); }
         else if (a == "--daemon")            { out.daemon = true; }
         else if (a == "--daemon-initial")    { out.daemon_initial = need(i, "--daemon-initial"); }
         else if (a == "--flow-managed")      { out.flow_managed = true; }

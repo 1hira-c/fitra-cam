@@ -31,6 +31,7 @@ build_intrinsic_session(const config::MainOptions& opts, std::size_t n_cams) {
     ic.num_cams           = n_cams;
     ic.min_views          = opts.intrinsic_min_views;
     ic.min_corners        = opts.intrinsic_min_corners;
+    ic.max_rms_px         = opts.intrinsic_max_rms_px;
     ic.out_path           = opts.intrinsic_out;
     try {
         return std::make_unique<pipeline::IntrinsicCalibSession>(std::move(ic));
