@@ -294,6 +294,24 @@ set_target_properties(fitra_test_floor_extrinsic_solver PROPERTIES
 
 add_test(NAME test_floor_extrinsic_solver COMMAND fitra_test_floor_extrinsic_solver)
 
+# Floor AprilTag SfM map builder: multi-frame pose-graph chaining of per-tag PnP
+# observations into one FloorTagMap, with floor-plane re-gauge + round-trip
+# through solve_floor_extrinsics. Pure geometry on synthetic observations.
+add_executable(fitra_test_floor_map_sfm
+    test_floor_map_sfm.cpp
+)
+
+target_link_libraries(fitra_test_floor_map_sfm PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_floor_map_sfm PROPERTIES
+    OUTPUT_NAME "test_floor_map_sfm"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_floor_map_sfm COMMAND fitra_test_floor_map_sfm)
+
 # Extrinsic calibration collection loop — motion gate / burst mechanics,
 # end-to-end solve+write+reload, and calib_io write round-trip.
 add_executable(fitra_test_extrinsic_calib_session

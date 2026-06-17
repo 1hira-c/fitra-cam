@@ -9,6 +9,7 @@ add_library(fitra_lift STATIC
     lift/apriltag_marker.cpp
     lift/floor_tag_map.cpp
     lift/floor_extrinsic_solver.cpp
+    lift/floor_map_sfm.cpp
     lift/charuco_board.cpp
     lift/kalman.cpp
     lift/ik.cpp
