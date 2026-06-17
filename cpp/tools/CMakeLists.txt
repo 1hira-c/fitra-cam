@@ -13,6 +13,40 @@ set_target_properties(fitra_build_engines PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
+# Offline smartphone intrinsic calibration from a recorded ChArUco video.
+add_executable(fitra_charuco_intrinsic_video
+    charuco_intrinsic_video.cpp
+)
+
+target_link_libraries(fitra_charuco_intrinsic_video PRIVATE
+    fitra_pipeline
+    opencv_videoio
+    opencv_imgproc
+    opencv_core
+)
+
+set_target_properties(fitra_charuco_intrinsic_video PROPERTIES
+    OUTPUT_NAME "charuco_intrinsic_video"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+# Offline SfM floor marker-map builder from a recorded AprilTag video.
+add_executable(fitra_sfm_floor_map
+    sfm_floor_map.cpp
+)
+
+target_link_libraries(fitra_sfm_floor_map PRIVATE
+    fitra_lift
+    opencv_videoio
+    opencv_imgproc
+    opencv_core
+)
+
+set_target_properties(fitra_sfm_floor_map PROPERTIES
+    OUTPUT_NAME "sfm_floor_map"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
 # Correctness driver: video -> JSONL of per-frame YOLOX/RTMPose results.
 add_executable(fitra_dump_keypoints
     dump_keypoints.cpp
