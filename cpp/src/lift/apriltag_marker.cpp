@@ -64,17 +64,26 @@ bool solve_tag_pose(const std::array<cv::Point2f, 4>& corners,
     T_cam_face = geom::T_cam_marker::from_raw(raw);
 
     // Reprojection RMS over the 4 corners (in the camera's own model).
-    std::vector<cv::Point2f> proj;
+    // cv::fisheye::projectPoints derives the output point type from the (double)
+    // object points, so its output MUST be Point2d — handing it a Point2f vector
+    // trips an OpenCV create() type assertion. Keep the branches' types separate.
+    double s2 = 0.0;
     if (fisheye) {
         std::vector<cv::Point3d> objd(obj.begin(), obj.end());
+        std::vector<cv::Point2d> proj;
         cv::fisheye::projectPoints(objd, proj, rvec, tvec, K, dist);
+        for (int i = 0; i < 4; ++i) {
+            const double dx = proj[i].x - imgv[i].x;
+            const double dy = proj[i].y - imgv[i].y;
+            s2 += dx * dx + dy * dy;
+        }
     } else {
+        std::vector<cv::Point2f> proj;
         cv::projectPoints(objv, rvec, tvec, K, dist, proj);
-    }
-    double s2 = 0.0;
-    for (int i = 0; i < 4; ++i) {
-        cv::Point2f d = proj[i] - imgv[i];
-        s2 += static_cast<double>(d.x) * d.x + static_cast<double>(d.y) * d.y;
+        for (int i = 0; i < 4; ++i) {
+            const cv::Point2f d = proj[i] - imgv[i];
+            s2 += static_cast<double>(d.x) * d.x + static_cast<double>(d.y) * d.y;
+        }
     }
     reproj_rms_px = std::sqrt(s2 / 4.0);
     return true;
