@@ -33,6 +33,19 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-06-18 — WebUI/VMT 未接続時の待機 (idle) モード仕様起票 (仕様のみ)
+消費者 (WebUI の WS ビューア / VR 側 VMT) が誰も繋がっていない時に重い GPU 推論を自動で止めて
+省電力にする待機モードを設計。新 `RunMode::Idle` (flow daemon 再起動方式) は復帰に数秒かかるため没とし、
+`RunMode::Run` プロセスを生かしたまま既存スレッド内でゲートする **in-process throttle** を採用
+(既存 `calib_recording_flag` と同型の `shared_ptr<atomic<bool>>` を流用)。消費者ゼロが `enter_after_s`
+継続したら `FrameSource::decode_loop` の YOLOX と `MultiCameraDriver::loop` の RTMPose/3D をスキップ、
+ループを `idle.tick_hz` (既定 2Hz) へスロットル。**待機深度は推論スキップのみ** (capture/decode/TRT は
+温存) で復帰は atomic 反転の <100ms、**既定 ON** (`--no-idle` で無効、calib モードは対象外)。
+WS は `clients2d/3d.conns`、VR は `HmdPoseBus` の freshness で検出。VMT-out かつ HMD-listen 無し
+(戻り信号無し) は安全側で idle に入れない。**実装は未着手** — M1 状態/計数/config、M2/M3 ゲート、
+M4 復帰ジャンプ対策、M5 安全既定。
+→ [design/core-pipeline-idle-standby.md](../design/core-pipeline-idle-standby.md)
+
 ### 2026-05-29 — `maybe_update_3d` の冗長 bone_drift_pct 計算を除去 (挙動不変)
 `MultiCameraDriver::maybe_update_3d` で IK 前に `ik_.bone_drift_pct(skel)` を計算していたが、
 `ik_enabled` 時は直後に IK 後の値で無条件上書きされ pre-IK 値は常に破棄されていた。
