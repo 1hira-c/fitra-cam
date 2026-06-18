@@ -26,6 +26,12 @@ struct MainOptions {
     std::array<std::string, 3> cam_paths{};
     int width  = 640;
     int height = 480;
+    // Per-camera V4L2 capture resolution override (0 = use width/height, no
+    // downscale). For cameras whose low-res modes center-crop instead of
+    // downscaling: capture at full-sensor dims here, then FrameSource resizes
+    // to width/height. See docs/design/core-pipeline-per-camera-capture-downscale.md.
+    std::array<int, 3> cam_cap_width{};
+    std::array<int, 3> cam_cap_height{};
     int fps    = 30;
     // V4L2 pixel format: "mjpeg" (default; camera-side compression, CPU decode)
     // or "yuyv" (uncompressed; skips decode + camera encode latency but costs

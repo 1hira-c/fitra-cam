@@ -9,12 +9,17 @@ CameraSet make_frame_sources(const config::MainOptions& opts,
                              TrtStack* trt,
                              std::shared_ptr<std::atomic<bool>> recording_flag) {
     CameraSet set;
-    for (const auto& path : opts.cam_paths) {
+    for (std::size_t i = 0; i < opts.cam_paths.size(); ++i) {
+        const auto& path = opts.cam_paths[i];
         if (path.empty()) continue;
         camera::V4l2Options o;
         o.device_path = path;
         o.width  = opts.width;
         o.height = opts.height;
+        // Per-camera capture-resolution override (0 = no override/downscale).
+        // FrameSource resizes the capture to width/height when these are set.
+        o.cap_width  = opts.cam_cap_width[i];
+        o.cap_height = opts.cam_cap_height[i];
         o.fps    = opts.fps;
         o.n_buffers = opts.n_buffers;
         o.pixel_format = (opts.pixel_format == "yuyv")

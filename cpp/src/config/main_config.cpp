@@ -49,6 +49,9 @@ void load_cameras(const YAML::Node& section, MainOptions& out) {
     static const std::set<std::string> allowed{
         "cam0", "cam1", "cam2", "width", "height", "fps",
         "pixel_format", "n_buffers",
+        "cam0_capture_width", "cam0_capture_height",
+        "cam1_capture_width", "cam1_capture_height",
+        "cam2_capture_width", "cam2_capture_height",
     };
     check_keys(section, allowed, "cameras");
     if (section["cam0"])   out.cam_paths[0] = parse_scalar<std::string>(section["cam0"],   "cameras.cam0");
@@ -56,6 +59,12 @@ void load_cameras(const YAML::Node& section, MainOptions& out) {
     if (section["cam2"])   out.cam_paths[2] = parse_scalar<std::string>(section["cam2"],   "cameras.cam2");
     if (section["width"])  out.width  = parse_scalar<int>(section["width"],  "cameras.width");
     if (section["height"]) out.height = parse_scalar<int>(section["height"], "cameras.height");
+    for (int i = 0; i < 3; ++i) {
+        const std::string wk = "cam" + std::to_string(i) + "_capture_width";
+        const std::string hk = "cam" + std::to_string(i) + "_capture_height";
+        if (section[wk]) out.cam_cap_width[i]  = parse_scalar<int>(section[wk], "cameras." + wk);
+        if (section[hk]) out.cam_cap_height[i] = parse_scalar<int>(section[hk], "cameras." + hk);
+    }
     if (section["fps"])    out.fps    = parse_scalar<int>(section["fps"],    "cameras.fps");
     if (section["pixel_format"]) out.pixel_format = parse_scalar<std::string>(section["pixel_format"], "cameras.pixel_format");
     if (section["n_buffers"])    out.n_buffers    = parse_scalar<int>(section["n_buffers"],    "cameras.n_buffers");
@@ -383,6 +392,16 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         }
         return argv[++i];
     };
+    // Parse "WxH" (e.g. "1280x960") into out.cam_cap_width/height[idx].
+    auto parse_capture = [&](const char* s, const char* flag, int idx) {
+        const std::string v{s};
+        const auto x = v.find('x');
+        if (x == std::string::npos || x == 0 || x + 1 >= v.size()) {
+            fail(std::string(flag) + " expects WxH (e.g. 1280x960)");
+        }
+        out.cam_cap_width[idx]  = std::atoi(v.substr(0, x).c_str());
+        out.cam_cap_height[idx] = std::atoi(v.substr(x + 1).c_str());
+    };
 
     for (int i = 0; i < argc; ++i) {
         std::string_view a{argv[i]};
@@ -394,6 +413,9 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         if      (a == "--cam0")              { out.cam_paths[0] = need(i, "--cam0"); }
         else if (a == "--cam1")              { out.cam_paths[1] = need(i, "--cam1"); }
         else if (a == "--cam2")              { out.cam_paths[2] = need(i, "--cam2"); }
+        else if (a == "--cam0-capture")      { parse_capture(need(i, "--cam0-capture"), "--cam0-capture", 0); }
+        else if (a == "--cam1-capture")      { parse_capture(need(i, "--cam1-capture"), "--cam1-capture", 1); }
+        else if (a == "--cam2-capture")      { parse_capture(need(i, "--cam2-capture"), "--cam2-capture", 2); }
         else if (a == "--det-engine")        { out.det_engine  = need(i, "--det-engine"); }
         else if (a == "--pose-engine")       { out.pose_engine = need(i, "--pose-engine"); }
         else if (a == "--port")              { out.port = std::atoi(need(i, "--port")); }

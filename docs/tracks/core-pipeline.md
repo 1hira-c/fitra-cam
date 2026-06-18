@@ -33,6 +33,17 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-06-18 — per-camera capture 解像度 + ソフト downscale
+増設した USB3.0 個体 (`Global Shutter Camera` serial `2601240001`) は、既存 2 機と違い
+**640×480 だけセンサ中央 center-crop** に切替わり狭画角になることを実機キャプチャで確認。
+カメラ単位で V4L2 キャプチャ解像度を上書きでき (`cam{N}_capture_width/height` /
+`--camN-capture WxH`)、`FrameSource::decode_loop` が decode 直後に共通出力解像度へ `cv::resize`
+(INTER_AREA) する経路を追加。`V4l2Options` を出力 (`width/height`) と capture (`cap_width/height`,
+0=無し) の二層に分離 — ダウンストリームは `options().width/height` を読むので無改造。縮小カメラは
+nvjpeg .so が VIC スケールを露出しないため all-GPU front-end を切り BGR scratch + CPU prebake へ
+降ろす (HW JPEG decode は維持)。新カメラは 1280×960 撮影→640 縮小で既存機と画角・座標系が一致。
+intrinsic は 1280 校正→`scale_intrinsics` 640。設計: `docs/design/core-pipeline-per-camera-capture-downscale.md`。
+
 ### 2026-05-29 — `maybe_update_3d` の冗長 bone_drift_pct 計算を除去 (挙動不変)
 `MultiCameraDriver::maybe_update_3d` で IK 前に `ik_.bone_drift_pct(skel)` を計算していたが、
 `ik_enabled` 時は直後に IK 後の値で無条件上書きされ pre-IK 値は常に破棄されていた。

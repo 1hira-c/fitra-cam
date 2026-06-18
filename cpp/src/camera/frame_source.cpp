@@ -125,6 +125,20 @@ void FrameSource::decode_loop() {
             FITRA_LOG_INFO("frame_source: all-GPU preprocess enabled (RTMPose{})",
                            yolox_device_ ? " + YOLOX" : "");
     }
+    // Downscaling cameras capture at a higher resolution (full sensor FOV) and
+    // are resized to the common output resolution after decode. The all-GPU
+    // front-end reads the device RGBA at native (capture) resolution and the
+    // nvjpeg .so exposes no scale, so force the BGR-scratch + CPU prebake path:
+    // HW JPEG decode is still used (decode() produces BGR), only the GPU
+    // preprocess kernels are bypassed. See
+    // docs/design/core-pipeline-per-camera-capture-downscale.md.
+    const bool downscaling = capture_->options().downscaling();
+    const int  out_w = capture_->options().width;
+    const int  out_h = capture_->options().height;
+    if (downscaling) {
+        device_pose_  = false;
+        yolox_device_ = false;
+    }
     while (!stop_.load()) {
         Frame raw;
         // Event-driven: block until the capture worker publishes a new frame
@@ -170,13 +184,16 @@ void FrameSource::decode_loop() {
             if (scratch_valid) { fw = scratch.cols; fh = scratch.rows; }
         } else if (capture_->options().pixel_format == PixFmt::Yuyv) {
             // Packed YUV422 -> BGR. No entropy decode; just a color convert.
+            // Interpret the raw buffer at the *capture* dims (may exceed the
+            // output dims for a downscaling camera).
             const auto& o = capture_->options();
-            if (static_cast<int>(raw.data.size()) < o.width * o.height * 2) {
+            const int cw = o.capture_w(), ch = o.capture_h();
+            if (static_cast<int>(raw.data.size()) < cw * ch * 2) {
                 FITRA_LOG_WARN("frame_source: short YUYV frame for seq={} ({} bytes)",
                                raw.seq, raw.data.size());
                 continue;
             }
-            cv::Mat yuy2(o.height, o.width, CV_8UC2,
+            cv::Mat yuy2(ch, cw, CV_8UC2,
                          const_cast<std::uint8_t*>(raw.data.data()));
             cv::cvtColor(yuy2, scratch, cv::COLOR_YUV2BGR_YUYV);
         } else {
@@ -186,6 +203,16 @@ void FrameSource::decode_loop() {
             }
         }
         if (!use_hw) { scratch_valid = true; fw = scratch.cols; fh = scratch.rows; }
+        // Downscale the full-sensor capture to the common output resolution.
+        // device_pose_/yolox_device_ were forced off above, so scratch always
+        // holds the decoded BGR here. INTER_AREA is the right filter for
+        // shrinking. After this, every downstream coordinate (bbox, M_inv,
+        // keypoints, drawer, triangulation) is in the output resolution space.
+        if (downscaling && scratch_valid && (fw != out_w || fh != out_h)) {
+            cv::resize(scratch, scratch, cv::Size(out_w, out_h), 0, 0, cv::INTER_AREA);
+            fw = out_w;
+            fh = out_h;
+        }
         auto t_decode = std::chrono::steady_clock::now();
 
         // YOLOX runs on this thread (one IExecutionContext per FrameSource),

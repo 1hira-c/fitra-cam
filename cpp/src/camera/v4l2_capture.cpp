@@ -51,23 +51,34 @@ void V4l2Capture::start() {
     const __u32 want_fourcc = want_yuyv ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
     const char* fmt_name    = want_yuyv ? "YUYV"
                             : (opts_.pixel_format == PixFmt::Nvjpeg ? "MJPG(HW)" : "MJPG");
+    // Negotiate the *capture* resolution (>= output resolution). When the
+    // camera is downscaling (cap_* set), the captured frame is resized to
+    // width/height in FrameSource; the V4L2 format must match the larger
+    // capture dims so the driver fills full sensor frames.
+    const int req_w = opts_.capture_w();
+    const int req_h = opts_.capture_h();
     v4l2_format fmt{};
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    fmt.fmt.pix.width       = opts_.width;
-    fmt.fmt.pix.height      = opts_.height;
+    fmt.fmt.pix.width       = req_w;
+    fmt.fmt.pix.height      = req_h;
     fmt.fmt.pix.pixelformat = want_fourcc;
     fmt.fmt.pix.field       = V4L2_FIELD_NONE;
     if (xioctl(fd_, VIDIOC_S_FMT, &fmt) < 0) throw_errno("VIDIOC_S_FMT");
     if (fmt.fmt.pix.pixelformat != want_fourcc) {
         throw std::runtime_error(std::string("driver did not accept ") + fmt_name + " format");
     }
-    if (static_cast<int>(fmt.fmt.pix.width)  != opts_.width
-     || static_cast<int>(fmt.fmt.pix.height) != opts_.height) {
+    if (static_cast<int>(fmt.fmt.pix.width)  != req_w
+     || static_cast<int>(fmt.fmt.pix.height) != req_h) {
         FITRA_LOG_WARN("driver returned {}x{} (requested {}x{})",
-                       fmt.fmt.pix.width, fmt.fmt.pix.height,
-                       opts_.width, opts_.height);
-        opts_.width  = static_cast<int>(fmt.fmt.pix.width);
-        opts_.height = static_cast<int>(fmt.fmt.pix.height);
+                       fmt.fmt.pix.width, fmt.fmt.pix.height, req_w, req_h);
+        const int acc_w = static_cast<int>(fmt.fmt.pix.width);
+        const int acc_h = static_cast<int>(fmt.fmt.pix.height);
+        // Write the accepted dims back to whichever field drove the request:
+        // the capture override (downscaling) or the output resolution.
+        if (opts_.cap_width > 0)  opts_.cap_width  = acc_w;
+        else                      opts_.width      = acc_w;
+        if (opts_.cap_height > 0) opts_.cap_height = acc_h;
+        else                      opts_.height     = acc_h;
     }
 
     // Frame interval (best-effort).
@@ -116,9 +127,15 @@ void V4l2Capture::start() {
     v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (xioctl(fd_, VIDIOC_STREAMON, &type) < 0) throw_errno("VIDIOC_STREAMON");
 
-    FITRA_LOG_INFO("v4l2: {} opened ({}x{}, {}, {} buffers, requested {} fps)",
-                   opts_.device_path, opts_.width, opts_.height,
-                   fmt_name, bufs_.size(), opts_.fps);
+    if (opts_.downscaling()) {
+        FITRA_LOG_INFO("v4l2: {} opened (capture {}x{} -> output {}x{}, {}, {} buffers, requested {} fps)",
+                       opts_.device_path, opts_.capture_w(), opts_.capture_h(),
+                       opts_.width, opts_.height, fmt_name, bufs_.size(), opts_.fps);
+    } else {
+        FITRA_LOG_INFO("v4l2: {} opened ({}x{}, {}, {} buffers, requested {} fps)",
+                       opts_.device_path, opts_.width, opts_.height,
+                       fmt_name, bufs_.size(), opts_.fps);
+    }
 
     stop_.store(false);
     worker_ = std::thread{&V4l2Capture::worker_loop, this};

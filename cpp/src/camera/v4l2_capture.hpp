@@ -44,11 +44,27 @@ struct Frame {
 
 struct V4l2Options {
     std::string device_path;
+    // Output (effective) resolution -- what every downstream consumer sees.
+    // When cap_width/cap_height override the capture resolution, frames are
+    // downscaled to width/height in FrameSource::decode_loop. Unchanged
+    // semantics for the no-override case (cap_* == 0).
     int width  = 640;
     int height = 480;
+    // Actual V4L2 capture resolution. 0 => same as width/height (no override,
+    // no downscale). Set higher than width/height for cameras whose low-res
+    // modes center-crop instead of downscaling (so the full sensor FOV is kept,
+    // then resized down to the common runtime resolution).
+    int cap_width  = 0;
+    int cap_height = 0;
     int fps    = 30;
     int n_buffers = 4;
     PixFmt pixel_format = PixFmt::Mjpeg;
+
+    int capture_w() const { return cap_width  > 0 ? cap_width  : width;  }
+    int capture_h() const { return cap_height > 0 ? cap_height : height; }
+    bool downscaling() const {
+        return capture_w() != width || capture_h() != height;
+    }
 };
 
 class V4l2Capture {
