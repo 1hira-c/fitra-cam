@@ -13,9 +13,15 @@ import {
   kpCountFor,
   skeletonFor,
 } from "../lib/skeleton";
-import type { Bundle3D, Joint3D, KpFormat, Person3D, Tracker } from "../types/bundle";
+import type { Bundle3D, Camera3D, Joint3D, KpFormat, Person3D, Tracker } from "../types/bundle";
 
 const TRACKER_AXIS_BASE_LEN = 0.15;
+// Camera frustum (wireframe pyramid) drawn at each calibrated camera. Apex sits
+// at the camera center; the opening points along the camera's view direction.
+const CAMERA_FRUSTUM_COLOR = 0xffc233;
+const CAMERA_FRUSTUM_DEPTH = 0.2; // metres from apex to opening
+const CAMERA_FRUSTUM_HALF_W = 0.13;
+const CAMERA_FRUSTUM_HALF_H = 0.1;
 // World (Z-up, X-right, Y-forward) → Three.js (Y-up) basis change = Rx(-90°).
 const WORLD_TO_THREE_QUAT = (() => {
   const k = 0.7071067811865475; // 1/√2
@@ -51,6 +57,10 @@ interface TrackerView {
   lastGood: { position: THREE.Vector3; scale: number; hasData: boolean };
 }
 
+interface CameraView {
+  group: THREE.Group;
+}
+
 export type ViewName = "front" | "side" | "top";
 
 export class SkeletonViewer {
@@ -75,6 +85,10 @@ export class SkeletonViewer {
   private trackersRoot!: THREE.Group;
   private trackersVisible = true;
   private trackerViews: TrackerView[] = [];
+  private camerasRoot!: THREE.Group;
+  private camerasVisible = true;
+  private cameraMaterial!: THREE.LineBasicMaterial;
+  private cameraViews = new Map<string, CameraView>();
   private onResize = () => this.resize();
 
   constructor(canvas: HTMLCanvasElement, statusEl: HTMLElement | null) {
@@ -125,6 +139,10 @@ export class SkeletonViewer {
         lastGood: { position: new THREE.Vector3(), scale: 1.0, hasData: false },
       });
     }
+
+    this.camerasRoot = new THREE.Group();
+    this.scene.add(this.camerasRoot);
+    this.cameraMaterial = new THREE.LineBasicMaterial({ color: CAMERA_FRUSTUM_COLOR });
 
     const grid = new THREE.GridHelper(4, 20, 0x335577, 0x2b2f36);
     (grid.material as THREE.Material).opacity = 0.75;
@@ -216,6 +234,10 @@ export class SkeletonViewer {
       this.kpFormat = bundle.kp_format;
     }
 
+    // Camera frustums are static placement data, independent of whether a person
+    // is currently triangulated; update them regardless of the branches below.
+    this.updateCameras(Array.isArray(bundle?.cameras) ? bundle.cameras : []);
+
     if (!bundle || bundle.enabled === false) {
       this.setStatus(bundle && bundle.enabled === false ? "3D disabled" : "(no 3D data)");
       this.updatePeople([]);
@@ -245,6 +267,81 @@ export class SkeletonViewer {
   setTrackersVisible(visible: boolean): void {
     this.trackersVisible = !!visible;
     if (this.trackersRoot) this.trackersRoot.visible = this.trackersVisible;
+  }
+
+  setCamerasVisible(visible: boolean): void {
+    this.camerasVisible = !!visible;
+    if (this.camerasRoot) this.camerasRoot.visible = this.camerasVisible;
+  }
+
+  // Wireframe pyramid with the apex at the local origin (camera center) opening
+  // toward local +Z (the camera's view direction in camera-frame coords). The
+  // group's quaternion then rotates +Z to the actual view direction in world.
+  private buildCameraFrustum(): THREE.LineSegments {
+    const d = CAMERA_FRUSTUM_DEPTH;
+    const w = CAMERA_FRUSTUM_HALF_W;
+    const h = CAMERA_FRUSTUM_HALF_H;
+    // 4 apex->corner edges + 4 rectangle edges = 8 segments (16 vertices).
+    const corners = [
+      [-w, -h, d],
+      [w, -h, d],
+      [w, h, d],
+      [-w, h, d],
+    ];
+    const verts: number[] = [];
+    for (const c of corners) verts.push(0, 0, 0, c[0], c[1], c[2]);
+    for (let i = 0; i < 4; i += 1) {
+      const a = corners[i];
+      const b = corners[(i + 1) % 4];
+      verts.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+    const lines = new THREE.LineSegments(geometry, this.cameraMaterial);
+    lines.frustumCulled = false;
+    return lines;
+  }
+
+  private updateCameras(cameras: Camera3D[]): void {
+    if (!this.camerasRoot) return;
+    this.camerasRoot.visible = this.camerasVisible;
+
+    const seen = new Set<string>();
+    for (const cam of cameras) {
+      if (!cam || !Array.isArray(cam.pos) || !Array.isArray(cam.quat_wxyz)) continue;
+      const id = String(cam.id);
+      seen.add(id);
+
+      let view = this.cameraViews.get(id);
+      if (!view) {
+        const group = new THREE.Group();
+        group.frustumCulled = false;
+        group.add(this.buildCameraFrustum());
+        this.camerasRoot.add(group);
+        view = { group };
+        this.cameraViews.set(id, view);
+      }
+
+      // Position: world (x, y, z) -> Three.js (x, z, -y), matching jointToVector.
+      view.group.position.set(Number(cam.pos[0]), Number(cam.pos[2]), -Number(cam.pos[1]));
+
+      // Orientation: camera->world quaternion conjugated into the Three.js basis,
+      // matching the tracker path.
+      const qw = Number(cam.quat_wxyz[0]);
+      const qx = Number(cam.quat_wxyz[1]);
+      const qy = Number(cam.quat_wxyz[2]);
+      const qz = Number(cam.quat_wxyz[3]);
+      const qWorld = new THREE.Quaternion(qx, qy, qz, qw);
+      const qThree = WORLD_TO_THREE_QUAT.clone()
+        .multiply(qWorld)
+        .multiply(WORLD_TO_THREE_QUAT_INV);
+      view.group.quaternion.copy(qThree);
+      view.group.visible = true;
+    }
+
+    for (const [id, view] of this.cameraViews) {
+      if (!seen.has(id)) view.group.visible = false;
+    }
   }
 
   private updateTrackers(trackers: Tracker[]): void {

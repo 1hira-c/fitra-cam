@@ -312,6 +312,26 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     if (!triangulator || !bus) return;
     if (latest_snapshots_.size() < 2) return;
 
+    // Static camera placements (world frame) for the 3D viewer's frustums.
+    // Resent on every snapshot (incl. sync-miss) so the markers stay visible.
+    std::vector<CameraPose3D> camera_poses;
+    {
+        const auto poses = triangulator->camera_poses();
+        camera_poses.reserve(poses.size());
+        for (const auto& p : poses) {
+            CameraPose3D cp;
+            cp.id = p.id;
+            cp.pos[0] = p.center_w[0];
+            cp.pos[1] = p.center_w[1];
+            cp.pos[2] = p.center_w[2];
+            cp.quat_wxyz[0] = p.quat_wxyz[0];
+            cp.quat_wxyz[1] = p.quat_wxyz[1];
+            cp.quat_wxyz[2] = p.quat_wxyz[2];
+            cp.quat_wxyz[3] = p.quat_wxyz[3];
+            camera_poses.push_back(std::move(cp));
+        }
+    }
+
     std::chrono::steady_clock::time_point min_ts{};
     std::chrono::steady_clock::time_point max_ts{};
     bool first = true;
@@ -349,6 +369,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         miss.stats.sync_miss = tri_sync_miss_;
         miss.stats.processed = tri_processed_;
         miss.stats.ik_locked = ik_.locked();
+        miss.cameras = camera_poses;
         bus->update(miss);
         for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
             last_3d_input_seqs_[i] = latest_snapshots_[i].seq;
@@ -443,6 +464,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     out.stats.profile_quality_status = ik_.profile_quality_status();
     out.stats.processed = tri_processed_;
     out.stats.sync_miss = tri_sync_miss_;
+    out.cameras = std::move(camera_poses);
     bus->update(out);
     for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
         last_3d_input_seqs_[i] = latest_snapshots_[i].seq;

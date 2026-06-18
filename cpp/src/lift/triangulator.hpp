@@ -42,6 +42,17 @@ public:
     const std::string& camera_id(std::size_t i) const { return cameras_[i].id; }
     void require_camera_ids(const std::vector<std::string>& expected_ids) const;
 
+    // Static camera placement in the fitra Z-up world frame, derived from the
+    // stored world->camera extrinsics: center_w = -Rᵀ·t, and quat_wxyz is the
+    // camera->world rotation (Rᵀ) as a unit quaternion (w,x,y,z). Used by the 3D
+    // viewer to draw camera frustums; cheap enough to call per frame.
+    struct CameraPose {
+        std::string id;
+        cv::Vec3d   center_w{0.0, 0.0, 0.0};
+        cv::Vec4d   quat_wxyz{1.0, 0.0, 0.0, 0.0};
+    };
+    std::vector<CameraPose> camera_poses() const;
+
 private:
     struct CameraModel {
         std::string id;

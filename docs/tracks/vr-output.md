@@ -40,6 +40,15 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-18 — 3D プレビューに校正カメラ位置を表示
+3D ビューア (`/ws3d`) に、校正済み各カメラの設置位置と視野方向をワイヤー視錐台 (向き付き四角錐)
+で描画。`Triangulator::camera_poses()` を新設し world 上のカメラ中心 (`-Rᵀ·t`) と camera→world
+回転を quaternion (w,x,y,z) で公開、`Skeleton3DSnapshot.cameras` 経由で `/ws3d` バンドルへ毎フレーム
+同梱 (extrinsics は静的・2〜3 台で数百バイトのため専用 REST は設けず既存ストリームに相乗り)。frontend
+は `SkeletonViewer.updateCameras()` で id ごとに視錐台を遅延生成し、トラッカーと同じ basis 変換
+(pos `[x,z,-y]` / quat 共役) で配置。`ThreeDView` に `show cameras` トグルを追加。校正の妥当性
+(カメラがどこを向くか) を直感確認するためのデバッグ可視化。軽微なため design doc なし (changelog のみ)。
+
 ### 2026-06-15 — React WebUI の Gemini レビュー堅牢化 (バグ修正)
 PR #33 の Gemini Code Assist 指摘対応。(1) `SkeletonViewer.dispose()` が geometry/material
 を解放しておらず、route 往来 (`/` ↔ `/subject-calib`) の度に GPU リソースが蓄積していたのを、
