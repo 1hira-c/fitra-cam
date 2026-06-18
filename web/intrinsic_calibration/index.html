@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>fitra-cam Intrinsic Calibration</title>
+  <link rel="stylesheet" href="/intrinsic-calib/styles.css">
+</head>
+<body>
+  <header>
+    <h1 id="title">Intrinsic Calibration (ChArUco)</h1>
+    <div class="conn-group">
+      <div id="conn" class="conn">connecting…</div>
+      <a class="conn link" href="/">live</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>1. Control</h2>
+      <p>
+        ChArUco ボードを各カメラに見せ、<b>画像の隅々・近遠・傾き</b>を変えながら
+        多様なビューを溜めます。各カメラが <b>min views</b> 以上・被覆が埋まったら Solve。
+        モデル: <b id="model">-</b>（fisheye は強い魚眼レンズ向け）。
+      </p>
+      <div class="status-line">
+        state: <span id="state" class="badge">-</span> &middot;
+        cams: <span id="num_cams">-</span> &middot;
+        min views: <span id="min_views">-</span>
+      </div>
+      <div class="actions">
+        <button id="btn_start" type="button">Start collecting</button>
+        <button id="btn_stop" type="button" disabled>Stop</button>
+        <button id="btn_solve" type="button">Solve &amp; write</button>
+      </div>
+      <div id="ctrl_msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>2. Per-camera coverage <span class="hint">(views · coverage · rms)</span></h2>
+      <table class="result" id="cams">
+        <thead>
+          <tr><th>cam</th><th>views</th><th>coverage</th><th>rms (px)</th><th>solved</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p class="hint">
+        coverage は画像を 3×3 に分けた被覆率。隅・中央・近遠・傾きを変えて 1.0 に近づける。
+        rms は solve 後に表示（小さいほど良い、目安 &lt; 0.5px）。
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>Raw state</h2>
+      <pre id="raw" class="log"></pre>
+    </section>
+  </main>
+
+  <script src="/flow.js"></script>
+  <script src="/intrinsic-calib/app.js"></script>
+</body>
+</html>

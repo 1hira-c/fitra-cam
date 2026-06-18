@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -232,6 +233,11 @@ void load_extrinsic_calib(const YAML::Node& section, MainOptions& out) {
         "lin_vel_max", "ang_vel_max", "burst_min", "min_samples",
         "controller_role",
         "controller_port", "controller_bind", "controller_stale_ms",
+        // Method selector + floor-AprilTag path (案D).
+        "method",
+        "floor_map", "floor_replay_dir", "floor_intrinsics",
+        "floor_out_intrinsics", "floor_burst_min", "floor_max_reproj_px",
+        "floor_fisheye",
     };
     check_keys(section, allowed, "extrinsic_calib");
     if (section["enabled"])         out.excal_enabled        = parse_scalar<bool>(section["enabled"],               "extrinsic_calib.enabled");
@@ -248,6 +254,59 @@ void load_extrinsic_calib(const YAML::Node& section, MainOptions& out) {
     if (section["controller_port"]) out.excal_controller_port = parse_scalar<int>(section["controller_port"],      "extrinsic_calib.controller_port");
     if (section["controller_bind"]) out.excal_controller_bind = parse_scalar<std::string>(section["controller_bind"], "extrinsic_calib.controller_bind");
     if (section["controller_stale_ms"]) out.excal_controller_stale_ms = parse_scalar<double>(section["controller_stale_ms"], "extrinsic_calib.controller_stale_ms");
+
+    // Method selector: "controller" (default, 案C) | "floor" (案D). Sets the
+    // daemon-only stage selector — NOT the run_mode flag (floor_calib_enabled).
+    // The shared daemon config must not carry a run_mode-deriving flag (that
+    // would make the parent + run child derive a calib mode); the daemon uses
+    // excal_method to choose the extrinsic stage and module_argv injects
+    // --floor-calib into that child. Standalone floor uses --floor-calib.
+    if (section["method"]) {
+        const std::string m = parse_scalar<std::string>(section["method"], "extrinsic_calib.method");
+        if (m != "controller" && m != "floor") {
+            throw std::runtime_error("extrinsic_calib.method must be 'controller' or 'floor'");
+        }
+        out.excal_method = m;
+    }
+    if (section["floor_map"])            out.floor_map            = parse_scalar<std::string>(section["floor_map"],            "extrinsic_calib.floor_map");
+    if (section["floor_replay_dir"])     out.floor_replay         = parse_scalar<std::string>(section["floor_replay_dir"],     "extrinsic_calib.floor_replay_dir");
+    if (section["floor_intrinsics"])     out.floor_intrinsics     = parse_scalar<std::string>(section["floor_intrinsics"],     "extrinsic_calib.floor_intrinsics");
+    if (section["floor_out_intrinsics"]) out.floor_out_intrinsics = parse_scalar<std::string>(section["floor_out_intrinsics"], "extrinsic_calib.floor_out_intrinsics");
+    if (section["floor_burst_min"])      out.floor_burst_min      = parse_scalar<int>(section["floor_burst_min"],              "extrinsic_calib.floor_burst_min");
+    if (section["floor_max_reproj_px"])  out.floor_max_reproj_px  = parse_scalar<double>(section["floor_max_reproj_px"],       "extrinsic_calib.floor_max_reproj_px");
+    if (section["floor_fisheye"])        out.floor_fisheye        = parse_scalar<bool>(section["floor_fisheye"],               "extrinsic_calib.floor_fisheye");
+    // The floor path shares extrinsic_calib.out as its output target.
+    if (section["out"])                  out.floor_out            = out.excal_out;
+}
+
+void load_intrinsic_calib(const YAML::Node& section, MainOptions& out) {
+    ensure_map(section, "intrinsic_calib");
+    static const std::set<std::string> allowed{
+        "enabled", "replay_dir", "out", "model",
+        "squares_x", "squares_y", "square_len_m", "marker_len_m", "dict",
+        "min_views", "min_corners", "max_rms_px",
+    };
+    check_keys(section, allowed, "intrinsic_calib");
+    // enabled sets the daemon-only step selector, NOT the run_mode flag
+    // (intrinsic_calib_enabled, set only by --calib-intrinsic). See the field
+    // docs: the shared daemon config stays free of run_mode-deriving flags.
+    if (section["enabled"])      out.intrinsic_step_enabled = parse_scalar<bool>(section["enabled"], "intrinsic_calib.enabled");
+    if (section["replay_dir"])   out.intrinsic_replay        = parse_scalar<std::string>(section["replay_dir"], "intrinsic_calib.replay_dir");
+    if (section["out"])          out.intrinsic_out           = parse_scalar<std::string>(section["out"], "intrinsic_calib.out");
+    if (section["model"]) {
+        out.intrinsic_model = parse_scalar<std::string>(section["model"], "intrinsic_calib.model");
+        if (out.intrinsic_model != "pinhole" && out.intrinsic_model != "fisheye") {
+            throw std::runtime_error("intrinsic_calib.model must be 'pinhole' or 'fisheye'");
+        }
+    }
+    if (section["squares_x"])    out.charuco_squares_x    = parse_scalar<int>(section["squares_x"], "intrinsic_calib.squares_x");
+    if (section["squares_y"])    out.charuco_squares_y    = parse_scalar<int>(section["squares_y"], "intrinsic_calib.squares_y");
+    if (section["square_len_m"]) out.charuco_square_len_m = parse_scalar<double>(section["square_len_m"], "intrinsic_calib.square_len_m");
+    if (section["marker_len_m"]) out.charuco_marker_len_m = parse_scalar<double>(section["marker_len_m"], "intrinsic_calib.marker_len_m");
+    if (section["dict"])         out.charuco_dict         = parse_scalar<int>(section["dict"], "intrinsic_calib.dict");
+    if (section["min_views"])    out.intrinsic_min_views  = parse_scalar<int>(section["min_views"], "intrinsic_calib.min_views");
+    if (section["min_corners"])  out.intrinsic_min_corners = parse_scalar<int>(section["min_corners"], "intrinsic_calib.min_corners");
+    if (section["max_rms_px"])   out.intrinsic_max_rms_px = parse_scalar<double>(section["max_rms_px"], "intrinsic_calib.max_rms_px");
 }
 
 }  // namespace
@@ -277,7 +336,7 @@ void load_main_config(const std::string& path, MainOptions& out) {
     static const std::set<std::string> top_allowed{
         "schema", "cameras", "inference", "web", "three_d",
         "subject", "calibration", "logging", "slimevr", "vmt",
-        "extrinsic_calib",
+        "extrinsic_calib", "intrinsic_calib",
     };
     for (auto it = root.begin(); it != root.end(); ++it) {
         const auto key = it->first.as<std::string>();
@@ -296,6 +355,7 @@ void load_main_config(const std::string& path, MainOptions& out) {
     if (root["slimevr"])     load_slimevr   (root["slimevr"],     out);
     if (root["vmt"])         load_vmt       (root["vmt"],         out);
     if (root["extrinsic_calib"]) load_extrinsic_calib(root["extrinsic_calib"], out);
+    if (root["intrinsic_calib"]) load_intrinsic_calib(root["intrinsic_calib"], out);
 }
 
 EarlyArgs scan_early_args(int argc, char** argv) {
@@ -421,6 +481,27 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--excal-controller-port")   { out.excal_controller_port = std::atoi(need(i, "--excal-controller-port")); }
         else if (a == "--excal-controller-bind")   { out.excal_controller_bind = need(i, "--excal-controller-bind"); }
         else if (a == "--excal-controller-stale-ms"){ out.excal_controller_stale_ms = std::stod(need(i, "--excal-controller-stale-ms")); }
+        else if (a == "--floor-calib")             { out.floor_calib_enabled = true; }
+        else if (a == "--floor-map")               { out.floor_map = need(i, "--floor-map"); }
+        else if (a == "--floor-replay")            { out.floor_replay = need(i, "--floor-replay"); }
+        else if (a == "--floor-intrinsics")        { out.floor_intrinsics = need(i, "--floor-intrinsics"); }
+        else if (a == "--floor-out-intrinsics")    { out.floor_out_intrinsics = need(i, "--floor-out-intrinsics"); }
+        else if (a == "--floor-out")               { out.floor_out = need(i, "--floor-out"); }
+        else if (a == "--floor-burst-min")         { out.floor_burst_min = std::atoi(need(i, "--floor-burst-min")); }
+        else if (a == "--floor-max-reproj-px")     { out.floor_max_reproj_px = std::stod(need(i, "--floor-max-reproj-px")); }
+        else if (a == "--floor-fisheye")           { out.floor_fisheye = true; }
+        else if (a == "--calib-intrinsic")         { out.intrinsic_calib_enabled = true; }
+        else if (a == "--intrinsic-replay")        { out.intrinsic_replay = need(i, "--intrinsic-replay"); }
+        else if (a == "--intrinsic-out")           { out.intrinsic_out = need(i, "--intrinsic-out"); }
+        else if (a == "--intrinsic-model")         { out.intrinsic_model = need(i, "--intrinsic-model"); }
+        else if (a == "--charuco-squares-x")       { out.charuco_squares_x = std::atoi(need(i, "--charuco-squares-x")); }
+        else if (a == "--charuco-squares-y")       { out.charuco_squares_y = std::atoi(need(i, "--charuco-squares-y")); }
+        else if (a == "--charuco-square-len-m")    { out.charuco_square_len_m = std::stod(need(i, "--charuco-square-len-m")); }
+        else if (a == "--charuco-marker-len-m")    { out.charuco_marker_len_m = std::stod(need(i, "--charuco-marker-len-m")); }
+        else if (a == "--charuco-dict")            { out.charuco_dict = std::atoi(need(i, "--charuco-dict")); }
+        else if (a == "--intrinsic-min-views")     { out.intrinsic_min_views = std::atoi(need(i, "--intrinsic-min-views")); }
+        else if (a == "--intrinsic-min-corners")   { out.intrinsic_min_corners = std::atoi(need(i, "--intrinsic-min-corners")); }
+        else if (a == "--intrinsic-max-rms")       { out.intrinsic_max_rms_px = std::stod(need(i, "--intrinsic-max-rms")); }
         else if (a == "--daemon")            { out.daemon = true; }
         else if (a == "--daemon-initial")    { out.daemon_initial = need(i, "--daemon-initial"); }
         else if (a == "--flow-managed")      { out.flow_managed = true; }
@@ -431,6 +512,12 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
 }
 
 RunMode run_mode(const MainOptions& opts) {
+    if (opts.intrinsic_calib_enabled || !opts.intrinsic_replay.empty()) {
+        return RunMode::CalibIntrinsic;
+    }
+    if (opts.floor_calib_enabled || !opts.floor_replay.empty()) {
+        return RunMode::CalibExtrinsicFloor;
+    }
     if (opts.excal_enabled || !opts.excal_replay.empty()) {
         return RunMode::CalibExtrinsic;
     }
@@ -440,18 +527,95 @@ RunMode run_mode(const MainOptions& opts) {
 
 const char* run_mode_name(RunMode mode) {
     switch (mode) {
-        case RunMode::CalibSubject:   return "calib-subject";
-        case RunMode::CalibExtrinsic: return "calib-extrinsic";
-        case RunMode::Run:            break;
+        case RunMode::CalibSubject:        return "calib-subject";
+        case RunMode::CalibExtrinsic:      return "calib-extrinsic";
+        case RunMode::CalibExtrinsicFloor: return "calib-extrinsic-floor";
+        case RunMode::CalibIntrinsic:      return "calib-intrinsic";
+        case RunMode::Run:                 break;
     }
     return "run";
 }
 
 bool parse_run_mode_name(const std::string& name, RunMode& out) {
-    if (name == "run")             { out = RunMode::Run;            return true; }
-    if (name == "calib-subject")   { out = RunMode::CalibSubject;   return true; }
-    if (name == "calib-extrinsic") { out = RunMode::CalibExtrinsic; return true; }
+    if (name == "run")                   { out = RunMode::Run;                 return true; }
+    if (name == "calib-subject")         { out = RunMode::CalibSubject;        return true; }
+    if (name == "calib-extrinsic")       { out = RunMode::CalibExtrinsic;      return true; }
+    if (name == "calib-extrinsic-floor") { out = RunMode::CalibExtrinsicFloor; return true; }
+    if (name == "calib-intrinsic")       { out = RunMode::CalibIntrinsic;      return true; }
     return false;
+}
+
+namespace {
+// A calibration source (intrinsics / extrinsics YAML) is usable if a path is
+// set and the file exists. `label` names it for the error message.
+bool source_ready(const std::string& path, const char* label, std::string& err) {
+    if (path.empty()) {
+        err = std::string("no ") + label + " configured";
+        return false;
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || ec) {
+        err = std::string(label) + " not found: " + path;
+        return false;
+    }
+    return true;
+}
+}  // namespace
+
+bool precheck_mode_switch(const MainOptions& opts, RunMode target,
+                          std::string& err) {
+    switch (target) {
+        case RunMode::CalibExtrinsicFloor: {
+            if (opts.floor_map.empty()) {
+                err = "floor calibration needs a known tag layout — set "
+                      "extrinsic_calib.floor_map (or --floor-map) in the config";
+                return false;
+            }
+            std::error_code ec;
+            if (!std::filesystem::exists(opts.floor_map, ec) || ec) {
+                err = "floor_map not found: " + opts.floor_map;
+                return false;
+            }
+            // PnP intrinsics: floor_intrinsics, else three_d.calib.
+            const std::string pnp =
+                opts.floor_intrinsics.empty() ? opts.calib : opts.floor_intrinsics;
+            return source_ready(pnp, "floor PnP intrinsics "
+                                "(extrinsic_calib.floor_intrinsics or three_d.calib)", err);
+        }
+        case RunMode::CalibExtrinsic: {
+            const std::string intr =
+                opts.excal_intrinsics.empty() ? opts.calib : opts.excal_intrinsics;
+            return source_ready(intr, "intrinsics "
+                                "(extrinsic_calib.intrinsics or three_d.calib)", err);
+        }
+        case RunMode::CalibIntrinsic:
+            // Produces the intrinsics YAML from scratch — no input file needed.
+            // But the board params are only validated by validate_options when
+            // the process IS in CalibIntrinsic mode; the daemon parent is Run,
+            // so re-check them here, else a flow-switch respawns a child that
+            // dies at validate and the daemon silently falls back to run.
+            if (opts.charuco_squares_x < 2 || opts.charuco_squares_y < 2) {
+                err = "calib-intrinsic needs charuco squares_x/y >= 2 (intrinsic_calib.*)";
+                return false;
+            }
+            if (opts.charuco_marker_len_m <= 0.0 ||
+                opts.charuco_marker_len_m >= opts.charuco_square_len_m) {
+                err = "calib-intrinsic needs 0 < marker_len < square_len (intrinsic_calib.*)";
+                return false;
+            }
+            if (opts.intrinsic_model != "pinhole" && opts.intrinsic_model != "fisheye") {
+                err = "intrinsic_calib.model must be 'pinhole' or 'fisheye'";
+                return false;
+            }
+            return true;
+        case RunMode::CalibSubject:
+            // Subject calibration triangulates, so it needs the extrinsics YAML.
+            return source_ready(opts.calib, "extrinsics (three_d.calib)", err);
+        case RunMode::Run:
+            // Run is the safe fallback; it tolerates a missing calib (2D only).
+            return true;
+    }
+    return true;
 }
 
 void validate_options(const MainOptions& opts) {
@@ -462,6 +626,34 @@ void validate_options(const MainOptions& opts) {
         // a replay session brings its own frames.
         if (opts.excal_replay.empty() && opts.cam_paths[0].empty()) {
             fail("missing required option (need --cam0)");
+        }
+    } else if (mode == RunMode::CalibExtrinsicFloor) {
+        // Floor path: also decode-only. Live collection needs cameras; replay
+        // brings its own. A known tag map and PnP intrinsics are mandatory.
+        if (opts.floor_replay.empty() && opts.cam_paths[0].empty()) {
+            fail("missing required option (need --cam0)");
+        }
+        if (opts.floor_map.empty()) {
+            fail("calib-extrinsic-floor requires --floor-map PATH");
+        }
+        if (opts.floor_intrinsics.empty() && opts.calib.empty()) {
+            fail("calib-extrinsic-floor requires --floor-intrinsics PATH (or --calib)");
+        }
+    } else if (mode == RunMode::CalibIntrinsic) {
+        // Intrinsic path: decode-only, produces the intrinsics YAML. Live needs
+        // cameras; replay brings its own. The ChArUco board must be sane.
+        if (opts.intrinsic_replay.empty() && opts.cam_paths[0].empty()) {
+            fail("missing required option (need --cam0)");
+        }
+        if (opts.charuco_squares_x < 2 || opts.charuco_squares_y < 2) {
+            fail("calib-intrinsic needs --charuco-squares-x/y >= 2");
+        }
+        if (opts.charuco_marker_len_m <= 0.0 ||
+            opts.charuco_marker_len_m >= opts.charuco_square_len_m) {
+            fail("calib-intrinsic needs 0 < --charuco-marker-len-m < --charuco-square-len-m");
+        }
+        if (opts.intrinsic_model != "pinhole" && opts.intrinsic_model != "fisheye") {
+            fail("--intrinsic-model must be 'pinhole' or 'fisheye'");
         }
     } else if (opts.cam_paths[0].empty() || opts.det_engine.empty()
                || opts.pose_engine.empty()) {
@@ -493,8 +685,9 @@ void validate_options(const MainOptions& opts) {
         if (opts.calibrate) {
             fail("--slimevr-out cannot be combined with --calibrate");
         }
-        if (mode == RunMode::CalibExtrinsic) {
-            fail("--slimevr-out cannot be combined with --extrinsic-calib/--excal-replay");
+        if (mode != RunMode::Run) {
+            fail("--slimevr-out cannot be combined with a calibration mode "
+                 "(--extrinsic-calib/--floor-calib/--calib-intrinsic/--calibrate)");
         }
         if (opts.slimevr_port <= 0 || opts.slimevr_port > 65535) {
             fail("--slimevr-port must be in [1, 65535]");
@@ -516,8 +709,9 @@ void validate_options(const MainOptions& opts) {
         if (opts.calibrate) {
             fail("--vmt-out cannot be combined with --calibrate");
         }
-        if (mode == RunMode::CalibExtrinsic) {
-            fail("--vmt-out cannot be combined with --extrinsic-calib/--excal-replay");
+        if (mode != RunMode::Run) {
+            fail("--vmt-out cannot be combined with a calibration mode "
+                 "(--extrinsic-calib/--floor-calib/--calib-intrinsic/--calibrate)");
         }
         if (opts.vmt_port <= 0 || opts.vmt_port > 65535) {
             fail("--vmt-port must be in [1, 65535]");
@@ -626,7 +820,7 @@ void validate_options(const MainOptions& opts) {
         if (opts.daemon_initial != "auto"
             && !parse_run_mode_name(opts.daemon_initial, initial)) {
             fail("--daemon-initial must be one of auto|run|calib-subject"
-                 "|calib-extrinsic");
+                 "|calib-extrinsic|calib-extrinsic-floor|calib-intrinsic");
         }
     }
 }

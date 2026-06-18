@@ -161,19 +161,37 @@ void test_next_action() {
 
 void test_initial_mode() {
     MainOptions opts;  // daemon_initial defaults to "auto"
+    // initial_mode(opts, intrinsics_exists, extrinsics_exists, profile_exists).
+    // Intrinsic step is disabled by default, so intrinsics_exists is moot here.
 
-    check(initial_mode(opts, false, false) == RunMode::CalibExtrinsic,
+    check(initial_mode(opts, true, false, false) == RunMode::CalibExtrinsic,
           "auto: no extrinsics -> calib-extrinsic");
-    check(initial_mode(opts, true, false) == RunMode::CalibSubject,
+    check(initial_mode(opts, true, true, false) == RunMode::CalibSubject,
           "auto: extrinsics ok, no profile -> calib-subject");
-    check(initial_mode(opts, true, true) == RunMode::Run,
-          "auto: both artifacts -> run");
+    check(initial_mode(opts, true, true, true) == RunMode::Run,
+          "auto: all artifacts -> run");
+
+    // Intrinsic step 0: step enabled + missing output -> calib-intrinsic first.
+    // Uses the daemon-only selector (intrinsic_step_enabled), not the run_mode
+    // flag, so a shared daemon config does not break the parent.
+    MainOptions iopts;
+    iopts.intrinsic_step_enabled = true;
+    check(initial_mode(iopts, false, false, false) == RunMode::CalibIntrinsic,
+          "auto: intrinsic step enabled + missing -> calib-intrinsic");
+    check(initial_mode(iopts, true, false, false) == RunMode::CalibExtrinsic,
+          "auto: intrinsics present -> skip to calib-extrinsic");
+
+    // method: floor selects the floor extrinsic stage via excal_method.
+    MainOptions fopts;
+    fopts.excal_method = "floor";
+    check(initial_mode(fopts, true, false, false) == RunMode::CalibExtrinsicFloor,
+          "auto: excal_method floor -> calib-extrinsic-floor");
 
     opts.daemon_initial = "calib-extrinsic";
-    check(initial_mode(opts, true, true) == RunMode::CalibExtrinsic,
+    check(initial_mode(opts, true, true, true) == RunMode::CalibExtrinsic,
           "explicit --daemon-initial wins over artifacts");
     opts.daemon_initial = "run";
-    check(initial_mode(opts, false, false) == RunMode::Run,
+    check(initial_mode(opts, false, false, false) == RunMode::Run,
           "explicit run wins even with artifacts missing");
 
     MainOptions p;
@@ -233,6 +251,11 @@ void test_run_daemon_chain() {
     opts.daemon = true;
     opts.daemon_initial = "calib-extrinsic";
     opts.calib_subject_id = "subj";
+    // calib-extrinsic's precheck needs intrinsics present (extrinsic_calib.intrinsics
+    // or three_d.calib). Point calib at an existing file so the initial-mode
+    // precheck passes and the spawn chain under test actually runs.
+    std::ofstream(stub.dir / "calib.yaml") << "x: 1\n";
+    opts.calib = (stub.dir / "calib.yaml").string();
     // Profile "exists": point subjects_dir at the stub dir and create it, so
     // the run spawn carries --subject-id.
     opts.subjects_dir = stub.dir.string();

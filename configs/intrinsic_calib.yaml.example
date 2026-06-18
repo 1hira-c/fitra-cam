@@ -1,0 +1,45 @@
+# Intrinsic (ChArUco) calibration config EXAMPLE for the medium 2-camera setup.
+# See docs/design/pose-3d-intrinsic-calibration.md.
+#
+# Produces calibrations/intrinsics.yaml (per-camera K + dist + distortion_model).
+# Calibrate at the SAME field-of-view but the HIGHEST resolution you can — tags
+# project to more pixels → robust corners. The recovered K/dist record that
+# resolution; the extrinsic/run steps then read this file.
+#
+# model: pinhole (cv::calibrateCamera, dist k1,k2,p1,p2,k3) or fisheye
+# (cv::fisheye::calibrate, dist k1..k4). Strong fisheye lenses (ELP AR0234) want
+# model: fisheye for accurate edges.
+
+schema: fitra_main_config_v1
+
+cameras:
+    cam0: /dev/v4l/by-path/platform-3610000.usb-usb-0:2.3:1.0-video-index0
+    cam1: /dev/v4l/by-path/platform-3610000.usb-usb-0:2.4:1.0-video-index0
+    height: 960
+    width: 1280
+    fps: 30
+    pixel_format: mjpeg
+
+web:
+    port: 8000
+
+intrinsic_calib:
+    enabled: true
+    model: fisheye
+    out: calibrations/intrinsics.yaml
+    # ChArUco board geometry (MUST match the printed board, including
+    # orientation). squares_x = columns, squares_y = rows. Transposing them
+    # (e.g. 5x7 vs 7x5) makes the marker-id → 3D mapping wrong → an anisotropic
+    # K (fx≠fy) and a huge rms. If your solve lands a large rms, try swapping
+    # squares_x/squares_y first. The medium rig's physical board is 7x5.
+    squares_x: 7
+    squares_y: 5
+    square_len_m: 0.056
+    marker_len_m: 0.042
+    # dict: -1 → DICT_4X4_50 (python calibrate_intrinsics_charuco.py default)
+    min_views: 15
+    min_corners: 8
+    # Reject a solve whose reprojection rms exceeds this (px). Catches a wrong
+    # board spec (transpose / square|marker / dict) that otherwise "solves" with
+    # a garbage K. 0 disables. Default 1.5.
+    max_rms_px: 1.5

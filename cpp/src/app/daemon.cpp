@@ -78,6 +78,22 @@ std::vector<std::string> module_argv(config::RunMode mode,
             args.push_back("--no-vmt-out");
             args.push_back("--no-slimevr-out");
             break;
+        case config::RunMode::CalibExtrinsicFloor:
+            // VR-free floor path: --floor-map / --floor-intrinsics come from
+            // --config (extrinsic_calib.floor_*). --floor-calib forces the mode
+            // regardless of the config's default method, so a flow switch into
+            // floor works even when the file selects controller.
+            args.push_back("--floor-calib");
+            args.push_back("--no-vmt-out");
+            args.push_back("--no-slimevr-out");
+            break;
+        case config::RunMode::CalibIntrinsic:
+            // Intrinsic (ChArUco) calibration: board params + out come from
+            // --config (intrinsic_calib.*). --calib-intrinsic forces the mode.
+            args.push_back("--calib-intrinsic");
+            args.push_back("--no-vmt-out");
+            args.push_back("--no-slimevr-out");
+            break;
     }
     return args;
 }
@@ -94,9 +110,11 @@ DaemonAction next_action(bool exited_normally, int exit_code,
         config::RunMode next;
         bool is_flow = true;
         switch (exit_code) {
-            case kExitFlowToRun:            next = config::RunMode::Run; break;
-            case kExitFlowToCalibSubject:   next = config::RunMode::CalibSubject; break;
-            case kExitFlowToCalibExtrinsic: next = config::RunMode::CalibExtrinsic; break;
+            case kExitFlowToRun:                 next = config::RunMode::Run; break;
+            case kExitFlowToCalibSubject:        next = config::RunMode::CalibSubject; break;
+            case kExitFlowToCalibExtrinsic:      next = config::RunMode::CalibExtrinsic; break;
+            case kExitFlowToCalibExtrinsicFloor: next = config::RunMode::CalibExtrinsicFloor; break;
+            case kExitFlowToCalibIntrinsic:      next = config::RunMode::CalibIntrinsic; break;
             default: is_flow = false; break;
         }
         if (is_flow) {
@@ -121,6 +139,7 @@ DaemonAction next_action(bool exited_normally, int exit_code,
 }
 
 config::RunMode initial_mode(const config::MainOptions& opts,
+                             bool intrinsics_exists,
                              bool extrinsics_exists,
                              bool profile_exists) {
     config::RunMode m;
@@ -128,7 +147,18 @@ config::RunMode initial_mode(const config::MainOptions& opts,
         && config::parse_run_mode_name(opts.daemon_initial, m)) {
         return m;
     }
-    if (!extrinsics_exists) return config::RunMode::CalibExtrinsic;
+    // Step 0 of setup: when C++ intrinsic calibration is enabled and its output
+    // YAML is missing, calibrate intrinsics first. Disabled (the default) →
+    // intrinsics are assumed provided externally and we skip to extrinsic.
+    if (opts.intrinsic_step_enabled && !intrinsics_exists) {
+        return config::RunMode::CalibIntrinsic;
+    }
+    if (!extrinsics_exists) {
+        // The configured method (extrinsic_calib.method: floor) picks which
+        // extrinsic stage to enter first.
+        return opts.excal_method == "floor" ? config::RunMode::CalibExtrinsicFloor
+                                            : config::RunMode::CalibExtrinsic;
+    }
     if (!profile_exists)    return config::RunMode::CalibSubject;
     return config::RunMode::Run;
 }
@@ -175,12 +205,33 @@ int run_daemon(const config::MainOptions& opts,
     std::error_code ec;
     const bool extrinsics_exists =
         !opts.calib.empty() && std::filesystem::exists(opts.calib, ec) && !ec;
+    const bool intrinsics_exists =
+        !opts.intrinsic_out.empty() &&
+        std::filesystem::exists(opts.intrinsic_out, ec) && !ec;
 
-    config::RunMode mode = initial_mode(opts, extrinsics_exists, profile_now());
-    FITRA_LOG_INFO("[daemon] initial mode: {} (extrinsics {}, profile {})",
+    config::RunMode mode =
+        initial_mode(opts, intrinsics_exists, extrinsics_exists, profile_now());
+    FITRA_LOG_INFO("[daemon] initial mode: {} (intrinsics {}, extrinsics {}, profile {})",
                    config::run_mode_name(mode),
+                   intrinsics_exists ? "present" : "missing",
                    extrinsics_exists ? "present" : "missing",
                    profile_now() ? "present" : "missing");
+
+    // Pre-flight the chosen initial mode's config the same way the flow-switch
+    // route does — otherwise a misconfigured calib stage (e.g. method: floor
+    // with no floor_map) spawns a child that dies at validate, next_action sees
+    // a non-flow exit and treats it as a crash, and the daemon silently falls
+    // back to run. Surface the reason and start in run instead (the rig comes up
+    // usable; the user fixes the config and re-switches from the viewer).
+    {
+        std::string perr;
+        if (!config::precheck_mode_switch(opts, mode, perr)) {
+            FITRA_LOG_ERROR("[daemon] initial mode {} is misconfigured: {} — starting "
+                            "in run mode; fix the config and re-switch from the viewer",
+                            config::run_mode_name(mode), perr);
+            mode = config::RunMode::Run;
+        }
+    }
 
     // Own both signals: main() leaves them to us for the daemon path so the
     // handler can forward to the child and set stop in one place. Restore the

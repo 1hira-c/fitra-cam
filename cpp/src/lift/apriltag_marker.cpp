@@ -30,7 +30,8 @@ bool solve_tag_pose(const std::array<cv::Point2f, 4>& corners,
                     const cv::Mat& K,
                     const cv::Mat& dist,
                     geom::T_cam_marker& T_cam_face,
-                    double& reproj_rms_px) {
+                    double& reproj_rms_px,
+                    bool fisheye) {
     if (tag_size_m <= 0.0 || K.empty()) return false;
 
     std::array<cv::Point3f, 4> obj = tag_object_corners(tag_size_m);
@@ -38,8 +39,19 @@ bool solve_tag_pose(const std::array<cv::Point2f, 4>& corners,
     std::vector<cv::Point2f> imgv(corners.begin(), corners.end());
 
     cv::Mat rvec, tvec;
-    bool ok = cv::solvePnP(objv, imgv, K, dist, rvec, tvec, false,
-                           cv::SOLVEPNP_IPPE_SQUARE);
+    bool ok;
+    if (fisheye) {
+        // The fisheye Brown model is incompatible with solvePnP's pinhole
+        // assumption: undistort to normalised rays first, then PnP with an
+        // identity camera and no distortion.
+        std::vector<cv::Point2f> norm;
+        cv::fisheye::undistortPoints(imgv, norm, K, dist);
+        ok = cv::solvePnP(objv, norm, cv::Mat::eye(3, 3, CV_64F), cv::Mat(),
+                          rvec, tvec, false, cv::SOLVEPNP_IPPE_SQUARE);
+    } else {
+        ok = cv::solvePnP(objv, imgv, K, dist, rvec, tvec, false,
+                          cv::SOLVEPNP_IPPE_SQUARE);
+    }
     if (!ok) return false;
 
     cv::Mat R;
@@ -51,13 +63,27 @@ bool solve_tag_pose(const std::array<cv::Point2f, 4>& corners,
     }
     T_cam_face = geom::T_cam_marker::from_raw(raw);
 
-    // Reprojection RMS over the 4 corners.
-    std::vector<cv::Point2f> proj;
-    cv::projectPoints(objv, rvec, tvec, K, dist, proj);
+    // Reprojection RMS over the 4 corners (in the camera's own model).
+    // cv::fisheye::projectPoints derives the output point type from the (double)
+    // object points, so its output MUST be Point2d — handing it a Point2f vector
+    // trips an OpenCV create() type assertion. Keep the branches' types separate.
     double s2 = 0.0;
-    for (int i = 0; i < 4; ++i) {
-        cv::Point2f d = proj[i] - imgv[i];
-        s2 += static_cast<double>(d.x) * d.x + static_cast<double>(d.y) * d.y;
+    if (fisheye) {
+        std::vector<cv::Point3d> objd(obj.begin(), obj.end());
+        std::vector<cv::Point2d> proj;
+        cv::fisheye::projectPoints(objd, proj, rvec, tvec, K, dist);
+        for (int i = 0; i < 4; ++i) {
+            const double dx = proj[i].x - imgv[i].x;
+            const double dy = proj[i].y - imgv[i].y;
+            s2 += dx * dx + dy * dy;
+        }
+    } else {
+        std::vector<cv::Point2f> proj;
+        cv::projectPoints(objv, rvec, tvec, K, dist, proj);
+        for (int i = 0; i < 4; ++i) {
+            const cv::Point2f d = proj[i] - imgv[i];
+            s2 += static_cast<double>(d.x) * d.x + static_cast<double>(d.y) * d.y;
+        }
     }
     reproj_rms_px = std::sqrt(s2 / 4.0);
     return true;
@@ -84,11 +110,18 @@ AprilTagDetector::AprilTagDetector(MarkerBoardConfig cfg)
       detector_(make_detector(cfg_.dictionary)) {
     // Persist the resolved dictionary id on cfg_ so config() reports it.
     if (cfg_.dictionary < 0) cfg_.dictionary = kDefaultDict;
+    // Build CLAHE once (reused per frame in detect) — creating it per frame is
+    // a needless allocation. Not thread-safe; detect() is single-threaded.
+    if (cfg_.use_clahe) {
+        const int grid = cfg_.clahe_grid > 0 ? cfg_.clahe_grid : 8;
+        clahe_ = cv::createCLAHE(cfg_.clahe_clip, cv::Size(grid, grid));
+    }
 }
 
 std::vector<TagDetection> AprilTagDetector::detect(const cv::Mat& image,
                                                    const cv::Mat& K,
-                                                   const cv::Mat& dist) {
+                                                   const cv::Mat& dist,
+                                                   bool fisheye) {
     std::vector<TagDetection> out;
     if (image.empty()) return out;
 
@@ -97,6 +130,17 @@ std::vector<TagDetection> AprilTagDetector::detect(const cv::Mat& image,
         gray = image;
     } else {
         cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
+    }
+
+    if (cfg_.use_clahe && clahe_) {
+        // clahe_->apply requires a single-channel 8-bit image; `gray` is either
+        // the input channel (channels()==1) or the BGR2GRAY result above. Write
+        // to a separate Mat so we never mutate a caller-owned single-channel
+        // image passed in by reference. The CLAHE object is built once in the
+        // ctor and reused here (single-threaded use).
+        cv::Mat eq;
+        clahe_->apply(gray, eq);
+        gray = eq;
     }
 
     std::vector<std::vector<cv::Point2f>> corners, rejected;
@@ -111,7 +155,8 @@ std::vector<TagDetection> AprilTagDetector::detect(const cv::Mat& image,
         det.face_id = ids[i];
         for (int c = 0; c < 4; ++c) det.corners[c] = corners[i][c];
         det.pose_ok = solve_tag_pose(det.corners, face->tag_size_m, K, dist,
-                                     det.T_cam_face, det.reproj_rms_px);
+                                     det.T_cam_face, det.reproj_rms_px,
+                                     fisheye);
         out.push_back(std::move(det));
     }
     return out;

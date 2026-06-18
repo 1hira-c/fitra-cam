@@ -13,6 +13,40 @@ set_target_properties(fitra_build_engines PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
+# Offline smartphone intrinsic calibration from a recorded ChArUco video.
+add_executable(fitra_charuco_intrinsic_video
+    charuco_intrinsic_video.cpp
+)
+
+target_link_libraries(fitra_charuco_intrinsic_video PRIVATE
+    fitra_pipeline
+    opencv_videoio
+    opencv_imgproc
+    opencv_core
+)
+
+set_target_properties(fitra_charuco_intrinsic_video PROPERTIES
+    OUTPUT_NAME "charuco_intrinsic_video"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+# Offline SfM floor marker-map builder from a recorded AprilTag video.
+add_executable(fitra_sfm_floor_map
+    sfm_floor_map.cpp
+)
+
+target_link_libraries(fitra_sfm_floor_map PRIVATE
+    fitra_lift
+    opencv_videoio
+    opencv_imgproc
+    opencv_core
+)
+
+set_target_properties(fitra_sfm_floor_map PROPERTIES
+    OUTPUT_NAME "sfm_floor_map"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
 # Correctness driver: video -> JSONL of per-frame YOLOX/RTMPose results.
 add_executable(fitra_dump_keypoints
     dump_keypoints.cpp
@@ -96,6 +130,20 @@ target_link_libraries(fitra_check_calibration PRIVATE
 
 set_target_properties(fitra_check_calibration PROPERTIES
     OUTPUT_NAME "check_calibration"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+# Rescale calibration intrinsics to a runtime resolution (calibrate high, run low).
+add_executable(fitra_scale_intrinsics
+    scale_intrinsics.cpp
+)
+
+target_link_libraries(fitra_scale_intrinsics PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_scale_intrinsics PROPERTIES
+    OUTPUT_NAME "scale_intrinsics"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
@@ -214,6 +262,104 @@ set_target_properties(fitra_test_apriltag_marker PROPERTIES
 
 add_test(NAME test_apriltag_marker COMMAND fitra_test_apriltag_marker)
 
+# calib_io: distortion_model round-trip + validation.
+add_executable(fitra_test_calib_io
+    test_calib_io.cpp
+)
+
+target_link_libraries(fitra_test_calib_io PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_calib_io PROPERTIES
+    OUTPUT_NAME "test_calib_io"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_calib_io COMMAND fitra_test_calib_io)
+
+# ChArUco board detection + object/image point matching.
+add_executable(fitra_test_charuco_board
+    test_charuco_board.cpp
+)
+
+target_link_libraries(fitra_test_charuco_board PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_charuco_board PROPERTIES
+    OUTPUT_NAME "test_charuco_board"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_charuco_board COMMAND fitra_test_charuco_board)
+
+# Intrinsic calibration session — synthetic ChArUco views → solve → K recovery.
+add_executable(fitra_test_intrinsic_calib_session
+    test_intrinsic_calib_session.cpp
+)
+
+target_link_libraries(fitra_test_intrinsic_calib_session PRIVATE
+    fitra_pipeline
+)
+
+set_target_properties(fitra_test_intrinsic_calib_session PROPERTIES
+    OUTPUT_NAME "test_intrinsic_calib_session"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_intrinsic_calib_session COMMAND fitra_test_intrinsic_calib_session)
+
+# Floor AprilTag map: data structure + FileStorage YAML I/O round-trip.
+add_executable(fitra_test_floor_tag_map
+    test_floor_tag_map.cpp
+)
+
+target_link_libraries(fitra_test_floor_tag_map PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_floor_tag_map PROPERTIES
+    OUTPUT_NAME "test_floor_tag_map"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_floor_tag_map COMMAND fitra_test_floor_tag_map)
+
+# Floor AprilTag extrinsic solver: multi-tag PnP localisation against the map.
+add_executable(fitra_test_floor_extrinsic_solver
+    test_floor_extrinsic_solver.cpp
+)
+
+target_link_libraries(fitra_test_floor_extrinsic_solver PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_floor_extrinsic_solver PROPERTIES
+    OUTPUT_NAME "test_floor_extrinsic_solver"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_floor_extrinsic_solver COMMAND fitra_test_floor_extrinsic_solver)
+
+# Floor AprilTag SfM map builder: multi-frame pose-graph chaining of per-tag PnP
+# observations into one FloorTagMap, with floor-plane re-gauge + round-trip
+# through solve_floor_extrinsics. Pure geometry on synthetic observations.
+add_executable(fitra_test_floor_map_sfm
+    test_floor_map_sfm.cpp
+)
+
+target_link_libraries(fitra_test_floor_map_sfm PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_floor_map_sfm PROPERTIES
+    OUTPUT_NAME "test_floor_map_sfm"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_floor_map_sfm COMMAND fitra_test_floor_map_sfm)
+
 # Extrinsic calibration collection loop — motion gate / burst mechanics,
 # end-to-end solve+write+reload, and calib_io write round-trip.
 add_executable(fitra_test_extrinsic_calib_session
@@ -230,6 +376,40 @@ set_target_properties(fitra_test_extrinsic_calib_session PROPERTIES
 )
 
 add_test(NAME test_extrinsic_calib_session COMMAND fitra_test_extrinsic_calib_session)
+
+# Floor-AprilTag calibration session — ingest → solve → write → reload, with
+# the persisted T_cw checked against ground truth in fitra Z-up (no basis change).
+add_executable(fitra_test_floor_calib_session
+    test_floor_calib_session.cpp
+)
+
+target_link_libraries(fitra_test_floor_calib_session PRIVATE
+    fitra_pipeline
+)
+
+set_target_properties(fitra_test_floor_calib_session PROPERTIES
+    OUTPUT_NAME "test_floor_calib_session"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_floor_calib_session COMMAND fitra_test_floor_calib_session)
+
+# Floor-AprilTag replay equivalence — direct imdecode+on_frame vs ExcalReplayInput
+# must reach the identical accumulator state.
+add_executable(fitra_test_floor_calib_replay
+    test_floor_calib_replay.cpp
+)
+
+target_link_libraries(fitra_test_floor_calib_replay PRIVATE
+    fitra_pipeline
+)
+
+set_target_properties(fitra_test_floor_calib_replay PROPERTIES
+    OUTPUT_NAME "test_floor_calib_replay"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_floor_calib_replay COMMAND fitra_test_floor_calib_replay)
 
 # Offline replay for calib-extrinsic — frames.jsonl parser + live↔replay
 # sample-stream equivalence on a synthetic recorder-format session.

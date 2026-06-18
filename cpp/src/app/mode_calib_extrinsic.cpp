@@ -82,6 +82,9 @@ build_excal_session(const config::MainOptions& opts, std::size_t n_cams) {
     ec.burst_min              = opts.excal_burst_min;
     ec.min_samples_per_group  = opts.excal_min_samples;
     ec.out_path               = opts.excal_out;
+    // Per-face PnP matches each camera's distortion model — handled per-frame in
+    // ExtrinsicCalibSession::on_frame (reads the per-camera intrinsics model and
+    // passes it to detect()), so no board-wide fisheye flag is needed here.
     return std::make_unique<pipeline::ExtrinsicCalibSession>(std::move(ec));
 }
 

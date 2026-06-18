@@ -6,6 +6,9 @@ export const PAGE_FOR_MODE: Record<FlowMode, string> = {
   run: "/",
   "calib-subject": "/subject-calib",
   "calib-extrinsic": "/extrinsic-calib",
+  // 案D shares the /extrinsic-calib page with 案C; the page branches on method.
+  "calib-extrinsic-floor": "/extrinsic-calib",
+  "calib-intrinsic": "/intrinsic-calib",
 };
 
 export type FlowWatchStatus = "unknown" | "unsupported" | "down" | "up";
@@ -22,7 +25,13 @@ interface FlowWatchResult {
 }
 
 function isFlowMode(mode: string): mode is FlowMode {
-  return mode === "run" || mode === "calib-subject" || mode === "calib-extrinsic";
+  return (
+    mode === "run" ||
+    mode === "calib-subject" ||
+    mode === "calib-extrinsic" ||
+    mode === "calib-extrinsic-floor" ||
+    mode === "calib-intrinsic"
+  );
 }
 
 export function useFlowWatch({
@@ -67,8 +76,13 @@ export function useFlowWatch({
         if (cancelled) return;
         setState(next);
         setStatus("up");
-        if (next.mode !== page && redirect) {
-          window.location.href = PAGE_FOR_MODE[next.mode];
+        // Redirect by target page, not mode label: calib-extrinsic and
+        // calib-extrinsic-floor share a page, so compare the target against the
+        // current path to avoid a reload loop when only the method differs.
+        const target = PAGE_FOR_MODE[next.mode];
+        if (redirect && target !== window.location.pathname &&
+            target !== PAGE_FOR_MODE[page]) {
+          window.location.href = target;
         }
       } catch {
         if (!cancelled) {

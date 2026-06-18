@@ -24,6 +24,10 @@ std::filesystem::path guess_extrinsic_calib_static_dir() {
     return repo_root() / "web" / "extrinsic_calibration";
 }
 
+std::filesystem::path guess_intrinsic_calib_static_dir() {
+    return repo_root() / "web" / "intrinsic_calibration";
+}
+
 std::filesystem::path guess_dump_tool_path() {
     auto exe = std::filesystem::canonical("/proc/self/exe");
     return exe.parent_path() / "tools" / "dump_keypoints_3d";

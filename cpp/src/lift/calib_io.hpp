@@ -19,8 +19,16 @@ struct Intrinsics {
     int height = 0;
     double rms_px = 0.0;
     std::string source;
+    // Lens distortion model the K/dist pair was fit under: "pinhole"
+    // (cv::calibrateCamera, dist = k1,k2,p1,p2[,k3...]) or "fisheye"
+    // (cv::fisheye::calibrate, dist = k1,k2,k3,k4). Consumers branch on this —
+    // NOT on the coefficient count — so a fisheye calibration is undistorted
+    // with the matching model. Absent in the YAML → "pinhole" (back-compat).
+    std::string distortion_model = "pinhole";
     cv::Mat K;     // 3x3 CV_64F
     cv::Mat dist;  // 1xN CV_64F
+
+    bool is_fisheye() const { return distortion_model == "fisheye"; }
 };
 
 struct Extrinsics {
@@ -67,5 +75,16 @@ void validate_calibration(const CalibrationSet& calib);
 // has_extrinsics=false are emitted under intrinsics only. Throws on open
 // failure. Used by the extrinsic calibration session to persist results.
 void write_calibration(const std::string& path, const CalibrationSet& calib);
+
+// Rescale an intrinsics block from its calibrated resolution to (new_w, new_h),
+// for the common "calibrate high (robust marker/charuco detection), run low
+// (latency/fps)" split. Valid ONLY for a same-FOV resize (uniform downscale,
+// not a crop): fx,fy and the principal point scale by new/old (with the OpenCV
+// pixel-centre −0.5 convention); distortion coefficients are defined on
+// normalised coordinates and are therefore scale-invariant (unchanged). The
+// triangulator does NOT rescale K, so the runtime resolution must match the
+// intrinsics it is handed — produce a matching file with this. Throws if the
+// input width/height are unset or the aspect ratio is not preserved.
+Intrinsics scale_intrinsics(const Intrinsics& in, int new_w, int new_h);
 
 }  // namespace fitra::lift

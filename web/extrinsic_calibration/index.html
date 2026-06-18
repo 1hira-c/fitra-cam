@@ -8,7 +8,7 @@
 </head>
 <body>
   <header>
-    <h1>Controller-Marker Extrinsic Calibration</h1>
+    <h1 id="title">Extrinsic Calibration</h1>
     <div class="conn-group">
       <div id="conn" class="conn">connecting…</div>
       <a class="conn link" href="/extrinsic-calib/scene.html">3D scene</a>
@@ -18,11 +18,27 @@
 
   <main>
     <section class="card">
+      <h2>Method</h2>
+      <div class="actions">
+        <button id="btn_method_controller" type="button">Controller marker (案C)</button>
+        <button id="btn_method_floor" type="button">Floor AprilTag (案D)</button>
+      </div>
+      <p class="hint" id="method_hint">
+        現在の方式: <b id="method_label">-</b>。
+        方式を切り替えると flow daemon がそのモードで再起動します。
+      </p>
+    </section>
+    <section class="card">
       <h2>1. Control</h2>
-      <p>
+      <p id="instr_controller">
         コントローラ固定 AprilTag を各カメラの近くに持って行き、<b>一瞬止める</b>と
         その姿勢のサンプルが溜まります。全カメラ×全 face を姿勢多様性込みで被覆したら Solve。
         取得は短時間 1 セッションで（recenter 厳禁）。
+      </p>
+      <p id="instr_floor" hidden>
+        床に既知配置した AprilTag を各カメラから安定検出させ、<b>各 (cam,tag) を burst 数以上</b>
+        蓄積したら Solve。カメラ・タグは静止前提（VR 不要）。広く散らしつつ最悪カメラから
+        edge ≥ 30px を維持、遠い位置ほど大きいタグを。面外スタンドのタグで平面縮退を回避。
       </p>
       <div class="status-line">
         state: <span id="state" class="badge">-</span> &middot;
@@ -39,7 +55,7 @@
       <div id="ctrl_msg" class="msg"></div>
     </section>
 
-    <section class="card">
+    <section class="card" id="gate_card">
       <h2>2. Capture gate <span class="hint">(glanceable)</span></h2>
       <div class="gate" id="gate">—</div>
       <div class="bar"><div id="lin_bar" class="bar-fill"></div></div>
@@ -77,7 +93,7 @@
     <section class="card">
       <h2>4. Result <span class="hint">(after solve)</span></h2>
       <table class="result" id="result">
-        <thead>
+        <thead id="result_head">
           <tr><th>cam</th><th>faces</th><th>samples</th>
               <th>face spread (mm)</th><th>face spread (deg)</th></tr>
         </thead>

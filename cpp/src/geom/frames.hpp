@@ -104,5 +104,8 @@ using T_cam_vmtworld      = Transform<frame::Camera, frame::VmtWorld>;
 using T_world_controller  = Transform<frame::VmtWorld, frame::Controller>;
 using T_cam_marker        = Transform<frame::Camera, frame::Marker>;
 using T_marker_controller = Transform<frame::Marker, frame::Controller>;
+// Floor-AprilTag map: a tag face placed at a known pose in the fitra Z-up world
+// (the floor map itself is the world frame). See lift/floor_tag_map.hpp.
+using T_world_marker      = Transform<frame::FitraWorld, frame::Marker>;
 
 }  // namespace fitra::geom

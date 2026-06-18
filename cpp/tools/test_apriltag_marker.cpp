@@ -94,6 +94,47 @@ void test_solve_tag_pose() {
     CHECK_LT(rot_angle_deg(T, gt), 0.05);
 }
 
+// 1b) Fisheye PnP path of solve_tag_pose. Synthesize corners with the fisheye
+//     model, recover via the fisheye branch (undistortPoints → IPPE on rays).
+//     Regression guard: the reprojection step used to hand cv::fisheye::
+//     projectPoints a Point2f output (it requires Point2d for double object
+//     points), which aborted with an OpenCV create() assertion — the exact crash
+//     seen running floor-calib against real fisheye intrinsics. No test exercised
+//     fisheye=true before, so it slipped through.
+void test_solve_tag_pose_fisheye() {
+    const double tag = 0.1145;
+    cv::Mat K = make_K(700.0, 640.0, 480.0);
+    cv::Mat D = (cv::Mat_<double>(1, 4) << 0.05, -0.01, 0.002, -0.0005);  // k1..k4
+
+    cv::Mat rvec = (cv::Mat_<double>(3, 1) << 0.10, 0.20, -0.03);
+    cv::Mat tvec = (cv::Mat_<double>(3, 1) << 0.05, -0.03, 1.2);
+    cv::Mat Rgt;
+    cv::Rodrigues(rvec, Rgt);
+    cv::Matx44d gt = cv::Matx44d::eye();
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) gt(r, c) = Rgt.at<double>(r, c);
+        gt(r, 3) = tvec.at<double>(r);
+    }
+
+    auto objc = tag_object_corners(tag);
+    std::vector<cv::Point3d> objd(objc.begin(), objc.end());
+    std::vector<cv::Point2d> proj;
+    cv::fisheye::projectPoints(objd, proj, rvec, tvec, K, D);
+    std::array<cv::Point2f, 4> corners{
+        cv::Point2f((float)proj[0].x, (float)proj[0].y),
+        cv::Point2f((float)proj[1].x, (float)proj[1].y),
+        cv::Point2f((float)proj[2].x, (float)proj[2].y),
+        cv::Point2f((float)proj[3].x, (float)proj[3].y)};
+
+    fitra::geom::T_cam_marker Tw;
+    double rms = 0.0;
+    bool ok = solve_tag_pose(corners, tag, K, D, Tw, rms, /*fisheye=*/true);
+    CHECK(ok);
+    CHECK_LT(rms, 1e-1);  // this line aborted before the fix
+    CHECK_LT(rot_angle_deg(Tw.raw(), gt), 0.2);
+    CHECK_LT(std::abs(Tw.raw()(2, 3) - gt(2, 3)), 1e-3);
+}
+
 // 2) Render a real 36h11 marker, detect it, recover a pose.
 void test_detect_roundtrip() {
     const int   face_id = 7;
@@ -129,11 +170,63 @@ void test_detect_roundtrip() {
     }
 }
 
+// 3) CLAHE front-end: a low-contrast (soft, mid-gray) rendering decodes when
+//    use_clahe is on. Mirrors the floor-AprilTag feasibility finding that
+//    contrast — not distortion or JPEG — gates detection on soft-focus lenses.
+void test_clahe_recovers_low_contrast() {
+    const int   face_id = 12;
+    const int   side_px = 240;
+    const int   quiet   = 80;
+    const double tag_m   = 0.10;
+
+    cv::aruco::Dictionary dict =
+        cv::aruco::getPredefinedDictionary(cv::aruco::DICT_APRILTAG_36h11);
+    cv::Mat marker;
+    dict.generateImageMarker(face_id, side_px, marker, 1);
+
+    cv::Mat canvas(side_px + 2 * quiet, side_px + 2 * quiet, CV_8UC1,
+                   cv::Scalar(255));
+    marker.copyTo(canvas(cv::Rect(quiet, quiet, side_px, side_px)));
+
+    // Compress the dynamic range toward a narrow band centred on mid-gray:
+    // out = 116 + in * (24/255), so black→116, white→140 (≈24 levels span).
+    cv::Mat low;
+    canvas.convertTo(low, CV_8UC1, 24.0 / 255.0, 116.0);
+
+    int W = low.cols, H = low.rows;
+    cv::Mat K = make_K(800.0, W * 0.5, H * 0.5);
+    cv::Mat dist = cv::Mat::zeros(1, 5, CV_64F);
+
+    MarkerBoardConfig cfg;
+    cfg.faces.push_back(MarkerFace{face_id, tag_m});
+    cfg.use_clahe  = true;
+    cfg.clahe_clip = 2.0;
+    cfg.clahe_grid = 8;
+    AprilTagDetector detector(cfg);
+
+    auto dets = detector.detect(low, K, dist);
+    CHECK(dets.size() == 1);
+    if (!dets.empty()) {
+        CHECK(dets[0].face_id == face_id);
+        CHECK(dets[0].pose_ok);
+        CHECK_LT(dets[0].reproj_rms_px, 1.0);
+    }
+
+    // Sanity: full-contrast detection is unaffected by the default (off).
+    MarkerBoardConfig cfg_off;
+    cfg_off.faces.push_back(MarkerFace{face_id, tag_m});
+    AprilTagDetector detector_off(cfg_off);
+    auto dets_full = detector_off.detect(canvas, K, dist);
+    CHECK(dets_full.size() == 1);
+}
+
 }  // namespace
 
 int main() {
     test_solve_tag_pose();
+    test_solve_tag_pose_fisheye();
     test_detect_roundtrip();
+    test_clahe_recovers_low_contrast();
     if (g_fail) {
         std::fprintf(stderr, "test_apriltag_marker: %d failures\n", g_fail);
         return 1;

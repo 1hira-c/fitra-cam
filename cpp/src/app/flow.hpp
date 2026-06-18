@@ -16,15 +16,19 @@ namespace fitra::app {
 // Module exit codes consumed by the daemon's wait loop. 0 is a clean stop
 // (the daemon exits too); any other non-flow exit or a signal death is a
 // crash. 80.. is outside the conventional 0/1/2 + 128+signal ranges.
-inline constexpr int kExitFlowToRun            = 80;
-inline constexpr int kExitFlowToCalibSubject   = 81;
-inline constexpr int kExitFlowToCalibExtrinsic = 82;
+inline constexpr int kExitFlowToRun                 = 80;
+inline constexpr int kExitFlowToCalibSubject        = 81;
+inline constexpr int kExitFlowToCalibExtrinsic      = 82;
+inline constexpr int kExitFlowToCalibExtrinsicFloor = 83;
+inline constexpr int kExitFlowToCalibIntrinsic      = 84;
 
 inline int flow_exit_code(config::RunMode m) {
     switch (m) {
-        case config::RunMode::CalibSubject:   return kExitFlowToCalibSubject;
-        case config::RunMode::CalibExtrinsic: return kExitFlowToCalibExtrinsic;
-        case config::RunMode::Run:            break;
+        case config::RunMode::CalibSubject:        return kExitFlowToCalibSubject;
+        case config::RunMode::CalibExtrinsic:      return kExitFlowToCalibExtrinsic;
+        case config::RunMode::CalibExtrinsicFloor: return kExitFlowToCalibExtrinsicFloor;
+        case config::RunMode::CalibIntrinsic:      return kExitFlowToCalibIntrinsic;
+        case config::RunMode::Run:                 break;
     }
     return kExitFlowToRun;
 }

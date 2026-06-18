@@ -1,9 +1,11 @@
 # 床 AprilTag SfM マップ方式による多カメラ extrinsic キャリブ (共視不要)
 
-> Status: **検討 (未実装・設計フェーズ前)** — 2026-06-09 起票。2026-06-13 に検出実現性を実測検証 (下記「実測知見」)。
+> Status: **モード(a) 既知配置 PnP は実装済み** (2026-06-15) —
+> [design/pose-3d-floor-apriltag-extrinsic.md](../design/pose-3d-floor-apriltag-extrinsic.md) に昇格。
+> 本 research ノートは **(b) スマホ SfM 自動復元** (本命方向・未実装) の検討記録として残す。
+> モード(a) はマップを実測で与え、(b) は同じ `FloorTagMap` を SfM で生成するだけ — localize コア
+> (`floor_extrinsic_solver`) は共有。下記「実測知見」は (a)(b) 共通の検出条件。
 > 上流 = controller-marker 案C ([design/pose-3d-controller-marker-extrinsic.md](../design/pose-3d-controller-marker-extrinsic.md)) の **代替選択肢**。
-> 案C を潰すものではなく、**初期設定時に方式を選べる選択肢の 1 つ**として整理する。
-> 実装着手時はこのメモを design doc へ昇格させ、ここはリンクで残す。
 
 ## 背景 / 動機
 

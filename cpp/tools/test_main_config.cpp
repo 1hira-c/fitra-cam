@@ -466,7 +466,7 @@ void test_run_mode_derivation_and_publisher_exclusivity() {
     try { validate_options(bad); }
     catch (const std::exception& e) {
         threw = true;
-        check_contains(e.what(), "--slimevr-out cannot be combined with --extrinsic-calib",
+        check_contains(e.what(), "--slimevr-out cannot be combined with a calibration mode",
                        "slimevr+excal exclusivity msg");
     }
     check(threw, "--slimevr-out + --extrinsic-calib must throw");
@@ -477,10 +477,24 @@ void test_run_mode_derivation_and_publisher_exclusivity() {
     try { validate_options(bad); }
     catch (const std::exception& e) {
         threw = true;
-        check_contains(e.what(), "--vmt-out cannot be combined with --extrinsic-calib",
+        check_contains(e.what(), "--vmt-out cannot be combined with a calibration mode",
                        "vmt+excal exclusivity msg");
     }
     check(threw, "--vmt-out + --extrinsic-calib must throw");
+
+    // The exclusivity now covers the floor + intrinsic calib modes too.
+    MainOptions floorbad;
+    floorbad.cam_paths[0] = "/dev/null";
+    floorbad.floor_calib_enabled = true;
+    floorbad.floor_map = "/tmp/m.yaml";
+    floorbad.calib = "/tmp/cam.yaml";
+    floorbad.enable_3d = true;
+    floorbad.keypoint_format = "halpe26";
+    floorbad.vmt_out = true;
+    threw = false;
+    try { validate_options(floorbad); }
+    catch (const std::exception&) { threw = true; }
+    check(threw, "--vmt-out + --floor-calib must throw");
 }
 
 void test_excal_replay_yaml_cli_and_mode() {
@@ -521,6 +535,205 @@ extrinsic_calib:
         check_contains(e.what(), "--excal-replay", "replay+calibrate exclusivity msg");
     }
     check(threw, "--excal-replay + --calibrate must throw");
+}
+
+void test_floor_calib_yaml_cli_and_mode() {
+    using fitra::config::RunMode;
+    using fitra::config::parse_run_mode_name;
+    using fitra::config::run_mode;
+    using fitra::config::run_mode_name;
+
+    // YAML: method: floor sets the daemon-only selector (excal_method), NOT the
+    // run_mode flag — so a shared daemon config does not derive a calib mode in
+    // the parent / run child. floor_* keys load.
+    auto p = write_tmp("floor_calib.yaml", R"(schema: fitra_main_config_v1
+extrinsic_calib:
+  method: floor
+  floor_map: /tmp/floor_map.yaml
+  floor_intrinsics: /tmp/intr.yaml
+  floor_fisheye: true
+  out: /tmp/extr.yaml
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(opts.excal_method == "floor", "method: floor sets excal_method");
+    check(!opts.floor_calib_enabled, "method: floor does NOT set the run_mode flag");
+    check(opts.floor_map == "/tmp/floor_map.yaml", "floor_map loads");
+    check(opts.floor_fisheye, "floor_fisheye loads");
+    check(opts.floor_out == "/tmp/extr.yaml", "floor shares extrinsic_calib.out");
+    check(run_mode(opts) == RunMode::Run,
+          "method: floor alone stays run-mode (daemon injects --floor-calib)");
+    // --floor-calib (CLI / module_argv) is what selects the floor run mode.
+    opts.floor_calib_enabled = true;
+    check(run_mode(opts) == RunMode::CalibExtrinsicFloor,
+          "--floor-calib -> calib-extrinsic-floor mode");
+
+    // CLI replay path: validates with no cameras (replay brings frames), but
+    // still needs --floor-map and intrinsics.
+    MainOptions o2;
+    std::vector<std::string> argv_buf{"--floor-replay", "/tmp/sess",
+                                      "--floor-map", "/tmp/m.yaml",
+                                      "--floor-intrinsics", "/tmp/intr.yaml"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(o2, static_cast<int>(argv.size()), argv.data());
+    check(run_mode(o2) == RunMode::CalibExtrinsicFloor,
+          "--floor-replay -> calib-extrinsic-floor mode");
+    validate_options(o2);  // must not throw
+
+    check(std::string(run_mode_name(RunMode::CalibExtrinsicFloor)) ==
+              "calib-extrinsic-floor", "calib-extrinsic-floor label");
+    RunMode m;
+    check(parse_run_mode_name("calib-extrinsic-floor", m) &&
+              m == RunMode::CalibExtrinsicFloor, "parse calib-extrinsic-floor");
+
+    // --floor-map missing must throw.
+    MainOptions o3;
+    o3.floor_calib_enabled = true;
+    o3.cam_paths[0] = "/dev/null";
+    o3.floor_intrinsics = "/tmp/intr.yaml";
+    bool threw = false;
+    try { validate_options(o3); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--floor-map", "floor missing map msg");
+    }
+    check(threw, "floor without --floor-map must throw");
+}
+
+void test_intrinsic_calib_yaml_cli_and_mode() {
+    using fitra::config::RunMode;
+    using fitra::config::run_mode;
+    using fitra::config::run_mode_name;
+    using fitra::config::parse_run_mode_name;
+
+    auto p = write_tmp("intrinsic_calib.yaml", R"(schema: fitra_main_config_v1
+intrinsic_calib:
+  model: fisheye
+  out: /tmp/intr_hires.yaml
+  squares_x: 5
+  squares_y: 7
+  square_len_m: 0.04
+  marker_len_m: 0.03
+  enabled: true
+  min_views: 15
+  max_rms_px: 2.0
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(opts.intrinsic_model == "fisheye", "intrinsic_calib.model loads");
+    check(opts.intrinsic_out == "/tmp/intr_hires.yaml", "intrinsic_calib.out loads");
+    check(opts.intrinsic_min_views == 15, "intrinsic_calib.min_views loads");
+    // Regression: max_rms_px must be in the check_keys allow-list, else a config
+    // using the documented gate key fails with "unknown key" before parsing.
+    check(opts.intrinsic_max_rms_px == 2.0, "intrinsic_calib.max_rms_px loads");
+    // enabled sets the daemon-only step selector, NOT the run_mode flag.
+    check(opts.intrinsic_step_enabled, "intrinsic_calib.enabled sets intrinsic_step_enabled");
+    check(!opts.intrinsic_calib_enabled, "intrinsic_calib.enabled does NOT set the run_mode flag");
+    check(run_mode(opts) == RunMode::Run, "intrinsic enabled alone stays run-mode");
+    // CLI --calib-intrinsic selects the mode; replay validates without cameras.
+    MainOptions o2;
+    std::vector<std::string> argv_buf{"--intrinsic-replay", "/tmp/isess",
+                                      "--intrinsic-model", "pinhole"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(o2, static_cast<int>(argv.size()), argv.data());
+    check(run_mode(o2) == RunMode::CalibIntrinsic,
+          "--intrinsic-replay -> calib-intrinsic mode");
+    validate_options(o2);  // must not throw
+
+    check(std::string(run_mode_name(RunMode::CalibIntrinsic)) == "calib-intrinsic",
+          "calib-intrinsic label");
+    RunMode m;
+    check(parse_run_mode_name("calib-intrinsic", m) && m == RunMode::CalibIntrinsic,
+          "parse calib-intrinsic");
+
+    // Bad board (marker >= square) must throw.
+    MainOptions o3;
+    o3.intrinsic_calib_enabled = true;
+    o3.cam_paths[0] = "/dev/null";
+    o3.charuco_marker_len_m = 0.05;
+    o3.charuco_square_len_m = 0.04;
+    bool threw = false;
+    try { validate_options(o3); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "marker-len", "intrinsic board validation msg");
+    }
+    check(threw, "calib-intrinsic bad board must throw");
+
+    // Intrinsic takes precedence over extrinsic when both run_mode flags set.
+    MainOptions o4;
+    o4.intrinsic_calib_enabled = true;
+    o4.floor_calib_enabled = true;
+    check(run_mode(o4) == RunMode::CalibIntrinsic,
+          "intrinsic precedence over floor");
+
+    // Regression (Codex P1): a shared daemon config that selects floor + the
+    // intrinsic step must NOT make --daemon fail. The selectors are excal_method
+    // / intrinsic_step_enabled, which leave run_mode == Run so validate passes.
+    MainOptions d;
+    d.cam_paths[0] = "/tmp/a";
+    d.det_engine = "/tmp/y";
+    d.pose_engine = "/tmp/r";
+    d.daemon = true;
+    d.excal_method = "floor";
+    d.intrinsic_step_enabled = true;
+    check(run_mode(d) == RunMode::Run, "daemon parent with floor+intrinsic stays run-mode");
+    validate_options(d);  // must not throw (--daemon + Run)
+}
+
+void test_precheck_mode_switch() {
+    using fitra::config::MainOptions;
+    using fitra::config::RunMode;
+    using fitra::config::precheck_mode_switch;
+
+    auto intr = write_tmp("precheck_intr.yaml", "schema: x\n");
+    auto mapf = write_tmp("precheck_map.yaml", "%YAML:1.0\n");
+    std::string err;
+
+    // Floor: missing floor_map → refused with a floor_map reason.
+    MainOptions o;
+    o.calib = intr.string();
+    err.clear();
+    check(!precheck_mode_switch(o, RunMode::CalibExtrinsicFloor, err),
+          "floor switch refused without floor_map");
+    check_contains(err, "floor_map", "floor precheck names floor_map");
+
+    // Floor: floor_map points at a missing file → refused with "not found".
+    o.floor_map = "/no/such/floor_map.yaml";
+    err.clear();
+    check(!precheck_mode_switch(o, RunMode::CalibExtrinsicFloor, err),
+          "floor switch refused on missing map file");
+    check_contains(err, "not found", "floor precheck reports missing file");
+
+    // Floor: map present + PnP intrinsics via three_d.calib → allowed.
+    o.floor_map = mapf.string();
+    err.clear();
+    check(precheck_mode_switch(o, RunMode::CalibExtrinsicFloor, err),
+          "floor switch allowed with map + calib intrinsics");
+
+    // Floor: floor_intrinsics set but missing → refused.
+    o.floor_intrinsics = "/no/such/intr.yaml";
+    err.clear();
+    check(!precheck_mode_switch(o, RunMode::CalibExtrinsicFloor, err),
+          "floor switch refused on missing floor_intrinsics");
+
+    // Controller: needs intrinsics (excal_intrinsics or calib).
+    MainOptions c;
+    err.clear();
+    check(!precheck_mode_switch(c, RunMode::CalibExtrinsic, err),
+          "controller switch refused without intrinsics");
+    c.calib = intr.string();
+    err.clear();
+    check(precheck_mode_switch(c, RunMode::CalibExtrinsic, err),
+          "controller switch allowed with calib");
+
+    // Run is always reachable (safe fallback, tolerates missing calib).
+    MainOptions r;
+    err.clear();
+    check(precheck_mode_switch(r, RunMode::Run, err), "run switch always allowed");
+
+    std::remove(intr.string().c_str());
+    std::remove(mapf.string().c_str());
 }
 
 void test_flow_managed_and_publisher_negation() {
@@ -641,6 +854,9 @@ const TestCase kTests[] = {
     {"run_mode_derivation_and_publisher_exclusivity",
                                                test_run_mode_derivation_and_publisher_exclusivity},
     {"excal_replay_yaml_cli_and_mode",         test_excal_replay_yaml_cli_and_mode},
+    {"floor_calib_yaml_cli_and_mode",          test_floor_calib_yaml_cli_and_mode},
+    {"intrinsic_calib_yaml_cli_and_mode",      test_intrinsic_calib_yaml_cli_and_mode},
+    {"precheck_mode_switch",                   test_precheck_mode_switch},
     {"flow_managed_and_publisher_negation",    test_flow_managed_and_publisher_negation},
     {"daemon_flags_and_validate",              test_daemon_flags_and_validate},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},

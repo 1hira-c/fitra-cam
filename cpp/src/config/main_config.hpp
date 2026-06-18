@@ -164,6 +164,63 @@ struct MainOptions {
     std::string excal_controller_bind = "0.0.0.0";
     double      excal_controller_stale_ms = 200.0;
 
+    // Floor-AprilTag extrinsic calibration (see
+    // docs/design/pose-3d-floor-apriltag-extrinsic.md). A VR-free path: each
+    // camera localises against a known floor tag map via multi-tag PnP. Selected
+    // by --floor-calib (live) or --floor-replay (offline). Distinct from the
+    // controller-marker path above (different solver / world frame).
+    bool        floor_calib_enabled  = false;
+    // Daemon-only extrinsic stage selector ("controller" | "floor"), loaded from
+    // extrinsic_calib.method. Distinct from floor_calib_enabled (the run_mode
+    // flag, set only by --floor-calib): the shared daemon config must NOT set a
+    // run_mode-deriving flag, or the parent + run child derive a calib mode and
+    // the flow stalls. The daemon reads excal_method to pick which extrinsic
+    // stage to enter / spawn (--floor-calib injected per-child by module_argv).
+    std::string excal_method = "controller";
+    // Known tag layout YAML (lift::FloorTagMap). Required for the floor path.
+    std::string floor_map;
+    // Offline replay session directory (tools/excal_record format). Non-empty
+    // implies calib-extrinsic-floor and runs collect→solve unattended.
+    std::string floor_replay;
+    // Calibration-resolution intrinsics used for detection + PnP. Empty → reuse
+    // three_d.calib. The recovered T_cw is resolution-independent, so the
+    // written YAML carries the runtime intrinsics (floor_out_intrinsics / calib).
+    std::string floor_intrinsics;
+    // Runtime-resolution intrinsics to embed in the output YAML. Empty → write
+    // the same intrinsics used for PnP.
+    std::string floor_out_intrinsics;
+    std::string floor_out            = "calibrations/extrinsics.yaml";
+    int         floor_burst_min      = 10;
+    double      floor_max_reproj_px  = 3.0;     // per-frame detection filter (px)
+    bool        floor_fisheye        = false;   // intrinsics use the fisheye model
+
+    // Intrinsic (per-camera K + distortion) calibration (see
+    // docs/design/pose-3d-intrinsic-calibration.md). ChArUco board capture →
+    // cv::calibrateCamera (pinhole) or cv::fisheye::calibrate (fisheye). The
+    // setup step before extrinsic calibration. Selected by --calib-intrinsic
+    // (live) or --intrinsic-replay (offline).
+    bool        intrinsic_calib_enabled = false;
+    // Daemon-only: include the intrinsic step (step 0) in the setup chain,
+    // loaded from intrinsic_calib.enabled. Distinct from intrinsic_calib_enabled
+    // (the run_mode flag, set only by --calib-intrinsic) for the same reason as
+    // excal_method above — keeping the shared daemon config free of run_mode
+    // flags. The daemon enters calib-intrinsic first when this is set and the
+    // intrinsics YAML is missing.
+    bool        intrinsic_step_enabled = false;
+    std::string intrinsic_replay;
+    std::string intrinsic_out      = "calibrations/intrinsics.yaml";
+    std::string intrinsic_model    = "pinhole";  // "pinhole" | "fisheye"
+    int         charuco_squares_x  = 5;
+    int         charuco_squares_y  = 7;
+    double      charuco_square_len_m = 0.04;
+    double      charuco_marker_len_m = 0.03;
+    int         charuco_dict       = -1;   // -1 → DICT_4X4_50
+    int         intrinsic_min_views   = 12;
+    int         intrinsic_min_corners = 8;
+    // Acceptance gate: reject a solve above this rms (a transposed/ wrong board
+    // still "solves" with a huge rms). 0 disables. See IntrinsicCalibConfig.
+    double      intrinsic_max_rms_px  = 1.5;
+
     // Flow daemon (docs/design/pose-3d-flow-daemon.md). CLI-only — how the
     // process is launched is not part of the YAML schema. `flow_managed` is
     // set by the daemon on spawned mode modules; it enables the
@@ -178,7 +235,9 @@ struct MainOptions {
 // mode builds only what it needs; the only thing crossing a mode boundary is
 // YAML on disk. Derive after validate_options() — it enforces the flags'
 // mutual exclusivity.
-enum class RunMode { Run, CalibSubject, CalibExtrinsic };
+enum class RunMode {
+    Run, CalibSubject, CalibExtrinsic, CalibExtrinsicFloor, CalibIntrinsic
+};
 
 RunMode run_mode(const MainOptions& opts);
 
@@ -189,6 +248,16 @@ const char* run_mode_name(RunMode mode);
 // Inverse of run_mode_name(): parse a mode label (e.g. from
 // /api/flow/switch or --daemon-initial). Returns false on an unknown label.
 bool parse_run_mode_name(const std::string& name, RunMode& out);
+
+// Pre-flight check before a flow-switch respawns into `target`: verifies the
+// shared config carries everything that mode needs (required files present /
+// readable), so the /api/flow/switch handler can refuse with a clear reason
+// instead of respawning a child that dies at validate_options() and silently
+// falls the daemon back to run. Returns true if `target` should be reachable;
+// on false, `err` holds a human-facing reason. Checks config preconditions
+// only — not runtime resources (cameras, pose relay).
+bool precheck_mode_switch(const MainOptions& opts, RunMode target,
+                          std::string& err);
 
 // Schema version embedded in every YAML config. Bump only when a
 // non-backwards-compatible change to the YAML layout is required.

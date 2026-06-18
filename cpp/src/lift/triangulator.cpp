@@ -70,6 +70,7 @@ Triangulator::Triangulator(const CalibrationSet& calib, Options opts)
         m.id = cam.id;
         m.K = cam.intrinsics.K.clone();
         m.dist = cam.intrinsics.dist.clone();
+        m.fisheye = cam.intrinsics.is_fisheye();
         // Typed fitra Z-up world->camera extrinsic; unwrap to cv::Mat R/t for
         // the OpenCV DLT / projectPoints math below.
         const geom::T_cam_world T_cw = cam.extrinsics.pose();
@@ -114,7 +115,11 @@ TriangulatedSkeleton Triangulator::triangulate(
 
             const auto& cam = cameras_[static_cast<std::size_t>(obs.cam_index)];
             undist_src.assign(1, cv::Point2f(kp.x, kp.y));
-            cv::undistortPoints(undist_src, undist_dst, cam.K, cam.dist);
+            if (cam.fisheye) {
+                cv::fisheye::undistortPoints(undist_src, undist_dst, cam.K, cam.dist);
+            } else {
+                cv::undistortPoints(undist_src, undist_dst, cam.K, cam.dist);
+            }
             if (undist_dst.empty()) continue;
 
             JointView v;
@@ -239,7 +244,11 @@ bool Triangulator::project(int cam_index, const infer::Joint3D& joint, cv::Point
     const auto& cam = cameras_[static_cast<std::size_t>(cam_index)];
     std::vector<cv::Point3d> obj{{joint.x, joint.y, joint.z}};
     std::vector<cv::Point2d> img;
-    cv::projectPoints(obj, cam.rvec, cam.t, cam.K, cam.dist, img);
+    if (cam.fisheye) {
+        cv::fisheye::projectPoints(obj, img, cam.rvec, cam.t, cam.K, cam.dist);
+    } else {
+        cv::projectPoints(obj, cam.rvec, cam.t, cam.K, cam.dist, img);
+    }
     if (img.empty() || !std::isfinite(img[0].x) || !std::isfinite(img[0].y)) return false;
     out = cv::Point2f(static_cast<float>(img[0].x), static_cast<float>(img[0].y));
     return true;

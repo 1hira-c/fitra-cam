@@ -9,10 +9,16 @@ subject calibration。vr-output トラックの上流 (= tracker の単一 produ
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
 **kinematic-tree (root = hip_center, children = parent-relative offset)** で動く。
 
-**プロセスは排他 RunMode (`run` / `calib-subject` / `calib-extrinsic`) で動く**
+**プロセスは排他 RunMode (`run` / `calib-subject` / `calib-extrinsic` /
+`calib-extrinsic-floor` / `calib-intrinsic`) で動く**
 ([design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md) M1–M4
 実装済み)。mode は既存フラグから導出 (`--calibrate` → calib-subject、`--extrinsic-calib` or
-`--excal-replay` → calib-extrinsic)。calib↔runtime の契約は **YAML 成果物のみ**
+`--excal-replay` → calib-extrinsic、`--floor-calib` or `--floor-replay` → calib-extrinsic-floor)。
+**extrinsic 校正は 2 方式**: controller-marker hand-eye (案C、VR コントローラ固定マーカー) と
+floor-apriltag PnP (案D、床に既知配置したタグへ各カメラを個別 localize・VR 不要、
+[design/pose-3d-floor-apriltag-extrinsic.md](../design/pose-3d-floor-apriltag-extrinsic.md))。
+WebUI `/extrinsic-calib` の方式トグル (= flow-switch) で選択でき、案D は出力 `T_cw` を
+fitra Z-up で無変換書出。calib↔runtime の契約は **YAML 成果物のみ**
 (CalibrationSet / SubjectProfile) + プロセス再起動 — ライブ再注入 (triangulator ホットスワップ /
 IK ホットリロード / tap mux) はコンパイルレベルで存在しない。構築は `cpp/src/app/` の
 builder + モード runner (main.cpp は dispatch のみ)。calib-extrinsic は TRT 非依存の
@@ -85,6 +91,83 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-06-17 — intrinsics 解像度コンバータ (高解像度で校正→低解像度で実行)
+マーカー/ChArUco 検出は高解像度が要るが、ランタイムは低解像度で fps を稼ぎたい。triangulator は
+K をスケールしないので、校正(1280×960)のまま 640×480 で回すと K が2倍ズレて三角測量が崩れる。
+`lift::scale_intrinsics(Intrinsics, w, h)`(fx,fy と主点を画素中心 −0.5 規約でスケール、歪み係数は
+正規化座標で定義されスケール不変なので不変、アスペクト変化は例外)+ `tools/scale_intrinsics`
+(CalibrationSet を読み intrinsics を目標解像度へ、extrinsics は解像度非依存でそのまま通す)を追加。
+案D の `floor_out_intrinsics` 設計と整合。ctest: `test_calib_io` に scale ケース。実機: 1280×960
+校正 → 640×480 実行で 3D fps 回復・スケール一致を確認。
+
+### 2026-06-17 — fisheye の solve_tag_pose 再投影クラッシュ修正
+`solve_tag_pose` の fisheye 分岐の再投影で `cv::fisheye::projectPoints` に Point2f 出力を渡しており、
+(double の object 点から出力点型 Point2d を要求するため) OpenCV の create() 型アサートで abort。
+実機の fisheye intrinsics で floor-calib を回した初回に発火 (合成テストが fisheye 経路を踏んで
+いなかった)。出力を Point2d に分離して修正、`test_apriltag_marker` に fisheye=true 回帰テスト追加。
+
+### 2026-06-17 — intrinsic 校正に受け入れゲート (退化解の書き出し防止)
+盤面寸法の転置 (squares_x/y) や square/marker/dict の取り違えは intrinsic solve が「通る」のに
+rms 数百 px・異方 K の退化解になり、書き出すと extrinsic/triangulation を静かに壊す (実例:
+ChArUco 5×7↔7×5 転置で rms 203px↔0.72px、リグの `intrinsics.yaml` も同転置で 137px 退化)。
+`IntrinsicCalibSession::solve_and_write` に **受け入れゲート**を追加: `rms_px > max_rms_px`
+(既定 1.5) または `|fx-fy|/max(fx,fy) > max_fxfy_aniso` (既定 0.25) なら**そのカメラを失敗扱い**に
+して書き出さず、理由 (盤面転置の可能性を含む) を `state_json`/stdout に出す。CLI
+`--intrinsic-max-rms` / YAML `intrinsic_calib.max_rms_px` で調整可。`configs/intrinsic_calib.yaml`
+の盤面を実物に合わせ 7×5 に修正 + 向きの注意コメント。ctest: `test_intrinsic_calib_session`
+(rms ゲートで clean solve も閾値次第で失敗することを固定) / `test_main_config`。
+設計 = [design/pose-3d-intrinsic-calibration.md](../design/pose-3d-intrinsic-calibration.md)。
+
+### 2026-06-17 — スマホ動画から床 AprilTag マップを SfM 生成 (案D mode (b))
+案D の `FloorTagMap` を**巻尺実測なしで動画から自動生成**する mode (b) を実装
+(floor-apriltag-extrinsic doc が予告した拡張点。コア `floor_extrinsic_solver` は無改変)。
+(1) **pose-graph コア** `lift/floor_map_sfm` (純幾何): フレーム毎の共可視タグ相対姿勢を
+蓄積 → 各エッジ MAD トリム平均 → アンカー BFS で配置 → pose 平均緩和 → 床平面再ゲージ
+(FitraWorld z-up, 床=z=0)。スケールは各タグ実寸 (114.5mm) の PnP が固定。(2) オフライン
+ツール 2 本: `charuco_intrinsic_video` (ChArUco 動画 → スマホ intrinsics、`IntrinsicCalibSession`
+無改変流用) と `sfm_floor_map` (マーカー動画 + intrinsics → `floor_tag_map.yaml` + holdout 再投影
+検証)。C++ 4.8 の既存検出/PnP/IO を再利用 (Python cv2 は 4.5.4 legacy のため不採用)。設計 =
+[design/pose-3d-smartphone-sfm-marker-map.md](../design/pose-3d-smartphone-sfm-marker-map.md)。
+ctest: `test_floor_map_sfm` (連結復元 < 1e-3deg・床フィット・スケール保存・ノイズ・分割報告・
+`solve_floor_extrinsics` 往復)。実サンプル (iPhone 2160×1214): intrinsic RMS 0.83px、8/8 タグ
+連結マップ (plane_rms 6.7mm)、3+ タグ holdout 再投影 median 5.3px。**注意**: ChArUco 盤面は実物
+`7×5` で `configs/intrinsic_calib.yaml` の `5×7` は転置 — リグ intrinsic 退化の疑い (要再校正確認)。
+
+### 2026-06-16 — C++ 内部パラメータ (intrinsic) 校正 + 歪みモデル明示
+extrinsic の前提工程だった intrinsic 校正を C++/WebUI に取り込み、setup の step0 に
+据えた。(1) **歪みモデル基盤**: intrinsics YAML に `distortion_model` (pinhole|fisheye)
+を追加し、consumer (triangulator / apriltag PnP / floor solver) を係数数でなくモデルで
+分岐。案D の `floor_fisheye` が“裏付けのないフラグ”でなくなり魚眼 intrinsics を正しく
+食える。(2) **ChArUco 検出** (`lift/charuco_board`) + **収集 session**
+(`pipeline/intrinsic_calib_session`、多様性ゲートで per-camera ビュー収集、pinhole=
+cv::calibrateCamera / fisheye=cv::fisheye::calibrate)。(3) **RunMode::CalibIntrinsic** +
+`--calib-intrinsic`/`--intrinsic-replay`/`--charuco-*` + mode runner (live Crow / replay
+無人) + **WebUI** `/intrinsic-calib` (`/api/incal/*`、per-camera views/被覆/rms)。
+(4) **flow 統合**: `kExitFlowToCalibIntrinsic(84)`、daemon `initial_mode` が
+intrinsic_calib.enabled かつ出力不在で step0 に入り intrinsic→extrinsic→subject→run と
+連鎖。**切替前 precheck** (`precheck_mode_switch`) も追加し、設定不備のモード切替を
+respawn 前に WebUI へ理由表示 (静かな run フォールバックを解消)。設計 =
+[design/pose-3d-intrinsic-calibration.md](../design/pose-3d-intrinsic-calibration.md)。
+ctest: test_calib_io / test_charuco_board / test_intrinsic_calib_session /
+test_main_config (precheck + intrinsic ケース)。実機 rms は ChArUco 撮影後に確定。
+
+### 2026-06-15 — 床 AprilTag 既知配置 PnP による extrinsic 校正 (案D) コア実装
+VR を extrinsic チェーンから外す 2 つ目の extrinsic 方式。床に既知配置した AprilTag マップへ
+各カメラを多タグ PnP で個別 localize し、`T_cam←world` を **fitra Z-up で無変換書出** (案C の
+VmtWorld→FitraWorld 基底変換が無い)。新規: `lift/floor_tag_map` (FileStorage マップ I/O +
+grid)、`lift/floor_extrinsic_solver` (集約 solvePnP + 再投影 + 平面縮退検出、案a/b 共有の
+localize コア)、`pipeline/floor_calib_session` (静的前提のコーナー算術平均)、
+`RunMode::CalibExtrinsicFloor` + `app/mode_calib_extrinsic_floor` (`--floor-calib` live /
+`--floor-replay` 無人) + `floor_calib_runner`/`floor_live_input`。AprilTag 検出に CLAHE
+オプション追加 (案C/D 共通、検出律速の局所コントラスト不足対策)。WebUI は flow-switch で
+案C/案D を選択式に (`/extrinsic-calib` 方式トグル + Crow floor ルート、`PAGE_FOR_MODE` 追加、
+redirect を target ページ比較化)。intrinsics は校正解像度で PnP、出力 YAML はランタイム解像度
+(`T_cw` 解像度非依存)。設計 = [design/pose-3d-floor-apriltag-extrinsic.md](../design/pose-3d-floor-apriltag-extrinsic.md)
+(research [floor-apriltag-sfm-map.md](../research/floor-apriltag-sfm-map.md) から昇格、(b) スマホ
+SfM は research 残置)。ctest: test_floor_tag_map / test_floor_extrinsic_solver /
+test_floor_calib_session / test_floor_calib_replay / test_main_config (floor ケース追加)。
+実機の再投影 RMS / 平面縮退実値は高解像度 intrinsics 取得後に確定 (前提工程)。
 
 ### 2026-06-14 — flow daemon PR29 レビュー対応 (堅牢化 + 特殊 ID / subject 省略時の遷移修正)
 PR #29 のレビュー指摘 (Gemini + self-review) への後追い対応。(1) `daemon.cpp`: シグナル

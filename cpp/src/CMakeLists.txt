@@ -7,6 +7,10 @@ add_library(fitra_lift STATIC
     lift/triangulator.cpp
     lift/extrinsic_solver.cpp
     lift/apriltag_marker.cpp
+    lift/floor_tag_map.cpp
+    lift/floor_extrinsic_solver.cpp
+    lift/floor_map_sfm.cpp
+    lift/charuco_board.cpp
     lift/kalman.cpp
     lift/ik.cpp
     lift/subject_profile.cpp
@@ -133,6 +137,8 @@ add_library(fitra_pipeline STATIC
     pipeline/snapshot.cpp
     pipeline/calibration_session.cpp
     pipeline/extrinsic_calib_session.cpp
+    pipeline/floor_calib_session.cpp
+    pipeline/intrinsic_calib_session.cpp
     pipeline/excal_replay_input.cpp
 )
 
@@ -208,7 +214,12 @@ add_library(fitra_app STATIC
     app/daemon.cpp
     app/excal_live_input.cpp
     app/excal_runner.cpp
+    app/floor_calib_runner.cpp
+    app/floor_live_input.cpp
+    app/intrinsic_calib_runner.cpp
     app/mode_calib_extrinsic.cpp
+    app/mode_calib_extrinsic_floor.cpp
+    app/mode_calib_intrinsic.cpp
     app/mode_calib_subject.cpp
     app/mode_run.cpp
     app/output_builder.cpp

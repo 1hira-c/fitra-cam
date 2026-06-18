@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>   // cv::CLAHE (cached in the detector)
 #include <opencv2/objdetect/aruco_detector.hpp>
 
 #include "geom/frames.hpp"
@@ -35,6 +36,16 @@ struct MarkerBoardConfig {
     // cv::aruco predefined-dictionary id. Default DICT_APRILTAG_36h11.
     int dictionary = -1;            // -1 → resolved to DICT_APRILTAG_36h11 in ctor
     std::vector<MarkerFace> faces;
+
+    // Optional CLAHE (contrast-limited adaptive histogram equalisation) applied
+    // to the grayscale image before detection. The floor-AprilTag feasibility
+    // test (2026-06-13, docs/research/floor-apriltag-sfm-map.md) found soft-focus
+    // fisheye lenses lose low-contrast tags that CLAHE(2.0,(8,8)) recovers; it
+    // also helps the controller-marker path. Off by default to preserve the
+    // exact prior decode behaviour.
+    bool   use_clahe  = false;
+    double clahe_clip = 2.0;
+    int    clahe_grid = 8;          // (clahe_grid × clahe_grid) tiles
 
     const MarkerFace* find(int id) const;
 };
@@ -59,15 +70,21 @@ public:
     // Not thread-safe: the internal cv::aruco::ArucoDetector carries state and
     // must not be called from multiple threads concurrently. Call sites that
     // hand frames in serially (the calibration session's frame tap) are fine.
+    //
+    // `fisheye` selects the per-face PnP distortion model and MUST match the
+    // (K,dist) pair: it is per-camera (not a board-wide setting), so a mixed
+    // pinhole+fisheye rig passes the model of the camera that produced `image`.
     std::vector<TagDetection> detect(const cv::Mat& image,
                                      const cv::Mat& K,
-                                     const cv::Mat& dist);
+                                     const cv::Mat& dist,
+                                     bool fisheye = false);
 
     const MarkerBoardConfig& config() const { return cfg_; }
 
 private:
     MarkerBoardConfig         cfg_;
     cv::aruco::ArucoDetector  detector_;  // built once in the ctor
+    cv::Ptr<cv::CLAHE>        clahe_;     // built once in the ctor when use_clahe
 };
 
 // Pure PnP for a single square tag. `corners` are the four image-space corners
@@ -80,7 +97,8 @@ bool solve_tag_pose(const std::array<cv::Point2f, 4>& corners,
                     const cv::Mat& K,
                     const cv::Mat& dist,
                     geom::T_cam_marker& T_cam_face,
-                    double& reproj_rms_px);
+                    double& reproj_rms_px,
+                    bool fisheye = false);
 
 // Object-space corners of a square tag (side `s`) centred at the face origin,
 // Z=0 plane, matching aruco corner order: TL(-,+), TR(+,+), BR(+,-), BL(-,-).

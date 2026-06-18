@@ -1,0 +1,47 @@
+# Floor-AprilTag extrinsic calibration (案D) config for the medium 2-camera setup.
+#
+# VR-free: each camera localises against a known floor tag map (configs/
+# floor_tag_map.yaml.example — copy + edit your measured layout). No controller,
+# no SteamVR. See docs/design/pose-3d-floor-apriltag-extrinsic.md.
+#
+# IMPORTANT: extrinsic (T_cw = camera pose) is resolution-independent. Calibrate
+# at the SAME field-of-view but the HIGHEST resolution you can (tags project to
+# more pixels → robust PnP), using fisheye intrinsics at THAT resolution
+# (floor_intrinsics). The output YAML carries the RUNTIME intrinsics
+# (floor_out_intrinsics / three_d.calib) so the triangulator reuses the pose.
+
+schema: fitra_main_config_v1
+
+cameras:
+    cam0: /dev/v4l/by-path/platform-3610000.usb-usb-0:2.3:1.0-video-index0
+    cam1: /dev/v4l/by-path/platform-3610000.usb-usb-0:2.4:1.0-video-index0
+    # Calibrate at high resolution (same 4:3 FOV as the 640x480 runtime).
+    height: 960
+    width: 1280
+    fps: 30
+    pixel_format: mjpeg
+
+inference:
+    det_engine: outputs/tensorrt_engines/yolox_s.fp16.engine
+    pose_engine: outputs/tensorrt_engines/rtmpose_m_halpe26.fp16.engine
+    keypoint_format: halpe26
+
+three_d:
+    enable_3d: true
+    calib: calibrations/measure_session/cam_params.yaml
+
+web:
+    port: 8000
+
+extrinsic_calib:
+    method: floor
+    out: calibrations/medium_3d_extrinsics.yaml
+    floor_map: configs/floor_tag_map.yaml.example
+    # PnP intrinsics at the calibration (high) resolution.
+    floor_intrinsics: calibrations/intrinsics_1280x960.yaml
+    # Intrinsics embedded in the output YAML (runtime resolution). Empty → reuse
+    # floor_intrinsics (only correct if runtime == calibration resolution).
+    floor_out_intrinsics: calibrations/intrinsics.yaml
+    floor_burst_min: 10
+    floor_max_reproj_px: 3.0
+    floor_fisheye: true

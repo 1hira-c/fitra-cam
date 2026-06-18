@@ -142,7 +142,12 @@ export interface Bundle3D {
 
 // ---- REST payloads ---------------------------------------------------------
 
-export type FlowMode = "run" | "calib-subject" | "calib-extrinsic";
+export type FlowMode =
+  | "run"
+  | "calib-subject"
+  | "calib-extrinsic"
+  | "calib-extrinsic-floor"
+  | "calib-intrinsic";
 
 export interface FlowState {
   mode: FlowMode;

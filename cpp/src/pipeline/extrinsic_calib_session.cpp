@@ -184,9 +184,12 @@ void ExtrinsicCalibSession::on_frame(std::size_t cam_idx, const cv::Mat& bgr,
         if (cam_idx >= cfg_.intrinsics.cameras.size()) return;
     }
     const auto& cam = cfg_.intrinsics.cameras[cam_idx];
+    // Per-camera distortion model: the per-face PnP must undistort with the
+    // model THIS camera was calibrated under (fisheye intrinsics → fisheye PnP).
+    const bool fisheye = cam.intrinsics.is_fisheye();
     // detector_ is non-thread-safe (cv::aruco::ArucoDetector carries state);
     // on_frame is called from the single driver frame-worker thread.
-    auto dets = detector_->detect(bgr, cam.intrinsics.K, cam.intrinsics.dist);
+    auto dets = detector_->detect(bgr, cam.intrinsics.K, cam.intrinsics.dist, fisheye);
 
     // Record the per-camera live summary for the UI (under the lock).
     {

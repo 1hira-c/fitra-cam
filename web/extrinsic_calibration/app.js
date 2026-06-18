@@ -5,10 +5,21 @@
 
 const $ = (id) => document.getElementById(id);
 
+// Set by the flow watcher; read by the method selector + subject button. Hoisted
+// above refresh() (called on load) to avoid a temporal-dead-zone reference.
+let flowManaged = false;
+
 async function postJSON(path) {
-  const res = await fetch(path, { method: "POST",
-    headers: { "Content-Type": "application/json" }, body: "{}" });
-  return res.json();
+  // Tolerate a non-JSON / unreachable response (e.g. a flow-daemon module swap):
+  // return a structured failure so callers always get {ok:false} instead of an
+  // unhandled rejection that leaves the UI stuck (e.g. on "solving…").
+  try {
+    const res = await fetch(path, { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: "{}" });
+    return await res.json();
+  } catch (e) {
+    return { ok: false, err: e.message || "request failed" };
+  }
 }
 async function getJSON(path) { return (await fetch(path)).json(); }
 
@@ -25,24 +36,26 @@ const BADGE = {
   idle: "", collecting: "ok", solving: "warn", solved: "pass", failed: "fail",
 };
 
-// Coverage map keyed "cam:face" -> count.
+// Coverage map keyed "cam:face|tag" -> count. The controller path reports
+// `face`, the floor path `tag` — accept either.
 function coverageMap(s) {
   const m = {};
-  (s.coverage || []).forEach((c) => { m[`${c.cam}:${c.face}`] = c.count; });
+  (s.coverage || []).forEach((c) => { m[`${c.cam}:${c.face ?? c.tag}`] = c.count; });
   return m;
 }
 
 function renderMatrix(s) {
-  const faces = s.faces || [];
+  const faces = s.faces || s.tags || [];
   const nCams = s.num_cams || 0;
-  const minN = s.min_samples || 1;
+  const minN = s.min_samples || s.burst_min || 1;
   const cov = coverageMap(s);
   const tb = $("matrix").querySelector("tbody");
   tb.innerHTML = "";
 
-  // header row: face ids
+  // header row: face/tag ids
   const hr = document.createElement("tr");
-  hr.appendChild(Object.assign(document.createElement("th"), { textContent: "cam＼face" }));
+  const corner = s.method === "floor" ? "cam＼tag" : "cam＼face";
+  hr.appendChild(Object.assign(document.createElement("th"), { textContent: corner }));
   faces.forEach((f) => {
     hr.appendChild(Object.assign(document.createElement("th"), { textContent: f }));
   });
@@ -65,7 +78,16 @@ function renderMatrix(s) {
   }
 }
 
+const RESULT_HEAD = {
+  controller: "<tr><th>cam</th><th>faces</th><th>samples</th>" +
+              "<th>face spread (mm)</th><th>face spread (deg)</th></tr>",
+  floor: "<tr><th>cam</th><th>tags</th><th>reproj (px)</th>" +
+         "<th>planar?</th><th>plane thickness (mm)</th></tr>",
+};
+
 function renderResult(s) {
+  const floor = s.method === "floor";
+  $("result_head").innerHTML = floor ? RESULT_HEAD.floor : RESULT_HEAD.controller;
   const tb = $("result").querySelector("tbody");
   tb.innerHTML = "";
   const cams = s.cameras || [];
@@ -78,11 +100,13 @@ function renderResult(s) {
   setMsg($("result_msg"), "");
   cams.forEach((c) => {
     const tr = document.createElement("tr");
-    const cells = [
-      `cam${c.cam}`, c.n_faces, c.n_samples,
-      fmt((c.face_spread_trans_m || 0) * 1000, 2),
-      fmt(c.face_spread_rot_deg, 3),
-    ];
+    const cells = floor
+      ? [`cam${c.cam}`, c.n_tags, fmt(c.reproj_rms_px, 3),
+         c.planar_degenerate ? "DEGENERATE" : "ok",
+         fmt((c.plane_thickness_m || 0) * 1000, 1)]
+      : [`cam${c.cam}`, c.n_faces, c.n_samples,
+         fmt((c.face_spread_trans_m || 0) * 1000, 2),
+         fmt(c.face_spread_rot_deg, 3)];
     cells.forEach((v) => {
       tr.appendChild(Object.assign(document.createElement("td"), { textContent: v }));
     });
@@ -129,16 +153,22 @@ function renderDetections(s) {
     tb.innerHTML = `<tr><td class="muted" colspan="4">no frames yet</td></tr>`;
     return;
   }
+  const floor = s.method === "floor";
   dets.forEach((d) => {
     const tr = document.createElement("tr");
-    const faces = (d.faces || [])
+    const items = floor ? (d.tags || []) : (d.faces || []);
+    const tags = items
       .map((f) => `<span class="tag ${f.ok ? "ok" : "bad"}">${f.id}·${fmt(f.reproj, 2)}</span>`)
       .join(" ") || '<span class="muted">none</span>';
     const stale = d.age_ms > 750;
+    // Floor has no controller; show a static dash in that column.
+    const ctrlCell = floor
+      ? `<td class="muted">—</td>`
+      : `<td class="${d.ctrl_ok ? "ok-txt" : "bad-txt"}">${d.ctrl_ok ? "OK" : "—"}</td>`;
     tr.innerHTML =
       `<td>cam${d.cam}</td>` +
-      `<td class="${d.ctrl_ok ? "ok-txt" : "bad-txt"}">${d.ctrl_ok ? "OK" : "—"}</td>` +
-      `<td>${faces}</td>` +
+      ctrlCell +
+      `<td>${tags}</td>` +
       `<td class="${stale ? "muted" : ""}">${fmt(d.age_ms, 0)} ms</td>`;
     tb.appendChild(tr);
   });
@@ -155,14 +185,20 @@ async function refresh() {
   }
   $("conn").textContent = "ok";
 
+  const method = s.method === "floor" ? "floor" : "controller";
+  applyMethodUI(method);
+
   const badge = $("state");
   badge.textContent = s.state;
   badge.className = "badge " + (BADGE[s.state] || "");
   $("samples").textContent = s.samples ?? 0;
   $("num_cams").textContent = s.num_cams ?? "-";
-  $("min_samples").textContent = s.min_samples ?? "-";
+  $("min_samples").textContent = s.min_samples ?? s.burst_min ?? "-";
 
-  renderGate(s);
+  // The floor path is static — no motion gate. Hide the gate card; the rest of
+  // the rendering is method-aware.
+  $("gate_card").hidden = method === "floor";
+  if (method !== "floor") renderGate(s);
   renderDetections(s);
   renderMatrix(s);
   renderResult(s);
@@ -173,6 +209,45 @@ async function refresh() {
   $("btn_stop").disabled = !collecting;
   $("btn_subject").disabled = s.state !== "solved";
 }
+
+// --- method selector --------------------------------------------------------
+// Switching method = switching mode: the same /extrinsic-calib page is served by
+// both the controller (案C) and floor (案D) modes. A switch POSTs /api/flow/switch
+// and the flow daemon respawns into the chosen mode; flow.js then keeps the page.
+const MODE_FOR_METHOD = {
+  controller: "calib-extrinsic",
+  floor: "calib-extrinsic-floor",
+};
+
+function applyMethodUI(method) {
+  $("title").textContent = method === "floor"
+    ? "Floor AprilTag Extrinsic Calibration"
+    : "Controller-Marker Extrinsic Calibration";
+  $("method_label").textContent = method === "floor"
+    ? "Floor AprilTag (案D)" : "Controller marker (案C)";
+  $("instr_controller").hidden = method === "floor";
+  $("instr_floor").hidden = method !== "floor";
+  $("btn_method_controller").classList.toggle("active", method !== "floor");
+  $("btn_method_floor").classList.toggle("active", method === "floor");
+  // Without the flow daemon, mode switching is unavailable.
+  $("btn_method_controller").disabled = !flowManaged || method !== "floor";
+  $("btn_method_floor").disabled = !flowManaged || method === "floor";
+}
+
+async function switchMethod(method) {
+  if (!flowManaged) {
+    setMsg($("ctrl_msg"), "method switching needs the flow daemon", true);
+    return;
+  }
+  setMsg($("ctrl_msg"), `switching to ${method}…`);
+  const r = await FitraFlow.requestSwitch(MODE_FOR_METHOD[method]);
+  if (!r.ok) setMsg($("ctrl_msg"), `switch failed: ${r.err || "?"}`, true);
+  // On success the daemon respawns; flow.js keeps us on /extrinsic-calib and
+  // refresh() picks up the new method.
+}
+
+$("btn_method_controller").addEventListener("click", () => switchMethod("controller"));
+$("btn_method_floor").addEventListener("click", () => switchMethod("floor"));
 
 $("btn_start").addEventListener("click", async () => {
   const r = await postJSON("/api/excal/start");
@@ -213,7 +288,6 @@ setInterval(refresh, 200);
 // Mode-flow watcher (flow.js): once the next module is up with a different
 // mode, navigate there (solve success → /subject-calib under the daemon).
 // The connection display stays owned by refresh() above.
-let flowManaged = false;
 FitraFlow.watch({
   page: "calib-extrinsic",
   onState: (s) => { flowManaged = !!s.managed; },
