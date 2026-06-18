@@ -616,12 +616,16 @@ intrinsic_calib:
   marker_len_m: 0.03
   enabled: true
   min_views: 15
+  max_rms_px: 2.0
 )");
     MainOptions opts;
     load_main_config(p.string(), opts);
     check(opts.intrinsic_model == "fisheye", "intrinsic_calib.model loads");
     check(opts.intrinsic_out == "/tmp/intr_hires.yaml", "intrinsic_calib.out loads");
     check(opts.intrinsic_min_views == 15, "intrinsic_calib.min_views loads");
+    // Regression: max_rms_px must be in the check_keys allow-list, else a config
+    // using the documented gate key fails with "unknown key" before parsing.
+    check(opts.intrinsic_max_rms_px == 2.0, "intrinsic_calib.max_rms_px loads");
     // enabled sets the daemon-only step selector, NOT the run_mode flag.
     check(opts.intrinsic_step_enabled, "intrinsic_calib.enabled sets intrinsic_step_enabled");
     check(!opts.intrinsic_calib_enabled, "intrinsic_calib.enabled does NOT set the run_mode flag");

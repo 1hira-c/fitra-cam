@@ -31,11 +31,11 @@ intrinsic_calib:
     # orientation). squares_x = columns, squares_y = rows. Transposing them
     # (e.g. 5x7 vs 7x5) makes the marker-id → 3D mapping wrong → an anisotropic
     # K (fx≠fy) and a huge rms. If your solve lands a large rms, try swapping
-    # squares_x/squares_y first.
-    squares_x: 5
-    squares_y: 7
-    square_len_m: 0.04
-    marker_len_m: 0.03
+    # squares_x/squares_y first. The medium rig's physical board is 7x5.
+    squares_x: 7
+    squares_y: 5
+    square_len_m: 0.056
+    marker_len_m: 0.042
     # dict: -1 → DICT_4X4_50 (python calibrate_intrinsics_charuco.py default)
     min_views: 15
     min_corners: 8

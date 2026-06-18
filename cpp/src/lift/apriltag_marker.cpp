@@ -110,6 +110,12 @@ AprilTagDetector::AprilTagDetector(MarkerBoardConfig cfg)
       detector_(make_detector(cfg_.dictionary)) {
     // Persist the resolved dictionary id on cfg_ so config() reports it.
     if (cfg_.dictionary < 0) cfg_.dictionary = kDefaultDict;
+    // Build CLAHE once (reused per frame in detect) — creating it per frame is
+    // a needless allocation. Not thread-safe; detect() is single-threaded.
+    if (cfg_.use_clahe) {
+        const int grid = cfg_.clahe_grid > 0 ? cfg_.clahe_grid : 8;
+        clahe_ = cv::createCLAHE(cfg_.clahe_clip, cv::Size(grid, grid));
+    }
 }
 
 std::vector<TagDetection> AprilTagDetector::detect(const cv::Mat& image,
@@ -126,15 +132,14 @@ std::vector<TagDetection> AprilTagDetector::detect(const cv::Mat& image,
         cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
     }
 
-    if (cfg_.use_clahe) {
-        const int grid = cfg_.clahe_grid > 0 ? cfg_.clahe_grid : 8;
-        auto clahe = cv::createCLAHE(cfg_.clahe_clip, cv::Size(grid, grid));
-        // clahe->apply requires a single-channel 8-bit image; `gray` is one of
+    if (cfg_.use_clahe && clahe_) {
+        // clahe_->apply requires a single-channel 8-bit image; `gray` is either
         // the input channel (channels()==1) or the BGR2GRAY result above. Write
         // to a separate Mat so we never mutate a caller-owned single-channel
-        // image passed in by reference.
+        // image passed in by reference. The CLAHE object is built once in the
+        // ctor and reused here (single-threaded use).
         cv::Mat eq;
-        clahe->apply(gray, eq);
+        clahe_->apply(gray, eq);
         gray = eq;
     }
 

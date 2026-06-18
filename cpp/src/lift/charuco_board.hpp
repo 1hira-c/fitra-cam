@@ -39,7 +39,13 @@ public:
     CharucoBoardDetector& operator=(const CharucoBoardDetector&) = delete;
 
     // Detect the board in `image` (BGR or grayscale). Returns empty corners/ids
-    // when nothing is found. Not thread-safe (the detector carries state).
+    // when nothing is found.
+    //
+    // NOT thread-safe: the wrapped cv::aruco::CharucoDetector carries state and
+    // is mutated here (the `const` is a convenience for the detection-only call
+    // sites, via const_cast — it does NOT imply concurrency safety). Call from a
+    // single thread only; the intrinsic calibration session's frame tap and the
+    // offline tools hand frames in serially, which is fine.
     CharucoView detect(const cv::Mat& image) const;
 
     // Pair a detected view's corners with the board's known 3D corner positions

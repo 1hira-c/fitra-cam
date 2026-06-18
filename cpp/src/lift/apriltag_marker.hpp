@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>   // cv::CLAHE (cached in the detector)
 #include <opencv2/objdetect/aruco_detector.hpp>
 
 #include "geom/frames.hpp"
@@ -83,6 +84,7 @@ public:
 private:
     MarkerBoardConfig         cfg_;
     cv::aruco::ArucoDetector  detector_;  // built once in the ctor
+    cv::Ptr<cv::CLAHE>        clahe_;     // built once in the ctor when use_clahe
 };
 
 // Pure PnP for a single square tag. `corners` are the four image-space corners

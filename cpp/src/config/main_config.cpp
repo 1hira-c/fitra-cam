@@ -284,7 +284,7 @@ void load_intrinsic_calib(const YAML::Node& section, MainOptions& out) {
     static const std::set<std::string> allowed{
         "enabled", "replay_dir", "out", "model",
         "squares_x", "squares_y", "square_len_m", "marker_len_m", "dict",
-        "min_views", "min_corners",
+        "min_views", "min_corners", "max_rms_px",
     };
     check_keys(section, allowed, "intrinsic_calib");
     // enabled sets the daemon-only step selector, NOT the run_mode flag
