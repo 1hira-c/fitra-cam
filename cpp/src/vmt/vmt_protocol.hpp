@@ -74,6 +74,17 @@ inline int vmt_index_for(slimevr::TrackerRole role, int index_base = 0) {
 // Quaternion order mirrors position: q_out = q_yaw * q_in.
 void apply_vmt_alignment(VmtPos& pos, VmtQuat& quat, const VmtAlignment& alignment);
 
+// Inverse of (apply_vmt_alignment ∘ world_*_to_vmt): take a pose expressed in
+// the VMT Driver frame (Y-up, post-alignment — the frame SteamVR reports HMD /
+// controller poses in) and recover the fitra world pose (Z-up). Undoes the
+// alignment (translate back, rotate by -yaw) then the basis change. Lets the 3D
+// viewer draw the HMD in the same space as the triangulated skeleton.
+//   out_pos_xyz  : world (x, y, z)
+//   out_quat_wxyz: world quaternion in (w, x, y, z) order
+void vmt_pose_to_world(const VmtPos& pos, const VmtQuat& quat_xyzw,
+                       const VmtAlignment& alignment,
+                       float out_pos_xyz[3], float out_quat_wxyz[4]);
+
 // Append one `/VMT/Room/Driver` message to the writer. Caller is responsible
 // for begin_bundle / end_bundle.
 //   index:      0..57

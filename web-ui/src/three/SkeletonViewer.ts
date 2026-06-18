@@ -13,9 +13,22 @@ import {
   kpCountFor,
   skeletonFor,
 } from "../lib/skeleton";
-import type { Bundle3D, Camera3D, Joint3D, KpFormat, Person3D, Tracker } from "../types/bundle";
+import type {
+  Bundle3D,
+  Camera3D,
+  HmdBlock,
+  Joint3D,
+  KpFormat,
+  Person3D,
+  Tracker,
+} from "../types/bundle";
 
 const TRACKER_AXIS_BASE_LEN = 0.15;
+// HMD marker: a small wireframe headset box + a forward gaze line. Drawn at the
+// HMD's fitra-world pose (hmd.pos_world) so it shares the skeleton's space.
+const HMD_COLOR = 0x33ddff;
+const HMD_BOX = { w: 0.18, h: 0.1, d: 0.1 };
+const HMD_GAZE_LEN = 0.25; // forward line length (camera -Z in HMD local frame)
 // Camera frustum (wireframe pyramid) drawn at each calibrated camera. Apex sits
 // at the camera center; the opening points along the camera's view direction.
 const CAMERA_FRUSTUM_COLOR = 0xffc233;
@@ -89,6 +102,8 @@ export class SkeletonViewer {
   private camerasVisible = true;
   private cameraMaterial!: THREE.LineBasicMaterial;
   private cameraViews = new Map<string, CameraView>();
+  private hmdGroup!: THREE.Group;
+  private hmdVisible = true;
   private onResize = () => this.resize();
 
   constructor(canvas: HTMLCanvasElement, statusEl: HTMLElement | null) {
@@ -143,6 +158,10 @@ export class SkeletonViewer {
     this.camerasRoot = new THREE.Group();
     this.scene.add(this.camerasRoot);
     this.cameraMaterial = new THREE.LineBasicMaterial({ color: CAMERA_FRUSTUM_COLOR });
+
+    this.hmdGroup = this.buildHmdMarker();
+    this.hmdGroup.visible = false;
+    this.scene.add(this.hmdGroup);
 
     const grid = new THREE.GridHelper(4, 20, 0x335577, 0x2b2f36);
     (grid.material as THREE.Material).opacity = 0.75;
@@ -237,6 +256,8 @@ export class SkeletonViewer {
     // Camera frustums are static placement data, independent of whether a person
     // is currently triangulated; update them regardless of the branches below.
     this.updateCameras(Array.isArray(bundle?.cameras) ? bundle.cameras : []);
+    // HMD marker is likewise independent of the person/disabled branches.
+    this.updateHmd(bundle?.hmd);
 
     if (!bundle || bundle.enabled === false) {
       this.setStatus(bundle && bundle.enabled === false ? "3D disabled" : "(no 3D data)");
@@ -342,6 +363,70 @@ export class SkeletonViewer {
     for (const [id, view] of this.cameraViews) {
       if (!seen.has(id)) view.group.visible = false;
     }
+  }
+
+  setHmdVisible(visible: boolean): void {
+    this.hmdVisible = !!visible;
+    // Actual visibility also depends on whether a pose is present; updateHmd
+    // re-applies hmdVisible each frame, so just refresh now.
+    if (this.hmdGroup && !this.hmdVisible) this.hmdGroup.visible = false;
+  }
+
+  // Wireframe headset box centred at the local origin plus a forward gaze line
+  // along local -Z (the HMD's view direction in OpenVR's device frame).
+  private buildHmdMarker(): THREE.Group {
+    const group = new THREE.Group();
+    group.frustumCulled = false;
+    const material = new THREE.LineBasicMaterial({ color: HMD_COLOR });
+
+    const box = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(HMD_BOX.w, HMD_BOX.h, HMD_BOX.d)),
+      material,
+    );
+    box.frustumCulled = false;
+    group.add(box);
+
+    const gaze = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, 0, -HMD_GAZE_LEN),
+      ]),
+      material,
+    );
+    gaze.frustumCulled = false;
+    group.add(gaze);
+    return group;
+  }
+
+  private updateHmd(hmd: HmdBlock | undefined): void {
+    if (!this.hmdGroup) return;
+    // Need the world-frame pose (only present when VMT alignment is known) and a
+    // live, valid HMD reading.
+    const pos = hmd?.pos_world;
+    if (
+      !this.hmdVisible ||
+      !hmd ||
+      hmd.have_any !== true ||
+      hmd.valid === false ||
+      hmd.stale === true ||
+      !Array.isArray(pos)
+    ) {
+      this.hmdGroup.visible = false;
+      return;
+    }
+
+    // World (x, y, z) -> Three.js (x, z, -y), matching jointToVector/trackers.
+    this.hmdGroup.position.set(Number(pos[0]), Number(pos[2]), -Number(pos[1]));
+
+    const q = hmd.quat_wxyz;
+    if (Array.isArray(q) && q.length === 4) {
+      const qWorld = new THREE.Quaternion(Number(q[1]), Number(q[2]), Number(q[3]), Number(q[0]));
+      const qThree = WORLD_TO_THREE_QUAT.clone()
+        .multiply(qWorld)
+        .multiply(WORLD_TO_THREE_QUAT_INV);
+      this.hmdGroup.quaternion.copy(qThree);
+    }
+    this.hmdGroup.visible = true;
   }
 
   private updateTrackers(trackers: Tracker[]): void {

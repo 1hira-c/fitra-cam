@@ -99,8 +99,13 @@ export interface HmdBlock {
   stale?: boolean;
   valid?: boolean;
   age_ms?: number;
+  /** Raw HMD position in VMT Driver frame (Y-up). */
   pos?: [number, number, number];
   yaw_deg?: number;
+  /** HMD position in fitra world frame (Z-up); present when VMT alignment known. */
+  pos_world?: [number, number, number];
+  /** HMD orientation in fitra world frame, quaternion (w, x, y, z). */
+  quat_wxyz?: [number, number, number, number];
   [k: string]: unknown;
 }
 

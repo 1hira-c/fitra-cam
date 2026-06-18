@@ -186,6 +186,40 @@ void test_alignment_yaw_quat_left_multiply() {
     expect_near(quat.w,  0.5f, 1e-5f, "align yaw left-mul.quat.w");
 }
 
+// vmt_pose_to_world must invert (apply_vmt_alignment ∘ world_*_to_vmt) so the
+// 3D viewer recovers the fitra world HMD pose. Round-trip arbitrary world poses
+// through the forward path under a non-trivial alignment, then back.
+void test_pose_to_world_roundtrip() {
+    using namespace fitra::vmt;
+    fitra::vmt::VmtAlignment a;
+    a.x = 0.4f; a.y = -0.2f; a.z = 1.1f; a.yaw_deg = 37.0f;
+
+    struct WP { float x, y, z, qw, qx, qy, qz; };
+    const WP poses[] = {
+        {1.3f, -2.1f, 0.7f, 1.0f, 0.0f, 0.0f, 0.0f},
+        {-0.4f, 0.9f, -1.6f, 0.7071068f, 0.7071068f, 0.0f, 0.0f},
+        {2.5f, 0.5f, 1.8f, 0.5f, 0.5f, -0.5f, 0.5f},
+    };
+    for (const auto& w : poses) {
+        // forward: world -> vmt basis -> alignment.
+        VmtPos p = world_pos_to_vmt(w.x, w.y, w.z);
+        VmtQuat q = world_quat_to_vmt(w.qw, w.qx, w.qy, w.qz);
+        apply_vmt_alignment(p, q, a);
+        // inverse.
+        float wp[3], wq[4];
+        vmt_pose_to_world(p, q, a, wp, wq);
+        expect_near(wp[0], w.x, 1e-4f, "roundtrip pos.x");
+        expect_near(wp[1], w.y, 1e-4f, "roundtrip pos.y");
+        expect_near(wp[2], w.z, 1e-4f, "roundtrip pos.z");
+        // Quaternions match up to global sign; align sign on w then compare.
+        const float sgn = (wq[0] * w.qw < 0.0f) ? -1.0f : 1.0f;
+        expect_near(sgn * wq[0], w.qw, 1e-4f, "roundtrip quat.w");
+        expect_near(sgn * wq[1], w.qx, 1e-4f, "roundtrip quat.x");
+        expect_near(sgn * wq[2], w.qy, 1e-4f, "roundtrip quat.y");
+        expect_near(sgn * wq[3], w.qz, 1e-4f, "roundtrip quat.z");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -199,6 +233,7 @@ int main() {
         test_alignment_translation();
         test_alignment_yaw_position();
         test_alignment_yaw_quat_left_multiply();
+        test_pose_to_world_roundtrip();
         std::puts("test_vmt_protocol ok");
         return 0;
     } catch (const std::exception& e) {

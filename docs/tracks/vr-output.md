@@ -40,6 +40,16 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-18 — 3D プレビューに HMD 位置を表示 (VMT 接続時)
+VMT 接続時、3D ビューアに HMD をワイヤーヘッドセット箱＋前方視線で描画。HMD pose は SteamVR から
+VMT Driver フレーム (Y-up・alignment 適用後) で届くため、新設の `vmt::vmt_pose_to_world()` で
+`apply_vmt_alignment ∘ world_*_to_vmt` の逆 (並進戻し→-yaw→基底逆) を取り、fitra world (Z-up) の
+`pos_world`/`quat_wxyz` を `hmd` fragment に追加 (publisher の現 alignment を使用)。frontend は
+トラッカーと同じ basis 変換でマーカーを配置し、`ThreeDView` に `show hmd` トグルを追加。スケルトンと
+同一空間に重なるため alignment 品質の QA に使える (alignment が効いていないと見当違いの位置に出る)。
+往復変換は `test_vmt_protocol` の round-trip テストで固定。コントローラーは今回スコープ外
+(controller_bus は受信済みだが live で crow 未配線)。軽微なため design doc なし (changelog のみ)。
+
 ### 2026-06-18 — 3D プレビューに校正カメラ位置を表示
 3D ビューア (`/ws3d`) に、校正済み各カメラの設置位置と視野方向をワイヤー視錐台 (向き付き四角錐)
 で描画。`Triangulator::camera_poses()` を新設し world 上のカメラ中心 (`-Rᵀ·t`) と camera→world
