@@ -109,6 +109,12 @@ void test_module_argv() {
     check(!has_arg(excal_args, "--calib-auto-exit"),
           "excal argv: solve auto-exits by itself");
 
+    // setup: mode flag only — it constructs no publishers, so nothing to negate.
+    auto setup_args = module_argv(RunMode::Setup, opts, "/tmp/session.yaml", false);
+    check(has_arg(setup_args, "--setup"), "setup argv: --setup");
+    check(!has_arg(setup_args, "--no-vmt-out") && !has_arg(setup_args, "--no-slimevr-out"),
+          "setup argv: no publisher negations (none constructed)");
+
     // No --config: only the mode flags.
     auto bare = module_argv(RunMode::Run, no_subj, "", true);
     check(bare.size() == 1 && bare[0] == "--flow-managed",
@@ -130,6 +136,9 @@ void test_next_action() {
     a = next_action(true, fitra::app::kExitFlowToCalibExtrinsic, fails);
     check(a.kind == DaemonAction::Kind::Spawn && a.mode == RunMode::CalibExtrinsic,
           "82 -> spawn calib-extrinsic");
+    a = next_action(true, fitra::app::kExitFlowToSetup, fails);
+    check(a.kind == DaemonAction::Kind::Spawn && a.mode == RunMode::Setup,
+          "85 -> spawn setup");
 
     // Clean exit stops the daemon.
     fails = 2;
@@ -164,17 +173,27 @@ void test_initial_mode() {
     // initial_mode(opts, intrinsics_exists, extrinsics_exists, profile_exists).
     // Intrinsic step is disabled by default, so intrinsics_exists is moot here.
 
+    // No cameras configured -> setup, regardless of which artifacts exist (the
+    // Setup module is how cameras get configured in the first place).
+    check(initial_mode(opts, true, true, true) == RunMode::Setup,
+          "auto: no cameras -> setup");
+    check(initial_mode(opts, false, false, false) == RunMode::Setup,
+          "auto: no cameras + no artifacts -> setup");
+
+    // With cameras configured, fall through to the artifact-driven stages.
+    opts.cam_paths[0] = "/dev/video0";
     check(initial_mode(opts, true, false, false) == RunMode::CalibExtrinsic,
-          "auto: no extrinsics -> calib-extrinsic");
+          "auto: cameras set, no extrinsics -> calib-extrinsic");
     check(initial_mode(opts, true, true, false) == RunMode::CalibSubject,
-          "auto: extrinsics ok, no profile -> calib-subject");
+          "auto: cameras set, extrinsics ok, no profile -> calib-subject");
     check(initial_mode(opts, true, true, true) == RunMode::Run,
-          "auto: all artifacts -> run");
+          "auto: cameras set, all artifacts -> run");
 
     // Intrinsic step 0: step enabled + missing output -> calib-intrinsic first.
     // Uses the daemon-only selector (intrinsic_step_enabled), not the run_mode
     // flag, so a shared daemon config does not break the parent.
     MainOptions iopts;
+    iopts.cam_paths[0] = "/dev/video0";
     iopts.intrinsic_step_enabled = true;
     check(initial_mode(iopts, false, false, false) == RunMode::CalibIntrinsic,
           "auto: intrinsic step enabled + missing -> calib-intrinsic");
@@ -183,16 +202,23 @@ void test_initial_mode() {
 
     // method: floor selects the floor extrinsic stage via excal_method.
     MainOptions fopts;
+    fopts.cam_paths[0] = "/dev/video0";
     fopts.excal_method = "floor";
     check(initial_mode(fopts, true, false, false) == RunMode::CalibExtrinsicFloor,
           "auto: excal_method floor -> calib-extrinsic-floor");
 
-    opts.daemon_initial = "calib-extrinsic";
-    check(initial_mode(opts, true, true, true) == RunMode::CalibExtrinsic,
+    // Explicit --daemon-initial wins over everything, including the no-camera
+    // setup default — so a deliberate `setup`/`run` choice is honoured.
+    MainOptions xopts;  // empty cam_paths
+    xopts.daemon_initial = "calib-extrinsic";
+    check(initial_mode(xopts, true, true, true) == RunMode::CalibExtrinsic,
           "explicit --daemon-initial wins over artifacts");
-    opts.daemon_initial = "run";
-    check(initial_mode(opts, false, false, false) == RunMode::Run,
-          "explicit run wins even with artifacts missing");
+    xopts.daemon_initial = "run";
+    check(initial_mode(xopts, false, false, false) == RunMode::Run,
+          "explicit run wins even with no cameras / missing artifacts");
+    xopts.daemon_initial = "setup";
+    check(initial_mode(xopts, true, true, true) == RunMode::Setup,
+          "explicit setup is honoured");
 
     MainOptions p;
     p.subjects_dir = "/data/subjects";

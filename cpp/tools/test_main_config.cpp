@@ -834,6 +834,66 @@ void test_daemon_flags_and_validate() {
     check(threw, "--daemon-initial bogus must throw");
 }
 
+void test_setup_mode_and_daemon_blank_config() {
+    using fitra::config::RunMode;
+    using fitra::config::run_mode;
+    using fitra::config::run_mode_name;
+    using fitra::config::parse_run_mode_name;
+
+    // --setup -> RunMode::Setup, validates with NO cameras/engines (it is the
+    // module that configures them). Only the port must be sane.
+    MainOptions opts;
+    std::vector<std::string> argv_buf{"--setup"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(opts.setup_mode, "--setup sets setup_mode");
+    check(run_mode(opts) == RunMode::Setup, "--setup -> Setup mode");
+    validate_options(opts);  // must not throw despite empty cam_paths/engines
+
+    // Label round-trips both ways.
+    check(std::string(run_mode_name(RunMode::Setup)) == "setup", "setup label");
+    RunMode m;
+    check(parse_run_mode_name("setup", m) && m == RunMode::Setup, "parse setup label");
+
+    // A bad port is still rejected in setup mode.
+    MainOptions badport = opts;
+    badport.port = 0;
+    bool threw = false;
+    try { validate_options(badport); }
+    catch (const std::exception&) { threw = true; }
+    check(threw, "setup mode rejects an invalid port");
+
+    // The daemon parent validates its union config in run form, but a first-run
+    // config legitimately has no cameras/engines yet (the Setup module fills
+    // them in). --daemon must NOT reject a blank config.
+    MainOptions daemon_blank;
+    std::vector<std::string> dargv_buf{"--daemon"};
+    auto dargv = make_argv(dargv_buf);
+    apply_cli_overrides(daemon_blank, static_cast<int>(dargv.size()), dargv.data());
+    check(daemon_blank.daemon && daemon_blank.cam_paths[0].empty(),
+          "daemon set, no cameras");
+    validate_options(daemon_blank);  // must not throw
+
+    // But a NON-daemon, non-setup blank config (a bare ./main) still fails the
+    // run-form requirement.
+    MainOptions bare;
+    threw = false;
+    try { validate_options(bare); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "required option", "bare run-form msg");
+    }
+    check(threw, "bare ./main still requires --cam0 + engines");
+
+    // --daemon-initial setup is accepted.
+    MainOptions di;
+    std::vector<std::string> diargv_buf{"--daemon", "--daemon-initial", "setup"};
+    auto diargv = make_argv(diargv_buf);
+    apply_cli_overrides(di, static_cast<int>(diargv.size()), diargv.data());
+    validate_options(di);  // must not throw
+    check(di.daemon_initial == "setup", "--daemon-initial setup accepted");
+}
+
 struct TestCase {
     const char* name;
     void (*fn)();
@@ -859,6 +919,7 @@ const TestCase kTests[] = {
     {"precheck_mode_switch",                   test_precheck_mode_switch},
     {"flow_managed_and_publisher_negation",    test_flow_managed_and_publisher_negation},
     {"daemon_flags_and_validate",              test_daemon_flags_and_validate},
+    {"setup_mode_and_daemon_blank_config",     test_setup_mode_and_daemon_blank_config},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},

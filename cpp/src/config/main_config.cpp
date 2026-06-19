@@ -542,6 +542,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--daemon")            { out.daemon = true; }
         else if (a == "--daemon-initial")    { out.daemon_initial = need(i, "--daemon-initial"); }
         else if (a == "--flow-managed")      { out.flow_managed = true; }
+        else if (a == "--setup")             { out.setup_mode = true; }
         else {
             fail(std::string("unknown arg: ") + argv[i]);
         }
@@ -549,6 +550,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
 }
 
 RunMode run_mode(const MainOptions& opts) {
+    if (opts.setup_mode) return RunMode::Setup;
     if (opts.intrinsic_calib_enabled || !opts.intrinsic_replay.empty()) {
         return RunMode::CalibIntrinsic;
     }
@@ -564,6 +566,7 @@ RunMode run_mode(const MainOptions& opts) {
 
 const char* run_mode_name(RunMode mode) {
     switch (mode) {
+        case RunMode::Setup:               return "setup";
         case RunMode::CalibSubject:        return "calib-subject";
         case RunMode::CalibExtrinsic:      return "calib-extrinsic";
         case RunMode::CalibExtrinsicFloor: return "calib-extrinsic-floor";
@@ -575,6 +578,7 @@ const char* run_mode_name(RunMode mode) {
 
 bool parse_run_mode_name(const std::string& name, RunMode& out) {
     if (name == "run")                   { out = RunMode::Run;                 return true; }
+    if (name == "setup")                 { out = RunMode::Setup;               return true; }
     if (name == "calib-subject")         { out = RunMode::CalibSubject;        return true; }
     if (name == "calib-extrinsic")       { out = RunMode::CalibExtrinsic;      return true; }
     if (name == "calib-extrinsic-floor") { out = RunMode::CalibExtrinsicFloor; return true; }
@@ -648,6 +652,10 @@ bool precheck_mode_switch(const MainOptions& opts, RunMode target,
         case RunMode::CalibSubject:
             // Subject calibration triangulates, so it needs the extrinsics YAML.
             return source_ready(opts.calib, "extrinsics (three_d.calib)", err);
+        case RunMode::Setup:
+            // Setup produces the config from scratch — it needs no input
+            // artifact, cameras, or engines (it is how those get configured).
+            return true;
         case RunMode::Run:
             // Run is the safe fallback; it tolerates a missing calib (2D only).
             return true;
@@ -657,6 +665,15 @@ bool precheck_mode_switch(const MainOptions& opts, RunMode target,
 
 void validate_options(const MainOptions& opts) {
     const RunMode mode = run_mode(opts);
+    if (mode == RunMode::Setup) {
+        // Setup builds only a Crow server + setup routes (camera enumeration,
+        // config composition) — no cameras, engines, or 3D graph. The only
+        // thing it needs is a sane port (host defaults are fine).
+        if (opts.port <= 0 || opts.port > 65535) {
+            fail("--port must be in [1, 65535]");
+        }
+        return;
+    }
     if (mode == RunMode::CalibExtrinsic) {
         // calib-extrinsic is decode-only (AprilTag detection on CPU) — no TRT
         // engines are loaded. Cameras are required for live collection only;
@@ -692,8 +709,13 @@ void validate_options(const MainOptions& opts) {
         if (opts.intrinsic_model != "pinhole" && opts.intrinsic_model != "fisheye") {
             fail("--intrinsic-model must be 'pinhole' or 'fisheye'");
         }
-    } else if (opts.cam_paths[0].empty() || opts.det_engine.empty()
-               || opts.pose_engine.empty()) {
+    } else if (!opts.daemon && (opts.cam_paths[0].empty() || opts.det_engine.empty()
+               || opts.pose_engine.empty())) {
+        // The daemon parent validates its union config in run form, but a
+        // first-run config legitimately has no cameras/engines yet (the Setup
+        // module fills them in). Defer the run-form requirement to each spawned
+        // child + the initial_mode precheck (app/daemon.cpp); the daemon already
+        // warns on a bare config and falls back safely if a run child dies.
         fail("missing required option (need --cam0 + --det-engine + --pose-engine)");
     }
     if (opts.pixel_format != "mjpeg" && opts.pixel_format != "yuyv"
@@ -866,7 +888,7 @@ void validate_options(const MainOptions& opts) {
         RunMode initial;
         if (opts.daemon_initial != "auto"
             && !parse_run_mode_name(opts.daemon_initial, initial)) {
-            fail("--daemon-initial must be one of auto|run|calib-subject"
+            fail("--daemon-initial must be one of auto|setup|run|calib-subject"
                  "|calib-extrinsic|calib-extrinsic-floor|calib-intrinsic");
         }
     }

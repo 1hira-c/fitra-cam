@@ -248,8 +248,15 @@ struct MainOptions {
     // set by the daemon on spawned mode modules; it enables the
     // /api/flow/switch route and the calib auto-chain exit codes.
     bool        daemon         = false;   // --daemon: spawn mode modules
-    std::string daemon_initial = "auto";  // auto|run|calib-subject|calib-extrinsic
+    std::string daemon_initial = "auto";  // auto|setup|run|calib-subject|calib-extrinsic|...
     bool        flow_managed   = false;   // --flow-managed (daemon-spawned)
+
+    // --setup: the first-run setup module (RunMode::Setup). A GPU-less Crow
+    // server that enumerates V4L2 cameras, composes/writes the union config,
+    // and hands off to the next stage via a flow exit code. CLI-only (the
+    // launch form is the caller's responsibility, like the other daemon flags).
+    // See docs/design/core-pipeline-setup-mode.md.
+    bool        setup_mode     = false;
 };
 
 // Exclusive run mode, derived from the calibration flags (invocation stays
@@ -258,7 +265,7 @@ struct MainOptions {
 // YAML on disk. Derive after validate_options() — it enforces the flags'
 // mutual exclusivity.
 enum class RunMode {
-    Run, CalibSubject, CalibExtrinsic, CalibExtrinsicFloor, CalibIntrinsic
+    Run, Setup, CalibSubject, CalibExtrinsic, CalibExtrinsicFloor, CalibIntrinsic
 };
 
 RunMode run_mode(const MainOptions& opts);

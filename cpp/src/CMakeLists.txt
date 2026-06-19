@@ -222,6 +222,7 @@ add_library(fitra_app STATIC
     app/mode_calib_intrinsic.cpp
     app/mode_calib_subject.cpp
     app/mode_run.cpp
+    app/mode_setup.cpp
     app/output_builder.cpp
     app/paths.cpp
     app/pose_relay_builder.cpp

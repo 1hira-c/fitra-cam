@@ -32,6 +32,7 @@
 #include "app/mode_calib_intrinsic.hpp"
 #include "app/mode_calib_subject.hpp"
 #include "app/mode_run.hpp"
+#include "app/mode_setup.hpp"
 #include "app/trt_stack.hpp"
 #include "config/main_config.hpp"
 #include "lift/keypoint_format.hpp"
@@ -163,10 +164,14 @@ void print_help() {
         "                            -> run auto-chain + /api/flow/switch mode switching;\n"
         "                            crashes restart run mode (3 consecutive failures stop)\n"
         "  --daemon-initial MODE     first module: auto (default; picks the first stage whose\n"
-        "                            artifact is missing) | run | calib-subject | calib-extrinsic\n"
+        "                            artifact is missing, or setup when no cameras are configured)\n"
+        "                            | setup | run | calib-subject | calib-extrinsic | ...\n"
         "  --flow-managed            mark this process as flow-daemon-spawned: enables\n"
         "                            POST /api/flow/switch and the calib auto-chain exit codes\n"
         "                            (set by the daemon; not meant for manual use)\n"
+        "  --setup                   first-run setup module: GPU-less Crow server that\n"
+        "                            enumerates cameras + composes the config, then hands off\n"
+        "                            (docs/design/core-pipeline-setup-mode.md)\n"
         "\n"
         "  --config PATH             runtime YAML config (see docs/backlog-main-yaml-config.md).\n"
         "                            Precedence (low -> high): code defaults < --config < CLI flags.\n"
@@ -283,6 +288,9 @@ int main(int argc, char** argv) {
         fitra::app::FlowControl flow{g_stop, opts.flow_managed};
         int rc = EXIT_FAILURE;
         switch (mode) {
+            case fitra::config::RunMode::Setup:
+                rc = fitra::app::run_mode_setup(opts, flow);
+                break;
             case fitra::config::RunMode::CalibExtrinsic:
                 rc = fitra::app::run_mode_calib_extrinsic(opts, flow);
                 break;

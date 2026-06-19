@@ -58,6 +58,11 @@ std::vector<std::string> module_argv(config::RunMode mode,
     }
     args.push_back("--flow-managed");
     switch (mode) {
+        case config::RunMode::Setup:
+            // GPU-less setup module: enumerate cameras + compose the config.
+            // No --no-vmt-out (it constructs no publishers to negate).
+            args.push_back("--setup");
+            break;
         case config::RunMode::Run:
             if (profile_exists && !opts.calib_subject_id.empty()) {
                 args.push_back("--subject-id");
@@ -111,6 +116,7 @@ DaemonAction next_action(bool exited_normally, int exit_code,
         bool is_flow = true;
         switch (exit_code) {
             case kExitFlowToRun:                 next = config::RunMode::Run; break;
+            case kExitFlowToSetup:               next = config::RunMode::Setup; break;
             case kExitFlowToCalibSubject:        next = config::RunMode::CalibSubject; break;
             case kExitFlowToCalibExtrinsic:      next = config::RunMode::CalibExtrinsic; break;
             case kExitFlowToCalibExtrinsicFloor: next = config::RunMode::CalibExtrinsicFloor; break;
@@ -146,6 +152,13 @@ config::RunMode initial_mode(const config::MainOptions& opts,
     if (opts.daemon_initial != "auto"
         && config::parse_run_mode_name(opts.daemon_initial, m)) {
         return m;
+    }
+    // First run / unconfigured rig: with no cameras in the union config there is
+    // nothing to calibrate or run, so land in the Setup module — the browser
+    // picks cameras + composes the config, then the chain proceeds. (When
+    // cameras ARE configured we fall through to the artifact-driven stages.)
+    if (opts.cam_paths[0].empty()) {
+        return config::RunMode::Setup;
     }
     // Step 0 of setup: when C++ intrinsic calibration is enabled and its output
     // YAML is missing, calibrate intrinsics first. Disabled (the default) →
