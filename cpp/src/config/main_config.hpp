@@ -37,6 +37,12 @@ struct MainOptions {
     // or "yuyv" (uncompressed; skips decode + camera encode latency but costs
     // USB bandwidth -> caps resolution/fps). See docs/design/core-pipeline-e2e-latency.md.
     std::string pixel_format = "mjpeg";
+    // Per-camera pixel_format override (empty = use the global pixel_format).
+    // Use to mix decode paths: e.g. nvjpeg (HW) for a camera on a clean bus that
+    // must keep up at full rate, mjpeg (CPU, tolerant of corrupt frames) for
+    // cameras on a saturated USB2.0 bus where HW NVJPEG would crash on truncated
+    // MJPEG. See docs/design/core-pipeline-per-camera-capture-downscale.md.
+    std::array<std::string, 3> cam_pixel_format{};
     // V4L2 mmap ring depth. Fewer buffers = lower worst-case ring staleness;
     // driver-enforced minimum is 2.
     int n_buffers = 4;

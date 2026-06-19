@@ -52,6 +52,7 @@ void load_cameras(const YAML::Node& section, MainOptions& out) {
         "cam0_capture_width", "cam0_capture_height",
         "cam1_capture_width", "cam1_capture_height",
         "cam2_capture_width", "cam2_capture_height",
+        "cam0_pixel_format", "cam1_pixel_format", "cam2_pixel_format",
     };
     check_keys(section, allowed, "cameras");
     if (section["cam0"])   out.cam_paths[0] = parse_scalar<std::string>(section["cam0"],   "cameras.cam0");
@@ -64,6 +65,8 @@ void load_cameras(const YAML::Node& section, MainOptions& out) {
         const std::string hk = "cam" + std::to_string(i) + "_capture_height";
         if (section[wk]) out.cam_cap_width[i]  = parse_scalar<int>(section[wk], "cameras." + wk);
         if (section[hk]) out.cam_cap_height[i] = parse_scalar<int>(section[hk], "cameras." + hk);
+        const std::string pk = "cam" + std::to_string(i) + "_pixel_format";
+        if (section[pk]) out.cam_pixel_format[i] = parse_scalar<std::string>(section[pk], "cameras." + pk);
     }
     if (section["fps"])    out.fps    = parse_scalar<int>(section["fps"],    "cameras.fps");
     if (section["pixel_format"]) out.pixel_format = parse_scalar<std::string>(section["pixel_format"], "cameras.pixel_format");

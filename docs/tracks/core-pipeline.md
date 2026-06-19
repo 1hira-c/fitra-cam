@@ -33,6 +33,19 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-06-19 — HW NVJPEG 破損フレーム guard + per-camera pixel_format + VIC スケール decode
+3カメラリグ (cam0/cam2=ELP, cam1=USB3.0 1280→640) を立ち上げる過程で 3 点を追加。
+(1) **破損フレーム guard**: 多カメラの USB 帯域飽和で truncated/garbage MJPEG が出ると
+HW NVJPEG が segfault する。`frame_source` の `looks_like_jpeg()` が SOI/EOI+長さを検査して
+HW decoder に渡す前に drop (CPU `cv::imdecode` 経路は元々耐性あり)。nvjpeg 運用全般の
+クラッシュ耐性が上がる。(2) **per-camera `pixel_format`** (`cam{N}_pixel_format`): 混在
+decode 経路を可能に。(3) **VIC スケール decode**: `fitra_nvjpeg_decode_to_device` に
+`target_w/h` を追加し VIC の YUV→RGBA で 1280→640 を同時実行、縮小カメラも all-GPU front-end
+に残す。**未解決**: 3カメラ 60fps は GPU の null ストリーム直列化 (per-camera RTMPose 前処理の
+`cudaStreamSynchronize(nullptr)`) が天井で cam1 が ~50 頭打ち → tri_fps ガタつき。CPU はアイドル。
+対策は per-camera CUDA ストリーム化 (別タスク)。設計:
+`docs/design/core-pipeline-per-camera-capture-downscale.md` (M4-M6 + 残課題)。
+
 ### 2026-06-18 — per-camera capture 解像度 + ソフト downscale
 増設した USB3.0 個体 (`Global Shutter Camera` serial `2601240001`) は、既存 2 機と違い
 **640×480 だけセンサ中央 center-crop** に切替わり狭画角になることを実機キャプチャで確認。

@@ -18,6 +18,25 @@ namespace {
 // the constants in infer/rtmpose.cpp (preprocess_to_blob).
 constexpr float kMeanBgr[3]   = {103.53f, 116.28f, 123.675f};
 constexpr float kInvStdBgr[3] = {1.0f / 57.375f, 1.0f / 57.12f, 1.0f / 58.395f};
+
+// Cheap structural sanity check for an MJPEG payload before it reaches the HW
+// NVJPEG decoder. USB bandwidth saturation (multi-camera) produces truncated /
+// garbage frames; CPU cv::imdecode rejects those gracefully, but the HW NVJPEG
+// block SEGFAULTS on a malformed stream (observed: "Not a JPEG file: starts with
+// 0xff 0xd7", "Premature end of JPEG file"). Require a leading SOI (FF D8) and a
+// trailing EOI (FF D9) within the last bytes (tolerating a little driver
+// padding). This catches garbage-start and truncation -- the crash cases -- so
+// we can drop the frame instead of feeding it to the HW decoder.
+bool looks_like_jpeg(const std::vector<std::uint8_t>& d) {
+    if (d.size() < 4) return false;
+    if (d[0] != 0xFF || d[1] != 0xD8) return false;          // SOI
+    const std::size_t window = std::min<std::size_t>(d.size(), 64);
+    for (std::size_t k = 2; k <= window; ++k) {              // scan from the end
+        const std::size_t i = d.size() - k;
+        if (d[i] == 0xFF && d[i + 1] == 0xD9) return true;   // EOI
+    }
+    return false;
+}
 }  // namespace
 
 DeviceChwPool::DeviceChwPool() : state_{std::make_shared<State>()} {}
@@ -126,19 +145,15 @@ void FrameSource::decode_loop() {
                            yolox_device_ ? " + YOLOX" : "");
     }
     // Downscaling cameras capture at a higher resolution (full sensor FOV) and
-    // are resized to the common output resolution after decode. The all-GPU
-    // front-end reads the device RGBA at native (capture) resolution and the
-    // nvjpeg .so exposes no scale, so force the BGR-scratch + CPU prebake path:
-    // HW JPEG decode is still used (decode() produces BGR), only the GPU
-    // preprocess kernels are bypassed. See
+    // are resized to the common output resolution. On the all-GPU nvjpeg path the
+    // VIC transform does the downscale in its YUV->RGBA pass (decode_to_device
+    // target_w/h), so the camera stays fully on the GPU front-end at the runtime
+    // resolution -- no CPU resize, no CPU prebake. The CPU/mjpeg and HW-BGR
+    // fallback paths still resize `scratch` below. See
     // docs/design/core-pipeline-per-camera-capture-downscale.md.
     const bool downscaling = capture_->options().downscaling();
     const int  out_w = capture_->options().width;
     const int  out_h = capture_->options().height;
-    if (downscaling) {
-        device_pose_  = false;
-        yolox_device_ = false;
-    }
     while (!stop_.load()) {
         Frame raw;
         // Event-driven: block until the capture worker publishes a new frame
@@ -152,6 +167,15 @@ void FrameSource::decode_loop() {
             opts_.calib_recording_flag
             && opts_.calib_recording_flag->load(std::memory_order_relaxed);
 
+        // Guard the HW NVJPEG decoder against malformed frames (it segfaults on
+        // them; the CPU cv::imdecode path tolerates them on its own). Drop the
+        // frame here, same as a decode failure.
+        if (use_hw && !looks_like_jpeg(raw.data)) {
+            FITRA_LOG_WARN("frame_source: dropping corrupt MJPEG seq={} "
+                           "(HW decode unsafe)", raw.seq);
+            continue;
+        }
+
         bool gpu_decode_ok = false;     // RGBA CUDA buffer retained for GPU prebake
         bool scratch_valid = false;     // `scratch` holds a BGR frame
         int  fw = 0, fh = 0;            // decoded frame dimensions
@@ -163,10 +187,16 @@ void FrameSource::decode_loop() {
             // can't run on the GPU (older .so) and would need a BGR frame.
             const bool need_bgr =
                 opts_.retain_bgr || calib_recording || (yolox_ && !yolox_device_);
+            // VIC downscale target for the device path (0 = native). The BGR
+            // device-retain path can't scale, so a downscaling camera that needs
+            // BGR (calib/retain) falls through to plain decode() + cv::resize.
+            const int tgt_w = downscaling ? out_w : 0;
+            const int tgt_h = downscaling ? out_h : 0;
             if (device_pose_ && !need_bgr) {
                 gpu_decode_ok =
-                    hw_decoder_->decode_to_device(raw.data.data(), raw.data.size(), fw, fh);
-            } else if (device_pose_) {
+                    hw_decoder_->decode_to_device(raw.data.data(), raw.data.size(),
+                                                  fw, fh, tgt_w, tgt_h);
+            } else if (device_pose_ && !downscaling) {
                 gpu_decode_ok =
                     hw_decoder_->decode_keep_device(raw.data.data(), raw.data.size(), scratch);
                 scratch_valid = gpu_decode_ok;

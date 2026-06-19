@@ -22,9 +22,13 @@ CameraSet make_frame_sources(const config::MainOptions& opts,
         o.cap_height = opts.cam_cap_height[i];
         o.fps    = opts.fps;
         o.n_buffers = opts.n_buffers;
-        o.pixel_format = (opts.pixel_format == "yuyv")
+        // Per-camera pixel_format override falls back to the global setting.
+        const std::string& pf = opts.cam_pixel_format[i].empty()
+                                    ? opts.pixel_format
+                                    : opts.cam_pixel_format[i];
+        o.pixel_format = (pf == "yuyv")
                              ? camera::PixFmt::Yuyv
-                             : (opts.pixel_format == "nvjpeg")
+                             : (pf == "nvjpeg")
                                    ? camera::PixFmt::Nvjpeg
                                    : camera::PixFmt::Mjpeg;
         auto cap = std::make_unique<camera::V4l2Capture>(o);

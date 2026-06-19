@@ -92,6 +92,16 @@ HW JPEG デコード(重い部分)は維持。GPU preprocess を失う CPU コ�
 - M2: config (MainOptions/YAML/CLI) + `camera_builder` 配管。
 - M3: run config (`configs/medium_3d*.yaml` 等) に cam2 と capture 上書きの記入例、
   新カメラ intrinsic を 1280 校正→640 スケールで投入。
+- M4 (2026-06-19): **HW NVJPEG 破損フレーム guard** (`looks_like_jpeg()`)。多カメラの
+  USB 帯域飽和で truncated/garbage MJPEG が出ると HW NVJPEG が **segfault** する (CPU
+  `cv::imdecode` は耐える)。SOI(FFD8)/EOI(FFD9)+長さを検査し、HW decoder に渡す前に drop。
+  medium_3d 等あらゆる nvjpeg 運用のクラッシュ耐性も上がる。
+- M5 (2026-06-19): **per-camera `pixel_format`** (`cam{N}_pixel_format`)。混在 decode 経路
+  (例: 混雑する HW ブロックを避けて特定カメラだけ YUYV / nvjpeg) を可能に。
+- M6 (2026-06-19): **VIC スケール decode**。`fitra_nvjpeg_decode_to_device` に
+  `target_w/h` を追加し、VIC の YUV→RGBA 変換で 1280→640 を同時実行。縮小カメラも
+  all-GPU front-end に残せる (CPU resize/prebake 不要)。M1 の cv::resize は YUYV/CPU
+  /HW-BGR フォールバック経路の安全網として残置。
 
 ## 検証
 
@@ -103,5 +113,14 @@ HW JPEG デコード(重い部分)は維持。GPU preprocess を失う CPU コ�
 
 ## 残課題
 
-- nvjpeg .so に VIC スケール decode を足し、縮小カメラでも all-GPU front-end を維持する最適化。
-- 縮小カメラの CPU 負荷実測 (1280×960 HW decode + resize + CPU prebake)。
+- **3カメラ 60fps の GPU 直列化天井 (2026-06-19 判明、未解決)**: 3カメラ構成 (cam0/cam2=ELP
+  640, cam1=USB3.0 1280→640) を 60fps で回すと cam1 が ~50 で頭打ち・pending 増大 →
+  3カメラ sync が外れて tri_fps がガタつく。**CPU はアイドル (load ~1.0/6コア)** で、
+  ボトルネックは GPU 側: per-camera RTMPose GPU 前処理 (`fitra_nvjpeg_preprocess_from_last`)
+  が **null(default) ストリームで `cudaStreamSynchronize(nullptr)`** しており、3カメラ +
+  中央 RTMPose が null ストリームに直列化する。decode 方式 (mjpeg/nvjpeg/VIC/YUYV) を変えても
+  この天井は超えない (どれも cam1 ~45-50)。**本命の対策 = per-camera CUDA ストリーム化**
+  (前処理を専用ストリームに載せて並列実行)。別タスクとして起票。
+- ハード同期なし多カメラの時間 sync: 3-way 一致は 2-way より低歩留まりで、tight 窓だと
+  tri が間引かれ、広い窓 (例 30ms) だとモーションのカメラ間ズレが出る本質的トレードオフ。
+- 縮小カメラの YUYV 経路 (cvtColor 1280 + INTER_AREA resize) の CPU コスト実測。
