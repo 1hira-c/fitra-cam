@@ -43,6 +43,16 @@ struct MainOptions {
     // cameras on a saturated USB2.0 bus where HW NVJPEG would crash on truncated
     // MJPEG. See docs/design/core-pipeline-per-camera-capture-downscale.md.
     std::array<std::string, 3> cam_pixel_format{};
+    // Per-camera exposure control (anti-blur + steady fps). exposure_mode:
+    // "" / "auto" = leave camera controls untouched; "manual" = fixed exposure
+    // + gain, frozen; "assist" = manual initial + slow software AE (gain-first,
+    // fps-capped exposure). exposure is V4L2_CID_EXPOSURE_ABSOLUTE in 100us
+    // units (0 = leave); gain is V4L2_CID_GAIN (<0 = leave); ae_target is the
+    // assist target mean luma. See docs/design/core-pipeline-camera-exposure-control.md.
+    std::array<std::string, 3> cam_exposure_mode{};
+    std::array<int, 3>         cam_exposure{};
+    std::array<int, 3>         cam_gain{-1, -1, -1};
+    std::array<int, 3>         cam_ae_target{110, 110, 110};
     // V4L2 mmap ring depth. Fewer buffers = lower worst-case ring staleness;
     // driver-enforced minimum is 2.
     int n_buffers = 4;

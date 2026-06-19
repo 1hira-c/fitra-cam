@@ -60,6 +60,23 @@ struct V4l2Options {
     int n_buffers = 4;
     PixFmt pixel_format = PixFmt::Mjpeg;
 
+    // --- Exposure / gain control (anti-blur + steady 60fps pacing) -------
+    // Some UVC cameras' firmware auto-exposure lets the exposure TIME run long
+    // enough to (a) motion-blur a moving subject and (b) overrun the per-frame
+    // budget (16.7ms @60fps), producing irregular frame pacing (jitter) that
+    // appears on any host. We replace it:
+    //   Auto   = leave the camera's own controls untouched (default; no regress)
+    //   Manual = set fixed manual exposure + gain at start, then freeze
+    //   Assist = Manual initial set, then a slow software AE (FrameSource) nudges
+    //            gain (and exposure, capped at the fps-safe budget) toward a
+    //            brightness target -- keeps exposure short (low blur, steady fps).
+    // See docs/design/core-pipeline-camera-exposure-control.md.
+    enum class ExposureMode { Auto, Manual, Assist };
+    ExposureMode exposure_mode = ExposureMode::Auto;
+    int exposure_us100 = 0;    // V4L2_CID_EXPOSURE_ABSOLUTE (100us units); 0 = leave
+    int gain           = -1;   // V4L2_CID_GAIN; <0 = leave at camera default
+    int ae_target      = 110;  // Assist: target mean luma (0-255)
+
     int capture_w() const { return cap_width  > 0 ? cap_width  : width;  }
     int capture_h() const { return cap_height > 0 ? cap_height : height; }
     bool downscaling() const {
@@ -106,6 +123,16 @@ public:
 
     const V4l2Options& options() const { return opts_; }
 
+    // Live exposure/gain setters for the software-AE assist (called from the
+    // FrameSource decode thread). VIDIOC_S_CTRL is independent of the streaming
+    // DQBUF/QBUF on the worker thread. Return false on ioctl failure.
+    bool set_exposure_us100(int v);
+    bool set_gain(int v);
+    // Gain control range, queried from the driver at start() (defaults if the
+    // control is absent). Used by the assist controller to clamp.
+    int gain_min() const { return gain_min_; }
+    int gain_max() const { return gain_max_; }
+
 private:
     struct MmapBuf {
         void*       ptr     = nullptr;
@@ -114,6 +141,13 @@ private:
 
     void worker_loop();
     void update_recv_fps(std::chrono::steady_clock::time_point now);
+    // Set a single V4L2 control (logs + returns false on failure).
+    bool set_ctrl(unsigned int id, int value, const char* name);
+    // Query gain range + apply the configured initial exposure/gain/focus
+    // controls (no-op in Auto mode). Called from start() after format setup.
+    void apply_exposure_controls();
+    int gain_min_ = 0;
+    int gain_max_ = 255;
 
     // Diagnostic (env FITRA_CAPTURE_DEBUG): track driver-side frame drops via
     // v4l2_buffer.sequence gaps. A gap means the driver captured frames we

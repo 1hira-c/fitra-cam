@@ -197,6 +197,24 @@ private:
     int                      frame_idx_ = 0;
     std::vector<infer::Bbox> cached_bboxes_;
 
+    // Software auto-exposure assist (V4l2Options::ExposureMode::Assist).
+    // A slow deadband controller: every ae_interval_ frames, if the frame's
+    // mean luma is outside the deadband, nudge ONE knob by one step toward the
+    // target -- gain first (cheap; no blur), exposure only when gain saturates
+    // and always clamped to an fps-safe cap (keeps pacing steady + blur low).
+    // Touched only by decode_loop; applies via capture_->set_gain/exposure.
+    bool ae_enabled_      = false;
+    int  ae_target_       = 110;   // target mean luma (0-255)
+    int  ae_deadband_     = 10;    // no action within +/- this of target
+    int  ae_interval_     = 30;    // frames between adjustments (~0.5s @60fps = slow)
+    int  ae_gain_step_    = 4;
+    int  ae_exp_step_     = 4;     // 100us units
+    int  ae_gain_min_     = 0,   ae_gain_max_ = 255;
+    int  ae_exp_min_      = 4,   ae_exp_cap_  = 0;  // 100us; cap derived from fps
+    int  ae_cur_gain_     = 0,   ae_cur_exp_  = 0;
+    int  ae_frames_       = 0;
+    bool ae_warned_no_bgr_ = false;
+
     mutable std::mutex          slot_mu_;
     std::condition_variable     slot_cv_;
     std::optional<DecodedFrame> latest_;

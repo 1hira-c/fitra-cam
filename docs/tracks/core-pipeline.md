@@ -33,6 +33,20 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-06-19 — per-camera 露出/gain 制御 (手動固定 + 簡易ソフトAE)
+cam1 の「ガタつき + ブラー + 妙に明るい」を追及 → **カメラ純正の自動露出が原因**と確定
+(Windows でも MJPEG/YUYV 両方でもガタつく → ホスト/圧縮非依存。`exposure_time_absolute`
+default=15.6ms が 60fps 予算 16.67ms の 94% で、暗いと AE が予算超へ伸ばし pacing 不均一 +
+動体ブラー)。**AE bias では解けない** (当該カメラは bias control 非公開 + AE は浮動)。対策:
+per-camera 露出制御を `V4l2Capture` に追加。**設計の肝 = exposure(高コスト: ブラー+fps超過)は
+短く固定上限、明るさは gain(低コスト)で取る**。3 モード: `auto`(既定・無改変) / `manual`(固定) /
+`assist`(常時・遅いデッドバンド ソフトAE; gain 優先・exposure は fps 安全上限で頭打ち)。
+start() で `auto_exposure=manual`+exposure+gain+`focus_auto=off` を適用、gain range は
+QUERYCTRL。assist は `FrameSource` が平均輝度を ae_interval(30f≈0.5s) 毎にデッドバンド判定し
+gain/exposure を遅く追従。config `cam{N}_exposure_mode/exposure/gain/ae_target`。既定 auto なので
+既存リグ無影響。ブラー低減は 2D 精度の底上げにも効く見込み。設計:
+`docs/design/core-pipeline-camera-exposure-control.md`。
+
 ### 2026-06-19 — cam1 capture 頭打ち修正 (毎フレーム mmap 撤廃) + 電源モード是正
 cam1 (USB3.0 1280×960) が 53fps 頭打ち/ジッタだった件を追及。**カメラは無実** — 純 v4l2-ctl で
 YUYV 1280×960 は 60fps (要求 120fps でも 119fps) を steady に出すと実証。真因は 2 点:

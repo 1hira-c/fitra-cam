@@ -154,6 +154,27 @@ void FrameSource::decode_loop() {
     const bool downscaling = capture_->options().downscaling();
     const int  out_w = capture_->options().width;
     const int  out_h = capture_->options().height;
+
+    // Software auto-exposure assist init (no-op unless ExposureMode::Assist).
+    if (capture_->options().exposure_mode == V4l2Options::ExposureMode::Assist) {
+        const auto& o = capture_->options();
+        ae_enabled_  = true;
+        ae_target_   = o.ae_target;
+        ae_gain_min_ = capture_->gain_min();
+        ae_gain_max_ = capture_->gain_max();
+        // fps-safe exposure cap: keep exposure well under the frame period so a
+        // bright->dark swing can't push pacing past the budget. 85% of period.
+        const int fps = o.fps > 0 ? o.fps : 60;
+        ae_exp_cap_  = static_cast<int>((1.0e6 / fps) * 0.85 / 100.0);  // 100us units
+        // Seed current state from the configured initial exposure/gain.
+        ae_cur_exp_  = o.exposure_us100 > 0 ? o.exposure_us100 : ae_exp_cap_;
+        ae_cur_gain_ = o.gain >= 0 ? o.gain : (ae_gain_min_ + ae_gain_max_) / 2;
+        FITRA_LOG_INFO("frame_source: software-AE assist on (target_luma={} gain[{},{}] "
+                       "exp[{},{}]x100us start exp={} gain={})",
+                       ae_target_, ae_gain_min_, ae_gain_max_, ae_exp_min_, ae_exp_cap_,
+                       ae_cur_exp_, ae_cur_gain_);
+    }
+
     // Declared OUTSIDE the loop so its payload vector retains capacity across
     // frames: wait_pop_latest does `raw = *latest_`, a vector copy-assign that
     // reuses raw.data's storage when large enough. A fresh `Frame raw` per
@@ -248,6 +269,43 @@ void FrameSource::decode_loop() {
             cv::resize(scratch, scratch, cv::Size(out_w, out_h), 0, 0, cv::INTER_AREA);
             fw = out_w;
             fh = out_h;
+        }
+
+        // Software AE assist: slow deadband controller on the decoded frame's
+        // mean luma. Needs a BGR frame; the pure all-GPU device path has none
+        // (scratch empty) -> assist is unavailable there (warn once). For the
+        // YUYV / CPU / HW-BGR paths (incl. the recommended cam1=YUYV) scratch
+        // is always valid.
+        if (ae_enabled_) {
+            if (!scratch_valid) {
+                if (!ae_warned_no_bgr_) {
+                    FITRA_LOG_WARN("frame_source: AE assist needs a BGR frame but this "
+                                   "camera is on the pure all-GPU device path; AE inactive");
+                    ae_warned_no_bgr_ = true;
+                }
+            } else if (++ae_frames_ >= ae_interval_) {
+                ae_frames_ = 0;
+                const cv::Scalar m = cv::mean(scratch);  // BGR
+                const int luma = static_cast<int>(0.114 * m[0] + 0.587 * m[1] + 0.299 * m[2]);
+                const int err  = luma - ae_target_;
+                if (err < -ae_deadband_) {            // too dark: gain first, then exposure
+                    if (ae_cur_gain_ < ae_gain_max_) {
+                        ae_cur_gain_ = std::min(ae_cur_gain_ + ae_gain_step_, ae_gain_max_);
+                        capture_->set_gain(ae_cur_gain_);
+                    } else if (ae_cur_exp_ < ae_exp_cap_) {
+                        ae_cur_exp_ = std::min(ae_cur_exp_ + ae_exp_step_, ae_exp_cap_);
+                        capture_->set_exposure_us100(ae_cur_exp_);
+                    }
+                } else if (err > ae_deadband_) {      // too bright: drop gain first, then exposure
+                    if (ae_cur_gain_ > ae_gain_min_) {
+                        ae_cur_gain_ = std::max(ae_cur_gain_ - ae_gain_step_, ae_gain_min_);
+                        capture_->set_gain(ae_cur_gain_);
+                    } else if (ae_cur_exp_ > ae_exp_min_) {
+                        ae_cur_exp_ = std::max(ae_cur_exp_ - ae_exp_step_, ae_exp_min_);
+                        capture_->set_exposure_us100(ae_cur_exp_);
+                    }
+                }
+            }
         }
         auto t_decode = std::chrono::steady_clock::now();
 

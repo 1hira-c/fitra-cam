@@ -39,6 +39,51 @@ int xioctl(int fd, unsigned long req, void* arg) {
 
 V4l2Capture::V4l2Capture(V4l2Options opts) : opts_{std::move(opts)} {}
 
+bool V4l2Capture::set_ctrl(unsigned int id, int value, const char* name) {
+    v4l2_control c{};
+    c.id    = id;
+    c.value = value;
+    if (xioctl(fd_, VIDIOC_S_CTRL, &c) < 0) {
+        FITRA_LOG_WARN("v4l2 {}: set {}={} failed: errno={} ({})",
+                       opts_.device_path, name, value, errno, std::strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+bool V4l2Capture::set_exposure_us100(int v) {
+    return set_ctrl(V4L2_CID_EXPOSURE_ABSOLUTE, v, "exposure_absolute");
+}
+
+bool V4l2Capture::set_gain(int v) { return set_ctrl(V4L2_CID_GAIN, v, "gain"); }
+
+void V4l2Capture::apply_exposure_controls() {
+    // Query the gain range (the assist controller clamps to it). Harmless if
+    // the control is absent — keep the [0,255] default.
+    v4l2_queryctrl qc{};
+    qc.id = V4L2_CID_GAIN;
+    if (xioctl(fd_, VIDIOC_QUERYCTRL, &qc) == 0 && !(qc.flags & V4L2_CTRL_FLAG_DISABLED)) {
+        gain_min_ = qc.minimum;
+        gain_max_ = qc.maximum;
+    }
+    if (opts_.exposure_mode == V4l2Options::ExposureMode::Auto) return;
+
+    // Manual & Assist: turn the camera's own auto-exposure OFF (so exposure
+    // time can't run long -> no motion blur, no fps-budget overrun) and fix
+    // focus (autofocus hunting also stalls frames). Then set the initial
+    // exposure / gain. Assist drives them live afterwards from FrameSource.
+    set_ctrl(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL, "auto_exposure=manual");
+    set_ctrl(V4L2_CID_FOCUS_AUTO, 0, "focus_auto=off");  // ok if camera has no AF
+    if (opts_.exposure_us100 > 0)
+        set_ctrl(V4L2_CID_EXPOSURE_ABSOLUTE, opts_.exposure_us100, "exposure_absolute");
+    if (opts_.gain >= 0)
+        set_ctrl(V4L2_CID_GAIN, opts_.gain, "gain");
+    FITRA_LOG_INFO("v4l2 {}: exposure_mode={} exposure={}x100us gain={} (gain range [{},{}])",
+                   opts_.device_path,
+                   opts_.exposure_mode == V4l2Options::ExposureMode::Manual ? "manual" : "assist",
+                   opts_.exposure_us100, opts_.gain, gain_min_, gain_max_);
+}
+
 V4l2Capture::~V4l2Capture() {
     try { stop(); } catch (...) {}
 }
@@ -116,6 +161,11 @@ void V4l2Capture::start() {
         bufs_[i].ptr    = p;
         bufs_[i].length = buf.length;
     }
+
+    // Query gain range + apply manual exposure / gain / focus controls (no-op
+    // in Auto mode). Done before STREAMON so the first frames already reflect
+    // the configured exposure.
+    apply_exposure_controls();
 
     // Queue all buffers.
     for (std::size_t i = 0; i < bufs_.size(); ++i) {

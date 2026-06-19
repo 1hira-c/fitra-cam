@@ -53,6 +53,10 @@ void load_cameras(const YAML::Node& section, MainOptions& out) {
         "cam1_capture_width", "cam1_capture_height",
         "cam2_capture_width", "cam2_capture_height",
         "cam0_pixel_format", "cam1_pixel_format", "cam2_pixel_format",
+        "cam0_exposure_mode", "cam1_exposure_mode", "cam2_exposure_mode",
+        "cam0_exposure", "cam1_exposure", "cam2_exposure",
+        "cam0_gain", "cam1_gain", "cam2_gain",
+        "cam0_ae_target", "cam1_ae_target", "cam2_ae_target",
     };
     check_keys(section, allowed, "cameras");
     if (section["cam0"])   out.cam_paths[0] = parse_scalar<std::string>(section["cam0"],   "cameras.cam0");
@@ -67,6 +71,14 @@ void load_cameras(const YAML::Node& section, MainOptions& out) {
         if (section[hk]) out.cam_cap_height[i] = parse_scalar<int>(section[hk], "cameras." + hk);
         const std::string pk = "cam" + std::to_string(i) + "_pixel_format";
         if (section[pk]) out.cam_pixel_format[i] = parse_scalar<std::string>(section[pk], "cameras." + pk);
+        const std::string em = "cam" + std::to_string(i) + "_exposure_mode";
+        const std::string ek = "cam" + std::to_string(i) + "_exposure";
+        const std::string gk = "cam" + std::to_string(i) + "_gain";
+        const std::string tk = "cam" + std::to_string(i) + "_ae_target";
+        if (section[em]) out.cam_exposure_mode[i] = parse_scalar<std::string>(section[em], "cameras." + em);
+        if (section[ek]) out.cam_exposure[i]      = parse_scalar<int>(section[ek], "cameras." + ek);
+        if (section[gk]) out.cam_gain[i]          = parse_scalar<int>(section[gk], "cameras." + gk);
+        if (section[tk]) out.cam_ae_target[i]     = parse_scalar<int>(section[tk], "cameras." + tk);
     }
     if (section["fps"])    out.fps    = parse_scalar<int>(section["fps"],    "cameras.fps");
     if (section["pixel_format"]) out.pixel_format = parse_scalar<std::string>(section["pixel_format"], "cameras.pixel_format");
