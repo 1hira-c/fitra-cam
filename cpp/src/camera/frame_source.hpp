@@ -214,6 +214,11 @@ private:
     int  ae_cur_gain_     = 0,   ae_cur_exp_  = 0;
     int  ae_frames_       = 0;
     bool ae_warned_no_bgr_ = false;
+    // A knob whose VIDIOC_S_CTRL fails (control absent/rejected) is marked
+    // unavailable so assist stops trying it and falls through to the other,
+    // rather than walking a virtual range the sensor never applied.
+    bool ae_gain_avail_   = true;
+    bool ae_exp_avail_    = true;
 
     mutable std::mutex          slot_mu_;
     std::condition_variable     slot_cv_;

@@ -260,11 +260,13 @@ void FrameSource::decode_loop() {
             }
         }
         if (!use_hw) { scratch_valid = true; fw = scratch.cols; fh = scratch.rows; }
-        // Downscale the full-sensor capture to the common output resolution.
-        // device_pose_/yolox_device_ were forced off above, so scratch always
-        // holds the decoded BGR here. INTER_AREA is the right filter for
-        // shrinking. After this, every downstream coordinate (bbox, M_inv,
-        // keypoints, drawer, triangulation) is in the output resolution space.
+        // Downscale the full-sensor capture to the common output resolution on
+        // the CPU / fallback paths (YUYV, CPU mjpeg, HW-BGR). The all-GPU nvjpeg
+        // path already downscales on the device via VIC (decode_to_device
+        // target_w/h) and keeps no BGR scratch, so this is skipped there.
+        // INTER_AREA is the right filter for shrinking. After this, every
+        // downstream coordinate (bbox, M_inv, keypoints, drawer, triangulation)
+        // is in the output resolution space.
         if (downscaling && scratch_valid && (fw != out_w || fh != out_h)) {
             cv::resize(scratch, scratch, cv::Size(out_w, out_h), 0, 0, cv::INTER_AREA);
             fw = out_w;
@@ -288,21 +290,27 @@ void FrameSource::decode_loop() {
                 const cv::Scalar m = cv::mean(scratch);  // BGR
                 const int luma = static_cast<int>(0.114 * m[0] + 0.587 * m[1] + 0.299 * m[2]);
                 const int err  = luma - ae_target_;
+                // Only advance the internal gain/exposure state when the ioctl
+                // actually succeeds: a camera lacking V4L2_CID_GAIN /
+                // EXPOSURE_ABSOLUTE (or rejecting it) would otherwise let assist
+                // walk a virtual range that doesn't reflect the sensor. A knob
+                // whose set fails is marked unavailable so the controller falls
+                // through to the other knob instead of getting stuck on it.
                 if (err < -ae_deadband_) {            // too dark: gain first, then exposure
-                    if (ae_cur_gain_ < ae_gain_max_) {
-                        ae_cur_gain_ = std::min(ae_cur_gain_ + ae_gain_step_, ae_gain_max_);
-                        capture_->set_gain(ae_cur_gain_);
-                    } else if (ae_cur_exp_ < ae_exp_cap_) {
-                        ae_cur_exp_ = std::min(ae_cur_exp_ + ae_exp_step_, ae_exp_cap_);
-                        capture_->set_exposure_us100(ae_cur_exp_);
+                    if (ae_gain_avail_ && ae_cur_gain_ < ae_gain_max_) {
+                        const int v = std::min(ae_cur_gain_ + ae_gain_step_, ae_gain_max_);
+                        if (capture_->set_gain(v)) ae_cur_gain_ = v; else ae_gain_avail_ = false;
+                    } else if (ae_exp_avail_ && ae_cur_exp_ < ae_exp_cap_) {
+                        const int v = std::min(ae_cur_exp_ + ae_exp_step_, ae_exp_cap_);
+                        if (capture_->set_exposure_us100(v)) ae_cur_exp_ = v; else ae_exp_avail_ = false;
                     }
                 } else if (err > ae_deadband_) {      // too bright: drop gain first, then exposure
-                    if (ae_cur_gain_ > ae_gain_min_) {
-                        ae_cur_gain_ = std::max(ae_cur_gain_ - ae_gain_step_, ae_gain_min_);
-                        capture_->set_gain(ae_cur_gain_);
-                    } else if (ae_cur_exp_ > ae_exp_min_) {
-                        ae_cur_exp_ = std::max(ae_cur_exp_ - ae_exp_step_, ae_exp_min_);
-                        capture_->set_exposure_us100(ae_cur_exp_);
+                    if (ae_gain_avail_ && ae_cur_gain_ > ae_gain_min_) {
+                        const int v = std::max(ae_cur_gain_ - ae_gain_step_, ae_gain_min_);
+                        if (capture_->set_gain(v)) ae_cur_gain_ = v; else ae_gain_avail_ = false;
+                    } else if (ae_exp_avail_ && ae_cur_exp_ > ae_exp_min_) {
+                        const int v = std::max(ae_cur_exp_ - ae_exp_step_, ae_exp_min_);
+                        if (capture_->set_exposure_us100(v)) ae_cur_exp_ = v; else ae_exp_avail_ = false;
                     }
                 }
             }
@@ -324,9 +332,11 @@ void FrameSource::decode_loop() {
             // acquire a person entering frame), which is plenty responsive, so
             // drop the per-frame retry. Camera detects at its staggered phase
             // slot within the period (det_phase) so the cameras' YOLOX bursts
-            // don't all land on the same frame and stall the shared GPU.
-            bool do_detect =
-                (frame_idx_ % opts_.det_frequency) == (opts_.det_phase % opts_.det_frequency);
+            // don't all land on the same frame and stall the shared GPU. The
+            // det_frequency <= 0 short-circuit guards the modulo against a
+            // zero/negative frequency (config bug) -> detect every frame.
+            bool do_detect = (opts_.det_frequency <= 0) ||
+                ((frame_idx_ % opts_.det_frequency) == (opts_.det_phase % opts_.det_frequency));
             if (do_detect) {
                 // GPU YOLOX: the preprocess kernel fills the engine input from
                 // the retained RGBA device buffer (on the engine's stream); the

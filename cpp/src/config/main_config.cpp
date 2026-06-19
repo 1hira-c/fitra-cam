@@ -700,6 +700,16 @@ void validate_options(const MainOptions& opts) {
         && opts.pixel_format != "nvjpeg") {
         fail("--pixel-format must be \"mjpeg\", \"yuyv\", or \"nvjpeg\"");
     }
+    // Per-camera pixel_format overrides: reject invalid non-empty values at
+    // startup instead of silently falling back to mjpeg (a typo like "yuyv "
+    // would otherwise quietly disable the intended decode-path split).
+    for (int i = 0; i < 3; ++i) {
+        const std::string& pf = opts.cam_pixel_format[i];
+        if (!pf.empty() && pf != "mjpeg" && pf != "yuyv" && pf != "nvjpeg") {
+            fail("cam" + std::to_string(i) +
+                 "_pixel_format must be \"mjpeg\", \"yuyv\", or \"nvjpeg\"");
+        }
+    }
     if (opts.n_buffers < 2) {
         fail("--n-buffers must be >= 2 (driver needs at least 2 to pipeline)");
     }
