@@ -44,6 +44,39 @@ void apply_vmt_alignment(VmtPos& pos, VmtQuat& quat, const VmtAlignment& alignme
     quat = normalize_quat(mul_xyzw(yaw_q, quat));
 }
 
+void vmt_pose_to_world(const VmtPos& pos, const VmtQuat& quat_xyzw,
+                       const VmtAlignment& alignment,
+                       float out_pos_xyz[3], float out_quat_wxyz[4]) {
+    const float yaw_rad = alignment.yaw_deg * (kPi / 180.0f);
+    const float half = yaw_rad * 0.5f;
+    const float s = std::sin(yaw_rad);
+    const float c = std::cos(yaw_rad);
+
+    // 1) undo the alignment translation, then the in-plane yaw. The forward map
+    //    is [[c, s], [-s, c]] over (x, z); its inverse (a rotation, so the
+    //    transpose) is [[c, -s], [s, c]].
+    const float px = pos.x - alignment.x;
+    const float py = pos.y - alignment.y;
+    const float pz = pos.z - alignment.z;
+    const float vx = c * px - s * pz;
+    const float vy = py;
+    const float vz = s * px + c * pz;
+
+    // 2) inverse basis change of world_pos_to_vmt: world (x, y, z) = (X, -Z, Y).
+    out_pos_xyz[0] = vx;
+    out_pos_xyz[1] = -vz;
+    out_pos_xyz[2] = vy;
+
+    // 3) undo the yaw quaternion (q = yaw_q * q_pre ⇒ q_pre = conj(yaw_q) * q),
+    //    then invert the basis: world wxyz = (W, X, -Z, Y) of world_quat_to_vmt.
+    VmtQuat yaw_q_inv{0.0f, -std::sin(half), 0.0f, std::cos(half)};
+    VmtQuat q_pre = normalize_quat(mul_xyzw(yaw_q_inv, quat_xyzw));
+    out_quat_wxyz[0] = q_pre.w;
+    out_quat_wxyz[1] = q_pre.x;
+    out_quat_wxyz[2] = -q_pre.z;
+    out_quat_wxyz[3] = q_pre.y;
+}
+
 void encode_vmt_room_driver(OscWriter& w,
                             int index,
                             int enable,

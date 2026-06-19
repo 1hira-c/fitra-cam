@@ -14,6 +14,8 @@ export function ThreeDView({ onViewer }: Props) {
   const viewerRef = useRef<SkeletonViewer | null>(null);
   const [view, setView] = useState<ViewName>("front");
   const [showTrackers, setShowTrackers] = useState(true);
+  const [showCameras, setShowCameras] = useState(true);
+  const [showHmd, setShowHmd] = useState(true);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -39,6 +41,16 @@ export function ThreeDView({ onViewer }: Props) {
     viewerRef.current?.setTrackersVisible(checked);
   };
 
+  const toggleCameras = (checked: boolean) => {
+    setShowCameras(checked);
+    viewerRef.current?.setCamerasVisible(checked);
+  };
+
+  const toggleHmd = (checked: boolean) => {
+    setShowHmd(checked);
+    viewerRef.current?.setHmdVisible(checked);
+  };
+
   return (
     <>
       <div className="view3d-head">
@@ -62,6 +74,22 @@ export function ThreeDView({ onViewer }: Props) {
             onChange={(e) => toggleTrackers(e.target.checked)}
           />
           <span>show trackers</span>
+        </label>
+        <label className="view3d-toggle">
+          <input
+            type="checkbox"
+            checked={showCameras}
+            onChange={(e) => toggleCameras(e.target.checked)}
+          />
+          <span>show cameras</span>
+        </label>
+        <label className="view3d-toggle">
+          <input
+            type="checkbox"
+            checked={showHmd}
+            onChange={(e) => toggleHmd(e.target.checked)}
+          />
+          <span>show hmd</span>
         </label>
       </div>
       <div className="canvas3d-wrap">

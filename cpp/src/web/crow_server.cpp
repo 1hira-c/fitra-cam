@@ -71,8 +71,14 @@ std::string make_vmt_stats_fragment(const vmt::VmtPublisher& publisher) {
     return out.str();
 }
 
+// When `align` is non-null and the HMD pose is present, the fragment also
+// carries `pos_world` / `quat_wxyz`: the HMD pose mapped back into the fitra
+// world frame (Z-up) via the inverse of the alignment the VMT publisher applies
+// to outgoing trackers. The 3D viewer renders the HMD marker from those, so it
+// lands in the same space as the triangulated skeleton.
 std::string make_hmd_status_fragment(const vmt::HmdPoseSnapshot& snap,
-                                      bool enabled) {
+                                      bool enabled,
+                                      const vmt::VmtAlignment* align = nullptr) {
     std::ostringstream out;
     out << "\"hmd\":{\"enabled\":" << (enabled ? "true" : "false")
         << ",\"have_any\":" << (snap.have_any ? "true" : "false")
@@ -93,6 +99,20 @@ std::string make_hmd_status_fragment(const vmt::HmdPoseSnapshot& snap,
                 (180.0f / 3.14159265358979323846f) *
                 vmt::yaw_from_vmt_quat(vmt::VmtQuat{
                     snap.pose.qx, snap.pose.qy, snap.pose.qz, snap.pose.qw});
+        // Only emit world-frame pose for a valid reading: an invalid pose may
+        // carry non-finite x/y/z/q, and nan/inf would produce malformed JSON
+        // that breaks the frontend's JSON.parse. The viewer ignores invalid
+        // HMD poses anyway, so omitting pos_world/quat_wxyz here is harmless.
+        if (align && snap.pose.valid) {
+            float wp[3], wq[4];
+            vmt::vmt_pose_to_world(
+                vmt::VmtPos{snap.pose.x, snap.pose.y, snap.pose.z},
+                vmt::VmtQuat{snap.pose.qx, snap.pose.qy, snap.pose.qz, snap.pose.qw},
+                *align, wp, wq);
+            out << ",\"pos_world\":[" << wp[0] << "," << wp[1] << "," << wp[2] << "]"
+                << ",\"quat_wxyz\":[" << wq[0] << "," << wq[1] << "," << wq[2]
+                << "," << wq[3] << "]";
+        }
     }
     out << "}";
     return out.str();
@@ -1031,8 +1051,14 @@ void CrowServer::publisher_loop() {
         // the broadcast or the "自動追従" toggle stays disabled / "no hmd".
         if (hmd_pose_bus_) {
             if (!extra3d.empty()) extra3d += ",";
+            // Hand the publisher's current alignment so the fragment can carry
+            // the HMD pose in fitra world coords (pos_world/quat_wxyz) for the
+            // 3D viewer. Without a publisher there is no alignment to invert.
+            vmt::VmtAlignment al;
+            const vmt::VmtAlignment* alp = nullptr;
+            if (vmt_publisher_) { al = vmt_publisher_->alignment(); alp = &al; }
             extra3d += make_hmd_status_fragment(
-                hmd_pose_bus_->snapshot(hmd_stale_ms_), true);
+                hmd_pose_bus_->snapshot(hmd_stale_ms_), true, alp);
         }
         if (continuous_aligner_) {
             if (!extra3d.empty()) extra3d += ",";

@@ -201,6 +201,26 @@ std::string Skeleton3DBus::make_bundle_json(const std::string& extra_fields_json
         out += "]}";
     }
     out += "]";
+    // Static camera placements (world frame): position + camera->world quat.
+    // Lets the 3D viewer draw a frustum per camera.
+    out += ",\"cameras\":[";
+    for (std::size_t ci = 0; ci < s.cameras.size(); ++ci) {
+        if (ci) out += ",";
+        const auto& cam = s.cameras[ci];
+        out += "{\"id\":";
+        append_json_string(out, cam.id);
+        out += ",\"pos\":[";
+        append_float(out, cam.pos[0]); out += ",";
+        append_float(out, cam.pos[1]); out += ",";
+        append_float(out, cam.pos[2]);
+        out += "],\"quat_wxyz\":[";
+        append_float(out, cam.quat_wxyz[0]); out += ",";
+        append_float(out, cam.quat_wxyz[1]); out += ",";
+        append_float(out, cam.quat_wxyz[2]); out += ",";
+        append_float(out, cam.quat_wxyz[3]);
+        out += "]}";
+    }
+    out += "]";
     out += ",\"stats\":{";
     out += "\"enabled\":true";
     out += ",\"tri_fps\":"; append_float(out, s.stats.tri_fps, 4);

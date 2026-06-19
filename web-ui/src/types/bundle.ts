@@ -50,6 +50,15 @@ export interface Person3D {
   joints: Joint3D[];
 }
 
+/** Static camera placement in the world frame (Z-up). */
+export interface Camera3D {
+  id: string;
+  /** Camera center [x, y, z] in world coords. */
+  pos: [number, number, number];
+  /** Camera->world rotation as a unit quaternion (w, x, y, z). */
+  quat_wxyz: [number, number, number, number];
+}
+
 export interface TrackerStats {
   freeze_current_ms?: number;
   leakage_pct?: number;
@@ -90,8 +99,13 @@ export interface HmdBlock {
   stale?: boolean;
   valid?: boolean;
   age_ms?: number;
+  /** Raw HMD position in VMT Driver frame (Y-up). */
   pos?: [number, number, number];
   yaw_deg?: number;
+  /** HMD position in fitra world frame (Z-up); present when VMT alignment known. */
+  pos_world?: [number, number, number];
+  /** HMD orientation in fitra world frame, quaternion (w, x, y, z). */
+  quat_wxyz?: [number, number, number, number];
   [k: string]: unknown;
 }
 
@@ -133,6 +147,7 @@ export interface Bundle3D {
   enabled?: boolean;
   kp_format?: KpFormat;
   persons_3d?: Person3D[];
+  cameras?: Camera3D[];
   trackers?: Tracker[];
   stats?: Stats3D;
   vmt?: VmtBlock;

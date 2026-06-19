@@ -8,6 +8,7 @@
 
 #include <opencv2/calib3d.hpp>
 
+#include "geom/frames.hpp"
 #include "lift/keypoint_format.hpp"
 
 namespace fitra::lift {
@@ -84,6 +85,24 @@ Triangulator::Triangulator(const CalibrationSet& calib, Options opts)
     }
     if (cameras_.size() < 2) {
         throw std::runtime_error("triangulation requires at least 2 calibrated cameras");
+    }
+
+    // Camera placement is static; precompute it once here so camera_poses()
+    // (called every 3D-publish frame) is a const-ref read with no matrix work.
+    camera_poses_.reserve(cameras_.size());
+    for (const auto& cam : cameras_) {
+        CameraPose p;
+        p.id = cam.id;
+        // R/t are world->camera. Camera center in world = -Rᵀ·t,
+        // camera->world rotation = Rᵀ.
+        const cv::Mat Rt = cam.R.t();
+        const cv::Mat c = -Rt * cam.t;  // 3x1 CV_64F
+        p.center_w = cv::Vec3d(c.at<double>(0), c.at<double>(1), c.at<double>(2));
+        cv::Matx33d R_wc;
+        for (int r = 0; r < 3; ++r)
+            for (int col = 0; col < 3; ++col) R_wc(r, col) = Rt.at<double>(r, col);
+        p.quat_wxyz = geom::mat_to_quat(R_wc);
+        camera_poses_.push_back(std::move(p));
     }
 }
 

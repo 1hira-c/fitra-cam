@@ -13,15 +13,37 @@ import {
   kpCountFor,
   skeletonFor,
 } from "../lib/skeleton";
-import type { Bundle3D, Joint3D, KpFormat, Person3D, Tracker } from "../types/bundle";
+import type {
+  Bundle3D,
+  Camera3D,
+  HmdBlock,
+  Joint3D,
+  KpFormat,
+  Person3D,
+  Tracker,
+} from "../types/bundle";
 
 const TRACKER_AXIS_BASE_LEN = 0.15;
+// HMD marker: a small wireframe headset box + a forward gaze line. Drawn at the
+// HMD's fitra-world pose (hmd.pos_world) so it shares the skeleton's space.
+const HMD_COLOR = 0x33ddff;
+const HMD_BOX = { w: 0.18, h: 0.1, d: 0.1 };
+const HMD_GAZE_LEN = 0.25; // forward line length (camera -Z in HMD local frame)
+// Camera frustum (wireframe pyramid) drawn at each calibrated camera. Apex sits
+// at the camera center; the opening points along the camera's view direction.
+const CAMERA_FRUSTUM_COLOR = 0xffc233;
+const CAMERA_FRUSTUM_DEPTH = 0.2; // metres from apex to opening
+const CAMERA_FRUSTUM_HALF_W = 0.13;
+const CAMERA_FRUSTUM_HALF_H = 0.1;
 // World (Z-up, X-right, Y-forward) → Three.js (Y-up) basis change = Rx(-90°).
 const WORLD_TO_THREE_QUAT = (() => {
   const k = 0.7071067811865475; // 1/√2
   return new THREE.Quaternion(-k, 0, 0, k);
 })();
 const WORLD_TO_THREE_QUAT_INV = WORLD_TO_THREE_QUAT.clone().invert();
+// Scratch quaternion reused by the per-frame camera/HMD update paths to keep
+// those hot loops allocation-free.
+const tempQuat = new THREE.Quaternion();
 
 function isVisible3DJoint(joint: Joint3D | undefined): boolean {
   if (!Array.isArray(joint) || joint.length < 3) return false;
@@ -51,6 +73,10 @@ interface TrackerView {
   lastGood: { position: THREE.Vector3; scale: number; hasData: boolean };
 }
 
+interface CameraView {
+  group: THREE.Group;
+}
+
 export type ViewName = "front" | "side" | "top";
 
 export class SkeletonViewer {
@@ -75,6 +101,12 @@ export class SkeletonViewer {
   private trackersRoot!: THREE.Group;
   private trackersVisible = true;
   private trackerViews: TrackerView[] = [];
+  private camerasRoot!: THREE.Group;
+  private camerasVisible = true;
+  private cameraMaterial!: THREE.LineBasicMaterial;
+  private cameraViews = new Map<string, CameraView>();
+  private hmdGroup!: THREE.Group;
+  private hmdVisible = true;
   private onResize = () => this.resize();
 
   constructor(canvas: HTMLCanvasElement, statusEl: HTMLElement | null) {
@@ -125,6 +157,14 @@ export class SkeletonViewer {
         lastGood: { position: new THREE.Vector3(), scale: 1.0, hasData: false },
       });
     }
+
+    this.camerasRoot = new THREE.Group();
+    this.scene.add(this.camerasRoot);
+    this.cameraMaterial = new THREE.LineBasicMaterial({ color: CAMERA_FRUSTUM_COLOR });
+
+    this.hmdGroup = this.buildHmdMarker();
+    this.hmdGroup.visible = false;
+    this.scene.add(this.hmdGroup);
 
     const grid = new THREE.GridHelper(4, 20, 0x335577, 0x2b2f36);
     (grid.material as THREE.Material).opacity = 0.75;
@@ -216,6 +256,12 @@ export class SkeletonViewer {
       this.kpFormat = bundle.kp_format;
     }
 
+    // Camera frustums are static placement data, independent of whether a person
+    // is currently triangulated; update them regardless of the branches below.
+    this.updateCameras(Array.isArray(bundle?.cameras) ? bundle.cameras : []);
+    // HMD marker is likewise independent of the person/disabled branches.
+    this.updateHmd(bundle?.hmd);
+
     if (!bundle || bundle.enabled === false) {
       this.setStatus(bundle && bundle.enabled === false ? "3D disabled" : "(no 3D data)");
       this.updatePeople([]);
@@ -245,6 +291,156 @@ export class SkeletonViewer {
   setTrackersVisible(visible: boolean): void {
     this.trackersVisible = !!visible;
     if (this.trackersRoot) this.trackersRoot.visible = this.trackersVisible;
+  }
+
+  setCamerasVisible(visible: boolean): void {
+    this.camerasVisible = !!visible;
+    if (this.camerasRoot) this.camerasRoot.visible = this.camerasVisible;
+  }
+
+  // Wireframe pyramid with the apex at the local origin (camera center) opening
+  // toward local +Z (the camera's view direction in camera-frame coords). The
+  // group's quaternion then rotates +Z to the actual view direction in world.
+  private buildCameraFrustum(): THREE.LineSegments {
+    const d = CAMERA_FRUSTUM_DEPTH;
+    const w = CAMERA_FRUSTUM_HALF_W;
+    const h = CAMERA_FRUSTUM_HALF_H;
+    // 4 apex->corner edges + 4 rectangle edges = 8 segments (16 vertices).
+    const corners = [
+      [-w, -h, d],
+      [w, -h, d],
+      [w, h, d],
+      [-w, h, d],
+    ];
+    const verts: number[] = [];
+    for (const c of corners) verts.push(0, 0, 0, c[0], c[1], c[2]);
+    for (let i = 0; i < 4; i += 1) {
+      const a = corners[i];
+      const b = corners[(i + 1) % 4];
+      verts.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+    const lines = new THREE.LineSegments(geometry, this.cameraMaterial);
+    lines.frustumCulled = false;
+    return lines;
+  }
+
+  private updateCameras(cameras: Camera3D[]): void {
+    if (!this.camerasRoot) return;
+    this.camerasRoot.visible = this.camerasVisible;
+
+    const seen = new Set<string>();
+    for (const cam of cameras) {
+      if (!cam || !Array.isArray(cam.pos) || !Array.isArray(cam.quat_wxyz)) continue;
+      const id = String(cam.id);
+      seen.add(id);
+
+      let view = this.cameraViews.get(id);
+      if (!view) {
+        const group = new THREE.Group();
+        group.frustumCulled = false;
+        group.add(this.buildCameraFrustum());
+        this.camerasRoot.add(group);
+        view = { group };
+        this.cameraViews.set(id, view);
+      }
+
+      // Position: world (x, y, z) -> Three.js (x, z, -y), matching jointToVector.
+      view.group.position.set(Number(cam.pos[0]), Number(cam.pos[2]), -Number(cam.pos[1]));
+
+      // Orientation: B·R (compose), NOT the similarity transform B·R·B⁻¹.
+      // Camera quat_wxyz comes from the raw camera->world extrinsic (Rᵀ), whose
+      // local frame is still the OpenCV camera convention (+Z = optical axis),
+      // and the frustum opening is authored along three.js-local +Z to match it
+      // directly. Because the rotation's local frame is NOT rebased into the
+      // three.js basis, only the world side needs B; conjugating would
+      // double-apply the basis change and tilt a forward frustum up 90°.
+      // (The HMD path differs — see updateHmd — because its quat goes through
+      // vmt_pose_to_world, which rebases the local frame like a tracker.)
+      tempQuat.set(
+        Number(cam.quat_wxyz[1]),
+        Number(cam.quat_wxyz[2]),
+        Number(cam.quat_wxyz[3]),
+        Number(cam.quat_wxyz[0]),
+      );
+      view.group.quaternion.multiplyQuaternions(WORLD_TO_THREE_QUAT, tempQuat);
+      view.group.visible = true;
+    }
+
+    for (const [id, view] of this.cameraViews) {
+      if (!seen.has(id)) view.group.visible = false;
+    }
+  }
+
+  setHmdVisible(visible: boolean): void {
+    this.hmdVisible = !!visible;
+    // Actual visibility also depends on whether a pose is present; updateHmd
+    // re-applies hmdVisible each frame, so just refresh now.
+    if (this.hmdGroup && !this.hmdVisible) this.hmdGroup.visible = false;
+  }
+
+  // Wireframe headset box centred at the local origin plus a forward gaze line
+  // along local -Z (the HMD's view direction in OpenVR's device frame).
+  private buildHmdMarker(): THREE.Group {
+    const group = new THREE.Group();
+    group.frustumCulled = false;
+    const material = new THREE.LineBasicMaterial({ color: HMD_COLOR });
+
+    const box = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(HMD_BOX.w, HMD_BOX.h, HMD_BOX.d)),
+      material,
+    );
+    box.frustumCulled = false;
+    group.add(box);
+
+    const gaze = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, 0, -HMD_GAZE_LEN),
+      ]),
+      material,
+    );
+    gaze.frustumCulled = false;
+    group.add(gaze);
+    return group;
+  }
+
+  private updateHmd(hmd: HmdBlock | undefined): void {
+    if (!this.hmdGroup) return;
+    // Need the world-frame pose (only present when VMT alignment is known) and a
+    // live, valid HMD reading.
+    const pos = hmd?.pos_world;
+    if (
+      !this.hmdVisible ||
+      !hmd ||
+      hmd.have_any !== true ||
+      hmd.valid === false ||
+      hmd.stale === true ||
+      !Array.isArray(pos)
+    ) {
+      this.hmdGroup.visible = false;
+      return;
+    }
+
+    // World (x, y, z) -> Three.js (x, z, -y), matching jointToVector/trackers.
+    this.hmdGroup.position.set(Number(pos[0]), Number(pos[2]), -Number(pos[1]));
+
+    const q = hmd.quat_wxyz;
+    if (Array.isArray(q) && q.length === 4) {
+      // Conjugate into the Three.js basis (B·R·B⁻¹), same as the tracker path —
+      // NOT the camera path's B·R. The HMD quat_wxyz is delivered by
+      // vmt_pose_to_world, which rebases the rotation from the VMT frame into
+      // the fitra world frame on BOTH sides (local + world), so its local frame
+      // is fitra-convention just like a tracker's. With identity orientation
+      // the correct forward is fitra +Y → three.js -Z; B·R alone would tilt the
+      // gaze line down to -Y (a 90° error), B·R·B⁻¹ keeps it at -Z.
+      tempQuat.set(Number(q[1]), Number(q[2]), Number(q[3]), Number(q[0]));
+      this.hmdGroup.quaternion
+        .multiplyQuaternions(WORLD_TO_THREE_QUAT, tempQuat)
+        .multiply(WORLD_TO_THREE_QUAT_INV);
+    }
+    this.hmdGroup.visible = true;
   }
 
   private updateTrackers(trackers: Tracker[]): void {

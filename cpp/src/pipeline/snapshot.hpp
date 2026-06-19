@@ -74,6 +74,15 @@ struct Skeleton3DStats {
     std::uint64_t sync_miss = 0;
 };
 
+// Static camera placement in the fitra Z-up world frame, surfaced to the 3D
+// viewer so it can draw a frustum per camera. pos = camera center in world,
+// quat_wxyz = camera->world rotation (w,x,y,z).
+struct CameraPose3D {
+    std::string id;
+    double pos[3] = {0.0, 0.0, 0.0};
+    double quat_wxyz[4] = {1.0, 0.0, 0.0, 0.0};
+};
+
 struct Skeleton3DSnapshot {
     std::uint64_t seq = 0;
     std::chrono::system_clock::time_point ts{};
@@ -83,6 +92,9 @@ struct Skeleton3DSnapshot {
     // consumers must guard against it before computing a delta.
     std::chrono::steady_clock::time_point t_capture_oldest{};
     std::vector<infer::Skeleton3D> persons;
+    // Static camera placements (world frame). Resent every frame; a few cameras
+    // is negligible wire cost and lets the viewer build frustums lazily.
+    std::vector<CameraPose3D> cameras;
     Skeleton3DStats stats;
 };
 

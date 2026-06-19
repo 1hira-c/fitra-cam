@@ -40,6 +40,36 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-19 — 3D カメラ/HMD マーカーの PR#40 レビュー指摘修正 (バグ修正)
+PR #40 の Codex / Gemini レビュー指摘を反映。(1) **HMD 向きバグ**: HMD マーカーの姿勢を
+`B·R` から `B·R·B⁻¹` (トラッカーと同じ共役) へ修正。HMD `quat_wxyz` は `vmt_pose_to_world()`
+で fitra world フレームへ両側 rebase された姿勢のため、生 extrinsic 由来の camera (`B·R` が正)
+とは扱いが異なる。修正前は視線が常に 90°(真下) ずれて HMD 向き確認が機能しなかった。
+(2) `make_hmd_status_fragment` の world 変換を `snap.pose.valid` でガード (非有限値の JSON 混入
+→ frontend `JSON.parse` クラッシュ防止)。(3) `Triangulator::camera_poses()` をコンストラクタで
+事前計算しキャッシュ (毎フレームの行列演算/`cv::Mat` アロケーション排除)。(4) `updateCameras`/
+`updateHmd` の毎フレーム quaternion アロケーションを scratch + `multiplyQuaternions` で除去。
+軽微なため design doc なし (changelog のみ)。
+
+### 2026-06-18 — 3D プレビューに HMD 位置を表示 (VMT 接続時)
+VMT 接続時、3D ビューアに HMD をワイヤーヘッドセット箱＋前方視線で描画。HMD pose は SteamVR から
+VMT Driver フレーム (Y-up・alignment 適用後) で届くため、新設の `vmt::vmt_pose_to_world()` で
+`apply_vmt_alignment ∘ world_*_to_vmt` の逆 (並進戻し→-yaw→基底逆) を取り、fitra world (Z-up) の
+`pos_world`/`quat_wxyz` を `hmd` fragment に追加 (publisher の現 alignment を使用)。frontend は
+トラッカーと同じ basis 変換でマーカーを配置し、`ThreeDView` に `show hmd` トグルを追加。スケルトンと
+同一空間に重なるため alignment 品質の QA に使える (alignment が効いていないと見当違いの位置に出る)。
+往復変換は `test_vmt_protocol` の round-trip テストで固定。コントローラーは今回スコープ外
+(controller_bus は受信済みだが live で crow 未配線)。軽微なため design doc なし (changelog のみ)。
+
+### 2026-06-18 — 3D プレビューに校正カメラ位置を表示
+3D ビューア (`/ws3d`) に、校正済み各カメラの設置位置と視野方向をワイヤー視錐台 (向き付き四角錐)
+で描画。`Triangulator::camera_poses()` を新設し world 上のカメラ中心 (`-Rᵀ·t`) と camera→world
+回転を quaternion (w,x,y,z) で公開、`Skeleton3DSnapshot.cameras` 経由で `/ws3d` バンドルへ毎フレーム
+同梱 (extrinsics は静的・2〜3 台で数百バイトのため専用 REST は設けず既存ストリームに相乗り)。frontend
+は `SkeletonViewer.updateCameras()` で id ごとに視錐台を遅延生成し、トラッカーと同じ basis 変換
+(pos `[x,z,-y]` / quat 共役) で配置。`ThreeDView` に `show cameras` トグルを追加。校正の妥当性
+(カメラがどこを向くか) を直感確認するためのデバッグ可視化。軽微なため design doc なし (changelog のみ)。
+
 ### 2026-06-18 — VMT ⇔ Jetson zeroconf ディスカバリ仕様起票 (仕様のみ)
 他ユーザー配布時に唯一手で埋める設定 (`vmt.host` = Windows PC の実 IP) を消すため、Jetson と
 VMT Manager が同一 LAN 上で相互に相手を見つける制御プレーンを設計。現状は「Jetson が先に PC IP を
