@@ -51,7 +51,9 @@ Layout:
 - `outputs/recorded_rtmpose/20260515_064342/` — evaluation videos used for C++ correctness checks (`raw_cam{0,1}.mp4` = inputs, `overlay_cam{0,1}.mp4` = Python ORT reference)
 - `.github/copilot-instructions.md` — **stale**; pre-dates the python/ relocation and references `rtmlib.PoseTracker` which is no longer in the code. Prefer this file and `python/README.md`.
 
-Jetson-wide constraints (apt OpenCV, NumPy 1.x, `/dev/v4l/by-path`, `nvpmodel -m 0 && jetson_clocks`, never pip-install opencv/tensorrt) are in `~/CLAUDE.md`. Don't duplicate.
+Jetson-wide constraints (apt OpenCV, NumPy 1.x, `/dev/v4l/by-path`, max-perf power mode, never pip-install opencv/tensorrt) are in `~/CLAUDE.md`. Don't duplicate.
+
+> **Power mode (corrected 2026-06-19):** the max-perf mode on *this* board (Orin Nano Super) is **`sudo nvpmodel -m 2 && sudo jetson_clocks`** — mode IDs are renumbered here: `0`=15W (weakest), `1`=25W, `2`=MAXN_SUPER. The older `nvpmodel -m 0` guidance pins 15W (the *slowest* mode) and was wrong; it measurably throttled multi-camera capture. Verify with `nvpmodel -q`.
 
 ## C++ build (current state)
 

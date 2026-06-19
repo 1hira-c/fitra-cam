@@ -105,6 +105,15 @@ class FrameSource {
 public:
     struct Options {
         int  det_frequency = 10;
+        // Phase offset (frames) within the det_frequency period at which this
+        // camera runs YOLOX. With one decode thread per camera and a shared
+        // GPU, aligning every camera's detection on the same frame piles all
+        // their YOLOX inferences (the heaviest GPU op) into one window — a
+        // periodic burst that stalls the steady RTMPose stream and makes the
+        // 3-camera pose rate jitter. Staggering the phase across cameras
+        // (0, freq/N, 2*freq/N, ...) spreads the bursts over time so the GPU
+        // load is smooth. Set per camera in camera_builder.
+        int  det_phase     = 0;
         bool single_person = true;
         // Keep a BGR copy in DecodedFrame even when RTMPose prebaking is
         // enabled. This costs a full-frame clone per decoded frame, so callers
@@ -187,6 +196,29 @@ private:
     // Det-frequency state (touched only by decode_loop).
     int                      frame_idx_ = 0;
     std::vector<infer::Bbox> cached_bboxes_;
+
+    // Software auto-exposure assist (V4l2Options::ExposureMode::Assist).
+    // A slow deadband controller: every ae_interval_ frames, if the frame's
+    // mean luma is outside the deadband, nudge ONE knob by one step toward the
+    // target -- gain first (cheap; no blur), exposure only when gain saturates
+    // and always clamped to an fps-safe cap (keeps pacing steady + blur low).
+    // Touched only by decode_loop; applies via capture_->set_gain/exposure.
+    bool ae_enabled_      = false;
+    int  ae_target_       = 110;   // target mean luma (0-255)
+    int  ae_deadband_     = 10;    // no action within +/- this of target
+    int  ae_interval_     = 30;    // frames between adjustments (~0.5s @60fps = slow)
+    int  ae_gain_step_    = 4;
+    int  ae_exp_step_     = 4;     // 100us units
+    int  ae_gain_min_     = 0,   ae_gain_max_ = 255;
+    int  ae_exp_min_      = 4,   ae_exp_cap_  = 0;  // 100us; cap derived from fps
+    int  ae_cur_gain_     = 0,   ae_cur_exp_  = 0;
+    int  ae_frames_       = 0;
+    bool ae_warned_no_bgr_ = false;
+    // A knob whose VIDIOC_S_CTRL fails (control absent/rejected) is marked
+    // unavailable so assist stops trying it and falls through to the other,
+    // rather than walking a virtual range the sensor never applied.
+    bool ae_gain_avail_   = true;
+    bool ae_exp_avail_    = true;
 
     mutable std::mutex          slot_mu_;
     std::condition_variable     slot_cv_;

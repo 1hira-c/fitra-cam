@@ -18,6 +18,25 @@ namespace {
 // the constants in infer/rtmpose.cpp (preprocess_to_blob).
 constexpr float kMeanBgr[3]   = {103.53f, 116.28f, 123.675f};
 constexpr float kInvStdBgr[3] = {1.0f / 57.375f, 1.0f / 57.12f, 1.0f / 58.395f};
+
+// Cheap structural sanity check for an MJPEG payload before it reaches the HW
+// NVJPEG decoder. USB bandwidth saturation (multi-camera) produces truncated /
+// garbage frames; CPU cv::imdecode rejects those gracefully, but the HW NVJPEG
+// block SEGFAULTS on a malformed stream (observed: "Not a JPEG file: starts with
+// 0xff 0xd7", "Premature end of JPEG file"). Require a leading SOI (FF D8) and a
+// trailing EOI (FF D9) within the last bytes (tolerating a little driver
+// padding). This catches garbage-start and truncation -- the crash cases -- so
+// we can drop the frame instead of feeding it to the HW decoder.
+bool looks_like_jpeg(const std::vector<std::uint8_t>& d) {
+    if (d.size() < 4) return false;
+    if (d[0] != 0xFF || d[1] != 0xD8) return false;          // SOI
+    const std::size_t window = std::min<std::size_t>(d.size(), 64);
+    for (std::size_t k = 2; k <= window; ++k) {              // scan from the end
+        const std::size_t i = d.size() - k;
+        if (d[i] == 0xFF && d[i + 1] == 0xD9) return true;   // EOI
+    }
+    return false;
+}
 }  // namespace
 
 DeviceChwPool::DeviceChwPool() : state_{std::make_shared<State>()} {}
@@ -125,8 +144,45 @@ void FrameSource::decode_loop() {
             FITRA_LOG_INFO("frame_source: all-GPU preprocess enabled (RTMPose{})",
                            yolox_device_ ? " + YOLOX" : "");
     }
+    // Downscaling cameras capture at a higher resolution (full sensor FOV) and
+    // are resized to the common output resolution. On the all-GPU nvjpeg path the
+    // VIC transform does the downscale in its YUV->RGBA pass (decode_to_device
+    // target_w/h), so the camera stays fully on the GPU front-end at the runtime
+    // resolution -- no CPU resize, no CPU prebake. The CPU/mjpeg and HW-BGR
+    // fallback paths still resize `scratch` below. See
+    // docs/design/core-pipeline-per-camera-capture-downscale.md.
+    const bool downscaling = capture_->options().downscaling();
+    const int  out_w = capture_->options().width;
+    const int  out_h = capture_->options().height;
+
+    // Software auto-exposure assist init (no-op unless ExposureMode::Assist).
+    if (capture_->options().exposure_mode == V4l2Options::ExposureMode::Assist) {
+        const auto& o = capture_->options();
+        ae_enabled_  = true;
+        ae_target_   = o.ae_target;
+        ae_gain_min_ = capture_->gain_min();
+        ae_gain_max_ = capture_->gain_max();
+        // fps-safe exposure cap: keep exposure well under the frame period so a
+        // bright->dark swing can't push pacing past the budget. 85% of period.
+        const int fps = o.fps > 0 ? o.fps : 60;
+        ae_exp_cap_  = static_cast<int>((1.0e6 / fps) * 0.85 / 100.0);  // 100us units
+        // Seed current state from the configured initial exposure/gain.
+        ae_cur_exp_  = o.exposure_us100 > 0 ? o.exposure_us100 : ae_exp_cap_;
+        ae_cur_gain_ = o.gain >= 0 ? o.gain : (ae_gain_min_ + ae_gain_max_) / 2;
+        FITRA_LOG_INFO("frame_source: software-AE assist on (target_luma={} gain[{},{}] "
+                       "exp[{},{}]x100us start exp={} gain={})",
+                       ae_target_, ae_gain_min_, ae_gain_max_, ae_exp_min_, ae_exp_cap_,
+                       ae_cur_exp_, ae_cur_gain_);
+    }
+
+    // Declared OUTSIDE the loop so its payload vector retains capacity across
+    // frames: wait_pop_latest does `raw = *latest_`, a vector copy-assign that
+    // reuses raw.data's storage when large enough. A fresh `Frame raw` per
+    // iteration would heap-allocate the (2.46MB) YUYV payload every frame
+    // (glibc mmap path), mirroring the capture-thread cap fixed in
+    // v4l2_capture.cpp -- it would otherwise cap the decode thread at ~53fps.
+    Frame raw;
     while (!stop_.load()) {
-        Frame raw;
         // Event-driven: block until the capture worker publishes a new frame
         // (or stop_ is set, or the 100ms safety timeout fires). Replaces the
         // old 2ms poll-sleep; wait_pop_latest already dedups on seq.
@@ -137,6 +193,15 @@ void FrameSource::decode_loop() {
         const bool calib_recording =
             opts_.calib_recording_flag
             && opts_.calib_recording_flag->load(std::memory_order_relaxed);
+
+        // Guard the HW NVJPEG decoder against malformed frames (it segfaults on
+        // them; the CPU cv::imdecode path tolerates them on its own). Drop the
+        // frame here, same as a decode failure.
+        if (use_hw && !looks_like_jpeg(raw.data)) {
+            FITRA_LOG_WARN("frame_source: dropping corrupt MJPEG seq={} "
+                           "(HW decode unsafe)", raw.seq);
+            continue;
+        }
 
         bool gpu_decode_ok = false;     // RGBA CUDA buffer retained for GPU prebake
         bool scratch_valid = false;     // `scratch` holds a BGR frame
@@ -149,10 +214,16 @@ void FrameSource::decode_loop() {
             // can't run on the GPU (older .so) and would need a BGR frame.
             const bool need_bgr =
                 opts_.retain_bgr || calib_recording || (yolox_ && !yolox_device_);
+            // VIC downscale target for the device path (0 = native). The BGR
+            // device-retain path can't scale, so a downscaling camera that needs
+            // BGR (calib/retain) falls through to plain decode() + cv::resize.
+            const int tgt_w = downscaling ? out_w : 0;
+            const int tgt_h = downscaling ? out_h : 0;
             if (device_pose_ && !need_bgr) {
                 gpu_decode_ok =
-                    hw_decoder_->decode_to_device(raw.data.data(), raw.data.size(), fw, fh);
-            } else if (device_pose_) {
+                    hw_decoder_->decode_to_device(raw.data.data(), raw.data.size(),
+                                                  fw, fh, tgt_w, tgt_h);
+            } else if (device_pose_ && !downscaling) {
                 gpu_decode_ok =
                     hw_decoder_->decode_keep_device(raw.data.data(), raw.data.size(), scratch);
                 scratch_valid = gpu_decode_ok;
@@ -170,13 +241,16 @@ void FrameSource::decode_loop() {
             if (scratch_valid) { fw = scratch.cols; fh = scratch.rows; }
         } else if (capture_->options().pixel_format == PixFmt::Yuyv) {
             // Packed YUV422 -> BGR. No entropy decode; just a color convert.
+            // Interpret the raw buffer at the *capture* dims (may exceed the
+            // output dims for a downscaling camera).
             const auto& o = capture_->options();
-            if (static_cast<int>(raw.data.size()) < o.width * o.height * 2) {
+            const int cw = o.capture_w(), ch = o.capture_h();
+            if (static_cast<int>(raw.data.size()) < cw * ch * 2) {
                 FITRA_LOG_WARN("frame_source: short YUYV frame for seq={} ({} bytes)",
                                raw.seq, raw.data.size());
                 continue;
             }
-            cv::Mat yuy2(o.height, o.width, CV_8UC2,
+            cv::Mat yuy2(ch, cw, CV_8UC2,
                          const_cast<std::uint8_t*>(raw.data.data()));
             cv::cvtColor(yuy2, scratch, cv::COLOR_YUV2BGR_YUYV);
         } else {
@@ -186,6 +260,61 @@ void FrameSource::decode_loop() {
             }
         }
         if (!use_hw) { scratch_valid = true; fw = scratch.cols; fh = scratch.rows; }
+        // Downscale the full-sensor capture to the common output resolution on
+        // the CPU / fallback paths (YUYV, CPU mjpeg, HW-BGR). The all-GPU nvjpeg
+        // path already downscales on the device via VIC (decode_to_device
+        // target_w/h) and keeps no BGR scratch, so this is skipped there.
+        // INTER_AREA is the right filter for shrinking. After this, every
+        // downstream coordinate (bbox, M_inv, keypoints, drawer, triangulation)
+        // is in the output resolution space.
+        if (downscaling && scratch_valid && (fw != out_w || fh != out_h)) {
+            cv::resize(scratch, scratch, cv::Size(out_w, out_h), 0, 0, cv::INTER_AREA);
+            fw = out_w;
+            fh = out_h;
+        }
+
+        // Software AE assist: slow deadband controller on the decoded frame's
+        // mean luma. Needs a BGR frame; the pure all-GPU device path has none
+        // (scratch empty) -> assist is unavailable there (warn once). For the
+        // YUYV / CPU / HW-BGR paths (incl. the recommended cam1=YUYV) scratch
+        // is always valid.
+        if (ae_enabled_) {
+            if (!scratch_valid) {
+                if (!ae_warned_no_bgr_) {
+                    FITRA_LOG_WARN("frame_source: AE assist needs a BGR frame but this "
+                                   "camera is on the pure all-GPU device path; AE inactive");
+                    ae_warned_no_bgr_ = true;
+                }
+            } else if (++ae_frames_ >= ae_interval_) {
+                ae_frames_ = 0;
+                const cv::Scalar m = cv::mean(scratch);  // BGR
+                const int luma = static_cast<int>(0.114 * m[0] + 0.587 * m[1] + 0.299 * m[2]);
+                const int err  = luma - ae_target_;
+                // Only advance the internal gain/exposure state when the ioctl
+                // actually succeeds: a camera lacking V4L2_CID_GAIN /
+                // EXPOSURE_ABSOLUTE (or rejecting it) would otherwise let assist
+                // walk a virtual range that doesn't reflect the sensor. A knob
+                // whose set fails is marked unavailable so the controller falls
+                // through to the other knob instead of getting stuck on it.
+                if (err < -ae_deadband_) {            // too dark: gain first, then exposure
+                    if (ae_gain_avail_ && ae_cur_gain_ < ae_gain_max_) {
+                        const int v = std::min(ae_cur_gain_ + ae_gain_step_, ae_gain_max_);
+                        if (capture_->set_gain(v)) ae_cur_gain_ = v; else ae_gain_avail_ = false;
+                    } else if (ae_exp_avail_ && ae_cur_exp_ < ae_exp_cap_) {
+                        const int v = std::min(ae_cur_exp_ + ae_exp_step_, ae_exp_cap_);
+                        if (capture_->set_exposure_us100(v)) ae_cur_exp_ = v; else ae_exp_avail_ = false;
+                    }
+                } else if (err > ae_deadband_) {      // too bright: drop gain first, then exposure
+                    if (ae_gain_avail_ && ae_cur_gain_ > ae_gain_min_) {
+                        const int v = std::max(ae_cur_gain_ - ae_gain_step_, ae_gain_min_);
+                        if (capture_->set_gain(v)) ae_cur_gain_ = v; else ae_gain_avail_ = false;
+                    } else if (ae_exp_avail_ && ae_cur_exp_ > ae_exp_min_) {
+                        const int v = std::max(ae_cur_exp_ - ae_exp_step_, ae_exp_min_);
+                        if (capture_->set_exposure_us100(v)) ae_cur_exp_ = v; else ae_exp_avail_ = false;
+                    }
+                }
+            }
+        }
         auto t_decode = std::chrono::steady_clock::now();
 
         // YOLOX runs on this thread (one IExecutionContext per FrameSource),
@@ -193,8 +322,21 @@ void FrameSource::decode_loop() {
         // raw mp4 capture is the priority, and dump_keypoints_3d re-runs
         // detection offline on the resulting clips anyway.
         if (yolox_ && !calib_recording) {
-            bool do_detect = (frame_idx_ % opts_.det_frequency == 0)
-                          || cached_bboxes_.empty();
+            // Detect on the decimation schedule only. The old `||
+            // cached_bboxes_.empty()` clause forced YOLOX EVERY frame whenever
+            // nothing was detected -- so an empty/no-person scene ran the
+            // heaviest GPU op (YOLOX_s 640, ~18ms) on all cameras at full frame
+            // rate, saturating the shared GPU and capping pose at ~48fps (idle
+            // was MORE expensive than tracking). The modulo already re-detects
+            // every det_frequency frames when empty (~167ms @60fps/det=10 to
+            // acquire a person entering frame), which is plenty responsive, so
+            // drop the per-frame retry. Camera detects at its staggered phase
+            // slot within the period (det_phase) so the cameras' YOLOX bursts
+            // don't all land on the same frame and stall the shared GPU. The
+            // det_frequency <= 0 short-circuit guards the modulo against a
+            // zero/negative frequency (config bug) -> detect every frame.
+            bool do_detect = (opts_.det_frequency <= 0) ||
+                ((frame_idx_ % opts_.det_frequency) == (opts_.det_phase % opts_.det_frequency));
             if (do_detect) {
                 // GPU YOLOX: the preprocess kernel fills the engine input from
                 // the retained RGBA device buffer (on the engine's stream); the

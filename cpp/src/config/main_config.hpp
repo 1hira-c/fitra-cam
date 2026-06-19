@@ -26,11 +26,33 @@ struct MainOptions {
     std::array<std::string, 3> cam_paths{};
     int width  = 640;
     int height = 480;
+    // Per-camera V4L2 capture resolution override (0 = use width/height, no
+    // downscale). For cameras whose low-res modes center-crop instead of
+    // downscaling: capture at full-sensor dims here, then FrameSource resizes
+    // to width/height. See docs/design/core-pipeline-per-camera-capture-downscale.md.
+    std::array<int, 3> cam_cap_width{};
+    std::array<int, 3> cam_cap_height{};
     int fps    = 30;
     // V4L2 pixel format: "mjpeg" (default; camera-side compression, CPU decode)
     // or "yuyv" (uncompressed; skips decode + camera encode latency but costs
     // USB bandwidth -> caps resolution/fps). See docs/design/core-pipeline-e2e-latency.md.
     std::string pixel_format = "mjpeg";
+    // Per-camera pixel_format override (empty = use the global pixel_format).
+    // Use to mix decode paths: e.g. nvjpeg (HW) for a camera on a clean bus that
+    // must keep up at full rate, mjpeg (CPU, tolerant of corrupt frames) for
+    // cameras on a saturated USB2.0 bus where HW NVJPEG would crash on truncated
+    // MJPEG. See docs/design/core-pipeline-per-camera-capture-downscale.md.
+    std::array<std::string, 3> cam_pixel_format{};
+    // Per-camera exposure control (anti-blur + steady fps). exposure_mode:
+    // "" / "auto" = leave camera controls untouched; "manual" = fixed exposure
+    // + gain, frozen; "assist" = manual initial + slow software AE (gain-first,
+    // fps-capped exposure). exposure is V4L2_CID_EXPOSURE_ABSOLUTE in 100us
+    // units (0 = leave); gain is V4L2_CID_GAIN (<0 = leave); ae_target is the
+    // assist target mean luma. See docs/design/core-pipeline-camera-exposure-control.md.
+    std::array<std::string, 3> cam_exposure_mode{};
+    std::array<int, 3>         cam_exposure{};
+    std::array<int, 3>         cam_gain{-1, -1, -1};
+    std::array<int, 3>         cam_ae_target{110, 110, 110};
     // V4L2 mmap ring depth. Fewer buffers = lower worst-case ring staleness;
     // driver-enforced minimum is 2.
     int n_buffers = 4;
