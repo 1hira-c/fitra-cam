@@ -12,6 +12,7 @@
 // before start() and immutable afterwards, so this is equivalent to the old
 // member reads at request time.
 
+#include <functional>
 #include <string>
 
 #include <crow.h>
@@ -24,6 +25,8 @@ class FloorCalibSession;
 class IntrinsicCalibSession;
 }
 namespace fitra::vmt { class HmdPoseBus; class ControllerPoseBus; }
+namespace fitra::config { class SetupConfigStore; }
+namespace fitra::camera { class SetupCameraManager; }
 
 namespace fitra::web::detail {
 
@@ -68,5 +71,17 @@ struct IntrinsicCalibRouteDeps {
 };
 void register_intrinsic_calib_routes(crow::SimpleApp& app,
                                      const IntrinsicCalibRouteDeps& deps);
+
+// First-run setup module (docs/design/core-pipeline-setup-mode.md). Registered
+// only in RunMode::Setup: camera enumeration + preview (when `cameras` is set,
+// M3) and the editable config draft (when `store` is set). `on_proceed` writes
+// the union config and advances the flow; it fills `next_mode` (a run-mode
+// label) on success and `err` on failure.
+struct SetupRouteDeps {
+    config::SetupConfigStore*   store   = nullptr;   // nullptr → no config routes
+    camera::SetupCameraManager* cameras = nullptr;   // nullptr → no camera routes
+    std::function<bool(std::string& next_mode, std::string& err)> on_proceed;
+};
+void register_setup_mode_routes(crow::SimpleApp& app, const SetupRouteDeps& deps);
 
 }  // namespace fitra::web::detail

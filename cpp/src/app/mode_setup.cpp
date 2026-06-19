@@ -2,37 +2,87 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
 #include <thread>
 
+#include "app/daemon.hpp"          // initial_mode, profile_path
 #include "app/server_builder.hpp"
+#include "config/setup_config_store.hpp"
 #include "pipeline/snapshot.hpp"
 #include "util/logging.hpp"
 #include "web/crow_server.hpp"
 
 namespace fitra::app {
 
-// First-run setup module. Builds only a Crow server — no FrameSource, no TRT
-// stack, no 3D graph, no publishers — so it starts in well under a second and
-// touches neither CUDA nor the GPU. The web surface (camera enumeration,
-// config compose/save, /api/setup/proceed) is attached in M2/M3 via the
-// CrowServer setup-route setter; here in M1 the module serves /api/state
-// (mode="setup") and the /api/flow/switch route (when flow-managed), which is
-// enough for the daemon to chain out of setup.
-int run_mode_setup(const config::MainOptions& opts, FlowControl& flow) {
-    // CrowServer needs a SnapshotBus reference; setup publishes no frames, so a
-    // size-1 bus is constructed and left idle.
-    pipeline::SnapshotBus bus{1};
+namespace {
+
+// Decide the stage to hand off to once the config is composed, mirroring the
+// daemon's auto initial-mode logic (artifact-driven), and write the union
+// config + advance the flow. Returns false + a user-facing reason in `err`.
+bool do_proceed(config::SetupConfigStore& store, FlowControl& flow,
+                std::string& next_mode, std::string& err) {
+    if (!store.validate_draft(err)) return false;
+    config::MainOptions d = store.draft();
+    if (d.cam_paths[0].empty()) {
+        err = "configure at least cam0 before proceeding";
+        return false;
+    }
+    std::error_code ec;
+    const bool intrinsics_exists =
+        !d.intrinsic_out.empty() && std::filesystem::exists(d.intrinsic_out, ec) && !ec;
+    const bool extrinsics_exists =
+        !d.calib.empty() && std::filesystem::exists(d.calib, ec) && !ec;
+    bool profile_exists = true;
+    {
+        const std::string pp = profile_path(d);
+        if (!pp.empty()) profile_exists = std::filesystem::exists(pp, ec) && !ec;
+    }
+    config::RunMode next =
+        initial_mode(d, intrinsics_exists, extrinsics_exists, profile_exists);
+    if (next == config::RunMode::Setup) {
+        err = "configure cameras before proceeding";
+        return false;
+    }
+    std::string perr;
+    if (!config::precheck_mode_switch(d, next, perr)) {
+        err = perr;
+        return false;
+    }
+    if (!store.write_union(err)) return false;
+    next_mode = config::run_mode_name(next);
+    FITRA_LOG_INFO("setup: wrote {} — handing off to {}", store.union_path(), next_mode);
+    if (flow.managed) flow.request_switch(next);
+    else              flow.stop.store(true);
+    return true;
+}
+
+}  // namespace
+
+int run_mode_setup(const config::MainOptions& opts, const std::string& config_path,
+                   FlowControl& flow) {
+    // The store seeds from the loaded config and writes back to the same path
+    // the daemon reloads on the next spawn.
+    config::SetupConfigStore store{opts, config_path};
+
+    pipeline::SnapshotBus bus{1};  // unused; CrowServer ctor needs one
     auto server = make_server(opts, config::RunMode::Setup, bus, nullptr, &flow);
     if (!server) {
-        // --no-web in setup mode leaves nothing to drive the hand-off; treat as
-        // a clean exit (the daemon stops rather than spinning).
         FITRA_LOG_WARN("setup: --no-web set — no web surface to configure from; exiting");
         return EXIT_SUCCESS;
     }
+    server->set_setup_handlers(
+        &store,
+        [&store, &flow](std::string& next_mode, std::string& err) {
+            return do_proceed(store, flow, next_mode, err);
+        });
 
     server->start();
     FITRA_LOG_INFO("setup: serving WebUI on {}:{} — choose cameras, compose the "
                    "config, then proceed.", opts.host, opts.port);
+    if (config_path.empty()) {
+        FITRA_LOG_WARN("setup: launched without --config — proceed cannot persist "
+                       "the composed config (start the daemon with --config)");
+    }
 
     while (!flow.stop.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));

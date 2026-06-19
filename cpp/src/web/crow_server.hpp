@@ -41,6 +41,9 @@ class ControllerPoseBus; // selected-controller pose source for excal scene
 class ContinuousAligner; // always-on HMD-driven alignment refiner
 }
 
+namespace fitra::config { class SetupConfigStore; }   // setup-mode config draft
+namespace fitra::camera { class SetupCameraManager; }  // setup-mode camera preview
+
 namespace fitra::web {
 
 struct ServerOptions {
@@ -110,6 +113,17 @@ public:
     // its state + start/stop/solve. Must be called before start().
     void set_intrinsic_calib_session(pipeline::IntrinsicCalibSession* session);
     void set_intrinsic_calib_next_step(std::string guidance);
+
+    // Attach the setup-module handlers (RunMode::Setup only): the editable
+    // config store (drives /api/config*) and an on-proceed callback that writes
+    // the union config and advances the flow (drives /api/setup/proceed). A
+    // camera manager for /api/cameras* is attached separately (M3). Caller
+    // retains ownership; pointers must outlive the server. Before start().
+    void set_setup_handlers(
+        config::SetupConfigStore* store,
+        std::function<bool(std::string& next_mode, std::string& err)> on_proceed);
+    // Attach the V4L2 camera manager for setup-mode enumeration + preview (M3).
+    void set_setup_camera_manager(camera::SetupCameraManager* cameras);
 
     // Human-facing guidance spliced into a successful /api/excal/solve
     // response as "next_step" (the subject-calib restart command). Replaces
@@ -183,6 +197,7 @@ private:
     void register_extrinsic_calib_routes_();
     void register_floor_calib_routes_();
     void register_intrinsic_calib_routes_();
+    void register_setup_mode_routes_();
 
     pipeline::SnapshotBus& bus_;
     pipeline::Skeleton3DBus* bus3d_ = nullptr;
@@ -200,6 +215,9 @@ private:
     std::string                    floor_next_step_;
     pipeline::IntrinsicCalibSession* intrinsic_session_ = nullptr;
     std::string                    intrinsic_next_step_;
+    config::SetupConfigStore*      setup_store_   = nullptr;
+    camera::SetupCameraManager*    setup_cameras_ = nullptr;
+    std::function<bool(std::string&, std::string&)> setup_on_proceed_;
     FlowSwitchFn                   flow_switch_;
     slimevr::NativePublisher*      native_publisher_ = nullptr;
     slimevr::SlimeTrackerBus*      tracker_bus_     = nullptr;

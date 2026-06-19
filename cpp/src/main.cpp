@@ -289,7 +289,7 @@ int main(int argc, char** argv) {
         int rc = EXIT_FAILURE;
         switch (mode) {
             case fitra::config::RunMode::Setup:
-                rc = fitra::app::run_mode_setup(opts, flow);
+                rc = fitra::app::run_mode_setup(opts, early.config_path, flow);
                 break;
             case fitra::config::RunMode::CalibExtrinsic:
                 rc = fitra::app::run_mode_calib_extrinsic(opts, flow);

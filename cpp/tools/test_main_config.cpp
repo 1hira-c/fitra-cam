@@ -5,6 +5,7 @@
 // hand-rolled assertions that throw std::runtime_error on failure; main()
 // catches and reports.
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -894,6 +895,151 @@ void test_setup_mode_and_daemon_blank_config() {
     check(di.daemon_initial == "setup", "--daemon-initial setup accepted");
 }
 
+void test_emit_load_round_trip() {
+    using fitra::config::emit_main_config;
+    using fitra::config::save_main_config;
+
+    // A representative union config: varied non-default values across every
+    // section, including the tricky ones (negated kalman/ik, bare slimevr/vmt
+    // host/port, excal_method, intrinsic step selector, per-camera arrays).
+    // calibrate / excal_enabled / replay dirs stay at defaults — those are
+    // deliberately not emitted (run-mode-deriving).
+    MainOptions o;
+    o.cam_paths[0] = "/dev/v4l/by-path/cam-A";
+    o.cam_paths[2] = "/dev/v4l/by-path/cam-C";
+    o.width = 1280; o.height = 960; o.fps = 60;
+    o.pixel_format = "yuyv"; o.n_buffers = 6;
+    o.cam_cap_width[1] = 1280; o.cam_cap_height[1] = 960;
+    o.cam_pixel_format[2] = "nvjpeg";
+    o.cam_exposure_mode[0] = "manual"; o.cam_exposure[0] = 120; o.cam_gain[0] = 8;
+    o.cam_ae_target[1] = 95;
+    o.det_engine = "/tmp/yolox.engine"; o.pose_engine = "/tmp/rtmpose.engine";
+    o.det_frequency = 5; o.det_score = 0.42f; o.keypoint_format = "halpe26";
+    o.multi_person = true;
+    o.host = "127.0.0.1"; o.port = 8123;
+    o.enable_3d = true; o.calib = "calibrations/extrinsics.yaml";
+    o.kp_conf_thresh = 0.25f; o.max_reproj_px = 5.5f; o.sync_window_ms = 12.0;
+    o.bone_calib_frames = 200;
+    o.kalman_3d = false;   // -> no_3d_kalman: true
+    o.ik_3d = false;       // -> no_3d_ik: true
+    o.vr_extract_event_driven = true; o.vr_one_euro = false;
+    o.vr_pos_mincutoff = 2.0; o.vr_pos_beta = 6.0; o.vr_quat_beta = 2.5;
+    o.subjects_dir = "calibrations/subjects"; o.subject_id = "alice";
+    o.subject_height_m = 1.72;
+    o.log_every_s = 1.0;
+    o.slimevr_out = true; o.slimevr_host = "172.34.1.9"; o.slimevr_port = 6970;
+    o.slimevr_rate_hz = 75.0; o.slimevr_quat_smooth = 0.4;
+    o.vmt_out = true; o.vmt_host = "172.34.1.9"; o.vmt_port = 39571;
+    o.vmt_index_base = 12; o.vmt_degeneracy_mode = "disable";
+    o.hmd_listen_enabled = true; o.hmd_listen_port = 39572;
+    o.vmt_continuous_align = false; o.vmt_continuous_blend = 0.3;
+    o.excal_intrinsics = "calibrations/intrinsics.yaml";
+    o.excal_out = "calibrations/extrinsics.yaml";
+    o.excal_method = "floor"; o.excal_tag_size_m = 0.12; o.excal_min_samples = 10;
+    o.floor_map = "configs/floor_tag_map.yaml"; o.floor_fisheye = true;
+    o.floor_out = o.excal_out;  // loader couples floor_out := excal_out via `out`
+    o.intrinsic_step_enabled = true; o.intrinsic_out = "calibrations/intrinsics.yaml";
+    o.intrinsic_model = "fisheye"; o.charuco_squares_x = 7; o.charuco_squares_y = 5;
+    o.charuco_square_len_m = 0.035; o.charuco_marker_len_m = 0.026;
+    o.intrinsic_min_views = 15; o.intrinsic_max_rms_px = 1.2;
+
+    auto p = write_tmp("round_trip.yaml", "");
+    save_main_config(p.string(), o);
+
+    MainOptions r;  // fresh defaults
+    load_main_config(p.string(), r);
+
+    // The emitted document must itself be valid + accepted by the loader.
+    // Compare every loader-visible field.
+    auto eq_s = [](const std::string& a, const std::string& b, const char* k) {
+        check(a == b, std::string("round-trip string ") + k + ": '" + a + "' vs '" + b + "'");
+    };
+    auto eq_i = [](long a, long b, const char* k) {
+        check(a == b, std::string("round-trip int ") + k);
+    };
+    auto eq_b = [](bool a, bool b, const char* k) {
+        check(a == b, std::string("round-trip bool ") + k);
+    };
+    auto eq_f = [](double a, double b, const char* k) {
+        check(std::abs(a - b) < 1e-6, std::string("round-trip float ") + k);
+    };
+
+    for (int i = 0; i < 3; ++i) {
+        eq_s(o.cam_paths[i], r.cam_paths[i], "cam_path");
+        eq_i(o.cam_cap_width[i],  r.cam_cap_width[i],  "cam_cap_width");
+        eq_i(o.cam_cap_height[i], r.cam_cap_height[i], "cam_cap_height");
+        eq_s(o.cam_pixel_format[i],  r.cam_pixel_format[i],  "cam_pixel_format");
+        eq_s(o.cam_exposure_mode[i], r.cam_exposure_mode[i], "cam_exposure_mode");
+        eq_i(o.cam_exposure[i],  r.cam_exposure[i],  "cam_exposure");
+        eq_i(o.cam_gain[i],      r.cam_gain[i],      "cam_gain");
+        eq_i(o.cam_ae_target[i], r.cam_ae_target[i], "cam_ae_target");
+    }
+    eq_i(o.width, r.width, "width"); eq_i(o.height, r.height, "height");
+    eq_i(o.fps, r.fps, "fps"); eq_s(o.pixel_format, r.pixel_format, "pixel_format");
+    eq_i(o.n_buffers, r.n_buffers, "n_buffers");
+    eq_s(o.det_engine, r.det_engine, "det_engine");
+    eq_s(o.pose_engine, r.pose_engine, "pose_engine");
+    eq_i(o.det_frequency, r.det_frequency, "det_frequency");
+    eq_f(o.det_score, r.det_score, "det_score");
+    eq_s(o.keypoint_format, r.keypoint_format, "keypoint_format");
+    eq_b(o.multi_person, r.multi_person, "multi_person");
+    eq_s(o.host, r.host, "host"); eq_i(o.port, r.port, "port");
+    eq_b(o.enable_3d, r.enable_3d, "enable_3d"); eq_s(o.calib, r.calib, "calib");
+    eq_f(o.kp_conf_thresh, r.kp_conf_thresh, "kp_conf_thresh");
+    eq_f(o.max_reproj_px, r.max_reproj_px, "max_reproj_px");
+    eq_f(o.sync_window_ms, r.sync_window_ms, "sync_window_ms");
+    eq_i(o.bone_calib_frames, r.bone_calib_frames, "bone_calib_frames");
+    eq_b(o.kalman_3d, r.kalman_3d, "kalman_3d (negated key)");
+    eq_b(o.ik_3d, r.ik_3d, "ik_3d (negated key)");
+    eq_b(o.vr_extract_event_driven, r.vr_extract_event_driven, "vr_extract_event_driven");
+    eq_b(o.vr_one_euro, r.vr_one_euro, "vr_one_euro");
+    eq_f(o.vr_pos_mincutoff, r.vr_pos_mincutoff, "vr_pos_mincutoff");
+    eq_f(o.vr_pos_beta, r.vr_pos_beta, "vr_pos_beta");
+    eq_f(o.vr_quat_beta, r.vr_quat_beta, "vr_quat_beta");
+    eq_s(o.subjects_dir, r.subjects_dir, "subjects_dir");
+    eq_s(o.subject_id, r.subject_id, "subject_id");
+    eq_f(o.subject_height_m, r.subject_height_m, "subject_height_m");
+    eq_f(o.log_every_s, r.log_every_s, "log_every_s");
+    eq_b(o.slimevr_out, r.slimevr_out, "slimevr_out");
+    eq_s(o.slimevr_host, r.slimevr_host, "slimevr_host");
+    eq_i(o.slimevr_port, r.slimevr_port, "slimevr_port");
+    eq_f(o.slimevr_rate_hz, r.slimevr_rate_hz, "slimevr_rate_hz");
+    eq_f(o.slimevr_quat_smooth, r.slimevr_quat_smooth, "slimevr_quat_smooth");
+    eq_b(o.vmt_out, r.vmt_out, "vmt_out");
+    eq_s(o.vmt_host, r.vmt_host, "vmt_host");
+    eq_i(o.vmt_port, r.vmt_port, "vmt_port");
+    eq_i(o.vmt_index_base, r.vmt_index_base, "vmt_index_base");
+    eq_s(o.vmt_degeneracy_mode, r.vmt_degeneracy_mode, "vmt_degeneracy_mode");
+    eq_b(o.hmd_listen_enabled, r.hmd_listen_enabled, "hmd_listen_enabled");
+    eq_i(o.hmd_listen_port, r.hmd_listen_port, "hmd_listen_port");
+    eq_b(o.vmt_continuous_align, r.vmt_continuous_align, "vmt_continuous_align");
+    eq_f(o.vmt_continuous_blend, r.vmt_continuous_blend, "vmt_continuous_blend");
+    eq_s(o.excal_intrinsics, r.excal_intrinsics, "excal_intrinsics");
+    eq_s(o.excal_out, r.excal_out, "excal_out");
+    eq_s(o.excal_method, r.excal_method, "excal_method");
+    eq_f(o.excal_tag_size_m, r.excal_tag_size_m, "excal_tag_size_m");
+    eq_i(o.excal_min_samples, r.excal_min_samples, "excal_min_samples");
+    eq_s(o.floor_map, r.floor_map, "floor_map");
+    eq_s(o.floor_out, r.floor_out, "floor_out (coupled to excal_out)");
+    eq_b(o.floor_fisheye, r.floor_fisheye, "floor_fisheye");
+    eq_b(o.intrinsic_step_enabled, r.intrinsic_step_enabled, "intrinsic_step_enabled");
+    eq_s(o.intrinsic_out, r.intrinsic_out, "intrinsic_out");
+    eq_s(o.intrinsic_model, r.intrinsic_model, "intrinsic_model");
+    eq_i(o.charuco_squares_x, r.charuco_squares_x, "charuco_squares_x");
+    eq_i(o.charuco_squares_y, r.charuco_squares_y, "charuco_squares_y");
+    eq_f(o.charuco_square_len_m, r.charuco_square_len_m, "charuco_square_len_m");
+    eq_f(o.charuco_marker_len_m, r.charuco_marker_len_m, "charuco_marker_len_m");
+    eq_i(o.intrinsic_min_views, r.intrinsic_min_views, "intrinsic_min_views");
+    eq_f(o.intrinsic_max_rms_px, r.intrinsic_max_rms_px, "intrinsic_max_rms_px");
+
+    // Run-mode-deriving flags must NOT have been emitted: the reloaded config is
+    // a clean union config (no calib mode derived).
+    check(!r.calibrate && !r.excal_enabled && r.excal_replay.empty()
+          && r.intrinsic_replay.empty(),
+          "emitted config carries no run-mode-deriving flags");
+    validate_options(r);  // emitted config must be runnable-as-loaded
+}
+
 struct TestCase {
     const char* name;
     void (*fn)();
@@ -920,6 +1066,7 @@ const TestCase kTests[] = {
     {"flow_managed_and_publisher_negation",    test_flow_managed_and_publisher_negation},
     {"daemon_flags_and_validate",              test_daemon_flags_and_validate},
     {"setup_mode_and_daemon_blank_config",     test_setup_mode_and_daemon_blank_config},
+    {"emit_load_round_trip",                   test_emit_load_round_trip},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},

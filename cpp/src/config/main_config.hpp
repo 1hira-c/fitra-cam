@@ -292,6 +292,19 @@ bool precheck_mode_switch(const MainOptions& opts, RunMode target,
 // non-backwards-compatible change to the YAML layout is required.
 inline constexpr const char* kMainConfigSchema = "fitra_main_config_v1";
 
+// Serialize `opts` back to a `fitra_main_config_v1` YAML document. The inverse
+// of load_main_config: every key the loader reads round-trips (emit -> load is
+// the identity on the loader-visible fields). Only non-default values are
+// emitted (keeps files clean). Run-mode-deriving flags (calibration.calibrate,
+// extrinsic_calib.enabled, *.replay_dir) and launch-form flags (daemon /
+// flow_managed / setup_mode — which have no YAML key) are NEVER emitted: a
+// written config is always a union config the daemon can consume.
+std::string emit_main_config(const MainOptions& opts);
+
+// emit_main_config(opts) written to `path` atomically (path.tmp + rename).
+// Throws std::runtime_error on an I/O failure.
+void save_main_config(const std::string& path, const MainOptions& opts);
+
 // Load a YAML config from `path` into `out`. Unknown keys, type mismatches,
 // missing `schema`, or wrong `schema` value all throw std::runtime_error
 // with a key-path-qualified message (e.g. "config: unknown key three_d.foo").

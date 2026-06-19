@@ -318,6 +318,17 @@ void CrowServer::set_calibration_next_step(std::string guidance) {
     calib_next_step_ = std::move(guidance);
 }
 
+void CrowServer::set_setup_handlers(
+    config::SetupConfigStore* store,
+    std::function<bool(std::string&, std::string&)> on_proceed) {
+    setup_store_ = store;
+    setup_on_proceed_ = std::move(on_proceed);
+}
+
+void CrowServer::set_setup_camera_manager(camera::SetupCameraManager* cameras) {
+    setup_cameras_ = cameras;
+}
+
 void CrowServer::set_flow_switch_handler(FlowSwitchFn fn) {
     flow_switch_ = std::move(fn);
 }
@@ -903,6 +914,7 @@ void CrowServer::start() {
     register_extrinsic_calib_routes_();
     register_floor_calib_routes_();
     register_intrinsic_calib_routes_();
+    register_setup_mode_routes_();
 
     // Static files under opts_.static_dir
     std::filesystem::path static_root{opts_.static_dir};
@@ -1023,6 +1035,14 @@ void CrowServer::register_intrinsic_calib_routes_() {
     deps.next_step  = intrinsic_next_step_;
     deps.static_dir = opts_.incal_static_dir;
     detail::register_intrinsic_calib_routes(impl_->app, deps);
+}
+
+void CrowServer::register_setup_mode_routes_() {
+    detail::SetupRouteDeps deps;
+    deps.store      = setup_store_;
+    deps.cameras    = setup_cameras_;
+    deps.on_proceed = setup_on_proceed_;
+    detail::register_setup_mode_routes(impl_->app, deps);
 }
 
 void CrowServer::publisher_loop() {

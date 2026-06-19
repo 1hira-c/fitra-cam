@@ -196,9 +196,11 @@ target_link_libraries(fitra_vmt PUBLIC
 add_library(fitra_web STATIC
     web/crow_server.cpp
     web/crow_routes_setup.cpp
+    web/crow_routes_setup_mode.cpp
 )
 
 target_link_libraries(fitra_web PUBLIC
+    fitra_config      # setup mode: SetupConfigStore + emit_main_config
     fitra_pipeline
     fitra_slimevr     # /stats3d reads NativePublisher::stats() when attached
     fitra_vmt         # /stats3d also splices VmtPublisher::stats()
@@ -247,6 +249,7 @@ target_link_libraries(fitra_app PUBLIC
 # Independent of TensorRT/CUDA so its unit test stays light.
 add_library(fitra_config STATIC
     config/main_config.cpp
+    config/setup_config_store.cpp
 )
 
 target_include_directories(fitra_config PUBLIC
