@@ -50,7 +50,27 @@ struct Handle {
     CUgraphicsResource egl_res        = nullptr;  // CUDA-registered EGL resource
     void*              dev_ptr        = nullptr;  // pitch-linear RGBA8 CUDA device ptr
     int                dev_pitch      = 0;        // device row stride (bytes)
+    // --- per-handle CUDA stream (per-camera GPU parallelism) -------------
+    // The RTMPose preprocess kernel used to launch + sync on the NULL (legacy
+    // default) stream, which implicitly serializes with EVERY non-blocking
+    // stream in the context (all TRT engine streams are non-blocking). With
+    // one decode thread per camera that turned each camera's GPU preprocess
+    // into a full-GPU barrier: it waited for every other camera AND the central
+    // RTMPose inference, and they waited for it -- a convoy that capped 3-camera
+    // 60fps with the CPU idle. Each handle now owns a non-blocking stream so the
+    // per-camera preprocess kernels and the central inference overlap freely.
+    // Created lazily (needs a bound CUDA context, which the first decode's
+    // ensure_egl establishes via cudaFree(0)).
+    cudaStream_t       stream         = nullptr;
 };
+
+// Lazily create the handle's non-blocking CUDA stream. Must be called only
+// after a CUDA context is current on this thread (guaranteed once a decode has
+// run ensure_egl -> cudaFree(0)). Returns false if creation fails.
+bool ensure_stream(Handle* hd) {
+    if (hd->stream) return true;
+    return cudaStreamCreateWithFlags(&hd->stream, cudaStreamNonBlocking) == cudaSuccess;
+}
 
 // Tear down the cached EGL->CUDA registration (before the dst surface is freed
 // or re-allocated). Safe to call when nothing is registered.
@@ -129,21 +149,34 @@ bool ensure_dst(Handle* hd, int w, int h) {
 // dst surface, and ensure the EGL->CUDA registration is live. On success sets
 // dw/dh and leaves hd->dev_ptr / hd->dev_pitch pointing at the RGBA device
 // buffer. Shared by the M1 (decode_cuda) and M2 (preprocess) entry points.
+// target_w/target_h > 0 request a VIC downscale: the dst surface is allocated at
+// the target size and NvTransform scales src (JPEG-native) -> dst in the same
+// YUV->RGBA pass (near-free; VIC is already running). 0 => dst == src (no scale).
+// On success out_w/out_h are the EFFECTIVE (dst) dimensions and hd->w/hd->h, the
+// device pointer, and every preprocess kernel that reads them operate at that
+// size. Used so a center-cropping camera can capture full sensor (full FOV) yet
+// feed the all-GPU front-end at the common runtime resolution.
 bool decode_transform_egl(Handle* hd, const unsigned char* jpeg, unsigned long n,
-                          uint32_t& dw, uint32_t& dh) {
-    int src_fd = -1; uint32_t pf = 0;
-    if (hd->dec->decodeToFd(src_fd, const_cast<unsigned char*>(jpeg), n, pf, dw, dh) < 0)
+                          int target_w, int target_h,
+                          uint32_t& out_w, uint32_t& out_h) {
+    int src_fd = -1; uint32_t pf = 0, nw = 0, nh = 0;
+    if (hd->dec->decodeToFd(src_fd, const_cast<unsigned char*>(jpeg), n, pf, nw, nh) < 0)
         return false;
+    const uint32_t dw = target_w > 0 ? static_cast<uint32_t>(target_w) : nw;
+    const uint32_t dh = target_h > 0 ? static_cast<uint32_t>(target_h) : nh;
     if (!ensure_dst(hd, static_cast<int>(dw), static_cast<int>(dh))) return false;
 
     NvBufSurf::NvCommonTransformParams tp;
     std::memset(&tp, 0, sizeof(tp));
-    tp.src_width = dw; tp.src_height = dh; tp.src_top = 0; tp.src_left = 0;
+    tp.src_width = nw; tp.src_height = nh; tp.src_top = 0; tp.src_left = 0;
     tp.dst_width = dw; tp.dst_height = dh; tp.dst_top = 0; tp.dst_left = 0;
     tp.flag   = (NvBufSurfTransform_Transform_Flag)(NVBUFSURF_TRANSFORM_FILTER);
     tp.flip   = NvBufSurfTransform_None;
-    tp.filter = NvBufSurfTransformInter_Nearest;
+    // Bilinear when scaling (Nearest would alias on downscale); Nearest for 1:1.
+    tp.filter = (dw != nw || dh != nh) ? NvBufSurfTransformInter_Bilinear
+                                       : NvBufSurfTransformInter_Nearest;
     if (NvBufSurf::NvTransform(&tp, src_fd, hd->dst_fd) != 0) return false;
+    out_w = dw; out_h = dh;
     return ensure_egl(hd);
 }
 
@@ -231,7 +264,7 @@ int fitra_nvjpeg_decode_cuda(void* handle,
     if (!w || !h || !dev_pitch || !dev || !host || !host_pitch) return -1;
 
     uint32_t dw = 0, dh = 0;
-    if (!decode_transform_egl(hd, jpeg, n, dw, dh)) return -1;
+    if (!decode_transform_egl(hd, jpeg, n, 0, 0, dw, dh)) return -1;
     NvBufSurfaceSyncForCpu(hd->dst_surf, 0, 0);  // M1 reads RGBA on host for BGR
     const auto& s = hd->dst_surf->surfaceList[0];
     *w          = static_cast<int>(dw);
@@ -279,11 +312,18 @@ int fitra_nvjpeg_preprocess_from_last(void* handle,
                                       float* dst_chw_dev) {
     Handle* hd = static_cast<Handle*>(handle);
     if (!hd || !hd->egl_registered || !hd->dev_ptr || !dst_chw_dev) return -1;
+    if (!ensure_stream(hd)) return -1;
+    // Launch + sync on this handle's OWN non-blocking stream, not the NULL
+    // stream. The sync still blocks this (per-camera) worker thread until the
+    // kernel finishes, so the buffer is ready before the frame is published to
+    // the central RTMPose thread (correctness unchanged). But it no longer
+    // serializes against the other cameras' streams or the central inference, so
+    // those run concurrently on the GPU.
     if (fitra_nvjpeg_preprocess_launch(hd->dev_ptr, hd->w, hd->h, hd->dev_pitch,
                                        M_inv6, out_w, out_h, mean_bgr, inv_std_bgr,
-                                       dst_chw_dev, nullptr) != 0)
+                                       dst_chw_dev, hd->stream) != 0)
         return -1;
-    return (cudaStreamSynchronize(nullptr) == cudaSuccess) ? 0 : -1;
+    return (cudaStreamSynchronize(hd->stream) == cudaSuccess) ? 0 : -1;
 }
 
 // Run the YOLOX letterbox preprocess from the handle's LAST decode RGBA output
@@ -306,15 +346,18 @@ int fitra_nvjpeg_preprocess_yolox_from_last(void* handle, int target, float pad,
 // sync) -- the pure all-GPU path. Use when the BGR host image is not needed
 // (M3+). For now the worker uses decode_cuda (host map for YOLOX/calib) plus
 // preprocess_from_last, so this is provided for completeness/M3.
+// target_w/target_h > 0 VIC-downscale the decode output to that size (full FOV
+// kept, fed to the all-GPU front-end at the runtime resolution); 0 => native.
+// *w/*h report the effective (post-scale) dimensions.
 __attribute__((visibility("default")))
 int fitra_nvjpeg_decode_to_device(void* handle, const unsigned char* jpeg,
-                                  unsigned long n, int* w, int* h,
-                                  int* dev_pitch, void** dev) {
+                                  unsigned long n, int target_w, int target_h,
+                                  int* w, int* h, int* dev_pitch, void** dev) {
     Handle* hd = static_cast<Handle*>(handle);
     if (!hd || !hd->dec || !jpeg || n == 0) return -1;
     if (!w || !h || !dev_pitch || !dev) return -1;
     uint32_t dw = 0, dh = 0;
-    if (!decode_transform_egl(hd, jpeg, n, dw, dh)) return -1;
+    if (!decode_transform_egl(hd, jpeg, n, target_w, target_h, dw, dh)) return -1;
     *w = static_cast<int>(dw); *h = static_cast<int>(dh);
     *dev_pitch = hd->dev_pitch; *dev = hd->dev_ptr;
     return 0;
@@ -324,6 +367,7 @@ __attribute__((visibility("default")))
 void fitra_nvjpeg_destroy(void* handle) {
     Handle* hd = static_cast<Handle*>(handle);
     if (!hd) return;
+    if (hd->stream) cudaStreamDestroy(hd->stream);
     release_egl(hd);
     if (hd->mapped && hd->dst_surf) NvBufSurfaceUnMap(hd->dst_surf, 0, 0);
     if (hd->dst_fd >= 0) NvBufSurf::NvDestroy(hd->dst_fd);

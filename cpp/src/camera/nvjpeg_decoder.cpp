@@ -80,7 +80,7 @@ NvJpegHwDecoder::NvJpegHwDecoder() {
         void*, const double*, int, int, const float*, const float*, float*)>(
         ::dlsym(lib_, "fitra_nvjpeg_preprocess_from_last"));
     decode_to_device_ = reinterpret_cast<int (*)(
-        void*, const unsigned char*, unsigned long, int*, int*, int*, void**)>(
+        void*, const unsigned char*, unsigned long, int, int, int*, int*, int*, void**)>(
         ::dlsym(lib_, "fitra_nvjpeg_decode_to_device"));
     preprocess_yolox_from_last_ = reinterpret_cast<int (*)(
         void*, int, float, float*, void*, float*)>(
@@ -180,12 +180,12 @@ bool NvJpegHwDecoder::preprocess_into(const double* M_inv6, int out_w, int out_h
 }
 
 bool NvJpegHwDecoder::decode_to_device(const std::uint8_t* jpeg, std::size_t bytes,
-                                       int& w, int& h) {
+                                       int& w, int& h, int target_w, int target_h) {
     if (!handle_ || !decode_to_device_ || !jpeg || bytes == 0) return false;
     int dev_pitch = 0;
     void* dev = nullptr;
     if (decode_to_device_(handle_, jpeg, static_cast<unsigned long>(bytes),
-                          &w, &h, &dev_pitch, &dev) != 0)
+                          target_w, target_h, &w, &h, &dev_pitch, &dev) != 0)
         return false;
     return dev != nullptr && w > 0 && h > 0;
 }

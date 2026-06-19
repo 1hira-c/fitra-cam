@@ -57,7 +57,11 @@ public:
     // RGBA->BGR. Use when the BGR host image is not needed (YOLOX + RTMPose both
     // on the GPU path). Sets w/h; the RGBA dev ptr is retained for the
     // following preprocess_into / preprocess_yolox_into. Returns true on success.
-    bool decode_to_device(const std::uint8_t* jpeg, std::size_t bytes, int& w, int& h);
+    // target_w/target_h > 0 VIC-downscale the output to that size in the same
+    // YUV->RGBA pass (full FOV kept, fed to the GPU front-end at runtime res);
+    // 0 = native. w/h are set to the effective (post-scale) dimensions.
+    bool decode_to_device(const std::uint8_t* jpeg, std::size_t bytes, int& w, int& h,
+                          int target_w = 0, int target_h = 0);
 
     // Run the YOLOX letterbox preprocess from the LAST decode into `dst_chw_dev`
     // (device, target*target*3 floats) on `stream` (the YOLOX engine's stream).
@@ -98,7 +102,7 @@ private:
                                  const float*, const float*, float*)         = nullptr;
     // M3: pure device decode + YOLOX letterbox preprocess.
     int (*decode_to_device_)(void*, const unsigned char*, unsigned long,
-                             int*, int*, int*, void**)                       = nullptr;
+                             int, int, int*, int*, int*, void**)             = nullptr;
     int (*preprocess_yolox_from_last_)(void*, int, float, float*, void*, float*) = nullptr;
     void (*destroy_)(void*)                                                  = nullptr;
 

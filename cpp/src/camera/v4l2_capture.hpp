@@ -44,11 +44,44 @@ struct Frame {
 
 struct V4l2Options {
     std::string device_path;
+    // Output (effective) resolution -- what every downstream consumer sees.
+    // When cap_width/cap_height override the capture resolution, frames are
+    // downscaled to width/height in FrameSource::decode_loop. Unchanged
+    // semantics for the no-override case (cap_* == 0).
     int width  = 640;
     int height = 480;
+    // Actual V4L2 capture resolution. 0 => same as width/height (no override,
+    // no downscale). Set higher than width/height for cameras whose low-res
+    // modes center-crop instead of downscaling (so the full sensor FOV is kept,
+    // then resized down to the common runtime resolution).
+    int cap_width  = 0;
+    int cap_height = 0;
     int fps    = 30;
     int n_buffers = 4;
     PixFmt pixel_format = PixFmt::Mjpeg;
+
+    // --- Exposure / gain control (anti-blur + steady 60fps pacing) -------
+    // Some UVC cameras' firmware auto-exposure lets the exposure TIME run long
+    // enough to (a) motion-blur a moving subject and (b) overrun the per-frame
+    // budget (16.7ms @60fps), producing irregular frame pacing (jitter) that
+    // appears on any host. We replace it:
+    //   Auto   = leave the camera's own controls untouched (default; no regress)
+    //   Manual = set fixed manual exposure + gain at start, then freeze
+    //   Assist = Manual initial set, then a slow software AE (FrameSource) nudges
+    //            gain (and exposure, capped at the fps-safe budget) toward a
+    //            brightness target -- keeps exposure short (low blur, steady fps).
+    // See docs/design/core-pipeline-camera-exposure-control.md.
+    enum class ExposureMode { Auto, Manual, Assist };
+    ExposureMode exposure_mode = ExposureMode::Auto;
+    int exposure_us100 = 0;    // V4L2_CID_EXPOSURE_ABSOLUTE (100us units); 0 = leave
+    int gain           = -1;   // V4L2_CID_GAIN; <0 = leave at camera default
+    int ae_target      = 110;  // Assist: target mean luma (0-255)
+
+    int capture_w() const { return cap_width  > 0 ? cap_width  : width;  }
+    int capture_h() const { return cap_height > 0 ? cap_height : height; }
+    bool downscaling() const {
+        return capture_w() != width || capture_h() != height;
+    }
 };
 
 class V4l2Capture {
@@ -90,6 +123,16 @@ public:
 
     const V4l2Options& options() const { return opts_; }
 
+    // Live exposure/gain setters for the software-AE assist (called from the
+    // FrameSource decode thread). VIDIOC_S_CTRL is independent of the streaming
+    // DQBUF/QBUF on the worker thread. Return false on ioctl failure.
+    bool set_exposure_us100(int v);
+    bool set_gain(int v);
+    // Gain control range, queried from the driver at start() (defaults if the
+    // control is absent). Used by the assist controller to clamp.
+    int gain_min() const { return gain_min_; }
+    int gain_max() const { return gain_max_; }
+
 private:
     struct MmapBuf {
         void*       ptr     = nullptr;
@@ -98,12 +141,38 @@ private:
 
     void worker_loop();
     void update_recv_fps(std::chrono::steady_clock::time_point now);
+    // Set a single V4L2 control (logs + returns false on failure).
+    bool set_ctrl(unsigned int id, int value, const char* name);
+    // Query gain range + apply the configured initial exposure/gain/focus
+    // controls (no-op in Auto mode). Called from start() after format setup.
+    void apply_exposure_controls();
+    int gain_min_ = 0;
+    int gain_max_ = 255;
+
+    // Diagnostic (env FITRA_CAPTURE_DEBUG): track driver-side frame drops via
+    // v4l2_buffer.sequence gaps. A gap means the driver captured frames we
+    // failed to DQBUF in time (our capture thread was descheduled / too slow),
+    // distinguishing a scheduling stall from the camera simply not delivering.
+    bool          capture_debug_   = false;
+    std::uint32_t last_buf_seq_     = 0;
+    bool          have_last_seq_    = false;
+    std::uint64_t driver_dropped_   = 0;
+    std::uint64_t dbg_frames_       = 0;
 
     V4l2Options opts_;
     int fd_ = -1;
     std::vector<MmapBuf> bufs_;
     std::thread worker_;
     std::atomic<bool> stop_{false};
+
+    // Capture-thread-owned scratch for the next frame's payload. Reused every
+    // frame (swapped with latest_->data under the slot lock) so the large
+    // uncompressed YUYV payload (e.g. 2.46MB at 1280x960) is NOT heap-allocated
+    // per frame. glibc malloc serves >128KB via mmap/munmap, so a fresh
+    // per-frame vector for YUYV meant an mmap + page-fault-zeroing + munmap each
+    // frame (~ms on Jetson), capping capture at ~53fps; the camera itself
+    // delivers 60 (measured with v4l2-ctl). Ping-ponging two buffers removes it.
+    std::vector<std::uint8_t> spare_data_;
 
     // latest-frame slot
     mutable std::mutex slot_mu_;

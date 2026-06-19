@@ -73,6 +73,18 @@ USB cam 2 ┘                                 │
 > [`design/core-pipeline-nvjpeg-decode.md`](design/core-pipeline-nvjpeg-decode.md) /
 > [`design/core-pipeline-gpu-frontend.md`](design/core-pipeline-gpu-frontend.md)。
 > SimCC argmax の GPU 化 (M5) は残課題。
+>
+> **2026-06-19 更新 (3 カメラリグ実機 60fps 安定化)**: 検証基準 (IoU/kpt L2/170fps) は不変だが、
+> capture front-end に以下を追加。(1) **per-camera capture 解像度 + ソフト downscale**: カメラ単位で
+> 高解像度キャプチャ→共通ランタイム解像度へ縮小 (center-crop 個体対策; nvjpeg は VIC スケール
+> decode で device 上縮小)。(2) **per-handle 非ブロッキング CUDA ストリーム**: per-camera RTMPose 前処理
+> カーネルを NULL ストリームから専用ストリームへ (全 GPU バリア解消)。(3) **YOLOX 検出スケジュール**:
+> 空検出時の毎フレーム再検出を廃止 + カメラ間で検出位相をずらし GPU バーストを分散。(4) **per-camera
+> 露出/gain 制御** (`auto`/`manual`/`assist`): 純正 AE のブラー+fps 予算超過を回避。(5) capture の
+> 毎フレーム mmap 撤廃 (`spare_data_` 再利用)。実機: 3 カメラ 640@60fps steady、`cap→pub ~8.7ms`。
+> 詳細は [`design/core-pipeline-per-camera-capture-downscale.md`](design/core-pipeline-per-camera-capture-downscale.md) /
+> [`design/core-pipeline-3cam-60fps-smoothing.md`](design/core-pipeline-3cam-60fps-smoothing.md) /
+> [`design/core-pipeline-camera-exposure-control.md`](design/core-pipeline-camera-exposure-control.md)。
 
 ## リポジトリレイアウト
 

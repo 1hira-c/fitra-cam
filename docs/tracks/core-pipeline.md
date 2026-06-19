@@ -33,6 +33,74 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-06-19 — per-camera 露出/gain 制御 (手動固定 + 簡易ソフトAE)
+cam1 の「ガタつき + ブラー + 妙に明るい」を追及 → **カメラ純正の自動露出が原因**と確定
+(Windows でも MJPEG/YUYV 両方でもガタつく → ホスト/圧縮非依存。`exposure_time_absolute`
+default=15.6ms が 60fps 予算 16.67ms の 94% で、暗いと AE が予算超へ伸ばし pacing 不均一 +
+動体ブラー)。**AE bias では解けない** (当該カメラは bias control 非公開 + AE は浮動)。対策:
+per-camera 露出制御を `V4l2Capture` に追加。**設計の肝 = exposure(高コスト: ブラー+fps超過)は
+短く固定上限、明るさは gain(低コスト)で取る**。3 モード: `auto`(既定・無改変) / `manual`(固定) /
+`assist`(常時・遅いデッドバンド ソフトAE; gain 優先・exposure は fps 安全上限で頭打ち)。
+start() で `auto_exposure=manual`+exposure+gain+`focus_auto=off` を適用、gain range は
+QUERYCTRL。assist は `FrameSource` が平均輝度を ae_interval(30f≈0.5s) 毎にデッドバンド判定し
+gain/exposure を遅く追従。config `cam{N}_exposure_mode/exposure/gain/ae_target`。既定 auto なので
+既存リグ無影響。ブラー低減は 2D 精度の底上げにも効く見込み。設計:
+`docs/design/core-pipeline-camera-exposure-control.md`。
+
+### 2026-06-19 — cam1 capture 頭打ち修正 (毎フレーム mmap 撤廃) + 電源モード是正
+cam1 (USB3.0 1280×960) が 53fps 頭打ち/ジッタだった件を追及。**カメラは無実** — 純 v4l2-ctl で
+YUYV 1280×960 は 60fps (要求 120fps でも 119fps) を steady に出すと実証。真因は 2 点:
+(1) **毎フレーム 2.46MB ヒープ確保**: `V4l2Capture::worker_loop` が毎フレーム新規 `Frame` の
+空 vector に `assign` で 2.46MB(YUYV) をコピーしていた。glibc malloc は >128KB を mmap/munmap で
+扱うため毎フレーム mmap+ページフォルト(ゼロ埋め)+munmap が走り capture を ~53 に拘束。
+キャプチャスレッド専有の `spare_data_` を `latest_->data` とスワップして capacity を再利用
+(確保はウォームアップ後ゼロ)。消費側も `FrameSource::decode_loop` の `Frame raw` をループ外に
+出し `raw = *latest_` の copy-assign で storage 再利用 (同じ mmap 罠が decode スレッドにもあった)。
+(2) **電源モード**: nvpmodel が 25W + schedutil で cpu4/5 が 0.73GHz の省エネコアに落ち、
+そこにスレッドが載るとジッタ。**真の最大は MAXN_SUPER (mode 2)** — このデバイスは mode 番号が
+振り直されており `0`=15W(最弱)、`1`=25W、`2`=MAXN_SUPER。CLAUDE.md の `nvpmodel -m 0` は
+Orin Nano Super では誤り (15W 固定になる)。**実測 (MAXN_SUPER + jetson_clocks, 3カメラ)**:
+cam0/cam2 solid 60、cam1 55-60 で pending 7 安定、cap→pub 30→**5.6ms**。cam1 は HW NVJPEG 競合と
+MJPEG ソースジッタを避ける **YUYV 推奨** (stage_ms 6.7→1.8ms)。**残**: cam1 単一では steady 60 だが
+3カメラ全負荷で 55-60 に揺れる (1280×960 capture が 640 機より重く 6 コア競合でスリップ) — 深掘り中。
+設計: `docs/design/core-pipeline-3cam-60fps-smoothing.md` (cam1 capture 節)。
+
+### 2026-06-19 — 3カメラ 60fps 安定化 (GPU 直列化解消 + 検出スケジュール + 位相ずらし)
+3カメラ 60fps のガタつきを解消。実測 e2e breakdown で**当初診断 (GPU null ストリーム直列化が
+天井) は主因でなかった**ことが判明 — 中央 RTMPose は `bake->pose=1.1ms` で律速でなく、真の律速は
+worker 側 YOLOX (`dec->det=18ms`) だった。3 修正: (1) **per-handle 非ブロッキング CUDA
+ストリーム** — RTMPose 前処理カーネルを NULL ストリームから専用ストリームへ (`det->bake` →
+0.00ms; 全 GPU バリア解消だが単独では不十分)。(2) **検出スケジュール修正** — `||
+cached_bboxes_.empty()` を削除。無人/未検出時に毎フレーム YOLOX(18ms×3) が暴走し ~48fps に
+張り付く逆転挙動を停止 (`dec->det` 18→2.6ms、cap→pub 30.6→7.9ms)。(3) **検出位相ずらし**
+(`det_phase = i*freq/N`) — 3カメラの YOLOX バースト重なりを分散しジッタ解消。**実測 (無人)**:
+cam0/cam2 recent_pose ~48→**59-61 安定**。残課題: cam1 は recv 50-60 で振れる (カメラ/UVC 配信
+特性、帯域起因でない; YUYV 安定 53 推奨) → 別タスク。設計:
+`docs/design/core-pipeline-3cam-60fps-smoothing.md`。
+
+### 2026-06-19 — HW NVJPEG 破損フレーム guard + per-camera pixel_format + VIC スケール decode
+3カメラリグ (cam0/cam2=ELP, cam1=USB3.0 1280→640) を立ち上げる過程で 3 点を追加。
+(1) **破損フレーム guard**: 多カメラの USB 帯域飽和で truncated/garbage MJPEG が出ると
+HW NVJPEG が segfault する。`frame_source` の `looks_like_jpeg()` が SOI/EOI+長さを検査して
+HW decoder に渡す前に drop (CPU `cv::imdecode` 経路は元々耐性あり)。nvjpeg 運用全般の
+クラッシュ耐性が上がる。(2) **per-camera `pixel_format`** (`cam{N}_pixel_format`): 混在
+decode 経路を可能に。(3) **VIC スケール decode**: `fitra_nvjpeg_decode_to_device` に
+`target_w/h` を追加し VIC の YUV→RGBA で 1280→640 を同時実行、縮小カメラも all-GPU front-end
+に残す。設計: `docs/design/core-pipeline-per-camera-capture-downscale.md` (M4-M6 + 残課題)。
+> この時点の「3カメラ 60fps の天井 = GPU null ストリーム直列化」という診断は**後日 (同 2026-06-19)
+> 実測で否定**された (主因は worker 側 YOLOX の毎フレーム検出)。次エントリ参照。
+
+### 2026-06-18 — per-camera capture 解像度 + ソフト downscale
+増設した USB3.0 個体 (`Global Shutter Camera` serial `2601240001`) は、既存 2 機と違い
+**640×480 だけセンサ中央 center-crop** に切替わり狭画角になることを実機キャプチャで確認。
+カメラ単位で V4L2 キャプチャ解像度を上書きでき (`cam{N}_capture_width/height` /
+`--camN-capture WxH`)、`FrameSource::decode_loop` が decode 直後に共通出力解像度へ `cv::resize`
+(INTER_AREA) する経路を追加。`V4l2Options` を出力 (`width/height`) と capture (`cap_width/height`,
+0=無し) の二層に分離 — ダウンストリームは `options().width/height` を読むので無改造。縮小カメラは
+nvjpeg .so が VIC スケールを露出しないため all-GPU front-end を切り BGR scratch + CPU prebake へ
+降ろす (HW JPEG decode は維持)。新カメラは 1280×960 撮影→640 縮小で既存機と画角・座標系が一致。
+intrinsic は 1280 校正→`scale_intrinsics` 640。設計: `docs/design/core-pipeline-per-camera-capture-downscale.md`。
+
 ### 2026-06-18 — WebUI/VMT 未接続時の待機 (idle) モード仕様起票 (仕様のみ)
 消費者 (WebUI の WS ビューア / VR 側 VMT) が誰も繋がっていない時に重い GPU 推論を自動で止めて
 省電力にする待機モードを設計。新 `RunMode::Idle` (flow daemon 再起動方式) は復帰に数秒かかるため没とし、
