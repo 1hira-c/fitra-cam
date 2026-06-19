@@ -40,6 +40,17 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-19 — 3D カメラ/HMD マーカーの PR#40 レビュー指摘修正 (バグ修正)
+PR #40 の Codex / Gemini レビュー指摘を反映。(1) **HMD 向きバグ**: HMD マーカーの姿勢を
+`B·R` から `B·R·B⁻¹` (トラッカーと同じ共役) へ修正。HMD `quat_wxyz` は `vmt_pose_to_world()`
+で fitra world フレームへ両側 rebase された姿勢のため、生 extrinsic 由来の camera (`B·R` が正)
+とは扱いが異なる。修正前は視線が常に 90°(真下) ずれて HMD 向き確認が機能しなかった。
+(2) `make_hmd_status_fragment` の world 変換を `snap.pose.valid` でガード (非有限値の JSON 混入
+→ frontend `JSON.parse` クラッシュ防止)。(3) `Triangulator::camera_poses()` をコンストラクタで
+事前計算しキャッシュ (毎フレームの行列演算/`cv::Mat` アロケーション排除)。(4) `updateCameras`/
+`updateHmd` の毎フレーム quaternion アロケーションを scratch + `multiplyQuaternions` で除去。
+軽微なため design doc なし (changelog のみ)。
+
 ### 2026-06-18 — 3D プレビューに HMD 位置を表示 (VMT 接続時)
 VMT 接続時、3D ビューアに HMD をワイヤーヘッドセット箱＋前方視線で描画。HMD pose は SteamVR から
 VMT Driver フレーム (Y-up・alignment 適用後) で届くため、新設の `vmt::vmt_pose_to_world()` で

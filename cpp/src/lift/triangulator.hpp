@@ -45,13 +45,15 @@ public:
     // Static camera placement in the fitra Z-up world frame, derived from the
     // stored world->camera extrinsics: center_w = -Rᵀ·t, and quat_wxyz is the
     // camera->world rotation (Rᵀ) as a unit quaternion (w,x,y,z). Used by the 3D
-    // viewer to draw camera frustums; cheap enough to call per frame.
+    // viewer to draw camera frustums. Precomputed once in the constructor (the
+    // placement is static) and returned by const reference, so the per-frame 3D
+    // publish path pays no matrix/quaternion work or allocation.
     struct CameraPose {
         std::string id;
         cv::Vec3d   center_w{0.0, 0.0, 0.0};
         cv::Vec4d   quat_wxyz{1.0, 0.0, 0.0, 0.0};
     };
-    std::vector<CameraPose> camera_poses() const;
+    const std::vector<CameraPose>& camera_poses() const { return camera_poses_; }
 
 private:
     struct CameraModel {
@@ -82,6 +84,7 @@ private:
     float reproj_error_px(const JointView& view, const cv::Point3d& point_w) const;
 
     std::vector<CameraModel> cameras_;
+    std::vector<CameraPose>  camera_poses_;  // precomputed in the constructor
     Options opts_;
 };
 

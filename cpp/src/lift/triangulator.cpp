@@ -86,11 +86,10 @@ Triangulator::Triangulator(const CalibrationSet& calib, Options opts)
     if (cameras_.size() < 2) {
         throw std::runtime_error("triangulation requires at least 2 calibrated cameras");
     }
-}
 
-std::vector<Triangulator::CameraPose> Triangulator::camera_poses() const {
-    std::vector<CameraPose> out;
-    out.reserve(cameras_.size());
+    // Camera placement is static; precompute it once here so camera_poses()
+    // (called every 3D-publish frame) is a const-ref read with no matrix work.
+    camera_poses_.reserve(cameras_.size());
     for (const auto& cam : cameras_) {
         CameraPose p;
         p.id = cam.id;
@@ -103,9 +102,8 @@ std::vector<Triangulator::CameraPose> Triangulator::camera_poses() const {
         for (int r = 0; r < 3; ++r)
             for (int col = 0; col < 3; ++col) R_wc(r, col) = Rt.at<double>(r, col);
         p.quat_wxyz = geom::mat_to_quat(R_wc);
-        out.push_back(std::move(p));
+        camera_poses_.push_back(std::move(p));
     }
-    return out;
 }
 
 TriangulatedSkeleton Triangulator::triangulate(

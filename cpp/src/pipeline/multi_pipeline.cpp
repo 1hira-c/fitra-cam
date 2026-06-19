@@ -316,7 +316,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     // Resent on every snapshot (incl. sync-miss) so the markers stay visible.
     std::vector<CameraPose3D> camera_poses;
     {
-        const auto poses = triangulator->camera_poses();
+        const auto& poses = triangulator->camera_poses();
         camera_poses.reserve(poses.size());
         for (const auto& p : poses) {
             CameraPose3D cp;

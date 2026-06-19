@@ -99,7 +99,11 @@ std::string make_hmd_status_fragment(const vmt::HmdPoseSnapshot& snap,
                 (180.0f / 3.14159265358979323846f) *
                 vmt::yaw_from_vmt_quat(vmt::VmtQuat{
                     snap.pose.qx, snap.pose.qy, snap.pose.qz, snap.pose.qw});
-        if (align) {
+        // Only emit world-frame pose for a valid reading: an invalid pose may
+        // carry non-finite x/y/z/q, and nan/inf would produce malformed JSON
+        // that breaks the frontend's JSON.parse. The viewer ignores invalid
+        // HMD poses anyway, so omitting pos_world/quat_wxyz here is harmless.
+        if (align && snap.pose.valid) {
             float wp[3], wq[4];
             vmt::vmt_pose_to_world(
                 vmt::VmtPos{snap.pose.x, snap.pose.y, snap.pose.z},

@@ -41,6 +41,9 @@ const WORLD_TO_THREE_QUAT = (() => {
   return new THREE.Quaternion(-k, 0, 0, k);
 })();
 const WORLD_TO_THREE_QUAT_INV = WORLD_TO_THREE_QUAT.clone().invert();
+// Scratch quaternion reused by the per-frame camera/HMD update paths to keep
+// those hot loops allocation-free.
+const tempQuat = new THREE.Quaternion();
 
 function isVisible3DJoint(joint: Joint3D | undefined): boolean {
   if (!Array.isArray(joint) || joint.length < 3) return false;
@@ -346,21 +349,22 @@ export class SkeletonViewer {
       // Position: world (x, y, z) -> Three.js (x, z, -y), matching jointToVector.
       view.group.position.set(Number(cam.pos[0]), Number(cam.pos[2]), -Number(cam.pos[1]));
 
-      // Orientation: camera->world quaternion conjugated into the Three.js basis,
-      // matching the tracker path.
-      // Orientation: the frustum opening (local +Z) must point along the camera
-      // optical axis. For an object whose fitra-world rotation is R, the correct
-      // three.js orientation is B·R (compose with the basis change), NOT the
-      // similarity transform B·R·B⁻¹. Conjugation re-expresses a rotation
-      // between frames but double-applies the basis change to geometry authored
-      // in three.js-local coords, which tilts a forward-facing frustum up 90°.
-      const qw = Number(cam.quat_wxyz[0]);
-      const qx = Number(cam.quat_wxyz[1]);
-      const qy = Number(cam.quat_wxyz[2]);
-      const qz = Number(cam.quat_wxyz[3]);
-      const qWorld = new THREE.Quaternion(qx, qy, qz, qw);
-      const qThree = WORLD_TO_THREE_QUAT.clone().multiply(qWorld);
-      view.group.quaternion.copy(qThree);
+      // Orientation: B·R (compose), NOT the similarity transform B·R·B⁻¹.
+      // Camera quat_wxyz comes from the raw camera->world extrinsic (Rᵀ), whose
+      // local frame is still the OpenCV camera convention (+Z = optical axis),
+      // and the frustum opening is authored along three.js-local +Z to match it
+      // directly. Because the rotation's local frame is NOT rebased into the
+      // three.js basis, only the world side needs B; conjugating would
+      // double-apply the basis change and tilt a forward frustum up 90°.
+      // (The HMD path differs — see updateHmd — because its quat goes through
+      // vmt_pose_to_world, which rebases the local frame like a tracker.)
+      tempQuat.set(
+        Number(cam.quat_wxyz[1]),
+        Number(cam.quat_wxyz[2]),
+        Number(cam.quat_wxyz[3]),
+        Number(cam.quat_wxyz[0]),
+      );
+      view.group.quaternion.multiplyQuaternions(WORLD_TO_THREE_QUAT, tempQuat);
       view.group.visible = true;
     }
 
@@ -424,11 +428,17 @@ export class SkeletonViewer {
 
     const q = hmd.quat_wxyz;
     if (Array.isArray(q) && q.length === 4) {
-      // Compose with the basis change (B·R), not conjugate — see updateCameras.
-      // The gaze line (local -Z) then points along the HMD view direction.
-      const qWorld = new THREE.Quaternion(Number(q[1]), Number(q[2]), Number(q[3]), Number(q[0]));
-      const qThree = WORLD_TO_THREE_QUAT.clone().multiply(qWorld);
-      this.hmdGroup.quaternion.copy(qThree);
+      // Conjugate into the Three.js basis (B·R·B⁻¹), same as the tracker path —
+      // NOT the camera path's B·R. The HMD quat_wxyz is delivered by
+      // vmt_pose_to_world, which rebases the rotation from the VMT frame into
+      // the fitra world frame on BOTH sides (local + world), so its local frame
+      // is fitra-convention just like a tracker's. With identity orientation
+      // the correct forward is fitra +Y → three.js -Z; B·R alone would tilt the
+      // gaze line down to -Y (a 90° error), B·R·B⁻¹ keeps it at -Z.
+      tempQuat.set(Number(q[1]), Number(q[2]), Number(q[3]), Number(q[0]));
+      this.hmdGroup.quaternion
+        .multiplyQuaternions(WORLD_TO_THREE_QUAT, tempQuat)
+        .multiply(WORLD_TO_THREE_QUAT_INV);
     }
     this.hmdGroup.visible = true;
   }
