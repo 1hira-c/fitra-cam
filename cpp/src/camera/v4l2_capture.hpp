@@ -115,6 +115,16 @@ private:
     void worker_loop();
     void update_recv_fps(std::chrono::steady_clock::time_point now);
 
+    // Diagnostic (env FITRA_CAPTURE_DEBUG): track driver-side frame drops via
+    // v4l2_buffer.sequence gaps. A gap means the driver captured frames we
+    // failed to DQBUF in time (our capture thread was descheduled / too slow),
+    // distinguishing a scheduling stall from the camera simply not delivering.
+    bool          capture_debug_   = false;
+    std::uint32_t last_buf_seq_     = 0;
+    bool          have_last_seq_    = false;
+    std::uint64_t driver_dropped_   = 0;
+    std::uint64_t dbg_frames_       = 0;
+
     V4l2Options opts_;
     int fd_ = -1;
     std::vector<MmapBuf> bufs_;

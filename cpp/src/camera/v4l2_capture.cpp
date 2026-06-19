@@ -1,9 +1,11 @@
 #include "camera/v4l2_capture.hpp"
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 
 #include <fcntl.h>
 #include <linux/videodev2.h>
@@ -124,6 +126,9 @@ void V4l2Capture::start() {
         if (xioctl(fd_, VIDIOC_QBUF, &buf) < 0) throw_errno("VIDIOC_QBUF (initial)");
     }
 
+    if (const char* e = std::getenv("FITRA_CAPTURE_DEBUG"); e && *e && std::string(e) != "0")
+        capture_debug_ = true;
+
     v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (xioctl(fd_, VIDIOC_STREAMON, &type) < 0) throw_errno("VIDIOC_STREAMON");
 
@@ -186,6 +191,21 @@ void V4l2Capture::worker_loop() {
         }
         auto now = std::chrono::steady_clock::now();
         std::uint64_t seq = total_received_.fetch_add(1) + 1;
+
+        // Driver-side drop detection: a jump in buf.sequence > 1 means the
+        // driver captured frames we didn't dequeue in time (capture thread
+        // descheduled). Distinguishes a scheduling stall from under-delivery.
+        if (capture_debug_) {
+            if (have_last_seq_ && buf.sequence > last_buf_seq_ + 1)
+                driver_dropped_ += buf.sequence - last_buf_seq_ - 1;
+            last_buf_seq_  = buf.sequence;
+            have_last_seq_ = true;
+            if (++dbg_frames_ % 120 == 0) {
+                FITRA_LOG_INFO("v4l2 dbg {}: recv_fps={} driver_dropped={} "
+                               "(buf.seq={})", opts_.device_path, recv_fps_.load(),
+                               driver_dropped_, buf.sequence);
+            }
+        }
 
         // Copy out so we can re-queue the V4L2 buffer immediately.
         // YUYV is fixed-size; some drivers report bytesused=0 for uncompressed

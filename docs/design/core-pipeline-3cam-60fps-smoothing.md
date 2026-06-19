@@ -64,32 +64,58 @@ cam0/cam2 recent_pose ~48→**59-61 (60fps 張り付き)**。
 (3カメラ・freq 10 → frame 0/3/6、~50ms 間隔)。検出バーストが時間軸に分散。
 **効果 (実測, 無人)**: cam0/cam2 recent_pose 59-61 で**安定** (振れが解消)。
 
-## 残課題: cam1 のキャプチャレート
+## cam1 capture 頭打ちの追及 (2026-06-19 深掘り)
 
-cam0/cam2 は安定 60fps。残る不安定は **cam1 単独で、`recv` (キャプチャ自体) が 50-60 で振れる**。
-パイプラインではなくカメラ/UVC 配信特性:
-- USB は SuperSpeed (5000M) で正常リンク (`lsusb -t` 確認) → **帯域起因ではない**。
-- MJPEG 1280×960: 平均 ~54fps だが圧縮量依存でジッタ大 (49.8-59.96)。
-- YUYV 1280×960: 安定 ~53fps (フレームサイズ一定)。広告は 60fps 対応だが 53 頭打ち
-  (センサ読み出し or この Jetson ポートの isoc スケジューリング起因と推定。memory
-  project-usb-camera-bus-limit と同系)。
-- **スループットはほぼ同じ。MJPEG はジッタを買うだけ** → 三角測量には **YUYV (安定) が有利**。
+cam1 (USB3.0 1280×960) が 53fps 頭打ち + 3カメラで 50-60 ジッタ。原因を順に切り分けて確定:
 
-→ cam1 は YUYV 運用を推奨 (`run_3d_floor.yaml`)。本当の指標は tri_fps / 3D の滑らかさで、
-三角測量は cam1 が sync window を外しても cam0+cam2 の2視点でフォールバックしうる。
-cam1 の 53→60 capture チューニング (isoc 枠 / モード探索) は別タスク (ハード軸)。
+### (i) カメラは無実
+純 v4l2-ctl (パイプライン非経由) で計測:
+- YUYV 1280×960 @60: **60.2fps steady** (要求 @120 でも **119fps**)。
+- MJPEG 1280×960 @60: 54-58fps (圧縮量依存で**ソース時点から**ジッタ)。
+→ カメラは YUYV で 60(120) を余裕で出す。MJPEG のジッタは圧縮固有。
+
+### (ii) 毎フレーム 2.46MB mmap (コード) — 修正済 (別コミット)
+`V4l2Capture::worker_loop` が毎フレーム新規 `Frame` の空 vector に 2.46MB(YUYV) を `assign`。
+glibc malloc は >128KB を mmap/munmap で扱うため毎フレーム mmap+ページフォルト+munmap → ~53 に拘束。
+capture スレッド専有 `spare_data_` を `latest_->data` とスワップ (capacity 再利用)。消費側も
+`FrameSource::decode_loop` の `Frame raw` をループ外へ。→ 単一カメラで 52.78→**60 steady**。
+
+### (iii) 電源モード — 環境是正
+nvpmodel が 25W + schedutil で cpu4/5 が 0.73GHz 省エネコアに落ち、スレッドが載るとジッタ。
+**真の最大は MAXN_SUPER (mode 2)**。このデバイスは mode 番号が振り直されており
+`0`=15W(最弱) / `1`=25W / `2`=MAXN_SUPER。**CLAUDE.md の `nvpmodel -m 0` は誤り**
+(Orin Nano Super では 15W 固定になる)。`-m 2` + `jetson_clocks` で全コア 1.728GHz 固定。
+
+### (iv) 残る 3カメラ時のドロップ = USB ホストコントローラ競合 (ハード)
+(ii)(iii) 後も 3カメラ時に cam1 のみ `recv` が 55-60 で揺れる。`buf.sequence` ギャップ計装
+(`FITRA_CAPTURE_DEBUG`) で確定:
+- cam0/cam2 (640): driver_dropped = **0**。cam1 (1280): 蓄積する (帯域に比例)。
+  YUYV ~4.5% / MJPEG ~2.4% / 単一カメラ時 0%。
+- **CPU でもバッファでもない** (n_buffers 16 でも不変。我々は常に1枚しか保持しないので
+  ドライバ枠は尽きない → ギャップ = フレームが USB から来ていない)。
+- トポロジ: 単一 xHCI `3610000.usb` が3カメラを収容 — cam1 は Bus002(USB3) の Realtek
+  USB3.0 ハブ、ELP×2 は Bus001(USB2) の USB2.0 ハブ。**同一コントローラを共有**し cam1 の
+  高帯域 1280 転送が競合。memory project-usb-camera-bus-limit の xHCI 枠制約と同根。
+
+→ **実用影響は軽微**: cam1 がドロップしたフレームは cam0+cam2 の2視点で三角測量フォールバック
+できるので tri_fps は落ちない (当初の「pending 爆発で使用不可」からは別世界)。
+**推奨**: cam1=YUYV (decode 軽量 stage_ms 1.8ms・HW NVJPEG 非競合・圧縮ジッタなし、ドロップは
+やや多いが 3D 影響は誤差)。真の cam1 単独 60 が要るなら**別 USB コントローラ `3550000.usb` 側の
+ポートへ cam1 を物理隔離** (要・再キャリブレーション) — ハード軸の follow-up。
 
 ## 検証
 
 - ビルド: `cmake --build cpp/build -j`。
-- 実機 (無人, 3カメラ 60fps, cam1=nvjpeg): cam0/cam2 recent_pose 59-61 安定、
-  pending 横ばい。cam1 は recv 50-60 (カメラ起因)。
+- 実機 (無人, 3カメラ 60fps, MAXN_SUPER): cam0/cam2 recent_pose 59-61 安定・pending 横ばい・
+  driver_dropped 0。cam1 は recv 55-60・pending 安定 (USB 競合のドロップ 2-4%、上記 (iv))。
+  cap→pub 30→**5.6ms**。
 - 人物ありは det が det_frequency に従うので同等のスループット (検出が埋まっても10フレームに1回)。
 - 数値同一性: 修正1 はカーネルの実行ストリームのみ変更 (math 不変) → `fitra_gpu_preprocess_check`
   の kpt L2 に無影響。
 
 ## 残課題 (続き)
 
-- cam1 capture 60fps 安定化 (上記)。
+- cam1 の USB 競合ドロップ完全解消はハード軸 (別コントローラ `3550000.usb` へ隔離、または
+  cam1 帯域削減)。現状はソフト最適 (mmap 撤廃済) + 2視点フォールバックで実用十分。
 - 中央ループ multi-camera の 2ms poll sleep をイベント駆動 (N ソース shared wakeup) 化 —
   poll ジッタ除去の follow-up (core-pipeline-e2e-latency の単一カメラ CV 化の multi 版)。
