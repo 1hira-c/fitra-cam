@@ -154,8 +154,14 @@ void FrameSource::decode_loop() {
     const bool downscaling = capture_->options().downscaling();
     const int  out_w = capture_->options().width;
     const int  out_h = capture_->options().height;
+    // Declared OUTSIDE the loop so its payload vector retains capacity across
+    // frames: wait_pop_latest does `raw = *latest_`, a vector copy-assign that
+    // reuses raw.data's storage when large enough. A fresh `Frame raw` per
+    // iteration would heap-allocate the (2.46MB) YUYV payload every frame
+    // (glibc mmap path), mirroring the capture-thread cap fixed in
+    // v4l2_capture.cpp -- it would otherwise cap the decode thread at ~53fps.
+    Frame raw;
     while (!stop_.load()) {
-        Frame raw;
         // Event-driven: block until the capture worker publishes a new frame
         // (or stop_ is set, or the 100ms safety timeout fires). Replaces the
         // old 2ms poll-sleep; wait_pop_latest already dedups on seq.

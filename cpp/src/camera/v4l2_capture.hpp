@@ -121,6 +121,15 @@ private:
     std::thread worker_;
     std::atomic<bool> stop_{false};
 
+    // Capture-thread-owned scratch for the next frame's payload. Reused every
+    // frame (swapped with latest_->data under the slot lock) so the large
+    // uncompressed YUYV payload (e.g. 2.46MB at 1280x960) is NOT heap-allocated
+    // per frame. glibc malloc serves >128KB via mmap/munmap, so a fresh
+    // per-frame vector for YUYV meant an mmap + page-fault-zeroing + munmap each
+    // frame (~ms on Jetson), capping capture at ~53fps; the camera itself
+    // delivers 60 (measured with v4l2-ctl). Ping-ponging two buffers removes it.
+    std::vector<std::uint8_t> spare_data_;
+
     // latest-frame slot
     mutable std::mutex slot_mu_;
     std::condition_variable slot_cv_;

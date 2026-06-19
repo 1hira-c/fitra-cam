@@ -33,6 +33,24 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-06-19 — cam1 capture 頭打ち修正 (毎フレーム mmap 撤廃) + 電源モード是正
+cam1 (USB3.0 1280×960) が 53fps 頭打ち/ジッタだった件を追及。**カメラは無実** — 純 v4l2-ctl で
+YUYV 1280×960 は 60fps (要求 120fps でも 119fps) を steady に出すと実証。真因は 2 点:
+(1) **毎フレーム 2.46MB ヒープ確保**: `V4l2Capture::worker_loop` が毎フレーム新規 `Frame` の
+空 vector に `assign` で 2.46MB(YUYV) をコピーしていた。glibc malloc は >128KB を mmap/munmap で
+扱うため毎フレーム mmap+ページフォルト(ゼロ埋め)+munmap が走り capture を ~53 に拘束。
+キャプチャスレッド専有の `spare_data_` を `latest_->data` とスワップして capacity を再利用
+(確保はウォームアップ後ゼロ)。消費側も `FrameSource::decode_loop` の `Frame raw` をループ外に
+出し `raw = *latest_` の copy-assign で storage 再利用 (同じ mmap 罠が decode スレッドにもあった)。
+(2) **電源モード**: nvpmodel が 25W + schedutil で cpu4/5 が 0.73GHz の省エネコアに落ち、
+そこにスレッドが載るとジッタ。**真の最大は MAXN_SUPER (mode 2)** — このデバイスは mode 番号が
+振り直されており `0`=15W(最弱)、`1`=25W、`2`=MAXN_SUPER。CLAUDE.md の `nvpmodel -m 0` は
+Orin Nano Super では誤り (15W 固定になる)。**実測 (MAXN_SUPER + jetson_clocks, 3カメラ)**:
+cam0/cam2 solid 60、cam1 55-60 で pending 7 安定、cap→pub 30→**5.6ms**。cam1 は HW NVJPEG 競合と
+MJPEG ソースジッタを避ける **YUYV 推奨** (stage_ms 6.7→1.8ms)。**残**: cam1 単一では steady 60 だが
+3カメラ全負荷で 55-60 に揺れる (1280×960 capture が 640 機より重く 6 コア競合でスリップ) — 深掘り中。
+設計: `docs/design/core-pipeline-3cam-60fps-smoothing.md` (cam1 capture 節)。
+
 ### 2026-06-19 — 3カメラ 60fps 安定化 (GPU 直列化解消 + 検出スケジュール + 位相ずらし)
 3カメラ 60fps のガタつきを解消。実測 e2e breakdown で**当初診断 (GPU null ストリーム直列化が
 天井) は主因でなかった**ことが判明 — 中央 RTMPose は `bake->pose=1.1ms` で律速でなく、真の律速は

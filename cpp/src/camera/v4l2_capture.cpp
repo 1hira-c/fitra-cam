@@ -192,11 +192,11 @@ void V4l2Capture::worker_loop() {
         // formats, so fall back to the full mmap buffer length in that case.
         std::size_t nbytes = buf.bytesused;
         if (nbytes == 0) nbytes = bufs_[buf.index].length;
-        Frame f;
-        f.data.assign(static_cast<std::uint8_t*>(bufs_[buf.index].ptr),
-                      static_cast<std::uint8_t*>(bufs_[buf.index].ptr) + nbytes);
-        f.seq         = seq;
-        f.captured_at = now;
+        // Fill the reusable capture-thread scratch (reuses its capacity after
+        // warmup -> no per-frame heap alloc; critical for large YUYV payloads,
+        // see spare_data_ doc). Swapped into latest_ under the slot lock below.
+        spare_data_.assign(static_cast<std::uint8_t*>(bufs_[buf.index].ptr),
+                           static_cast<std::uint8_t*>(bufs_[buf.index].ptr) + nbytes);
 
         // Re-queue
         v4l2_buffer qb{};
@@ -210,7 +210,12 @@ void V4l2Capture::worker_loop() {
 
         {
             std::lock_guard<std::mutex> lk{slot_mu_};
-            latest_ = std::move(f);
+            if (!latest_) latest_.emplace();
+            // Swap: latest_ takes the freshly-filled bytes; spare_data_ reclaims
+            // the previous frame's buffer (capacity retained) for the next fill.
+            std::swap(latest_->data, spare_data_);
+            latest_->seq         = seq;
+            latest_->captured_at = now;
             slot_cv_.notify_one();  // wake a consumer parked in wait_pop_latest
         }
         update_recv_fps(now);
