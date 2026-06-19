@@ -40,6 +40,18 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-18 — VMT ⇔ Jetson zeroconf ディスカバリ仕様起票 (仕様のみ)
+他ユーザー配布時に唯一手で埋める設定 (`vmt.host` = Windows PC の実 IP) を消すため、Jetson と
+VMT Manager が同一 LAN 上で相互に相手を見つける制御プレーンを設計。現状は「Jetson が先に PC IP を
+知る」鶏卵問題なので、双方が `/fitra/announce` (OSC) を `239.255.42.99:39580` マルチキャスト
+(+broadcast 二段構え, TTL=1) に 1 Hz で投げ合い、src IP + 広告 `osc_recv_port` で相互学習する方式を
+採用 (mDNS は外部依存増で没、cloud/QR も没)。pose wire (`/VMT/Room/Driver` / `/fitra/tracked_pose` /
+`/fitra/punch`) は不変、純粋な追加。複数ピアは単一→自動 / 複数→`instance_id` 最小 + `pair_id` pin +
+`pairing_token` でリグ間遮断。`vmt.host` 明示指定は最優先で discovery を上書き (後方互換・退路)。
+**実装は未着手** — M1/M2 が fitra-cam (Jetson) 側、M3 が Windows `vmt_manager` 側、M4 が実機で両機
+IP 無指定起動の確認。Windows フォーク開発と歩調を合わせるため wire/挙動契約を先行確定。
+→ [design/vr-output-zeroconf-discovery.md](../design/vr-output-zeroconf-discovery.md)
+
 ### 2026-06-15 — React WebUI の Gemini レビュー堅牢化 (バグ修正)
 PR #33 の Gemini Code Assist 指摘対応。(1) `SkeletonViewer.dispose()` が geometry/material
 を解放しておらず、route 往来 (`/` ↔ `/subject-calib`) の度に GPU リソースが蓄積していたのを、
