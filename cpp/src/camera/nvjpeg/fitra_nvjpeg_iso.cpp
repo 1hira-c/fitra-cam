@@ -50,7 +50,27 @@ struct Handle {
     CUgraphicsResource egl_res        = nullptr;  // CUDA-registered EGL resource
     void*              dev_ptr        = nullptr;  // pitch-linear RGBA8 CUDA device ptr
     int                dev_pitch      = 0;        // device row stride (bytes)
+    // --- per-handle CUDA stream (per-camera GPU parallelism) -------------
+    // The RTMPose preprocess kernel used to launch + sync on the NULL (legacy
+    // default) stream, which implicitly serializes with EVERY non-blocking
+    // stream in the context (all TRT engine streams are non-blocking). With
+    // one decode thread per camera that turned each camera's GPU preprocess
+    // into a full-GPU barrier: it waited for every other camera AND the central
+    // RTMPose inference, and they waited for it -- a convoy that capped 3-camera
+    // 60fps with the CPU idle. Each handle now owns a non-blocking stream so the
+    // per-camera preprocess kernels and the central inference overlap freely.
+    // Created lazily (needs a bound CUDA context, which the first decode's
+    // ensure_egl establishes via cudaFree(0)).
+    cudaStream_t       stream         = nullptr;
 };
+
+// Lazily create the handle's non-blocking CUDA stream. Must be called only
+// after a CUDA context is current on this thread (guaranteed once a decode has
+// run ensure_egl -> cudaFree(0)). Returns false if creation fails.
+bool ensure_stream(Handle* hd) {
+    if (hd->stream) return true;
+    return cudaStreamCreateWithFlags(&hd->stream, cudaStreamNonBlocking) == cudaSuccess;
+}
 
 // Tear down the cached EGL->CUDA registration (before the dst surface is freed
 // or re-allocated). Safe to call when nothing is registered.
@@ -292,11 +312,18 @@ int fitra_nvjpeg_preprocess_from_last(void* handle,
                                       float* dst_chw_dev) {
     Handle* hd = static_cast<Handle*>(handle);
     if (!hd || !hd->egl_registered || !hd->dev_ptr || !dst_chw_dev) return -1;
+    if (!ensure_stream(hd)) return -1;
+    // Launch + sync on this handle's OWN non-blocking stream, not the NULL
+    // stream. The sync still blocks this (per-camera) worker thread until the
+    // kernel finishes, so the buffer is ready before the frame is published to
+    // the central RTMPose thread (correctness unchanged). But it no longer
+    // serializes against the other cameras' streams or the central inference, so
+    // those run concurrently on the GPU.
     if (fitra_nvjpeg_preprocess_launch(hd->dev_ptr, hd->w, hd->h, hd->dev_pitch,
                                        M_inv6, out_w, out_h, mean_bgr, inv_std_bgr,
-                                       dst_chw_dev, nullptr) != 0)
+                                       dst_chw_dev, hd->stream) != 0)
         return -1;
-    return (cudaStreamSynchronize(nullptr) == cudaSuccess) ? 0 : -1;
+    return (cudaStreamSynchronize(hd->stream) == cudaSuccess) ? 0 : -1;
 }
 
 // Run the YOLOX letterbox preprocess from the handle's LAST decode RGBA output
@@ -340,6 +367,7 @@ __attribute__((visibility("default")))
 void fitra_nvjpeg_destroy(void* handle) {
     Handle* hd = static_cast<Handle*>(handle);
     if (!hd) return;
+    if (hd->stream) cudaStreamDestroy(hd->stream);
     release_egl(hd);
     if (hd->mapped && hd->dst_surf) NvBufSurfaceUnMap(hd->dst_surf, 0, 0);
     if (hd->dst_fd >= 0) NvBufSurf::NvDestroy(hd->dst_fd);

@@ -9,6 +9,15 @@ CameraSet make_frame_sources(const config::MainOptions& opts,
                              TrtStack* trt,
                              std::shared_ptr<std::atomic<bool>> recording_flag) {
     CameraSet set;
+    // Count active cameras up front so each can be given a distinct YOLOX
+    // detection phase slot (stagger), spreading the per-camera detection bursts
+    // across the det_frequency period instead of letting them align on one
+    // frame and stall the shared GPU.
+    std::size_t active_cams = 0;
+    for (const auto& p : opts.cam_paths)
+        if (!p.empty()) ++active_cams;
+    if (active_cams == 0) active_cams = 1;
+    std::size_t active_idx = 0;
     for (std::size_t i = 0; i < opts.cam_paths.size(); ++i) {
         const auto& path = opts.cam_paths[i];
         if (path.empty()) continue;
@@ -52,6 +61,12 @@ CameraSet make_frame_sources(const config::MainOptions& opts,
 
         camera::FrameSource::Options src_opts;
         src_opts.det_frequency = opts.det_frequency;
+        // Stagger this camera's detection phase: slot = active_idx * freq / N,
+        // so for 3 cameras at det_frequency 10 they detect at frames ...0, 3, 6
+        // of each period — ~50ms apart at 60fps instead of all at once.
+        src_opts.det_phase = static_cast<int>(
+            active_idx * static_cast<std::size_t>(opts.det_frequency) / active_cams);
+        ++active_idx;
         src_opts.single_person = !opts.multi_person;
         src_opts.fake_bbox_if_empty = opts.bench_fake_bbox;
         // Subject-calibration recording taps MultiCameraDriver's frame tap.

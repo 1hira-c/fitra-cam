@@ -250,8 +250,19 @@ void FrameSource::decode_loop() {
         // raw mp4 capture is the priority, and dump_keypoints_3d re-runs
         // detection offline on the resulting clips anyway.
         if (yolox_ && !calib_recording) {
-            bool do_detect = (frame_idx_ % opts_.det_frequency == 0)
-                          || cached_bboxes_.empty();
+            // Detect on the decimation schedule only. The old `||
+            // cached_bboxes_.empty()` clause forced YOLOX EVERY frame whenever
+            // nothing was detected -- so an empty/no-person scene ran the
+            // heaviest GPU op (YOLOX_s 640, ~18ms) on all cameras at full frame
+            // rate, saturating the shared GPU and capping pose at ~48fps (idle
+            // was MORE expensive than tracking). The modulo already re-detects
+            // every det_frequency frames when empty (~167ms @60fps/det=10 to
+            // acquire a person entering frame), which is plenty responsive, so
+            // drop the per-frame retry. Camera detects at its staggered phase
+            // slot within the period (det_phase) so the cameras' YOLOX bursts
+            // don't all land on the same frame and stall the shared GPU.
+            bool do_detect =
+                (frame_idx_ % opts_.det_frequency) == (opts_.det_phase % opts_.det_frequency);
             if (do_detect) {
                 // GPU YOLOX: the preprocess kernel fills the engine input from
                 // the retained RGBA device buffer (on the engine's stream); the

@@ -105,6 +105,15 @@ class FrameSource {
 public:
     struct Options {
         int  det_frequency = 10;
+        // Phase offset (frames) within the det_frequency period at which this
+        // camera runs YOLOX. With one decode thread per camera and a shared
+        // GPU, aligning every camera's detection on the same frame piles all
+        // their YOLOX inferences (the heaviest GPU op) into one window — a
+        // periodic burst that stalls the steady RTMPose stream and makes the
+        // 3-camera pose rate jitter. Staggering the phase across cameras
+        // (0, freq/N, 2*freq/N, ...) spreads the bursts over time so the GPU
+        // load is smooth. Set per camera in camera_builder.
+        int  det_phase     = 0;
         bool single_person = true;
         // Keep a BGR copy in DecodedFrame even when RTMPose prebaking is
         // enabled. This costs a full-frame clone per decoded frame, so callers

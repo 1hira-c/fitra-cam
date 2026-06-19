@@ -113,14 +113,13 @@ HW JPEG デコード(重い部分)は維持。GPU preprocess を失う CPU コ�
 
 ## 残課題
 
-- **3カメラ 60fps の GPU 直列化天井 (2026-06-19 判明、未解決)**: 3カメラ構成 (cam0/cam2=ELP
-  640, cam1=USB3.0 1280→640) を 60fps で回すと cam1 が ~50 で頭打ち・pending 増大 →
-  3カメラ sync が外れて tri_fps がガタつく。**CPU はアイドル (load ~1.0/6コア)** で、
-  ボトルネックは GPU 側: per-camera RTMPose GPU 前処理 (`fitra_nvjpeg_preprocess_from_last`)
-  が **null(default) ストリームで `cudaStreamSynchronize(nullptr)`** しており、3カメラ +
-  中央 RTMPose が null ストリームに直列化する。decode 方式 (mjpeg/nvjpeg/VIC/YUYV) を変えても
-  この天井は超えない (どれも cam1 ~45-50)。**本命の対策 = per-camera CUDA ストリーム化**
-  (前処理を専用ストリームに載せて並列実行)。別タスクとして起票。
+- ~~**3カメラ 60fps の GPU 直列化天井**~~ **(2026-06-19 解決 — ただし当初診断は誤りだった)**:
+  当初「null ストリーム直列化が天井」と診断したが、実測 e2e breakdown で**否定された** —
+  中央 RTMPose は `bake->pose=1.1ms` で律速でなく、真の律速は worker 側 YOLOX の毎フレーム
+  検出 (無人時に `cached_bboxes_.empty()` が毎フレーム YOLOX を強制) だった。検出スケジュール
+  修正 + per-handle CUDA ストリーム + 検出位相ずらしで cam0/cam2 は 60fps 安定。正しい原因
+  究明・修正は `docs/design/core-pipeline-3cam-60fps-smoothing.md`。
+  (cam1 の recv 50-60 振れはカメラ/UVC 配信特性として別タスクに分離。)
 - ハード同期なし多カメラの時間 sync: 3-way 一致は 2-way より低歩留まりで、tight 窓だと
   tri が間引かれ、広い窓 (例 30ms) だとモーションのカメラ間ズレが出る本質的トレードオフ。
 - 縮小カメラの YUYV 経路 (cvtColor 1280 + INTER_AREA resize) の CPU コスト実測。

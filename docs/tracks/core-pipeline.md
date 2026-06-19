@@ -33,6 +33,19 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-06-19 — 3カメラ 60fps 安定化 (GPU 直列化解消 + 検出スケジュール + 位相ずらし)
+3カメラ 60fps のガタつきを解消。実測 e2e breakdown で**当初診断 (GPU null ストリーム直列化が
+天井) は主因でなかった**ことが判明 — 中央 RTMPose は `bake->pose=1.1ms` で律速でなく、真の律速は
+worker 側 YOLOX (`dec->det=18ms`) だった。3 修正: (1) **per-handle 非ブロッキング CUDA
+ストリーム** — RTMPose 前処理カーネルを NULL ストリームから専用ストリームへ (`det->bake` →
+0.00ms; 全 GPU バリア解消だが単独では不十分)。(2) **検出スケジュール修正** — `||
+cached_bboxes_.empty()` を削除。無人/未検出時に毎フレーム YOLOX(18ms×3) が暴走し ~48fps に
+張り付く逆転挙動を停止 (`dec->det` 18→2.6ms、cap→pub 30.6→7.9ms)。(3) **検出位相ずらし**
+(`det_phase = i*freq/N`) — 3カメラの YOLOX バースト重なりを分散しジッタ解消。**実測 (無人)**:
+cam0/cam2 recent_pose ~48→**59-61 安定**。残課題: cam1 は recv 50-60 で振れる (カメラ/UVC 配信
+特性、帯域起因でない; YUYV 安定 53 推奨) → 別タスク。設計:
+`docs/design/core-pipeline-3cam-60fps-smoothing.md`。
+
 ### 2026-06-19 — HW NVJPEG 破損フレーム guard + per-camera pixel_format + VIC スケール decode
 3カメラリグ (cam0/cam2=ELP, cam1=USB3.0 1280→640) を立ち上げる過程で 3 点を追加。
 (1) **破損フレーム guard**: 多カメラの USB 帯域飽和で truncated/garbage MJPEG が出ると
@@ -41,10 +54,9 @@ HW decoder に渡す前に drop (CPU `cv::imdecode` 経路は元々耐性あり)
 クラッシュ耐性が上がる。(2) **per-camera `pixel_format`** (`cam{N}_pixel_format`): 混在
 decode 経路を可能に。(3) **VIC スケール decode**: `fitra_nvjpeg_decode_to_device` に
 `target_w/h` を追加し VIC の YUV→RGBA で 1280→640 を同時実行、縮小カメラも all-GPU front-end
-に残す。**未解決**: 3カメラ 60fps は GPU の null ストリーム直列化 (per-camera RTMPose 前処理の
-`cudaStreamSynchronize(nullptr)`) が天井で cam1 が ~50 頭打ち → tri_fps ガタつき。CPU はアイドル。
-対策は per-camera CUDA ストリーム化 (別タスク)。設計:
-`docs/design/core-pipeline-per-camera-capture-downscale.md` (M4-M6 + 残課題)。
+に残す。設計: `docs/design/core-pipeline-per-camera-capture-downscale.md` (M4-M6 + 残課題)。
+> この時点の「3カメラ 60fps の天井 = GPU null ストリーム直列化」という診断は**後日 (同 2026-06-19)
+> 実測で否定**された (主因は worker 側 YOLOX の毎フレーム検出)。次エントリ参照。
 
 ### 2026-06-18 — per-camera capture 解像度 + ソフト downscale
 増設した USB3.0 個体 (`Global Shutter Camera` serial `2601240001`) は、既存 2 機と違い
