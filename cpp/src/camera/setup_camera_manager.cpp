@@ -47,6 +47,15 @@ bool SetupCameraManager::start(const PreviewRequest& req, std::string& err) {
     opts.fps          = req.fps;
     opts.pixel_format = s->pixfmt;
     opts.n_buffers    = 4;
+    // Exposure override (same string->enum mapping as app/camera_builder.cpp).
+    opts.exposure_mode = (req.exposure_mode == "manual")
+                             ? V4l2Options::ExposureMode::Manual
+                             : (req.exposure_mode == "assist")
+                                   ? V4l2Options::ExposureMode::Assist
+                                   : V4l2Options::ExposureMode::Auto;
+    opts.exposure_us100 = req.exposure;
+    opts.gain           = req.gain;
+    opts.ae_target      = req.ae_target;
     try {
         s->cap = std::make_unique<V4l2Capture>(std::move(opts));
         s->cap->start();

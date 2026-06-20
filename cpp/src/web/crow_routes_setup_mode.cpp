@@ -246,7 +246,11 @@ bool parse_preview(const crow::json::rvalue& body, camera::PreviewRequest& req,
     if (body.has("width")  && body["width"].t()  == crow::json::type::Number) req.width  = static_cast<int>(body["width"].i());
     if (body.has("height") && body["height"].t() == crow::json::type::Number) req.height = static_cast<int>(body["height"].i());
     if (body.has("fps")    && body["fps"].t()    == crow::json::type::Number) req.fps    = static_cast<int>(body["fps"].i());
-    if (body.has("pixel_format") && body["pixel_format"].t() == crow::json::type::String) req.pixel_format = body["pixel_format"].s();
+    if (body.has("pixel_format")  && body["pixel_format"].t()  == crow::json::type::String) req.pixel_format  = body["pixel_format"].s();
+    if (body.has("exposure_mode") && body["exposure_mode"].t() == crow::json::type::String) req.exposure_mode = body["exposure_mode"].s();
+    if (body.has("exposure")  && body["exposure"].t()  == crow::json::type::Number) req.exposure  = static_cast<int>(body["exposure"].i());
+    if (body.has("gain")      && body["gain"].t()      == crow::json::type::Number) req.gain      = static_cast<int>(body["gain"].i());
+    if (body.has("ae_target") && body["ae_target"].t() == crow::json::type::Number) req.ae_target = static_cast<int>(body["ae_target"].i());
     return true;
 }
 

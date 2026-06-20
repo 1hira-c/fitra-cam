@@ -25,6 +25,12 @@ struct PreviewRequest {
     int height = 480;
     int fps    = 30;
     std::string pixel_format = "mjpeg";   // mjpeg | yuyv | nvjpeg
+    // Per-camera exposure controls so the preview reflects an override before
+    // it is committed. exposure_mode "" / "auto" leaves the camera untouched.
+    std::string exposure_mode;            // "" | "auto" | "manual" | "assist"
+    int exposure  = 0;                    // V4L2 exposure_absolute, 100us units; 0 = leave
+    int gain      = -1;                   // V4L2 gain; <0 = leave at camera default
+    int ae_target = 110;                  // assist target mean luma
 };
 
 class SetupCameraManager {

@@ -184,6 +184,11 @@ export async function startCameraPreview(body: {
   height: number;
   fps: number;
   pixel_format: string;
+  // Optional per-camera exposure override so the preview reflects it.
+  exposure_mode?: string;
+  exposure?: number;
+  gain?: number;
+  ae_target?: number;
 }): Promise<CameraPreviewResponse> {
   const { res, data } = await postJson<CameraPreviewResponse>(
     "/api/cameras/preview/start",

@@ -59,6 +59,37 @@ function formatFor(cam: DetectedCamera | undefined, pixelFormat: string): Camera
   return cam.formats.find((f) => f.fourcc.toUpperCase() === want) ?? cam.formats[0];
 }
 
+interface PreviewSettings {
+  width: number;
+  height: number;
+  fps: number;
+  pixel_format: string;
+  exposure_mode: string;
+  exposure: number;
+  gain: number;
+  ae_target: number;
+}
+
+// Effective capture settings for previewing `cam`: the per-slot override (if the
+// camera is assigned to a slot) merged over the global capture format, matching
+// how the runtime builds each camera. The preview captures with exactly these so
+// an override can be reflected and confirmed before committing.
+function effectiveSettings(cam: DetectedCamera, draft: ConfigDraft): PreviewSettings {
+  const c = draft.cameras;
+  const i = SLOTS.findIndex((s) => c[s] === cam.by_path);
+  const ov = i >= 0 ? c.overrides[i] : undefined;
+  return {
+    width: ov && ov.capture_width > 0 ? ov.capture_width : c.width,
+    height: ov && ov.capture_height > 0 ? ov.capture_height : c.height,
+    fps: c.fps,
+    pixel_format: ov && ov.pixel_format ? ov.pixel_format : c.pixel_format,
+    exposure_mode: ov ? ov.exposure_mode : "",
+    exposure: ov ? ov.exposure : 0,
+    gain: ov ? ov.gain : -1,
+    ae_target: ov ? ov.ae_target : 110,
+  };
+}
+
 export function SetupPage() {
   const flow = useFlowWatch({ page: "setup" });
 
@@ -78,6 +109,11 @@ export function SetupPage() {
   const [previewing, setPreviewing] = useState<string | null>(null);
   const previewImg = useRef<HTMLImageElement | null>(null);
   const previewTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The device the refresh tick currently points at (updated without a flash on
+  // restart) and the effective-settings JSON last sent to the backend (so the
+  // live-reflect effect only restarts the stream when something actually changed).
+  const previewDevice = useRef<string>("");
+  const appliedPreviewKey = useRef<string>("");
 
   // --- initial load ---------------------------------------------------------
   const loadCameras = useCallback(async () => {
@@ -124,47 +160,64 @@ export function SetupPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const startPreview = useCallback(
+  // Start (or restart) the preview for `cam` using its effective settings. One
+  // camera at a time: switching devices stops the previous backend stream. The
+  // refresh tick reads previewDevice (a ref) so a same-camera restart (override
+  // edit) does not blank/recreate the <img>.
+  const applyPreview = useCallback(
     async (cam: DetectedCamera) => {
       if (!draft) return;
-      // One at a time: stop any current preview first.
-      if (previewing) {
-        stopPreviewTimer();
+      const eff = effectiveSettings(cam, draft);
+      if (previewing && previewing !== cam.by_path) {
         await stopCameraPreview(previewing);
-        setPreviewing(null);
       }
-      const c = draft.cameras;
-      const r = await startCameraPreview({
-        device: cam.by_path,
-        width: c.width,
-        height: c.height,
-        fps: c.fps,
-        pixel_format: c.pixel_format,
-      });
+      const r = await startCameraPreview({ device: cam.by_path, ...eff });
       if (!r.ok) {
         setScanMsg({ text: r.err || "preview failed", err: true });
         return;
       }
+      appliedPreviewKey.current = JSON.stringify(eff);
+      previewDevice.current = cam.by_path;
       setPreviewing(cam.by_path);
-      const tick = () => {
-        if (previewImg.current) {
-          previewImg.current.src = httpUrl(
-            "/api/cameras/preview.jpg?cam=" + encodeURIComponent(cam.by_path) + "&t=" + Date.now(),
-          );
-        }
-      };
-      tick();
-      previewTimer.current = setInterval(tick, PREVIEW_REFRESH_MS);
+      if (previewTimer.current === null) {
+        const tick = () => {
+          if (previewImg.current && previewDevice.current) {
+            previewImg.current.src = httpUrl(
+              "/api/cameras/preview.jpg?cam=" +
+                encodeURIComponent(previewDevice.current) +
+                "&t=" + Date.now(),
+            );
+          }
+        };
+        tick();
+        previewTimer.current = setInterval(tick, PREVIEW_REFRESH_MS);
+      }
     },
-    [draft, previewing, stopPreviewTimer],
+    [draft, previewing],
   );
 
   const stopPreview = useCallback(async () => {
     stopPreviewTimer();
     const dev = previewing;
+    previewDevice.current = "";
+    appliedPreviewKey.current = "";
     setPreviewing(null);
     if (dev) await stopCameraPreview(dev);
   }, [previewing, stopPreviewTimer]);
+
+  // Live reflect: when the previewing camera's effective settings change (an
+  // override or global edit), restart its stream after a short debounce so the
+  // preview shows the new settings. The key-compare keeps it from restarting
+  // when nothing relevant changed.
+  useEffect(() => {
+    if (!previewing || !draft) return;
+    const cam = cameras.find((c) => c.by_path === previewing);
+    if (!cam) return;
+    const key = JSON.stringify(effectiveSettings(cam, draft));
+    if (key === appliedPreviewKey.current) return;
+    const t = setTimeout(() => void applyPreview(cam), 400);
+    return () => clearTimeout(t);
+  }, [previewing, draft, cameras, applyPreview]);
 
   // --- draft mutation helpers ----------------------------------------------
   const setCameras_ = (patch: Partial<ConfigCameras>) =>
@@ -319,7 +372,7 @@ export function SetupPage() {
                           <td>
                             <button
                               type="button"
-                              onClick={() => (isPreview ? void stopPreview() : void startPreview(cam))}
+                              onClick={() => (isPreview ? void stopPreview() : void applyPreview(cam))}
                             >
                               {isPreview ? "停止" : "プレビュー"}
                             </button>
@@ -335,6 +388,21 @@ export function SetupPage() {
             {previewing && (
               <div className="preview-wrap">
                 <img ref={previewImg} alt="camera preview" />
+                {draft && (() => {
+                  const cam = cameras.find((c) => c.by_path === previewing);
+                  if (!cam) return null;
+                  const e = effectiveSettings(cam, draft);
+                  const exp =
+                    e.exposure_mode === "manual" || e.exposure_mode === "assist"
+                      ? ` / 露出 ${e.exposure_mode} exp=${e.exposure} gain=${e.gain}` +
+                        (e.exposure_mode === "assist" ? ` ae=${e.ae_target}` : "")
+                      : "";
+                  return (
+                    <div className="preview-caption muted">
+                      プレビュー: {e.width}×{e.height} {e.pixel_format} @{e.fps}fps{exp}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
