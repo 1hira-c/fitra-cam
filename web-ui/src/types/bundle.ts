@@ -403,8 +403,12 @@ export interface ConfigIntrinsicCalib {
 }
 
 export interface ConfigExtrinsicCalib {
-  method: string;
-  out: string;
+  method: string;          // "controller" | "floor"
+  out: string;             // where extrinsics are written
+  intrinsics: string;      // controller PnP intrinsics ("" → reuse three_d.calib)
+  floor_map: string;       // floor: known AprilTag layout YAML (required for floor)
+  floor_intrinsics: string; // floor PnP intrinsics ("" → reuse three_d.calib)
+  floor_fisheye: boolean;  // floor: intrinsics use the fisheye model
 }
 
 export interface ConfigDraft {

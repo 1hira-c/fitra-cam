@@ -127,6 +127,13 @@ void merge_config(MainOptions& d, const crow::json::rvalue& cfg) {
             // Keep the floor output target coupled to `out`, as the loader does.
             d.floor_out = d.excal_out;
         }
+        // PnP / marker intrinsics + floor tag layout. The floor method requires
+        // floor_map; both methods fall back to three_d.calib when their
+        // intrinsics field is empty (see config::precheck_mode_switch).
+        jstr(c, "intrinsics",       d.excal_intrinsics);   // controller method
+        jstr(c, "floor_map",        d.floor_map);
+        jstr(c, "floor_intrinsics", d.floor_intrinsics);   // floor method
+        jbool(c, "floor_fisheye",   d.floor_fisheye);
     }
 }
 
@@ -172,8 +179,12 @@ std::string draft_to_json(const MainOptions& d) {
       << "\"slimevr\":{\"slimevr_out\":" << b(d.slimevr_out)
       << ",\"host\":\"" << json_escape(d.slimevr_host) << "\",\"port\":" << d.slimevr_port << "},"
       << "\"intrinsic_calib\":{\"enabled\":" << b(d.intrinsic_step_enabled) << "},"
-      << "\"extrinsic_calib\":{\"method\":\"" << json_escape(d.excal_method)
-      << "\",\"out\":\"" << json_escape(d.excal_out) << "\"}"
+      << "\"extrinsic_calib\":{\"method\":\"" << json_escape(d.excal_method) << "\""
+      << ",\"out\":\"" << json_escape(d.excal_out) << "\""
+      << ",\"intrinsics\":\"" << json_escape(d.excal_intrinsics) << "\""
+      << ",\"floor_map\":\"" << json_escape(d.floor_map) << "\""
+      << ",\"floor_intrinsics\":\"" << json_escape(d.floor_intrinsics) << "\""
+      << ",\"floor_fisheye\":" << b(d.floor_fisheye) << "}"
       << "}";
     return o.str();
 }

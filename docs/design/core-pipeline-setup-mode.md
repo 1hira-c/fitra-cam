@@ -80,6 +80,11 @@ JSON で出し入れし、それ以外の seed 値は draft に保持され writ
 JSON⇄MainOptions マッピングは web 層 (`crow_routes_setup_mode.cpp`) に置き、`fitra_config` を
 Crow から切り離す (TensorRT/CUDA 非依存を維持)。
 
+**外部校正の method 別フィールド**も編集サブセットに含む: controller は `intrinsics`、floor は
+`floor_map`(タグ配置・floor 必須) / `floor_intrinsics` / `floor_fisheye`。SetupPage は method に
+応じて出し分け、path は `PathField` で存在チェック。これが無いと floor を選んでも
+`precheck_mode_switch(CalibExtrinsicFloor)` が floor_map を要求して proceed が止まる。
+
 **カメラ別オーバーライド**は `cameras.overrides[]` (長さ 3、index=スロット cam0/1/2) として
 JSON に乗せる。各要素は `{capture_width, capture_height, pixel_format, exposure_mode, exposure,
 gain, ae_target}` で、MainOptions の `cam{N}_*` 配列・YAML の `cam{N}_capture_width` 等と 1:1。

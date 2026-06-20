@@ -820,6 +820,38 @@ export function SetupPage() {
                     onChange={(e) => setExtrinsic({ out: e.target.value })}
                   />
                 </label>
+                {draft.extrinsic_calib.method === "controller" && (
+                  <PathField
+                    label="intrinsics（PnP用・空ならcalib）"
+                    value={draft.extrinsic_calib.intrinsics}
+                    onChange={(v) => setExtrinsic({ intrinsics: v })}
+                    placeholder="calibrations/intrinsics.yaml"
+                  />
+                )}
+                {draft.extrinsic_calib.method === "floor" && (
+                  <>
+                    <PathField
+                      label="floor_map（タグ配置・floorに必須）"
+                      value={draft.extrinsic_calib.floor_map}
+                      onChange={(v) => setExtrinsic({ floor_map: v })}
+                      placeholder="configs/floor_tag_map.yaml"
+                    />
+                    <PathField
+                      label="floor_intrinsics（PnP用・空ならcalib）"
+                      value={draft.extrinsic_calib.floor_intrinsics}
+                      onChange={(v) => setExtrinsic({ floor_intrinsics: v })}
+                      placeholder="calibrations/intrinsics.yaml"
+                    />
+                    <label className="inline">
+                      <input
+                        type="checkbox"
+                        checked={draft.extrinsic_calib.floor_fisheye}
+                        onChange={(e) => setExtrinsic({ floor_fisheye: e.target.checked })}
+                      />
+                      floor_fisheye（魚眼intrinsics）
+                    </label>
+                  </>
+                )}
                 <label>
                   web host
                   <input
