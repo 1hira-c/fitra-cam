@@ -36,6 +36,15 @@ std::unique_ptr<web::CrowServer> make_server(const config::MainOptions& opts,
                             "|calib-extrinsic-floor|calib-intrinsic)";
                     return false;
                 }
+                // The wizard stepper's "extrinsic" step is method-agnostic; pin
+                // it to the configured extrinsic_calib.method so a floor rig
+                // switches into the floor variant rather than the controller one.
+                if (next == config::RunMode::CalibExtrinsic ||
+                    next == config::RunMode::CalibExtrinsicFloor) {
+                    next = opts.excal_method == "floor"
+                               ? config::RunMode::CalibExtrinsicFloor
+                               : config::RunMode::CalibExtrinsic;
+                }
                 // Validate the target mode's config BEFORE respawning, so a
                 // misconfiguration (e.g. missing floor_map) surfaces in the UI
                 // here instead of the child dying at validate and the daemon

@@ -67,20 +67,17 @@ void append_excal_controller_pose_json(std::ostringstream& out,
 }
 
 // Subdirectory file handler shared by both static page groups. Rejects
-// anything that escapes `root`: prefix match alone allows sibling-directory
-// traversal (root "/a/b" would accept "/a/b2/..."), so the match is anchored
-// to a directory boundary by appending the separator before comparing.
+// anything that escapes `root` via path_within (anchored at a directory
+// boundary so a sibling like "<root>-secret" can't slip through a prefix test).
 crow::response serve_static_sub(const std::filesystem::path& root,
                                 const std::string& sub) {
     std::filesystem::path req = root / sub;
     auto canon_req  = std::filesystem::weakly_canonical(req);
     auto canon_root = std::filesystem::weakly_canonical(root);
-    std::string root_str = canon_root.string();
-    if (!root_str.empty() &&
-        root_str.back() != std::filesystem::path::preferred_separator) {
-        root_str += std::filesystem::path::preferred_separator;
-    }
-    if (canon_req.string().rfind(root_str, 0) != 0) {
+    // Enforce containment only when a root is configured; with none the file
+    // read below simply 404s (matches the pre-helper behavior).
+    if (!canon_root.empty() &&
+        !path_within(canon_root.string(), canon_req.string())) {
         return crow::response{403, "forbidden"};
     }
     if (!std::filesystem::is_regular_file(canon_req)) {

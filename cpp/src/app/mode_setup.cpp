@@ -46,6 +46,12 @@ config::RunMode derive_next_mode(const config::MainOptions& d) {
 bool compose_and_switch(config::SetupConfigStore& store, FlowControl& flow,
                         config::RunMode next, std::string& next_mode,
                         std::string& err) {
+    // Range/enum sanity on the live draft. do_proceed used to run this on its
+    // own, but an explicit WizardSteps jump (do_switch) reaches here too — so
+    // gate both paths here, else a draft with an out-of-range value (bad port,
+    // det_score, ...) would be written and only rejected when the spawned child
+    // hits validate_options, dropping the daemon back to run.
+    if (!store.validate_draft(err)) return false;
     config::MainOptions d = store.draft();
     // Leaving setup commits to the whole auto-chain: the spawned children re-read
     // this union config and the browser can no longer edit it. So when entering
@@ -96,7 +102,6 @@ bool compose_and_switch(config::SetupConfigStore& store, FlowControl& flow,
 // Auto-proceed: derive the next stage from artifacts and hand off.
 bool do_proceed(config::SetupConfigStore& store, FlowControl& flow,
                 std::string& next_mode, std::string& err) {
-    if (!store.validate_draft(err)) return false;
     const config::MainOptions d = store.draft();
     const config::RunMode next = derive_next_mode(d);
     if (next == config::RunMode::Setup) {
@@ -114,6 +119,16 @@ bool do_switch(config::SetupConfigStore& store, FlowControl& flow,
     if (!config::parse_run_mode_name(mode_name, next)) {
         err = "unknown mode: " + mode_name;
         return false;
+    }
+    // The wizard's single "extrinsic" step is method-agnostic; honor the
+    // configured extrinsic_calib.method so a floor rig lands in the floor variant
+    // (matching the auto-chain's initial_mode pick) instead of spawning the
+    // controller stage, which would fail its precheck on a floor config.
+    if (next == config::RunMode::CalibExtrinsic ||
+        next == config::RunMode::CalibExtrinsicFloor) {
+        next = store.draft().excal_method == "floor"
+                   ? config::RunMode::CalibExtrinsicFloor
+                   : config::RunMode::CalibExtrinsic;
     }
     std::string next_mode;
     return compose_and_switch(store, flow, next, next_mode, err);

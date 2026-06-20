@@ -271,48 +271,45 @@ bool parse_preview(const crow::json::rvalue& body, camera::PreviewRequest& req,
 }  // namespace
 
 void register_setup_mode_routes(crow::SimpleApp& app, const SetupRouteDeps& deps) {
-    // GET /api/setup/check-path?path=<p> — resolve `path` against the CWD (the
-    // same base the run/calib children open engines + calib artifacts from) and
-    // report existence, so the WebUI can flag a missing engine/calib path on the
-    // spot whether the user typed an absolute or a relative path.
-    CROW_ROUTE(app, "/api/setup/check-path")
-    ([](const crow::request& req) {
-        const char* p = req.url_params.get("path");
-        const std::string path = p ? p : "";
-        std::error_code ec;
-        std::string abs;
-        bool exists = false, is_file = false, allowed = false;
-        if (!path.empty()) {
-            abs = std::filesystem::weakly_canonical(
-                      std::filesystem::absolute(path, ec), ec).string();
-            const std::string root = std::filesystem::weakly_canonical(
-                      std::filesystem::current_path(ec), ec).string();
-            // Containment: only probe paths under the daemon CWD (engines/calib
-            // live under outputs/ + configs/). Never let the 0.0.0.0-bound setup
-            // server become a filesystem-existence oracle for arbitrary absolute
-            // paths (e.g. /etc/shadow); report exists=false for anything outside.
-            // Component-wise: a bare prefix match would also allow a sibling like
-            // <root>-secret, so require an exact match or a '/' right after root.
-            allowed = !abs.empty() && !root.empty() &&
-                      (abs == root ||
-                       (abs.size() > root.size() && abs[root.size()] == '/' &&
-                        abs.compare(0, root.size(), root) == 0));
-            if (allowed) {
-                exists  = std::filesystem::exists(abs, ec) && !ec;
-                is_file = exists && std::filesystem::is_regular_file(abs, ec) && !ec;
-            }
-        }
-        std::ostringstream o;
-        o << "{\"path\":\"" << json_escape(path) << "\""
-          << ",\"abs\":\"" << json_escape(abs) << "\""
-          << ",\"allowed\":" << b(allowed)
-          << ",\"exists\":" << b(exists)
-          << ",\"is_file\":" << b(is_file) << "}";
-        return json_response(o.str());
-    });
-
     if (deps.store) {
         auto* store = deps.store;
+
+        // GET /api/setup/check-path?path=<p> — resolve `path` against the CWD (the
+        // same base the run/calib children open engines + calib artifacts from) and
+        // report existence, so the WebUI can flag a missing engine/calib path on the
+        // spot whether the user typed an absolute or a relative path. Inside the
+        // deps.store guard so this filesystem-existence probe exists ONLY in the
+        // Setup module — never on the run/calib 0.0.0.0 bind, where it would be a
+        // CWD-subtree existence oracle for any LAN client.
+        CROW_ROUTE(app, "/api/setup/check-path")
+        ([](const crow::request& req) {
+            const char* p = req.url_params.get("path");
+            const std::string path = p ? p : "";
+            std::error_code ec;
+            std::string abs;
+            bool exists = false, is_file = false, allowed = false;
+            if (!path.empty()) {
+                abs = std::filesystem::weakly_canonical(
+                          std::filesystem::absolute(path, ec), ec).string();
+                const std::string root = std::filesystem::weakly_canonical(
+                          std::filesystem::current_path(ec), ec).string();
+                // Containment: only probe paths under the daemon CWD (engines/calib
+                // live under outputs/ + configs/). path_within anchors at the
+                // directory boundary so a sibling like <root>-secret can't escape.
+                allowed = path_within(root, abs);
+                if (allowed) {
+                    exists  = std::filesystem::exists(abs, ec) && !ec;
+                    is_file = exists && std::filesystem::is_regular_file(abs, ec) && !ec;
+                }
+            }
+            std::ostringstream o;
+            o << "{\"path\":\"" << json_escape(path) << "\""
+              << ",\"abs\":\"" << json_escape(abs) << "\""
+              << ",\"allowed\":" << b(allowed)
+              << ",\"exists\":" << b(exists)
+              << ",\"is_file\":" << b(is_file) << "}";
+            return json_response(o.str());
+        });
 
         CROW_ROUTE(app, "/api/config")
         ([store]() {
