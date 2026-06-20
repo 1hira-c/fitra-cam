@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useFlowWatch } from "../hooks/useFlowWatch";
+import { WizardLayout } from "../components/WizardLayout";
 import { usePolling } from "../hooks/usePolling";
 import { fetchCalibState, postCalib } from "../lib/api";
 import "../styles/subject-calib.css";
@@ -176,6 +177,7 @@ export function SubjectCalibPage() {
   };
 
   return (
+    <WizardLayout current="subject" flow={flow.state}>
     <div className="subject-page">
       <header>
         <h1>Subject Profile Calibration</h1>
@@ -291,5 +293,6 @@ export function SubjectCalibPage() {
         </section>
       </main>
     </div>
+    </WizardLayout>
   );
 }

@@ -31,11 +31,15 @@ export default defineConfig({
       "/api/vmt": { target: CROW },
       "/api/slimevr": { target: CROW },
       "/api/calib": { target: CROW },
-      // Legacy extrinsic-calib SPA (served at /extrinsic-calib) talks to the
-      // C++ Crow server via /api/excal/* — proxy it too or its fetches fall
-      // through to Vite and fail to parse as JSON during HMR dev.
       "/api/excal": { target: CROW },
-      "/extrinsic-calib": { target: CROW },
+      // Intrinsic + setup (cameras / config) REST live on Crow too. The
+      // calibration pages and /setup are now React routes served by Vite during
+      // HMR dev, so /extrinsic-calib and /intrinsic-calib are NOT proxied — only
+      // their /api/* backends are.
+      "/api/incal": { target: CROW },
+      "/api/cameras": { target: CROW },
+      "/api/config": { target: CROW },
+      "/api/setup": { target: CROW },
     },
   },
 });

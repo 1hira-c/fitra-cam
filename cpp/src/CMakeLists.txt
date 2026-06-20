@@ -54,6 +54,8 @@ target_link_libraries(fitra_infer PUBLIC
 # (FrameSource parallelizes CPU decode across cameras).
 add_library(fitra_camera STATIC
     camera/v4l2_capture.cpp
+    camera/v4l2_enumerate.cpp     # setup mode: device enumeration (pure ioctl)
+    camera/setup_camera_manager.cpp  # setup mode: JPEG preview
     camera/jpeg_decoder.cpp
     camera/nvjpeg_decoder.cpp     # dlopen loader for libfitra_nvjpeg.so (HW NVJPEG)
     camera/frame_source.cpp
@@ -196,9 +198,12 @@ target_link_libraries(fitra_vmt PUBLIC
 add_library(fitra_web STATIC
     web/crow_server.cpp
     web/crow_routes_setup.cpp
+    web/crow_routes_setup_mode.cpp
 )
 
 target_link_libraries(fitra_web PUBLIC
+    fitra_config      # setup mode: SetupConfigStore + emit_main_config
+    fitra_camera      # setup mode: V4L2 enumeration + preview
     fitra_pipeline
     fitra_slimevr     # /stats3d reads NativePublisher::stats() when attached
     fitra_vmt         # /stats3d also splices VmtPublisher::stats()
@@ -222,6 +227,7 @@ add_library(fitra_app STATIC
     app/mode_calib_intrinsic.cpp
     app/mode_calib_subject.cpp
     app/mode_run.cpp
+    app/mode_setup.cpp
     app/output_builder.cpp
     app/paths.cpp
     app/pose_relay_builder.cpp
@@ -246,6 +252,7 @@ target_link_libraries(fitra_app PUBLIC
 # Independent of TensorRT/CUDA so its unit test stays light.
 add_library(fitra_config STATIC
     config/main_config.cpp
+    config/setup_config_store.cpp
 )
 
 target_include_directories(fitra_config PUBLIC

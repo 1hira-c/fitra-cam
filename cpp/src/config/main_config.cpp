@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -382,6 +383,214 @@ void load_main_config(const std::string& path, MainOptions& out) {
     if (root["intrinsic_calib"]) load_intrinsic_calib(root["intrinsic_calib"], out);
 }
 
+std::string emit_main_config(const MainOptions& o) {
+    const MainOptions d;  // defaults — only non-default values are emitted
+    YAML::Emitter e;
+    e << YAML::BeginMap;
+    e << YAML::Key << "schema" << YAML::Value << std::string(kMainConfigSchema);
+
+    // cameras --------------------------------------------------------------
+    e << YAML::Key << "cameras" << YAML::Value << YAML::BeginMap;
+    if (!o.cam_paths[0].empty()) e << YAML::Key << "cam0" << YAML::Value << o.cam_paths[0];
+    if (!o.cam_paths[1].empty()) e << YAML::Key << "cam1" << YAML::Value << o.cam_paths[1];
+    if (!o.cam_paths[2].empty()) e << YAML::Key << "cam2" << YAML::Value << o.cam_paths[2];
+    if (o.width  != d.width)  e << YAML::Key << "width"  << YAML::Value << o.width;
+    if (o.height != d.height) e << YAML::Key << "height" << YAML::Value << o.height;
+    if (o.fps    != d.fps)    e << YAML::Key << "fps"    << YAML::Value << o.fps;
+    if (o.pixel_format != d.pixel_format) e << YAML::Key << "pixel_format" << YAML::Value << o.pixel_format;
+    if (o.n_buffers != d.n_buffers) e << YAML::Key << "n_buffers" << YAML::Value << o.n_buffers;
+    for (int i = 0; i < 3; ++i) {
+        const std::string p = "cam" + std::to_string(i);
+        if (o.cam_cap_width[i]  != d.cam_cap_width[i])  e << YAML::Key << (p + "_capture_width")  << YAML::Value << o.cam_cap_width[i];
+        if (o.cam_cap_height[i] != d.cam_cap_height[i]) e << YAML::Key << (p + "_capture_height") << YAML::Value << o.cam_cap_height[i];
+        if (!o.cam_pixel_format[i].empty())  e << YAML::Key << (p + "_pixel_format")  << YAML::Value << o.cam_pixel_format[i];
+        if (!o.cam_exposure_mode[i].empty()) e << YAML::Key << (p + "_exposure_mode") << YAML::Value << o.cam_exposure_mode[i];
+        if (o.cam_exposure[i]  != d.cam_exposure[i])  e << YAML::Key << (p + "_exposure")  << YAML::Value << o.cam_exposure[i];
+        if (o.cam_gain[i]      != d.cam_gain[i])      e << YAML::Key << (p + "_gain")      << YAML::Value << o.cam_gain[i];
+        if (o.cam_ae_target[i] != d.cam_ae_target[i]) e << YAML::Key << (p + "_ae_target") << YAML::Value << o.cam_ae_target[i];
+    }
+    e << YAML::EndMap;
+
+    // inference ------------------------------------------------------------
+    e << YAML::Key << "inference" << YAML::Value << YAML::BeginMap;
+    if (!o.det_engine.empty())  e << YAML::Key << "det_engine"  << YAML::Value << o.det_engine;
+    if (!o.pose_engine.empty()) e << YAML::Key << "pose_engine" << YAML::Value << o.pose_engine;
+    if (o.det_frequency != d.det_frequency)     e << YAML::Key << "det_frequency"   << YAML::Value << o.det_frequency;
+    if (o.det_score     != d.det_score)         e << YAML::Key << "det_score"       << YAML::Value << o.det_score;
+    if (o.keypoint_format != d.keypoint_format) e << YAML::Key << "keypoint_format" << YAML::Value << o.keypoint_format;
+    if (o.multi_person    != d.multi_person)    e << YAML::Key << "multi_person"    << YAML::Value << o.multi_person;
+    if (o.bench_fake_bbox != d.bench_fake_bbox) e << YAML::Key << "bench_fake_bbox" << YAML::Value << o.bench_fake_bbox;
+    e << YAML::EndMap;
+
+    // web ------------------------------------------------------------------
+    e << YAML::Key << "web" << YAML::Value << YAML::BeginMap;
+    if (o.host != d.host)            e << YAML::Key << "host"   << YAML::Value << o.host;
+    if (o.port != d.port)            e << YAML::Key << "port"   << YAML::Value << o.port;
+    if (!o.static_dir.empty())       e << YAML::Key << "static" << YAML::Value << o.static_dir;
+    if (o.no_web != d.no_web)        e << YAML::Key << "no_web" << YAML::Value << o.no_web;
+    e << YAML::EndMap;
+
+    // three_d --------------------------------------------------------------
+    e << YAML::Key << "three_d" << YAML::Value << YAML::BeginMap;
+    if (o.enable_3d != d.enable_3d) e << YAML::Key << "enable_3d" << YAML::Value << o.enable_3d;
+    if (!o.calib.empty())           e << YAML::Key << "calib"     << YAML::Value << o.calib;
+    if (o.kp_conf_thresh    != d.kp_conf_thresh)    e << YAML::Key << "kp_conf_thresh"    << YAML::Value << o.kp_conf_thresh;
+    if (o.max_reproj_px     != d.max_reproj_px)     e << YAML::Key << "max_reproj_px"     << YAML::Value << o.max_reproj_px;
+    if (o.sync_window_ms    != d.sync_window_ms)    e << YAML::Key << "sync_window_ms"    << YAML::Value << o.sync_window_ms;
+    if (o.bone_calib_frames != d.bone_calib_frames) e << YAML::Key << "bone_calib_frames" << YAML::Value << o.bone_calib_frames;
+    // Negated CLI-equivalent keys: emit the inverse of the positive predicate.
+    if (o.kalman_3d != d.kalman_3d) e << YAML::Key << "no_3d_kalman" << YAML::Value << !o.kalman_3d;
+    if (o.ik_3d     != d.ik_3d)     e << YAML::Key << "no_3d_ik"     << YAML::Value << !o.ik_3d;
+    if (o.vr_extract_event_driven != d.vr_extract_event_driven) e << YAML::Key << "vr_extract_event_driven" << YAML::Value << o.vr_extract_event_driven;
+    if (o.vr_one_euro       != d.vr_one_euro)       e << YAML::Key << "vr_one_euro"       << YAML::Value << o.vr_one_euro;
+    if (o.vr_pos_mincutoff  != d.vr_pos_mincutoff)  e << YAML::Key << "vr_pos_mincutoff"  << YAML::Value << o.vr_pos_mincutoff;
+    if (o.vr_pos_beta       != d.vr_pos_beta)       e << YAML::Key << "vr_pos_beta"       << YAML::Value << o.vr_pos_beta;
+    if (o.vr_pos_dcutoff    != d.vr_pos_dcutoff)    e << YAML::Key << "vr_pos_dcutoff"    << YAML::Value << o.vr_pos_dcutoff;
+    if (o.vr_quat_mincutoff != d.vr_quat_mincutoff) e << YAML::Key << "vr_quat_mincutoff" << YAML::Value << o.vr_quat_mincutoff;
+    if (o.vr_quat_beta      != d.vr_quat_beta)      e << YAML::Key << "vr_quat_beta"      << YAML::Value << o.vr_quat_beta;
+    if (o.vr_quat_dcutoff   != d.vr_quat_dcutoff)   e << YAML::Key << "vr_quat_dcutoff"   << YAML::Value << o.vr_quat_dcutoff;
+    e << YAML::EndMap;
+
+    // subject --------------------------------------------------------------
+    e << YAML::Key << "subject" << YAML::Value << YAML::BeginMap;
+    if (o.subjects_dir != d.subjects_dir) e << YAML::Key << "subjects_dir"     << YAML::Value << o.subjects_dir;
+    if (!o.subject_id.empty())            e << YAML::Key << "subject_id"       << YAML::Value << o.subject_id;
+    if (!o.subject_profile.empty())       e << YAML::Key << "subject_profile"  << YAML::Value << o.subject_profile;
+    if (o.subject_height_m != d.subject_height_m) e << YAML::Key << "subject_height_m" << YAML::Value << o.subject_height_m;
+    e << YAML::EndMap;
+
+    // calibration — persistent subject-calib knobs. NB: never emit `calibrate`
+    // (run-mode-deriving: run_mode() derives RunMode::CalibSubject from it).
+    e << YAML::Key << "calibration" << YAML::Value << YAML::BeginMap;
+    if (!o.calib_subject_id.empty())                       e << YAML::Key << "calib_subject_id"       << YAML::Value << o.calib_subject_id;
+    if (o.calib_subject_height_m != d.calib_subject_height_m) e << YAML::Key << "calib_subject_height_m" << YAML::Value << o.calib_subject_height_m;
+    if (o.calib_frames_per_cam != d.calib_frames_per_cam)  e << YAML::Key << "calib_frames_per_cam"   << YAML::Value << o.calib_frames_per_cam;
+    if (o.calib_hold_sec != d.calib_hold_sec)              e << YAML::Key << "calib_hold_sec"         << YAML::Value << o.calib_hold_sec;
+    if (o.calib_auto_approve != d.calib_auto_approve)      e << YAML::Key << "calib_auto_approve"     << YAML::Value << o.calib_auto_approve;
+    if (o.calib_auto_exit != d.calib_auto_exit)            e << YAML::Key << "calib_auto_exit"        << YAML::Value << o.calib_auto_exit;
+    if (!o.calib_static_dir.empty())                       e << YAML::Key << "calib_static_dir"       << YAML::Value << o.calib_static_dir;
+    if (!o.calib_dump_tool.empty())                        e << YAML::Key << "calib_dump_tool"        << YAML::Value << o.calib_dump_tool;
+    e << YAML::EndMap;
+
+    // logging --------------------------------------------------------------
+    e << YAML::Key << "logging" << YAML::Value << YAML::BeginMap;
+    if (o.log_every_s != d.log_every_s) e << YAML::Key << "log_every_s" << YAML::Value << o.log_every_s;
+    e << YAML::EndMap;
+
+    // slimevr (bare host/port/... keys) ------------------------------------
+    e << YAML::Key << "slimevr" << YAML::Value << YAML::BeginMap;
+    if (o.slimevr_out != d.slimevr_out)                 e << YAML::Key << "slimevr_out"      << YAML::Value << o.slimevr_out;
+    if (o.slimevr_host != d.slimevr_host)               e << YAML::Key << "host"             << YAML::Value << o.slimevr_host;
+    if (o.slimevr_port != d.slimevr_port)               e << YAML::Key << "port"             << YAML::Value << o.slimevr_port;
+    if (o.slimevr_rate_hz != d.slimevr_rate_hz)         e << YAML::Key << "rate_hz"          << YAML::Value << o.slimevr_rate_hz;
+    if (o.slimevr_quat_smooth != d.slimevr_quat_smooth) e << YAML::Key << "quat_smooth"      << YAML::Value << o.slimevr_quat_smooth;
+    if (o.slimevr_preview_no_reset != d.slimevr_preview_no_reset) e << YAML::Key << "preview_no_reset" << YAML::Value << o.slimevr_preview_no_reset;
+    e << YAML::EndMap;
+
+    // vmt (bare host/port/... keys + hmd receiver + continuous align) ------
+    e << YAML::Key << "vmt" << YAML::Value << YAML::BeginMap;
+    if (o.vmt_out != d.vmt_out)                         e << YAML::Key << "vmt_out"             << YAML::Value << o.vmt_out;
+    if (o.vmt_host != d.vmt_host)                       e << YAML::Key << "host"                << YAML::Value << o.vmt_host;
+    if (o.vmt_port != d.vmt_port)                       e << YAML::Key << "port"                << YAML::Value << o.vmt_port;
+    if (o.vmt_rate_hz != d.vmt_rate_hz)                 e << YAML::Key << "rate_hz"             << YAML::Value << o.vmt_rate_hz;
+    if (o.vmt_index_base != d.vmt_index_base)           e << YAML::Key << "index_base"          << YAML::Value << o.vmt_index_base;
+    if (o.vmt_pos_smooth != d.vmt_pos_smooth)           e << YAML::Key << "pos_smooth"          << YAML::Value << o.vmt_pos_smooth;
+    if (o.vmt_degeneracy_mode != d.vmt_degeneracy_mode) e << YAML::Key << "degeneracy_mode"     << YAML::Value << o.vmt_degeneracy_mode;
+    if (o.vmt_disable_below_floor != d.vmt_disable_below_floor) e << YAML::Key << "disable_below_floor" << YAML::Value << o.vmt_disable_below_floor;
+    if (o.hmd_listen_enabled != d.hmd_listen_enabled)   e << YAML::Key << "hmd_listen_enabled"  << YAML::Value << o.hmd_listen_enabled;
+    if (o.hmd_listen_port != d.hmd_listen_port)         e << YAML::Key << "hmd_listen_port"     << YAML::Value << o.hmd_listen_port;
+    if (o.hmd_listen_bind != d.hmd_listen_bind)         e << YAML::Key << "hmd_listen_bind"     << YAML::Value << o.hmd_listen_bind;
+    if (o.hmd_stale_ms != d.hmd_stale_ms)               e << YAML::Key << "hmd_stale_ms"        << YAML::Value << o.hmd_stale_ms;
+    if (o.vmt_continuous_align != d.vmt_continuous_align)         e << YAML::Key << "continuous_align"     << YAML::Value << o.vmt_continuous_align;
+    if (o.vmt_continuous_sample_hz != d.vmt_continuous_sample_hz) e << YAML::Key << "continuous_sample_hz" << YAML::Value << o.vmt_continuous_sample_hz;
+    if (o.vmt_continuous_resolve_s != d.vmt_continuous_resolve_s) e << YAML::Key << "continuous_resolve_s" << YAML::Value << o.vmt_continuous_resolve_s;
+    if (o.vmt_continuous_blend != d.vmt_continuous_blend)         e << YAML::Key << "continuous_blend"     << YAML::Value << o.vmt_continuous_blend;
+    e << YAML::EndMap;
+
+    // extrinsic_calib — NB: never emit `enabled`/`replay_dir`/`floor_replay_dir`
+    // (run-mode-deriving). `out` also drives floor_out on load.
+    e << YAML::Key << "extrinsic_calib" << YAML::Value << YAML::BeginMap;
+    if (!o.excal_intrinsics.empty())            e << YAML::Key << "intrinsics"   << YAML::Value << o.excal_intrinsics;
+    if (o.excal_out != d.excal_out)             e << YAML::Key << "out"          << YAML::Value << o.excal_out;
+    if (o.excal_faces != d.excal_faces)         e << YAML::Key << "faces"        << YAML::Value << o.excal_faces;
+    if (o.excal_tag_size_m != d.excal_tag_size_m)   e << YAML::Key << "tag_size_m"   << YAML::Value << o.excal_tag_size_m;
+    if (o.excal_lin_vel_max != d.excal_lin_vel_max) e << YAML::Key << "lin_vel_max"  << YAML::Value << o.excal_lin_vel_max;
+    if (o.excal_ang_vel_max != d.excal_ang_vel_max) e << YAML::Key << "ang_vel_max"  << YAML::Value << o.excal_ang_vel_max;
+    if (o.excal_burst_min != d.excal_burst_min)     e << YAML::Key << "burst_min"    << YAML::Value << o.excal_burst_min;
+    if (o.excal_min_samples != d.excal_min_samples) e << YAML::Key << "min_samples"  << YAML::Value << o.excal_min_samples;
+    if (o.excal_controller_role != d.excal_controller_role) e << YAML::Key << "controller_role" << YAML::Value << o.excal_controller_role;
+    if (o.excal_controller_port != d.excal_controller_port) e << YAML::Key << "controller_port" << YAML::Value << o.excal_controller_port;
+    if (o.excal_controller_bind != d.excal_controller_bind) e << YAML::Key << "controller_bind" << YAML::Value << o.excal_controller_bind;
+    if (o.excal_controller_stale_ms != d.excal_controller_stale_ms) e << YAML::Key << "controller_stale_ms" << YAML::Value << o.excal_controller_stale_ms;
+    if (o.excal_method != d.excal_method)       e << YAML::Key << "method"       << YAML::Value << o.excal_method;
+    if (!o.floor_map.empty())                   e << YAML::Key << "floor_map"    << YAML::Value << o.floor_map;
+    if (!o.floor_intrinsics.empty())            e << YAML::Key << "floor_intrinsics"     << YAML::Value << o.floor_intrinsics;
+    if (!o.floor_out_intrinsics.empty())        e << YAML::Key << "floor_out_intrinsics" << YAML::Value << o.floor_out_intrinsics;
+    if (o.floor_burst_min != d.floor_burst_min)         e << YAML::Key << "floor_burst_min"     << YAML::Value << o.floor_burst_min;
+    if (o.floor_max_reproj_px != d.floor_max_reproj_px) e << YAML::Key << "floor_max_reproj_px" << YAML::Value << o.floor_max_reproj_px;
+    if (o.floor_fisheye != d.floor_fisheye)             e << YAML::Key << "floor_fisheye"       << YAML::Value << o.floor_fisheye;
+    e << YAML::EndMap;
+
+    // intrinsic_calib — `enabled` here is the daemon STEP selector
+    // (intrinsic_step_enabled), not a run-mode flag, so it is safe to emit.
+    // `replay_dir` is never emitted (run-mode-deriving).
+    e << YAML::Key << "intrinsic_calib" << YAML::Value << YAML::BeginMap;
+    if (o.intrinsic_step_enabled != d.intrinsic_step_enabled) e << YAML::Key << "enabled" << YAML::Value << o.intrinsic_step_enabled;
+    if (o.intrinsic_out != d.intrinsic_out)     e << YAML::Key << "out"   << YAML::Value << o.intrinsic_out;
+    if (o.intrinsic_model != d.intrinsic_model) e << YAML::Key << "model" << YAML::Value << o.intrinsic_model;
+    if (o.charuco_squares_x != d.charuco_squares_x)     e << YAML::Key << "squares_x"    << YAML::Value << o.charuco_squares_x;
+    if (o.charuco_squares_y != d.charuco_squares_y)     e << YAML::Key << "squares_y"    << YAML::Value << o.charuco_squares_y;
+    if (o.charuco_square_len_m != d.charuco_square_len_m) e << YAML::Key << "square_len_m" << YAML::Value << o.charuco_square_len_m;
+    if (o.charuco_marker_len_m != d.charuco_marker_len_m) e << YAML::Key << "marker_len_m" << YAML::Value << o.charuco_marker_len_m;
+    if (o.charuco_dict != d.charuco_dict)       e << YAML::Key << "dict"  << YAML::Value << o.charuco_dict;
+    if (o.intrinsic_min_views != d.intrinsic_min_views)     e << YAML::Key << "min_views"   << YAML::Value << o.intrinsic_min_views;
+    if (o.intrinsic_min_corners != d.intrinsic_min_corners) e << YAML::Key << "min_corners" << YAML::Value << o.intrinsic_min_corners;
+    if (o.intrinsic_max_rms_px != d.intrinsic_max_rms_px)   e << YAML::Key << "max_rms_px"  << YAML::Value << o.intrinsic_max_rms_px;
+    e << YAML::EndMap;
+
+    e << YAML::EndMap;
+    return std::string(e.c_str());
+}
+
+void save_main_config(const std::string& path, const MainOptions& opts) {
+    const std::string body = emit_main_config(opts);
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f) fail("cannot open for write: " + tmp);
+        f << body << "\n";
+        if (!f) fail("write failed: " + tmp);
+    }
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) fail("cannot rename " + tmp + " -> " + path + ": " + ec.message());
+}
+
+namespace {
+void abs_path(std::string& p) {
+    if (p.empty()) return;
+    std::error_code ec;
+    auto a = std::filesystem::absolute(p, ec);
+    if (!ec) p = a.lexically_normal().string();
+}
+}  // namespace
+
+void absolutize_config_paths(MainOptions& o) {
+    abs_path(o.det_engine);
+    abs_path(o.pose_engine);
+    abs_path(o.calib);
+    abs_path(o.excal_intrinsics);
+    abs_path(o.excal_out);
+    abs_path(o.floor_map);
+    abs_path(o.floor_intrinsics);
+    abs_path(o.floor_out_intrinsics);
+    abs_path(o.floor_out);
+    abs_path(o.intrinsic_out);
+    abs_path(o.subjects_dir);
+    abs_path(o.subject_profile);
+    abs_path(o.static_dir);
+}
+
 EarlyArgs scan_early_args(int argc, char** argv) {
     EarlyArgs ea;
     for (int i = 0; i < argc; ++i) {
@@ -542,6 +751,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--daemon")            { out.daemon = true; }
         else if (a == "--daemon-initial")    { out.daemon_initial = need(i, "--daemon-initial"); }
         else if (a == "--flow-managed")      { out.flow_managed = true; }
+        else if (a == "--setup")             { out.setup_mode = true; }
         else {
             fail(std::string("unknown arg: ") + argv[i]);
         }
@@ -549,6 +759,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
 }
 
 RunMode run_mode(const MainOptions& opts) {
+    if (opts.setup_mode) return RunMode::Setup;
     if (opts.intrinsic_calib_enabled || !opts.intrinsic_replay.empty()) {
         return RunMode::CalibIntrinsic;
     }
@@ -564,6 +775,7 @@ RunMode run_mode(const MainOptions& opts) {
 
 const char* run_mode_name(RunMode mode) {
     switch (mode) {
+        case RunMode::Setup:               return "setup";
         case RunMode::CalibSubject:        return "calib-subject";
         case RunMode::CalibExtrinsic:      return "calib-extrinsic";
         case RunMode::CalibExtrinsicFloor: return "calib-extrinsic-floor";
@@ -575,6 +787,7 @@ const char* run_mode_name(RunMode mode) {
 
 bool parse_run_mode_name(const std::string& name, RunMode& out) {
     if (name == "run")                   { out = RunMode::Run;                 return true; }
+    if (name == "setup")                 { out = RunMode::Setup;               return true; }
     if (name == "calib-subject")         { out = RunMode::CalibSubject;        return true; }
     if (name == "calib-extrinsic")       { out = RunMode::CalibExtrinsic;      return true; }
     if (name == "calib-extrinsic-floor") { out = RunMode::CalibExtrinsicFloor; return true; }
@@ -648,6 +861,10 @@ bool precheck_mode_switch(const MainOptions& opts, RunMode target,
         case RunMode::CalibSubject:
             // Subject calibration triangulates, so it needs the extrinsics YAML.
             return source_ready(opts.calib, "extrinsics (three_d.calib)", err);
+        case RunMode::Setup:
+            // Setup produces the config from scratch — it needs no input
+            // artifact, cameras, or engines (it is how those get configured).
+            return true;
         case RunMode::Run:
             // Run is the safe fallback; it tolerates a missing calib (2D only).
             return true;
@@ -657,6 +874,15 @@ bool precheck_mode_switch(const MainOptions& opts, RunMode target,
 
 void validate_options(const MainOptions& opts) {
     const RunMode mode = run_mode(opts);
+    if (mode == RunMode::Setup) {
+        // Setup builds only a Crow server + setup routes (camera enumeration,
+        // config composition) — no cameras, engines, or 3D graph. The only
+        // thing it needs is a sane port (host defaults are fine).
+        if (opts.port <= 0 || opts.port > 65535) {
+            fail("--port must be in [1, 65535]");
+        }
+        return;
+    }
     if (mode == RunMode::CalibExtrinsic) {
         // calib-extrinsic is decode-only (AprilTag detection on CPU) — no TRT
         // engines are loaded. Cameras are required for live collection only;
@@ -692,9 +918,25 @@ void validate_options(const MainOptions& opts) {
         if (opts.intrinsic_model != "pinhole" && opts.intrinsic_model != "fisheye") {
             fail("--intrinsic-model must be 'pinhole' or 'fisheye'");
         }
-    } else if (opts.cam_paths[0].empty() || opts.det_engine.empty()
-               || opts.pose_engine.empty()) {
+    } else if (!opts.daemon && (opts.cam_paths[0].empty() || opts.det_engine.empty()
+               || opts.pose_engine.empty())) {
+        // The daemon parent validates its union config in run form, but a
+        // first-run config legitimately has no cameras/engines yet (the Setup
+        // module fills them in). Defer the run-form requirement to each spawned
+        // child + the initial_mode precheck (app/daemon.cpp); the daemon already
+        // warns on a bare config and falls back safely if a run child dies.
         fail("missing required option (need --cam0 + --det-engine + --pose-engine)");
+    }
+    // Reject the same physical device assigned to two camera slots: each slot
+    // opens its own V4l2Capture, so a duplicate node makes the second one fail
+    // with EBUSY at stream start.
+    for (int i = 0; i < 3; ++i) {
+        for (int j = i + 1; j < 3; ++j) {
+            if (!opts.cam_paths[i].empty() && opts.cam_paths[i] == opts.cam_paths[j]) {
+                fail("cam" + std::to_string(i) + " and cam" + std::to_string(j) +
+                     " point to the same device: " + opts.cam_paths[i]);
+            }
+        }
     }
     if (opts.pixel_format != "mjpeg" && opts.pixel_format != "yuyv"
         && opts.pixel_format != "nvjpeg") {
@@ -866,7 +1108,7 @@ void validate_options(const MainOptions& opts) {
         RunMode initial;
         if (opts.daemon_initial != "auto"
             && !parse_run_mode_name(opts.daemon_initial, initial)) {
-            fail("--daemon-initial must be one of auto|run|calib-subject"
+            fail("--daemon-initial must be one of auto|setup|run|calib-subject"
                  "|calib-extrinsic|calib-extrinsic-floor|calib-intrinsic");
         }
     }

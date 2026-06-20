@@ -1,0 +1,38 @@
+# First-run bootstrap template for the WebUI-driven setup flow.
+# See docs/design/core-pipeline-setup-mode.md.
+#
+#   ./cpp/build/main --daemon --config configs/session.yaml
+#
+# Point --config at a writable runtime config (e.g. configs/session.yaml, which
+# is gitignored). If that file does not exist yet, the daemon seeds it from this
+# template automatically. The Setup module writes the composed config back to
+# that path — it refuses to overwrite a .example template, so this file stays a
+# clean checked-in seed.
+#
+# With no cameras configured, the daemon's initial mode is `setup`: it spawns
+# the GPU-less Setup module which serves the WebUI on :8000. Open the browser,
+# pick cameras + engines + output targets, and the Setup module writes the full
+# config and hands off to the rest of the chain (intrinsic -> extrinsic ->
+# subject -> run).
+
+schema: fitra_main_config_v1
+
+# No cameras yet — this is exactly what makes the daemon land in setup mode.
+# The Setup module fills cameras + inference.det_engine/pose_engine in.
+
+web:
+    port: 8000
+
+# Run the intrinsic calibration step (step 0) once cameras are configured. Set
+# false if you supply calibrations/intrinsics.yaml externally.
+intrinsic_calib:
+    enabled: true
+
+# Where each stage reads/writes its artifact. extrinsic_calib.out and
+# three_d.calib must match so a fresh solve is picked up by the next stage.
+extrinsic_calib:
+    method: controller          # controller | floor
+    out: calibrations/extrinsics.yaml
+
+three_d:
+    calib: calibrations/extrinsics.yaml

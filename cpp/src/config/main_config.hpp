@@ -248,8 +248,15 @@ struct MainOptions {
     // set by the daemon on spawned mode modules; it enables the
     // /api/flow/switch route and the calib auto-chain exit codes.
     bool        daemon         = false;   // --daemon: spawn mode modules
-    std::string daemon_initial = "auto";  // auto|run|calib-subject|calib-extrinsic
+    std::string daemon_initial = "auto";  // auto|setup|run|calib-subject|calib-extrinsic|...
     bool        flow_managed   = false;   // --flow-managed (daemon-spawned)
+
+    // --setup: the first-run setup module (RunMode::Setup). A GPU-less Crow
+    // server that enumerates V4L2 cameras, composes/writes the union config,
+    // and hands off to the next stage via a flow exit code. CLI-only (the
+    // launch form is the caller's responsibility, like the other daemon flags).
+    // See docs/design/core-pipeline-setup-mode.md.
+    bool        setup_mode     = false;
 };
 
 // Exclusive run mode, derived from the calibration flags (invocation stays
@@ -258,7 +265,7 @@ struct MainOptions {
 // YAML on disk. Derive after validate_options() — it enforces the flags'
 // mutual exclusivity.
 enum class RunMode {
-    Run, CalibSubject, CalibExtrinsic, CalibExtrinsicFloor, CalibIntrinsic
+    Run, Setup, CalibSubject, CalibExtrinsic, CalibExtrinsicFloor, CalibIntrinsic
 };
 
 RunMode run_mode(const MainOptions& opts);
@@ -284,6 +291,28 @@ bool precheck_mode_switch(const MainOptions& opts, RunMode target,
 // Schema version embedded in every YAML config. Bump only when a
 // non-backwards-compatible change to the YAML layout is required.
 inline constexpr const char* kMainConfigSchema = "fitra_main_config_v1";
+
+// Serialize `opts` back to a `fitra_main_config_v1` YAML document. The inverse
+// of load_main_config: every key the loader reads round-trips (emit -> load is
+// the identity on the loader-visible fields). Only non-default values are
+// emitted (keeps files clean). Run-mode-deriving flags (calibration.calibrate,
+// extrinsic_calib.enabled, *.replay_dir) and launch-form flags (daemon /
+// flow_managed / setup_mode — which have no YAML key) are NEVER emitted: a
+// written config is always a union config the daemon can consume.
+std::string emit_main_config(const MainOptions& opts);
+
+// emit_main_config(opts) written to `path` atomically (path.tmp + rename).
+// Throws std::runtime_error on an I/O failure.
+void save_main_config(const std::string& path, const MainOptions& opts);
+
+// Rewrite the CWD-relative path fields (engines, calib artifacts, subject dir,
+// ...) to absolute, resolved against the current working directory. Engine /
+// calib paths are opened CWD-relative at runtime (std::ifstream, no base dir);
+// the daemon spawns every mode child with the daemon's CWD, so absolutizing in
+// the (CWD-sharing) setup module removes the ambiguity of a relative path
+// resolving differently later. Idempotent for already-absolute paths; empty
+// fields are left empty. Output paths are absolutized too (they need not exist).
+void absolutize_config_paths(MainOptions& opts);
 
 // Load a YAML config from `path` into `out`. Unknown keys, type mismatches,
 // missing `schema`, or wrong `schema` value all throw std::runtime_error

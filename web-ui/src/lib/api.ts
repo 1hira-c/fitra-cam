@@ -4,10 +4,22 @@
 import { getJson, postJson } from "./transport";
 import type {
   AutoAlignResponse,
+  CalibActionResponse,
+  CamerasResponse,
+  CameraPreviewResponse,
+  ConfigDraft,
+  ConfigListResponse,
+  ConfigLoadResponse,
+  ConfigOkResponse,
+  ConfigResponse,
   CorrectionsResponse,
+  ExcalState,
   FlowMode,
   FlowState,
   FlowSwitchResponse,
+  IncalState,
+  PathCheckResponse,
+  SetupProceedResponse,
   VmtAlignment,
   VmtAlignmentResponse,
 } from "../types/bundle";
@@ -117,4 +129,137 @@ export async function postCalib<T = { ok?: boolean; err?: string; next_step?: st
 ): Promise<T> {
   const { data } = await postJson<T>(`/api/calib/${action}`, body);
   return (data ?? ({} as T));
+}
+
+// ---- Intrinsic calibration (/api/incal/*) ----------------------------------
+
+export function fetchIncalState(): Promise<IncalState> {
+  return getJson<IncalState>("/api/incal/state");
+}
+
+/** POST an intrinsic-calib action. Tolerates a non-OK / module-swap response. */
+export async function postIncal(
+  action: "start" | "stop" | "solve",
+): Promise<CalibActionResponse> {
+  try {
+    const { res, data } = await postJson<CalibActionResponse>(`/api/incal/${action}`);
+    if (!res.ok || (data && data.ok === false)) {
+      return { ok: false, err: data?.err || `HTTP ${res.status}`, ...(data ?? {}) };
+    }
+    return data ?? { ok: true };
+  } catch (e) {
+    return { ok: false, err: (e as Error).message || "request failed" };
+  }
+}
+
+// ---- Extrinsic calibration (/api/excal/*) ----------------------------------
+
+export function fetchExcalState(): Promise<ExcalState> {
+  return getJson<ExcalState>("/api/excal/state");
+}
+
+/** POST an extrinsic-calib action. Tolerates a non-OK / module-swap response. */
+export async function postExcal(
+  action: "start" | "stop" | "solve",
+): Promise<CalibActionResponse> {
+  try {
+    const { res, data } = await postJson<CalibActionResponse>(`/api/excal/${action}`);
+    if (!res.ok || (data && data.ok === false)) {
+      return { ok: false, err: data?.err || `HTTP ${res.status}`, ...(data ?? {}) };
+    }
+    return data ?? { ok: true };
+  } catch (e) {
+    return { ok: false, err: (e as Error).message || "request failed" };
+  }
+}
+
+// ---- Setup (cameras / config / proceed) ------------------------------------
+
+export function fetchCameras(): Promise<CamerasResponse> {
+  return getJson<CamerasResponse>("/api/cameras");
+}
+
+export async function startCameraPreview(body: {
+  device: string;
+  width: number;
+  height: number;
+  fps: number;
+  pixel_format: string;
+  // Optional per-camera exposure override so the preview reflects it.
+  exposure_mode?: string;
+  exposure?: number;
+  gain?: number;
+  ae_target?: number;
+}): Promise<CameraPreviewResponse> {
+  const { res, data } = await postJson<CameraPreviewResponse>(
+    "/api/cameras/preview/start",
+    body,
+  );
+  if (!res.ok || (data && data.ok === false)) {
+    return { ok: false, err: data?.err || `HTTP ${res.status}` };
+  }
+  return data ?? { ok: true };
+}
+
+export async function stopCameraPreview(device: string): Promise<CameraPreviewResponse> {
+  const { res, data } = await postJson<CameraPreviewResponse>(
+    "/api/cameras/preview/stop",
+    { device },
+  );
+  if (!res.ok) return { ok: false, err: data?.err || `HTTP ${res.status}` };
+  return data ?? { ok: true };
+}
+
+export function fetchConfig(): Promise<ConfigResponse> {
+  return getJson<ConfigResponse>("/api/config");
+}
+
+/** Resolve `path` against the backend CWD and report existence (engine/calib paths). */
+export function checkPath(path: string): Promise<PathCheckResponse> {
+  return getJson<PathCheckResponse>("/api/setup/check-path?path=" + encodeURIComponent(path));
+}
+
+/** Persist a (partial) config; the backend merges only the present keys. */
+export async function postConfig(partial: Partial<ConfigDraft>): Promise<ConfigOkResponse> {
+  const { res, data } = await postJson<ConfigOkResponse>("/api/config", {
+    config: partial,
+  });
+  if (!res.ok || (data && data.ok === false)) {
+    return { ok: false, err: data?.err || `HTTP ${res.status}` };
+  }
+  return data ?? { ok: true };
+}
+
+export async function validateConfig(): Promise<ConfigOkResponse> {
+  const { res, data } = await postJson<ConfigOkResponse>("/api/config/validate");
+  if (!res.ok) return { ok: false, err: data?.err || `HTTP ${res.status}` };
+  return data ?? { ok: true };
+}
+
+export function listNamedConfigs(): Promise<ConfigListResponse> {
+  return getJson<ConfigListResponse>("/api/config/list");
+}
+
+export async function saveNamedConfig(name: string): Promise<ConfigOkResponse> {
+  const { res, data } = await postJson<ConfigOkResponse>("/api/config/save", { name });
+  if (!res.ok || (data && data.ok === false)) {
+    return { ok: false, err: data?.err || `HTTP ${res.status}` };
+  }
+  return data ?? { ok: true };
+}
+
+export async function loadNamedConfig(name: string): Promise<ConfigLoadResponse> {
+  const { res, data } = await postJson<ConfigLoadResponse>("/api/config/load", { name });
+  if (!res.ok || (data && data.ok === false)) {
+    return { ok: false, err: data?.err || `HTTP ${res.status}` };
+  }
+  return data ?? { ok: true };
+}
+
+export async function proceedSetup(): Promise<SetupProceedResponse> {
+  const { res, data } = await postJson<SetupProceedResponse>("/api/setup/proceed");
+  if (!res.ok || (data && data.ok === false)) {
+    return { ok: false, err: data?.err || `HTTP ${res.status}` };
+  }
+  return data ?? { ok: true };
 }
