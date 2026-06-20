@@ -1,15 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useRef, useState } from "react";
 import { CameraPane } from "../components/CameraPane";
 import { ThreeDView } from "../components/ThreeDView";
 import { VmtAlignForm, type VmtAlignHandle } from "../components/VmtAlignForm";
 import { VmtAutoForm } from "../components/VmtAutoForm";
 import { SlimeCorrectionTable } from "../components/SlimeCorrectionTable";
 import { TrackerStatsTable } from "../components/TrackerStatsTable";
+import { WizardLayout } from "../components/WizardLayout";
 import { useWebSocketJson, type WsStatus } from "../hooks/useWebSocketJson";
 import { useRafLoop } from "../hooks/useRafLoop";
 import { useFlowWatch } from "../hooks/useFlowWatch";
-import { requestFlowSwitch } from "../lib/api";
 import { drawCamera } from "../lib/draw2d";
 import { build2dStatsText, build3dStatsText, type HmdStatus } from "../lib/statsText";
 import type { SkeletonViewer } from "../three/SkeletonViewer";
@@ -18,7 +17,6 @@ import type {
   Bundle3D,
   CameraBundle,
   ContinuousAlignBlock,
-  FlowMode,
   KpFormat,
   Tracker,
 } from "../types/bundle";
@@ -61,10 +59,11 @@ export function ViewerPage() {
   const [hmdStatus, setHmdStatus] = useState<HmdStatus>({ text: "no hmd", cls: "" });
   const [trackers, setTrackers] = useState<Tracker[]>([]);
   const [contAlign, setContAlign] = useState<ContinuousAlignBlock | null>(null);
-  const [switchBanner, setSwitchBanner] = useState<{ text: string; cls: string } | null>(null);
-  const [switchPending, setSwitchPending] = useState(false);
 
-  const flow = useFlowWatch({ page: "run", redirect: false });
+  // The viewer follows the flow like the other step pages: opening "/" while
+  // the daemon is in setup / a calib mode redirects to that step (so a user can
+  // open the top and proceed through the wizard). In run mode "/" stays put.
+  const flow = useFlowWatch({ page: "run" });
 
   const status2d = useWebSocketJson<Bundle2D>(
     "/ws",
@@ -154,87 +153,23 @@ export function ViewerPage() {
     vmtAlignRef.current?.writeForm(alignment);
   }, []);
 
-  const switchMode = useCallback(async (mode: FlowMode, label: string) => {
-    if (!window.confirm(
-      `Restart into ${label}? Tracker output stops until calibration finishes.`,
-    )) {
-      return;
-    }
-    setSwitchBanner(null);
-    setSwitchPending(true);
-    try {
-      const res = await requestFlowSwitch(mode);
-      if (res.ok) {
-        setSwitchPending(true);
-      } else {
-        setSwitchPending(false);
-        setSwitchBanner({ text: `switch failed: ${res.err || "unknown error"}`, cls: "err" });
-      }
-    } catch (e) {
-      // A rejected fetch (backend down) must not leave switchPending stuck true.
-      setSwitchPending(false);
-      setSwitchBanner({ text: `switch failed: ${(e as Error).message || "unknown error"}`, cls: "err" });
-    }
-  }, []);
-
-  const flowMode = flow.state?.mode;
-  const managedRun = !!flow.state?.managed && flowMode === "run";
-  useEffect(() => {
-    if (flow.status === "down" || (flowMode && flowMode !== "run")) {
-      setSwitchPending(false);
-    }
-  }, [flow.status, flowMode]);
-
-  let flowBanner: { text: string; cls: string } | null = null;
-  if (flow.status === "down") {
-    flowBanner = { text: "module restarting - waiting for the next mode...", cls: "busy" };
-  } else if (switchPending && flowMode === "run") {
-    flowBanner = { text: "switching mode...", cls: "busy" };
-  } else if (switchBanner) {
-    flowBanner = switchBanner;
-  } else if (flowMode === "calib-subject") {
-    flowBanner = {
-      text: 'calib-subject mode - open the wizard from the "subject calib" link above',
-      cls: "note",
-    };
-  } else if (flowMode === "calib-extrinsic") {
-    flowBanner = {
-      text: 'calib-extrinsic mode - open the collection page from the "extrinsic calib" link above',
-      cls: "note",
-    };
-  }
+  // The viewer redirects away from non-run modes, so the only banner left is
+  // the daemon-restart gap (status "down" while a module is being respawned —
+  // e.g. just after a step-bar switch). Step navigation / recalibration is now
+  // the WizardSteps bar (WizardLayout below).
+  const flowBanner =
+    flow.status === "down"
+      ? { text: "モジュール再起動中 — 次のモードを待っています…", cls: "busy" }
+      : null;
 
   return (
+    <WizardLayout current="run" flow={flow.state}>
     <div className="viewer-page">
       <header>
         <h1>fitra-cam RTMPose</h1>
         <div className="conn-group">
           <div className={`conn ${conn2d.cls}`.trim()}>{conn2d.text}</div>
           <div className={`conn ${conn3d.cls}`.trim()}>{conn3d.text}</div>
-          {flowMode === "calib-subject" && (
-            <Link className="conn link" to="/subject-calib">subject calib</Link>
-          )}
-          {flowMode === "calib-extrinsic" && (
-            <a className="conn link" href="/extrinsic-calib">extrinsic calib</a>
-          )}
-          {managedRun && (
-            <>
-              <button
-                type="button"
-                className="conn link"
-                onClick={() => void switchMode("calib-extrinsic", "extrinsic calibration")}
-              >
-                recalibrate extrinsic
-              </button>
-              <button
-                type="button"
-                className="conn link"
-                onClick={() => void switchMode("calib-subject", "subject calibration")}
-              >
-                recalibrate subject
-              </button>
-            </>
-          )}
         </div>
       </header>
 
@@ -261,5 +196,6 @@ export function ViewerPage() {
         <TrackerStatsTable trackers={trackers} />
       </section>
     </div>
+    </WizardLayout>
   );
 }

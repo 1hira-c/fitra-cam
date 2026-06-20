@@ -69,6 +69,17 @@ Crow は handler から `multipart/x-mixed-replace` を綺麗にストリーム�
 ~150ms ポーリングする方式。MJPEG はペイロードを verbatim 返却 (再エンコード無)、YUYV のみ
 OpenCV で BGR→JPEG。背景スレッド無し (Crow worker が pull + cache)。
 
+### トップページからの導線 (採用: ビューワも flow を追従)
+
+ブラウザで `/` (ViewerPage) を開いたとき、daemon が run 以外 (setup / 各 calib) なら
+その step ページへ自動遷移する。これにより「トップを開く → そのままウィザードを進める」が
+成立する。実装は他の step ページと同じ `useFlowWatch`(redirect 既定 ON) を ViewerPage にも
+適用しただけ (旧来 ViewerPage だけ redirect:false で、setup モードで `/` を開くと
+"connecting…" のまま行き止まりだった)。run モードでは `/` に留まる。さらに ViewerPage も
+`WizardLayout` でラップし、run 中も step バーで進捗表示 + 任意 step への再校正 (flow-switch) が
+できる (旧「recalibrate extrinsic/subject」ボタンと calib モード時のリンク/バナーは step バーに
+集約して撤去)。calib 中のカメラ監視は各 calib ページ自身のライブ表示で代替。
+
 ### calib UI の統合 (採用: 全部 React + 静的 dir を web-ui/dist に向ける)
 
 intrinsic/extrinsic ページを React SPA へ移植。バックエンドは
