@@ -340,6 +340,19 @@ export interface CamerasResponse {
   cameras: DetectedCamera[];
 }
 
+// Per-camera override (slot index 0..2). Each field's "unset" sentinel means
+// "use the global setting / leave the camera default", matching the YAML
+// cam{N}_* keys and the MainOptions arrays.
+export interface ConfigCameraOverride {
+  capture_width: number;   // 0 = use global width (capture at full sensor then downscale)
+  capture_height: number;  // 0 = use global height
+  pixel_format: string;    // "" = use global pixel_format
+  exposure_mode: string;   // "" / "auto" = untouched | "manual" | "assist"
+  exposure: number;        // V4L2 exposure_absolute, 100us units; 0 = leave
+  gain: number;            // V4L2 gain; -1 = leave at camera default
+  ae_target: number;       // assist target mean luma (0..255)
+}
+
 export interface ConfigCameras {
   cam0: string;
   cam1: string;
@@ -349,6 +362,8 @@ export interface ConfigCameras {
   fps: number;
   pixel_format: string;
   n_buffers: number;
+  /** Per-slot overrides; index 0=cam0, 1=cam1, 2=cam2. Always length 3. */
+  overrides: ConfigCameraOverride[];
 }
 
 export interface ConfigInference {

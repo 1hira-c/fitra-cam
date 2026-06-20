@@ -21,6 +21,7 @@ import {
 import { httpUrl } from "../lib/config";
 import type {
   CameraFormat,
+  ConfigCameraOverride,
   ConfigCameras,
   ConfigDraft,
   ConfigExtrinsicCalib,
@@ -37,6 +38,9 @@ import "../styles/setup.css";
 const PREVIEW_REFRESH_MS = 150;
 const SLOTS: Array<keyof Pick<ConfigCameras, "cam0" | "cam1" | "cam2">> = ["cam0", "cam1", "cam2"];
 const PIXEL_FORMATS = ["mjpeg", "yuyv"];
+// Per-camera pixel_format override: "" = use the global format; nvjpeg (HW
+// decode) is valid per-camera even though the global selector omits it.
+const OVERRIDE_PIXEL_FORMATS = ["", "mjpeg", "yuyv", "nvjpeg"];
 
 type Msg = { text: string; err: boolean };
 
@@ -177,6 +181,13 @@ export function SetupPage() {
     setDraft((d) => (d ? { ...d, slimevr: { ...d.slimevr, ...patch } } : d));
   const setExtrinsic = (patch: Partial<ConfigExtrinsicCalib>) =>
     setDraft((d) => (d ? { ...d, extrinsic_calib: { ...d.extrinsic_calib, ...patch } } : d));
+  // Patch one slot's per-camera override (index 0=cam0, 1=cam1, 2=cam2).
+  const setOverride = (i: number, patch: Partial<ConfigCameraOverride>) =>
+    setDraft((d) => {
+      if (!d) return d;
+      const overrides = d.cameras.overrides.map((o, idx) => (idx === i ? { ...o, ...patch } : o));
+      return { ...d, cameras: { ...d.cameras, overrides } };
+    });
 
   // Assign a detected camera to a slot (toggle off if already assigned there).
   const assignSlot = (slot: keyof ConfigCameras, byPath: string) => {
@@ -398,6 +409,103 @@ export function SetupPage() {
                     />
                   </label>
                 </div>
+
+                <h3>カメラ別オーバーライド（任意）</h3>
+                <p className="muted">
+                  スロットごとにキャプチャ解像度・ピクセル形式・露出をグローバル設定から上書きします。
+                  0 / 空欄 / gain -1 はグローバルまたはカメラ既定を使用。
+                </p>
+                {SLOTS.every((s) => !draft.cameras[s]) ? (
+                  <p className="muted">スロットにカメラを割り当てると表示されます。</p>
+                ) : (
+                  SLOTS.map((slot, i) => {
+                    const dev = draft.cameras[slot] as string;
+                    const ov = draft.cameras.overrides[i];
+                    if (!dev || !ov) return null;
+                    const manualOrAssist = ov.exposure_mode === "manual" || ov.exposure_mode === "assist";
+                    return (
+                      <div key={slot} className="override-block">
+                        <h4>{slot} <code className="muted">{dev}</code></h4>
+                        <div className="form-grid">
+                          <label>
+                            capture override (w×h, 0=グローバル)
+                            <span className="wh">
+                              <input
+                                type="number"
+                                min={0}
+                                value={ov.capture_width}
+                                onChange={(e) => setOverride(i, { capture_width: Number(e.target.value) })}
+                              />
+                              <span>×</span>
+                              <input
+                                type="number"
+                                min={0}
+                                value={ov.capture_height}
+                                onChange={(e) => setOverride(i, { capture_height: Number(e.target.value) })}
+                              />
+                            </span>
+                          </label>
+                          <label>
+                            pixel_format
+                            <select
+                              value={ov.pixel_format}
+                              onChange={(e) => setOverride(i, { pixel_format: e.target.value })}
+                            >
+                              {OVERRIDE_PIXEL_FORMATS.map((pf) => (
+                                <option key={pf || "global"} value={pf}>{pf || "(グローバル)"}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            exposure_mode
+                            <select
+                              value={ov.exposure_mode}
+                              onChange={(e) => setOverride(i, { exposure_mode: e.target.value })}
+                            >
+                              <option value="">auto（既定）</option>
+                              <option value="manual">manual</option>
+                              <option value="assist">assist</option>
+                            </select>
+                          </label>
+                          {manualOrAssist && (
+                            <>
+                              <label>
+                                exposure (×100µs)
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={ov.exposure}
+                                  onChange={(e) => setOverride(i, { exposure: Number(e.target.value) })}
+                                />
+                              </label>
+                              <label>
+                                gain (-1=既定)
+                                <input
+                                  type="number"
+                                  min={-1}
+                                  value={ov.gain}
+                                  onChange={(e) => setOverride(i, { gain: Number(e.target.value) })}
+                                />
+                              </label>
+                            </>
+                          )}
+                          {ov.exposure_mode === "assist" && (
+                            <label>
+                              ae_target (0-255)
+                              <input
+                                type="number"
+                                min={0}
+                                max={255}
+                                value={ov.ae_target}
+                                onChange={(e) => setOverride(i, { ae_target: Number(e.target.value) })}
+                              />
+                            </label>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
               </>
             )}
           </section>

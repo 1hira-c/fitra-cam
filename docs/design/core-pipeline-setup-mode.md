@@ -62,6 +62,16 @@ JSON で出し入れし、それ以外の seed 値は draft に保持され writ
 JSON⇄MainOptions マッピングは web 層 (`crow_routes_setup_mode.cpp`) に置き、`fitra_config` を
 Crow から切り離す (TensorRT/CUDA 非依存を維持)。
 
+**カメラ別オーバーライド**は `cameras.overrides[]` (長さ 3、index=スロット cam0/1/2) として
+JSON に乗せる。各要素は `{capture_width, capture_height, pixel_format, exposure_mode, exposure,
+gain, ae_target}` で、MainOptions の `cam{N}_*` 配列・YAML の `cam{N}_capture_width` 等と 1:1。
+未設定センチネル (capture 0 / pixel_format・exposure_mode "" / gain -1) はグローバルまたは
+カメラ既定を意味し、emit_main_config が非デフォルトのみ書くので未設定スロットは YAML に出ない。
+用途: 低解像でセンタークロップする USB3.0 カメラの capture 解像度上書き
+([per-camera-capture-downscale](core-pipeline-per-camera-capture-downscale.md))、nvjpeg/mjpeg の
+デコード経路混在、露出固定によるブレ低減
+([camera-exposure-control](core-pipeline-camera-exposure-control.md))。
+
 ### カメラ preview (採用: 単発 JPEG スナップショットのポーリング)
 
 Crow は handler から `multipart/x-mixed-replace` を綺麗にストリームできない (body を 1 回 flush)。

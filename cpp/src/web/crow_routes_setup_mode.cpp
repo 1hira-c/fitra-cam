@@ -10,6 +10,8 @@
 // their seed values and are still written verbatim by write_union (emit covers
 // the whole struct).
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <sstream>
 #include <string>
@@ -61,6 +63,25 @@ void merge_config(MainOptions& d, const crow::json::rvalue& cfg) {
         jint(c, "fps", d.fps);
         jstr(c, "pixel_format", d.pixel_format);
         jint(c, "n_buffers", d.n_buffers);
+        // Per-camera overrides: cameras.overrides[i] (i = slot 0..2) carries the
+        // capture-resolution / pixel-format / exposure overrides. Each field's
+        // unset sentinel (0 capture, "" pixel_format/exposure_mode, -1 gain)
+        // means "use the global / leave the camera default", matching the YAML
+        // cam{N}_* keys and MainOptions arrays.
+        if (c.has("overrides") && c["overrides"].t() == crow::json::type::List) {
+            const auto ov = c["overrides"];
+            const std::size_t n = std::min<std::size_t>(ov.size(), 3);
+            for (std::size_t i = 0; i < n; ++i) {
+                const auto o = ov[i];
+                jint(o, "capture_width",  d.cam_cap_width[i]);
+                jint(o, "capture_height", d.cam_cap_height[i]);
+                jstr(o, "pixel_format",   d.cam_pixel_format[i]);
+                jstr(o, "exposure_mode",  d.cam_exposure_mode[i]);
+                jint(o, "exposure",       d.cam_exposure[i]);
+                jint(o, "gain",           d.cam_gain[i]);
+                jint(o, "ae_target",      d.cam_ae_target[i]);
+            }
+        }
     }
     if (cfg.has("inference")) {
         const auto c = cfg["inference"];
@@ -121,7 +142,19 @@ std::string draft_to_json(const MainOptions& d) {
       << "\"width\":" << d.width << ",\"height\":" << d.height
       << ",\"fps\":" << d.fps
       << ",\"pixel_format\":\"" << json_escape(d.pixel_format) << "\""
-      << ",\"n_buffers\":" << d.n_buffers << "},"
+      << ",\"n_buffers\":" << d.n_buffers
+      << ",\"overrides\":[";
+    for (int i = 0; i < 3; ++i) {
+        if (i) o << ",";
+        o << "{\"capture_width\":" << d.cam_cap_width[i]
+          << ",\"capture_height\":" << d.cam_cap_height[i]
+          << ",\"pixel_format\":\"" << json_escape(d.cam_pixel_format[i]) << "\""
+          << ",\"exposure_mode\":\"" << json_escape(d.cam_exposure_mode[i]) << "\""
+          << ",\"exposure\":" << d.cam_exposure[i]
+          << ",\"gain\":" << d.cam_gain[i]
+          << ",\"ae_target\":" << d.cam_ae_target[i] << "}";
+    }
+    o << "]},"
       << "\"inference\":{"
       << "\"det_engine\":\"" << json_escape(d.det_engine) << "\","
       << "\"pose_engine\":\"" << json_escape(d.pose_engine) << "\","

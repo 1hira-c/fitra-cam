@@ -94,6 +94,23 @@
 }
 .setup-page .row { display: flex; gap: 0.7em; flex-wrap: wrap; align-items: end; }
 
+/* Per-camera override blocks */
+.setup-page .override-block {
+  margin-top: 0.6em;
+  padding: 0.5em 0.7em;
+  border: 1px solid #2a323d;
+  border-radius: 0.3em;
+  background: #0e1116;
+}
+.setup-page .override-block h4 {
+  margin: 0 0 0.4em;
+  font-size: 0.9em;
+  font-weight: 600;
+}
+.setup-page .override-block h4 code { font-size: 0.85em; font-weight: 400; }
+.setup-page .wh { display: inline-flex; align-items: center; gap: 0.3em; }
+.setup-page .wh input { width: 5.5em; }
+
 .setup-page .msg { margin-top: 0.5em; font-size: 0.85em; color: #ffa; min-height: 1.1em; }
 .setup-page .msg.err { color: #f88; }
 .setup-page .status-line { font-size: 0.85em; color: #aab2bc; margin-top: 0.4em; }
