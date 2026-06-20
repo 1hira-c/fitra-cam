@@ -400,6 +400,7 @@ export interface ConfigSlimevr {
 
 export interface ConfigIntrinsicCalib {
   enabled: boolean;
+  out: string;   // where the intrinsic step writes (= the extrinsic step's intrinsics input)
 }
 
 export interface ConfigExtrinsicCalib {

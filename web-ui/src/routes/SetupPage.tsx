@@ -92,6 +92,28 @@ function effectiveSettings(cam: DetectedCamera, draft: ConfigDraft): PreviewSett
   };
 }
 
+// Establish the 2-file calibration invariant, resolving the out/calib
+// chicken-and-egg: one intrinsics file (intrinsic-step output = extrinsic-step
+// input) and one extrinsics file (extrinsic output = run's calib). Without this
+// the extrinsic step's intrinsics fall back to three_d.calib — the extrinsics
+// output that does not exist yet on first run ("floor PnP intrinsics ... not
+// found: calibrations/extrinsics.yaml").
+function normalizeCalibPaths(c: ConfigDraft): ConfigDraft {
+  const intr =
+    c.extrinsic_calib.intrinsics ||
+    c.extrinsic_calib.floor_intrinsics ||
+    c.intrinsic_calib.out ||
+    "calibrations/intrinsics.yaml";
+  const ext =
+    c.extrinsic_calib.out || c.three_d.calib || "calibrations/extrinsics.yaml";
+  return {
+    ...c,
+    intrinsic_calib: { ...c.intrinsic_calib, out: intr },
+    extrinsic_calib: { ...c.extrinsic_calib, out: ext, intrinsics: intr, floor_intrinsics: intr },
+    three_d: { ...c.three_d, calib: ext },
+  };
+}
+
 // A text input for a filesystem path with an on-the-spot existence check. The
 // path is resolved by the backend against the daemon CWD (where engines/calib
 // are actually opened), so relative and absolute inputs both report correctly.
@@ -195,7 +217,7 @@ export function SetupPage() {
   const loadConfig = useCallback(async () => {
     try {
       const r = await fetchConfig();
-      setDraft(r.config);
+      setDraft(normalizeCalibPaths(r.config));
       setNamed(r.named ?? []);
     } catch (e) {
       setCfgMsg({ text: (e as Error).message || "config load failed", err: true });
@@ -299,6 +321,32 @@ export function SetupPage() {
     setDraft((d) => (d ? { ...d, slimevr: { ...d.slimevr, ...patch } } : d));
   const setExtrinsic = (patch: Partial<ConfigExtrinsicCalib>) =>
     setDraft((d) => (d ? { ...d, extrinsic_calib: { ...d.extrinsic_calib, ...patch } } : d));
+  // 2-file model couplings (see normalizeCalibPaths).
+  const setIntrinsicEnabled = (enabled: boolean) =>
+    setDraft((d) => (d ? { ...d, intrinsic_calib: { ...d.intrinsic_calib, enabled } } : d));
+  // The intrinsics file is the intrinsic-step output AND the extrinsic-step
+  // input (controller + floor), so one field drives all three.
+  const setIntrinsicsFile = (v: string) =>
+    setDraft((d) =>
+      d
+        ? {
+            ...d,
+            intrinsic_calib: { ...d.intrinsic_calib, out: v },
+            extrinsic_calib: { ...d.extrinsic_calib, intrinsics: v, floor_intrinsics: v },
+          }
+        : d,
+    );
+  // The extrinsics file is the extrinsic output AND run's calib input.
+  const setExtrinsicsFile = (v: string) =>
+    setDraft((d) =>
+      d
+        ? {
+            ...d,
+            extrinsic_calib: { ...d.extrinsic_calib, out: v },
+            three_d: { ...d.three_d, calib: v },
+          }
+        : d,
+    );
   // Patch one slot's per-camera override (index 0=cam0, 1=cam1, 2=cam2).
   const setOverride = (i: number, patch: Partial<ConfigCameraOverride>) =>
     setDraft((d) => {
@@ -321,7 +369,7 @@ export function SetupPage() {
     if (!selectedNamed) return;
     const r = await loadNamedConfig(selectedNamed);
     if (r.ok && r.config) {
-      setDraft(r.config);
+      setDraft(normalizeCalibPaths(r.config));
       setCfgMsg({ text: `loaded "${selectedNamed}"`, err: false });
     } else {
       setCfgMsg({ text: r.err || "load failed", err: true });
@@ -775,6 +823,12 @@ export function SetupPage() {
           {draft && (
             <section className="card">
               <h2>4. 3D / 校正</h2>
+              <p className="muted">
+                校正は 2 ファイルで回します:
+                <b> intrinsics ファイル</b>（内部校正の出力 = 外部校正の入力）と
+                <b> extrinsics ファイル</b>（外部校正の出力 = 推論が読む calib）。
+                両者は別物で、extrinsics は外部校正で初めて生成されます。
+              </p>
               <div className="form-grid">
                 <label className="inline">
                   <input
@@ -785,22 +839,18 @@ export function SetupPage() {
                   enable_3d
                 </label>
                 <PathField
-                  label="calib path"
-                  value={draft.three_d.calib}
-                  onChange={(v) => setThreeD({ calib: v })}
-                  placeholder="calibrations/extrinsics.yaml"
+                  label="intrinsics ファイル（内部校正の出力 / 外部校正の入力）"
+                  value={draft.intrinsic_calib.out}
+                  onChange={setIntrinsicsFile}
+                  placeholder="calibrations/intrinsics.yaml"
                 />
                 <label className="inline">
                   <input
                     type="checkbox"
                     checked={draft.intrinsic_calib.enabled}
-                    onChange={(e) =>
-                      setDraft((d) =>
-                        d ? { ...d, intrinsic_calib: { enabled: e.target.checked } } : d,
-                      )
-                    }
+                    onChange={(e) => setIntrinsicEnabled(e.target.checked)}
                   />
-                  intrinsic_calib
+                  この intrinsics を ChArUco 内部校正で生成する
                 </label>
                 <label>
                   extrinsic method
@@ -812,22 +862,6 @@ export function SetupPage() {
                     <option value="floor">floor</option>
                   </select>
                 </label>
-                <label>
-                  extrinsic out
-                  <input
-                    type="text"
-                    value={draft.extrinsic_calib.out}
-                    onChange={(e) => setExtrinsic({ out: e.target.value })}
-                  />
-                </label>
-                {draft.extrinsic_calib.method === "controller" && (
-                  <PathField
-                    label="intrinsics（PnP用・空ならcalib）"
-                    value={draft.extrinsic_calib.intrinsics}
-                    onChange={(v) => setExtrinsic({ intrinsics: v })}
-                    placeholder="calibrations/intrinsics.yaml"
-                  />
-                )}
                 {draft.extrinsic_calib.method === "floor" && (
                   <>
                     <PathField
@@ -835,12 +869,6 @@ export function SetupPage() {
                       value={draft.extrinsic_calib.floor_map}
                       onChange={(v) => setExtrinsic({ floor_map: v })}
                       placeholder="configs/floor_tag_map.yaml"
-                    />
-                    <PathField
-                      label="floor_intrinsics（PnP用・空ならcalib）"
-                      value={draft.extrinsic_calib.floor_intrinsics}
-                      onChange={(v) => setExtrinsic({ floor_intrinsics: v })}
-                      placeholder="calibrations/intrinsics.yaml"
                     />
                     <label className="inline">
                       <input
@@ -852,6 +880,12 @@ export function SetupPage() {
                     </label>
                   </>
                 )}
+                <PathField
+                  label="extrinsics ファイル（外部校正の出力 = 推論の calib）"
+                  value={draft.extrinsic_calib.out}
+                  onChange={setExtrinsicsFile}
+                  placeholder="calibrations/extrinsics.yaml"
+                />
                 <label>
                   web host
                   <input

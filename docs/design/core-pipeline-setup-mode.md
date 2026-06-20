@@ -85,6 +85,21 @@ Crow から切り離す (TensorRT/CUDA 非依存を維持)。
 応じて出し分け、path は `PathField` で存在チェック。これが無いと floor を選んでも
 `precheck_mode_switch(CalibExtrinsicFloor)` が floor_map を要求して proceed が止まる。
 
+**out/calib の鶏卵問題と 2-file モデル**: `extrinsic_calib.out`(外部校正の出力) と
+`three_d.calib`(run が読む) は daemon 規約で一致必須。さらに外部校正の intrinsics 入力が
+未設定だと `precheck_mode_switch` は `three_d.calib` に fallback するが、それは「まだ存在しない
+外部校正の出力」なので初回に `floor PnP intrinsics ... not found: calibrations/extrinsics.yaml`
+で落ちる(循環)。対策として SetupPage は **2 ファイルモデル**で提示する:
+- **intrinsics ファイル** = `intrinsic_calib.out`(内部校正の出力) かつ外部校正の入力。1 つの入力欄が
+  `intrinsic_calib.out` / `excal_intrinsics` / `floor_intrinsics` を同時に駆動。
+- **extrinsics ファイル** = `extrinsic_calib.out` = `three_d.calib`(外部校正の出力 = run の calib)。
+  1 つの入力欄が両方を駆動。
+
+`normalizeCalibPaths` がロード時に不変条件を確立し(intrinsics 系を一致、extrinsics 系を一致、
+intrinsics 入力が空なら intrinsic 出力で埋める)、編集中も coupled setter が両者を同期する。
+これで「外部校正の入力 intrinsics が、まだ無い外部校正の出力を指す」循環が起きない。
+バックエンドの fallback 挙動 (pose-3d トラック) は変更せず、UI 層で解消している。
+
 **カメラ別オーバーライド**は `cameras.overrides[]` (長さ 3、index=スロット cam0/1/2) として
 JSON に乗せる。各要素は `{capture_width, capture_height, pixel_format, exposure_mode, exposure,
 gain, ae_target}` で、MainOptions の `cam{N}_*` 配列・YAML の `cam{N}_capture_width` 等と 1:1。
