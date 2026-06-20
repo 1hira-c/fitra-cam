@@ -159,6 +159,7 @@ export interface Bundle3D {
 
 export type FlowMode =
   | "run"
+  | "setup"
   | "calib-subject"
   | "calib-extrinsic"
   | "calib-extrinsic-floor"

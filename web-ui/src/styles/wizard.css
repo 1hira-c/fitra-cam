@@ -1,0 +1,67 @@
+/* Setup-wizard stepper (docs/design/core-pipeline-setup-mode.md). Scoped under
+   .wizard-steps so it never bleeds into a page's own styles. */
+
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.wizard-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid #333;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+  opacity: 0.6;
+}
+.wizard-step:hover { border-color: var(--accent); }
+
+.wizard-step .wizard-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #333;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.wizard-step.done {
+  opacity: 0.9;
+  border-color: #2d6a4f;
+}
+.wizard-step.done .wizard-step-num { background: #2d6a4f; }
+
+.wizard-step.current {
+  opacity: 1;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.wizard-step.current .wizard-step-num {
+  background: var(--accent);
+  color: #04222e;
+}
+
+.wizard-step.upcoming { opacity: 0.45; }
+
+.wizard-switch-banner {
+  padding: 8px 16px;
+  font-size: 13px;
+  background: #1d2530;
+}
+.wizard-switch-banner.err { background: #3a1d1d; color: #f6a; }
+.wizard-switch-banner.busy { background: #2a2a14; }

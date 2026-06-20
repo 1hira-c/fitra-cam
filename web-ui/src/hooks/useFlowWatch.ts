@@ -4,6 +4,8 @@ import type { FlowMode, FlowState } from "../types/bundle";
 
 export const PAGE_FOR_MODE: Record<FlowMode, string> = {
   run: "/",
+  // The first-run setup module (RunMode::Setup) serves its own SPA page.
+  setup: "/setup",
   "calib-subject": "/subject-calib",
   "calib-extrinsic": "/extrinsic-calib",
   // 案D shares the /extrinsic-calib page with 案C; the page branches on method.
@@ -27,6 +29,7 @@ interface FlowWatchResult {
 function isFlowMode(mode: string): mode is FlowMode {
   return (
     mode === "run" ||
+    mode === "setup" ||
     mode === "calib-subject" ||
     mode === "calib-extrinsic" ||
     mode === "calib-extrinsic-floor" ||

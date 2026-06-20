@@ -940,7 +940,18 @@ void CrowServer::start() {
             return crow::response{403, "forbidden"};
         }
         if (!std::filesystem::is_regular_file(canon_req)) {
-            return crow::response{404, "not found"};
+            // SPA history fallback: a client-side route (no file extension, e.g.
+            // /setup, /intrinsic-calib, /subject-calib) returns index.html so a
+            // deep link / refresh boots the SPA and React Router renders it. A
+            // missing asset (has an extension) stays a 404.
+            if (std::filesystem::path{sub}.has_extension()) {
+                return crow::response{404, "not found"};
+            }
+            auto index = read_file(static_root / "index.html");
+            if (index.empty()) return crow::response{404, "index.html not found"};
+            crow::response resp{index};
+            resp.set_header("Content-Type", "text/html; charset=utf-8");
+            return resp;
         }
         auto body = read_file(canon_req);
         crow::response resp{body};
