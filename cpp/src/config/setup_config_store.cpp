@@ -53,6 +53,10 @@ bool SetupConfigStore::validate_draft(std::string& err) const {
 }
 
 bool SetupConfigStore::write_union(std::string& err) {
+    if (union_path_.empty()) {
+        err = "cannot persist config: the daemon was launched without --config";
+        return false;
+    }
     // Never clobber a tracked template: --config must point at a writable
     // runtime config (the daemon bootstraps a missing one from the .example).
     if (ends_with(union_path_, ".example")) {

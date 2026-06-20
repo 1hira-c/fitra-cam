@@ -47,26 +47,26 @@ bool compose_and_switch(config::SetupConfigStore& store, FlowControl& flow,
                         config::RunMode next, std::string& next_mode,
                         std::string& err) {
     config::MainOptions d = store.draft();
-    // Every non-setup stage runs live cameras; run + subject-calib additionally
-    // need the inference engines. A child spawned without them dies immediately
-    // and the daemon falls back to run, so gate the switch here against the live
-    // draft (precheck_mode_switch alone returns true for run/subject regardless).
-    if (next != config::RunMode::Setup && d.cam_paths[0].empty()) {
-        err = "configure at least cam0 before proceeding";
-        return false;
-    }
-    if ((next == config::RunMode::Run || next == config::RunMode::CalibSubject)
-        && (d.det_engine.empty() || d.pose_engine.empty())) {
-        err = std::string("set --det-engine and --pose-engine before "
-                          "proceeding to ") + config::run_mode_name(next);
-        return false;
-    }
-    // The daemon spawns the subject-calib child with only --config (it does not
-    // forward --calib-subject-id/--calib-subject-height-m), so the composed
-    // config must carry a valid id + height or the child fails validate_options
-    // and the boot preflight. Seed defaults; the operator can still change the id
-    // on the subject-calib page (POST /api/calib/preflight overrides this).
-    if (next == config::RunMode::CalibSubject) {
+    // Leaving setup commits to the whole auto-chain: the spawned children re-read
+    // this union config and the browser can no longer edit it. So when entering
+    // ANY stage other than setup — even an intermediate calib stage — require the
+    // cameras + inference engines the terminal stages (run, subject-calib) need,
+    // and seed a subject id/height. Without the engines a later run/subject child
+    // dies on missing --det-engine/--pose-engine with no way to fix it from the
+    // UI; without a subject id the extrinsic stage keys on an empty
+    // calib_subject_id and routes straight to run, silently skipping subject
+    // calibration (mode_calib_extrinsic.cpp's has_subject_stage). The relaxed
+    // validate_draft alone would let such a half-config through.
+    if (next != config::RunMode::Setup) {
+        if (d.cam_paths[0].empty()) {
+            err = "configure at least cam0 before proceeding";
+            return false;
+        }
+        if (d.det_engine.empty() || d.pose_engine.empty()) {
+            err = "set --det-engine and --pose-engine before proceeding "
+                  "(subject calibration and run require them)";
+            return false;
+        }
         bool seeded = false;
         if (d.calib_subject_id.empty()) {
             d.calib_subject_id = kDefaultSubjectId;

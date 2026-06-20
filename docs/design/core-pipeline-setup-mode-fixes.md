@@ -62,12 +62,24 @@
   `do_proceed` (auto mode 導出)・`do_switch` (要求 mode を同経路へ)・`do_validate` (緩和 + engine 必須)
   に整理。`on_validate` を `SetupRouteDeps`/`CrowServer` に追加。flow-switch handler は `run_mode_setup`
   で `do_switch` に差し替え (make_server の stale-opts 版を上書き)。
+  **重要 (レビュー指摘で修正)**: cam0+engine 必須と subject id/height の seed は `next==CalibSubject`
+  だけでなく **`next != Setup` の全 chain 入口** で行う。初回フローは setup→calib-intrinsic から入るため、
+  CalibSubject 限定だと union config の `calib_subject_id` が空のまま intrinsic→extrinsic へ進み、
+  extrinsic 子 (`has_subject_stage = !calib_subject_id.empty()`) が空判定で run へ直行し subject 校正を
+  飛ばす。engine も同様で、空のまま離脱すると後段 run/subject 子が即死し UI から直せなくなる。
 - **B4** frontend `assignSlot` が割当時に他スロットの同 device をクリア + `validate_options` が非空
   `cam_paths` の重複を reject。
 - **C1** catch-all で `api/` 始まりパスは index.html でなく JSON 404。
 - **C2** `check-path` は解決後の絶対パスが CWD 配下のときだけ existence を返す (`allowed` フィールド追加)。
+  包含判定は prefix 一致でなく **完全一致 or 直後が `/`** の component 単位 (`<root>-secret` の sibling
+  バイパスを塞ぐ。bot レビュー指摘)。
 - **D1** `enum_frame_sizes`/`enum_frame_rates` が STEPWISE/CONTINUOUS で min/max + レンジ内標準解像度/fps を
-  合成。
+  合成。候補は **step grid 上 (`(w-min)%step==0`) のものだけ** に限定 (driver が S_FMT で蹴る非整列解像度を
+  出さない。bot レビュー指摘)。
+- **追加堅牢化 (bot レビュー指摘)**: V4L2 enum の `::open` に `O_CLOEXEC` (子へ fd 漏洩→EBUSY 防止)、
+  `directory_iterator` を明示 increment + error_code (例外でデーモンを落とさない)、`cap.card/driver` と
+  fmtdesc description を `strnlen` 長で構築 (非終端ドライバの範囲外読み防止)、`write_union` は空 `--config`
+  パスを明確 err で拒否。
 - **D2** YUYV ガードを `==` → `>=` (padding を許容し先頭 `w*h*2` を decode)、短すぎる場合のみ 1 回 warn。
 - **E1** `lib/format.ts` に `numOr(value, fallback)` を追加し全数値 input に適用。
 - **E2** `applyPreview` が成功/失敗を問わず `appliedPreviewKey` を更新 (失敗設定の連打再 POST を停止)。
@@ -96,3 +108,8 @@
 applyPreview の in-flight 競合、`floor_out` の往復消失 (`--floor-out` 経由のみ)、useFlowSwitch の
 banner 未クリア、ExtrinsicCalibPage の二重 banner、POST /api/config の RMW race (単一ユーザでは
 非現実的)、jint の範囲チェック。必要なら別トピックで対応。
+
+bot レビューで指摘された **`SetupCameraManager::latest_jpeg` のグローバル `mu_` を encode 中も保持** する
+contention は見送り。プレビューは 1 台ずつ (SetupPage は単一 `previewing`) なので実害は poll-encode と
+start/stop の競合のみで軽微。本格対応は `streams_` を `shared_ptr<Stream>` + per-stream mutex 化して
+encode を `mu_` 外に出す改修だが、別トピック化する。

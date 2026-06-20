@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <utility>
 
@@ -87,8 +88,14 @@ std::vector<V4l2FrameSize> enum_frame_sizes(int fd, std::uint32_t pixfmt) {
             const int min_h = static_cast<int>(sw.min_height);
             const int max_w = static_cast<int>(sw.max_width);
             const int max_h = static_cast<int>(sw.max_height);
+            const int step_w = static_cast<int>(sw.step_width);
+            const int step_h = static_cast<int>(sw.step_height);
+            // A candidate must lie in [min,max] AND on the step grid, else the
+            // driver rejects it at S_FMT (continuous reports step 1).
             auto fits = [&](int w, int h) {
-                return w >= min_w && w <= max_w && h >= min_h && h <= max_h;
+                return w >= min_w && w <= max_w && h >= min_h && h <= max_h &&
+                       (step_w <= 1 || (w - min_w) % step_w == 0) &&
+                       (step_h <= 1 || (h - min_h) % step_h == 0);
             };
             add_size(max_w, max_h);
             for (auto wh : {std::pair{1920, 1080}, std::pair{1600, 1200},
@@ -117,8 +124,12 @@ std::vector<V4l2Format> enum_formats(int fd) {
     for (fd_desc.index = 0; xioctl(fd, VIDIOC_ENUM_FMT, &fd_desc) == 0; ++fd_desc.index) {
         V4l2Format f;
         f.fourcc = fourcc_str(fd_desc.pixelformat);
-        f.description =
-            reinterpret_cast<const char*>(fd_desc.description);
+        // V4L2 fixed-size __u8 buffers are documented NUL-terminated, but bound
+        // the length defensively against a non-conformant driver over-reading.
+        f.description = std::string(
+            reinterpret_cast<const char*>(fd_desc.description),
+            ::strnlen(reinterpret_cast<const char*>(fd_desc.description),
+                      sizeof(fd_desc.description)));
         f.sizes = enum_frame_sizes(fd, fd_desc.pixelformat);
         formats.push_back(std::move(f));
     }
@@ -133,10 +144,16 @@ std::vector<V4l2Device> enumerate_v4l2_cameras() {
     std::error_code ec;
     if (!std::filesystem::exists(by_path, ec) || ec) return devices;
 
-    for (const auto& entry : std::filesystem::directory_iterator(by_path, ec)) {
-        if (ec) break;
+    // Explicit increment with an error_code: a node disappearing mid-iteration
+    // must break the loop, not throw filesystem_error out of the daemon.
+    std::error_code iter_ec;
+    for (std::filesystem::directory_iterator it{by_path, ec}, end;
+         !ec && !iter_ec && it != end; it.increment(iter_ec)) {
+        const std::filesystem::directory_entry& entry = *it;
         const std::string link = entry.path().string();
-        const int fd = ::open(link.c_str(), O_RDONLY | O_NONBLOCK);
+        // O_CLOEXEC: this is a multi-threaded daemon that execvp()s mode
+        // children; an inherited fd would leak and keep the camera EBUSY.
+        const int fd = ::open(link.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
         if (fd < 0) continue;
 
         v4l2_capability cap{};
@@ -153,8 +170,12 @@ std::vector<V4l2Device> enumerate_v4l2_cameras() {
         std::error_code rec;
         auto resolved = std::filesystem::weakly_canonical(entry.path(), rec);
         dev.dev_node = rec ? link : resolved.string();
-        dev.card   = reinterpret_cast<const char*>(cap.card);
-        dev.driver = reinterpret_cast<const char*>(cap.driver);
+        dev.card = std::string(
+            reinterpret_cast<const char*>(cap.card),
+            ::strnlen(reinterpret_cast<const char*>(cap.card), sizeof(cap.card)));
+        dev.driver = std::string(
+            reinterpret_cast<const char*>(cap.driver),
+            ::strnlen(reinterpret_cast<const char*>(cap.driver), sizeof(cap.driver)));
         dev.formats = enum_formats(fd);
         ::close(fd);
         devices.push_back(std::move(dev));

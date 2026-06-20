@@ -1096,6 +1096,13 @@ void test_setup_store_refuses_example_path() {
     seed.det_engine = "/tmp/y.engine";
     seed.pose_engine = "/tmp/r.engine";
     {
+        SetupConfigStore store{seed, ""};  // launched without --config
+        std::string err;
+        check(!store.write_union(err), "write_union must refuse an empty path");
+        check(err.find("--config") != std::string::npos,
+              "empty-path error mentions --config");
+    }
+    {
         SetupConfigStore store{seed, "configs/foo.yaml.example"};
         std::string err;
         check(!store.write_union(err), "write_union must refuse a .example path");

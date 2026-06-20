@@ -289,7 +289,11 @@ export function SetupPage() {
         previewTimer.current = setInterval(tick, PREVIEW_REFRESH_MS);
       }
     },
-    [draft, previewing],
+    // Only the cameras section feeds effectiveSettings; depending on draft.cameras
+    // (not the whole draft) keeps this stable across unrelated edits (engine path,
+    // ports), so the live-reflect effect below isn't re-armed on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [draft?.cameras, previewing],
   );
 
   const stopPreview = useCallback(async () => {
@@ -313,7 +317,7 @@ export function SetupPage() {
     if (key === appliedPreviewKey.current) return;
     const t = setTimeout(() => void applyPreview(cam), 400);
     return () => clearTimeout(t);
-  }, [previewing, draft, cameras, applyPreview]);
+  }, [previewing, draft?.cameras, cameras, applyPreview]);
 
   // --- draft mutation helpers ----------------------------------------------
   const setCameras_ = (patch: Partial<ConfigCameras>) =>

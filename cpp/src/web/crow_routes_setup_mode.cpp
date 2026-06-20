@@ -291,7 +291,12 @@ void register_setup_mode_routes(crow::SimpleApp& app, const SetupRouteDeps& deps
             // live under outputs/ + configs/). Never let the 0.0.0.0-bound setup
             // server become a filesystem-existence oracle for arbitrary absolute
             // paths (e.g. /etc/shadow); report exists=false for anything outside.
-            allowed = !abs.empty() && !root.empty() && abs.rfind(root, 0) == 0;
+            // Component-wise: a bare prefix match would also allow a sibling like
+            // <root>-secret, so require an exact match or a '/' right after root.
+            allowed = !abs.empty() && !root.empty() &&
+                      (abs == root ||
+                       (abs.size() > root.size() && abs[root.size()] == '/' &&
+                        abs.compare(0, root.size(), root) == 0));
             if (allowed) {
                 exists  = std::filesystem::exists(abs, ec) && !ec;
                 is_file = exists && std::filesystem::is_regular_file(abs, ec) && !ec;
