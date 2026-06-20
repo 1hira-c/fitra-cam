@@ -7,6 +7,13 @@
 
 namespace fitra::config {
 
+namespace {
+bool ends_with(const std::string& s, const std::string& suffix) {
+    return s.size() >= suffix.size() &&
+           s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+}  // namespace
+
 SetupConfigStore::SetupConfigStore(MainOptions seed, std::string union_path,
                                    std::string named_dir)
     : draft_(std::move(seed)),
@@ -46,6 +53,14 @@ bool SetupConfigStore::validate_draft(std::string& err) const {
 }
 
 bool SetupConfigStore::write_union(std::string& err) {
+    // Never clobber a tracked template: --config must point at a writable
+    // runtime config (the daemon bootstraps a missing one from the .example).
+    if (ends_with(union_path_, ".example")) {
+        err = "refusing to overwrite the tracked template '" + union_path_ +
+              "'; point --config at a writable runtime config "
+              "(e.g. configs/session.yaml) instead";
+        return false;
+    }
     MainOptions copy;
     {
         std::lock_guard<std::mutex> lk{mu_};

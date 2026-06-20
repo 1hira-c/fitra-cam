@@ -18,3 +18,15 @@ export function fmtRad(v: number | undefined): string {
 export function fixed(v: number | undefined, d = 2): string {
   return (Number.isFinite(v) ? (v as number) : 0).toFixed(d);
 }
+
+/**
+ * Parse a number-input's string value, preserving `fallback` when the field is
+ * empty or not a finite number. Avoids the `Number("") === 0` trap that silently
+ * clobbers a field (and sentinels like gain -1, ports) when the user clears it
+ * to retype.
+ */
+export function numOr(value: string, fallback: number): number {
+  if (value.trim() === "") return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}

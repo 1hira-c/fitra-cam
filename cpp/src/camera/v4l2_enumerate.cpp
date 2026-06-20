@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <filesystem>
+#include <utility>
 
 #include <fcntl.h>
 #include <linux/videodev2.h>
@@ -38,8 +39,24 @@ std::vector<double> enum_frame_rates(int fd, std::uint32_t pixfmt, int w, int h)
     fi.pixel_format = pixfmt;
     fi.width  = static_cast<__u32>(w);
     fi.height = static_cast<__u32>(h);
+    auto fract_fps = [](const v4l2_fract& f) -> double {
+        return f.numerator > 0 ? static_cast<double>(f.denominator) /
+                                 static_cast<double>(f.numerator)
+                               : 0.0;
+    };
     for (fi.index = 0; xioctl(fd, VIDIOC_ENUM_FRAMEINTERVALS, &fi) == 0; ++fi.index) {
-        if (fi.type != V4L2_FRMIVAL_TYPE_DISCRETE) break;  // stepwise: skip
+        if (fi.type != V4L2_FRMIVAL_TYPE_DISCRETE) {
+            // Stepwise/continuous: a single descriptor with min/max intervals.
+            // Synthesize the standard fps that fall inside [min,max] so the UI
+            // still offers selectable rates (smallest interval = highest fps).
+            const double fps_max = fract_fps(fi.stepwise.min);
+            const double fps_min = fract_fps(fi.stepwise.max);
+            for (double f : {120.0, 90.0, 60.0, 50.0, 30.0, 25.0, 15.0, 10.0, 5.0}) {
+                if (f <= fps_max + 1e-6 && f >= fps_min - 1e-6) fps.push_back(f);
+            }
+            if (fps.empty() && fps_max > 0.0) fps.push_back(fps_max);
+            break;
+        }
         if (fi.discrete.numerator > 0) {
             fps.push_back(static_cast<double>(fi.discrete.denominator) /
                           static_cast<double>(fi.discrete.numerator));
@@ -53,13 +70,42 @@ std::vector<V4l2FrameSize> enum_frame_sizes(int fd, std::uint32_t pixfmt) {
     std::vector<V4l2FrameSize> sizes;
     v4l2_frmsizeenum fs{};
     fs.pixel_format = pixfmt;
-    for (fs.index = 0; xioctl(fd, VIDIOC_ENUM_FRAMESIZES, &fs) == 0; ++fs.index) {
-        if (fs.type != V4L2_FRMSIZE_TYPE_DISCRETE) break;  // stepwise: skip
+    auto add_size = [&](int w, int h) {
         V4l2FrameSize sz;
-        sz.width  = static_cast<int>(fs.discrete.width);
-        sz.height = static_cast<int>(fs.discrete.height);
-        sz.fps = enum_frame_rates(fd, pixfmt, sz.width, sz.height);
+        sz.width  = w;
+        sz.height = h;
+        sz.fps = enum_frame_rates(fd, pixfmt, w, h);
         sizes.push_back(std::move(sz));
+    };
+    for (fs.index = 0; xioctl(fd, VIDIOC_ENUM_FRAMESIZES, &fs) == 0; ++fs.index) {
+        if (fs.type != V4L2_FRMSIZE_TYPE_DISCRETE) {
+            // Stepwise/continuous: a single descriptor with a min/max/step range.
+            // Synthesize the standard resolutions that fit so the UI dropdown is
+            // not empty, always including the max (and min when distinct).
+            const auto& sw = fs.stepwise;
+            const int min_w = static_cast<int>(sw.min_width);
+            const int min_h = static_cast<int>(sw.min_height);
+            const int max_w = static_cast<int>(sw.max_width);
+            const int max_h = static_cast<int>(sw.max_height);
+            auto fits = [&](int w, int h) {
+                return w >= min_w && w <= max_w && h >= min_h && h <= max_h;
+            };
+            add_size(max_w, max_h);
+            for (auto wh : {std::pair{1920, 1080}, std::pair{1600, 1200},
+                            std::pair{1280, 960}, std::pair{1280, 720},
+                            std::pair{1024, 768}, std::pair{800, 600},
+                            std::pair{640, 480}, std::pair{640, 360},
+                            std::pair{320, 240}}) {
+                if (fits(wh.first, wh.second) &&
+                    !(wh.first == max_w && wh.second == max_h)) {
+                    add_size(wh.first, wh.second);
+                }
+            }
+            if (min_w != max_w || min_h != max_h) add_size(min_w, min_h);
+            break;
+        }
+        add_size(static_cast<int>(fs.discrete.width),
+                 static_cast<int>(fs.discrete.height));
     }
     return sizes;
 }

@@ -33,6 +33,22 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-06-20 — Setup モード コードレビュー指摘 15 件の修正
+`/code-review xhigh` で confirmed の 15 件を一括修正し、ウィザードを実運用前の状態に。
+**config 往復**: `emit_main_config` に `calibration:` 節追加で `calib_subject_id` 等の消失を解消、
+`web.static` も絶対化。**フロー**: `do_proceed` が profile 未作成なら subject 校正へ routing し
+id/height を seed (daemon の CalibSubject child が validate/preflight で落ちないように)、validate は
+`on_validate` で「cam0 割当済みなら engine 必須」を追加し engine 空の偽 OK を解消、flow-switch は
+stale opts でなく live draft を write+precheck してから切替、`validate_options` が `cam_paths` 重複を
+reject (+ frontend `assignSlot` が他スロットの同 device をクリア)。**書き戻し汚染**: daemon が
+`--config` 非存在なら `.example` から bootstrap、`write_union` は `.example` 上書きを拒否
+(汚染済み `setup_first.yaml.example` を復旧)。**web**: 未登録 `/api/*` は JSON 404 (SPA fallback の
+HTML 200 を回避)、`check-path` を CWD 配下に限定 (任意パス存在オラクル封鎖)。**camera**: V4L2 stepwise
+カメラの解像度/fps を合成、YUYV padding を許容しプレビュー永久 503 を解消。**React**: 数値欄の
+`Number("")===0` 潰しを `numOr` で防止、start 失敗時の無限再 POST を停止、アンマウントで fd 解放、
+pixel_format 変更で有効解像度へ snap。ctest 全 29 pass + `pnpm build` 通過。
+設計: [`core-pipeline-setup-mode-fixes.md`](../design/core-pipeline-setup-mode-fixes.md)。
+
 ### 2026-06-20 — WebUI 主導セットアップ (RunMode::Setup daemon モジュール)
 「初回セットアップから実推論まで」をほぼ全部ブラウザから回せるようにした。残っていた gap
 (カメラ選択 UI 無し / portless daemon の bootstrap 鶏卵 / 名前付き config 無し /

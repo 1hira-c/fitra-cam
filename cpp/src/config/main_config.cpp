@@ -459,6 +459,19 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.subject_height_m != d.subject_height_m) e << YAML::Key << "subject_height_m" << YAML::Value << o.subject_height_m;
     e << YAML::EndMap;
 
+    // calibration — persistent subject-calib knobs. NB: never emit `calibrate`
+    // (run-mode-deriving: run_mode() derives RunMode::CalibSubject from it).
+    e << YAML::Key << "calibration" << YAML::Value << YAML::BeginMap;
+    if (!o.calib_subject_id.empty())                       e << YAML::Key << "calib_subject_id"       << YAML::Value << o.calib_subject_id;
+    if (o.calib_subject_height_m != d.calib_subject_height_m) e << YAML::Key << "calib_subject_height_m" << YAML::Value << o.calib_subject_height_m;
+    if (o.calib_frames_per_cam != d.calib_frames_per_cam)  e << YAML::Key << "calib_frames_per_cam"   << YAML::Value << o.calib_frames_per_cam;
+    if (o.calib_hold_sec != d.calib_hold_sec)              e << YAML::Key << "calib_hold_sec"         << YAML::Value << o.calib_hold_sec;
+    if (o.calib_auto_approve != d.calib_auto_approve)      e << YAML::Key << "calib_auto_approve"     << YAML::Value << o.calib_auto_approve;
+    if (o.calib_auto_exit != d.calib_auto_exit)            e << YAML::Key << "calib_auto_exit"        << YAML::Value << o.calib_auto_exit;
+    if (!o.calib_static_dir.empty())                       e << YAML::Key << "calib_static_dir"       << YAML::Value << o.calib_static_dir;
+    if (!o.calib_dump_tool.empty())                        e << YAML::Key << "calib_dump_tool"        << YAML::Value << o.calib_dump_tool;
+    e << YAML::EndMap;
+
     // logging --------------------------------------------------------------
     e << YAML::Key << "logging" << YAML::Value << YAML::BeginMap;
     if (o.log_every_s != d.log_every_s) e << YAML::Key << "log_every_s" << YAML::Value << o.log_every_s;
@@ -575,6 +588,7 @@ void absolutize_config_paths(MainOptions& o) {
     abs_path(o.intrinsic_out);
     abs_path(o.subjects_dir);
     abs_path(o.subject_profile);
+    abs_path(o.static_dir);
 }
 
 EarlyArgs scan_early_args(int argc, char** argv) {
@@ -912,6 +926,17 @@ void validate_options(const MainOptions& opts) {
         // child + the initial_mode precheck (app/daemon.cpp); the daemon already
         // warns on a bare config and falls back safely if a run child dies.
         fail("missing required option (need --cam0 + --det-engine + --pose-engine)");
+    }
+    // Reject the same physical device assigned to two camera slots: each slot
+    // opens its own V4l2Capture, so a duplicate node makes the second one fail
+    // with EBUSY at stream start.
+    for (int i = 0; i < 3; ++i) {
+        for (int j = i + 1; j < 3; ++j) {
+            if (!opts.cam_paths[i].empty() && opts.cam_paths[i] == opts.cam_paths[j]) {
+                fail("cam" + std::to_string(i) + " and cam" + std::to_string(j) +
+                     " point to the same device: " + opts.cam_paths[i]);
+            }
+        }
     }
     if (opts.pixel_format != "mjpeg" && opts.pixel_format != "yuyv"
         && opts.pixel_format != "nvjpeg") {

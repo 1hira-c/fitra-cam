@@ -17,32 +17,66 @@ namespace fitra::app {
 
 namespace {
 
-// Decide the stage to hand off to once the config is composed, mirroring the
-// daemon's auto initial-mode logic (artifact-driven), and write the union
-// config + advance the flow. Returns false + a user-facing reason in `err`.
-bool do_proceed(config::SetupConfigStore& store, FlowControl& flow,
-                std::string& next_mode, std::string& err) {
-    if (!store.validate_draft(err)) return false;
-    config::MainOptions d = store.draft();
-    if (d.cam_paths[0].empty()) {
-        err = "configure at least cam0 before proceeding";
-        return false;
-    }
+// Subject-calib defaults seeded when routing into CalibSubject with none
+// configured. Match the SubjectCalibPage defaults so the page reflects the same
+// id the daemon's boot auto-start uses.
+constexpr const char* kDefaultSubjectId = "subject01";
+constexpr double      kDefaultSubjectHeightM = 1.70;
+
+// Auto initial-mode for the composed draft, mirroring the daemon's
+// artifact-driven picker.
+config::RunMode derive_next_mode(const config::MainOptions& d) {
     std::error_code ec;
     const bool intrinsics_exists =
         !d.intrinsic_out.empty() && std::filesystem::exists(d.intrinsic_out, ec) && !ec;
     const bool extrinsics_exists =
         !d.calib.empty() && std::filesystem::exists(d.calib, ec) && !ec;
-    bool profile_exists = true;
-    {
-        const std::string pp = profile_path(d);
-        if (!pp.empty()) profile_exists = std::filesystem::exists(pp, ec) && !ec;
-    }
-    config::RunMode next =
-        initial_mode(d, intrinsics_exists, extrinsics_exists, profile_exists);
-    if (next == config::RunMode::Setup) {
-        err = "configure cameras before proceeding";
+    const std::string pp = profile_path(d);
+    // An empty path means no subject id is configured yet (the Setup wizard never
+    // sets one). On a rig that already has intrinsics + extrinsics that means
+    // subject calibration has not run — treat the profile as absent so we route
+    // into CalibSubject rather than skipping it (#2).
+    const bool profile_exists = !pp.empty() && std::filesystem::exists(pp, ec) && !ec;
+    return initial_mode(d, intrinsics_exists, extrinsics_exists, profile_exists);
+}
+
+// Persist the live draft and hand off to `next`, gating against the *live* draft
+// rather than a stale bootstrap snapshot (#5). Shared by the auto-proceed path
+// and the explicit WizardSteps switch.
+bool compose_and_switch(config::SetupConfigStore& store, FlowControl& flow,
+                        config::RunMode next, std::string& next_mode,
+                        std::string& err) {
+    config::MainOptions d = store.draft();
+    // Every non-setup stage runs live cameras; run + subject-calib additionally
+    // need the inference engines. A child spawned without them dies immediately
+    // and the daemon falls back to run, so gate the switch here against the live
+    // draft (precheck_mode_switch alone returns true for run/subject regardless).
+    if (next != config::RunMode::Setup && d.cam_paths[0].empty()) {
+        err = "configure at least cam0 before proceeding";
         return false;
+    }
+    if ((next == config::RunMode::Run || next == config::RunMode::CalibSubject)
+        && (d.det_engine.empty() || d.pose_engine.empty())) {
+        err = std::string("set --det-engine and --pose-engine before "
+                          "proceeding to ") + config::run_mode_name(next);
+        return false;
+    }
+    // The daemon spawns the subject-calib child with only --config (it does not
+    // forward --calib-subject-id/--calib-subject-height-m), so the composed
+    // config must carry a valid id + height or the child fails validate_options
+    // and the boot preflight. Seed defaults; the operator can still change the id
+    // on the subject-calib page (POST /api/calib/preflight overrides this).
+    if (next == config::RunMode::CalibSubject) {
+        bool seeded = false;
+        if (d.calib_subject_id.empty()) {
+            d.calib_subject_id = kDefaultSubjectId;
+            seeded = true;
+        }
+        if (d.calib_subject_height_m <= 0.0) {
+            d.calib_subject_height_m = kDefaultSubjectHeightM;
+            seeded = true;
+        }
+        if (seeded) store.set_draft(d);
     }
     std::string perr;
     if (!config::precheck_mode_switch(d, next, perr)) {
@@ -54,6 +88,47 @@ bool do_proceed(config::SetupConfigStore& store, FlowControl& flow,
     FITRA_LOG_INFO("setup: wrote {} — handing off to {}", store.union_path(), next_mode);
     if (flow.managed) flow.request_switch(next);
     else              flow.stop.store(true);
+    return true;
+}
+
+// Auto-proceed: derive the next stage from artifacts and hand off.
+bool do_proceed(config::SetupConfigStore& store, FlowControl& flow,
+                std::string& next_mode, std::string& err) {
+    if (!store.validate_draft(err)) return false;
+    const config::MainOptions d = store.draft();
+    const config::RunMode next = derive_next_mode(d);
+    if (next == config::RunMode::Setup) {
+        err = "configure cameras before proceeding";
+        return false;
+    }
+    return compose_and_switch(store, flow, next, next_mode, err);
+}
+
+// Explicit WizardSteps switch: route the requested mode through the same
+// compose + gate + write path as proceed, using the live draft (#5).
+bool do_switch(config::SetupConfigStore& store, FlowControl& flow,
+               const std::string& mode_name, std::string& err) {
+    config::RunMode next;
+    if (!config::parse_run_mode_name(mode_name, next)) {
+        err = "unknown mode: " + mode_name;
+        return false;
+    }
+    std::string next_mode;
+    return compose_and_switch(store, flow, next, next_mode, err);
+}
+
+// Setup "validate" button: the relaxed range/enum pass, plus the cam0+engines
+// requirement that validate_draft's daemon relaxation skips. A draft with
+// cameras assigned but blank engines must not report a false OK (#4), since both
+// run and subject calibration need them.
+bool do_validate(config::SetupConfigStore& store, std::string& err) {
+    if (!store.validate_draft(err)) return false;
+    const config::MainOptions d = store.draft();
+    if (!d.cam_paths[0].empty() && (d.det_engine.empty() || d.pose_engine.empty())) {
+        err = "set --det-engine and --pose-engine (required to run inference "
+              "and for subject calibration)";
+        return false;
+    }
     return true;
 }
 
@@ -76,8 +151,18 @@ int run_mode_setup(const config::MainOptions& opts, const std::string& config_pa
         &store,
         [&store, &flow](std::string& next_mode, std::string& err) {
             return do_proceed(store, flow, next_mode, err);
-        });
+        },
+        [&store](std::string& err) { return do_validate(store, err); });
     server->set_setup_camera_manager(&cameras);
+    // Override make_server's default flow-switch handler (which prechecks a stale
+    // bootstrap snapshot) with one that composes + writes the live draft before
+    // switching, so a WizardSteps jump uses the edited config (#5).
+    if (flow.managed) {
+        server->set_flow_switch_handler(
+            [&store, &flow](const std::string& mode_name, std::string& err) {
+                return do_switch(store, flow, mode_name, err);
+            });
+    }
 
     server->start();
     FITRA_LOG_INFO("setup: serving WebUI on {}:{} — choose cameras, compose the "

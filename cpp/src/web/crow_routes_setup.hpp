@@ -81,6 +81,9 @@ struct SetupRouteDeps {
     config::SetupConfigStore*   store   = nullptr;   // nullptr → no config routes
     camera::SetupCameraManager* cameras = nullptr;   // nullptr → no camera routes
     std::function<bool(std::string& next_mode, std::string& err)> on_proceed;
+    // Mode-aware validation for /api/config/validate. Falls back to
+    // store->validate_draft (relaxed) when unset.
+    std::function<bool(std::string& err)> on_validate;
 };
 void register_setup_mode_routes(crow::SimpleApp& app, const SetupRouteDeps& deps);
 

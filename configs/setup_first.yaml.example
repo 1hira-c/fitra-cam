@@ -1,14 +1,19 @@
-# First-run bootstrap config for the WebUI-driven setup flow.
+# First-run bootstrap template for the WebUI-driven setup flow.
 # See docs/design/core-pipeline-setup-mode.md.
 #
-#   ./cpp/build/main --daemon --config configs/setup_first.yaml.example
+#   ./cpp/build/main --daemon --config configs/session.yaml
+#
+# Point --config at a writable runtime config (e.g. configs/session.yaml, which
+# is gitignored). If that file does not exist yet, the daemon seeds it from this
+# template automatically. The Setup module writes the composed config back to
+# that path — it refuses to overwrite a .example template, so this file stays a
+# clean checked-in seed.
 #
 # With no cameras configured, the daemon's initial mode is `setup`: it spawns
 # the GPU-less Setup module which serves the WebUI on :8000. Open the browser,
 # pick cameras + engines + output targets, and the Setup module writes the full
 # config and hands off to the rest of the chain (intrinsic -> extrinsic ->
-# subject -> run). Copy this file before running — the Setup module overwrites
-# the config it is given.
+# subject -> run).
 
 schema: fitra_main_config_v1
 

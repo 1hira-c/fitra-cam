@@ -121,7 +121,8 @@ public:
     // retains ownership; pointers must outlive the server. Before start().
     void set_setup_handlers(
         config::SetupConfigStore* store,
-        std::function<bool(std::string& next_mode, std::string& err)> on_proceed);
+        std::function<bool(std::string& next_mode, std::string& err)> on_proceed,
+        std::function<bool(std::string& err)> on_validate = {});
     // Attach the V4L2 camera manager for setup-mode enumeration + preview (M3).
     void set_setup_camera_manager(camera::SetupCameraManager* cameras);
 
@@ -218,6 +219,7 @@ private:
     config::SetupConfigStore*      setup_store_   = nullptr;
     camera::SetupCameraManager*    setup_cameras_ = nullptr;
     std::function<bool(std::string&, std::string&)> setup_on_proceed_;
+    std::function<bool(std::string&)>               setup_on_validate_;
     FlowSwitchFn                   flow_switch_;
     slimevr::NativePublisher*      native_publisher_ = nullptr;
     slimevr::SlimeTrackerBus*      tracker_bus_     = nullptr;

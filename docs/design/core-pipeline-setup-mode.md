@@ -199,8 +199,10 @@ legacy `web/{extrinsic,intrinsic}_calibration` は配信されなくなり super
 - **frontend**: `pnpm build` (tsc strict + vite) 通過。SPA history-fallback で /setup・
   /intrinsic-calib が index.html を 200 で返し /assets/missing.js は 404。
 - **実機 一気通し (未・ユーザー実施)**: 3 カメラ + SteamVR で SSH 1 回
-  `./main --daemon --config configs/setup_first.yaml.example` → ブラウザのみで setup → intrinsic →
-  extrinsic → subject → run、各 calib ページが旧 vanilla と機能 parity であることを確認。
+  `./main --daemon --config configs/session.yaml` (非存在なら `setup_first.yaml.example` から
+  自動 bootstrap、gitignore 済み) → ブラウザのみで setup → intrinsic → extrinsic → subject → run、
+  各 calib ページが旧 vanilla と機能 parity であることを確認。`.example` を直接 `--config` に渡すと
+  proceed が「テンプレートは上書き不可」で明確に拒否 (詳細は `core-pipeline-setup-mode-fixes.md`)。
 
 ## 残課題
 

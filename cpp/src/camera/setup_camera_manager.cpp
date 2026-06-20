@@ -17,6 +17,7 @@ struct SetupCameraManager::Stream {
     int height = 0;
     Frame frame;                          // reused scratch for try_pop_latest
     std::vector<std::uint8_t> last_jpeg;  // cached most-recent encoded frame
+    bool size_warned = false;             // throttle the YUYV-too-short warning
 };
 
 namespace {
@@ -88,17 +89,26 @@ bool SetupCameraManager::latest_jpeg(const std::string& device,
 
     if (s.cap->try_pop_latest(s.frame)) {
         if (s.pixfmt == PixFmt::Yuyv) {
-            // Packed YUV422 -> BGR -> JPEG. capture_h() x capture_w() is the
-            // actual decoded buffer geometry.
+            // Packed YUV422 -> BGR -> JPEG. capture_w()/capture_h() reflect the
+            // geometry V4l2Capture negotiated via S_FMT. Some drivers pad the
+            // buffer (sizeimage/bytesused > w*h*2), so accept any buffer that is
+            // at least w*h*2 and decode the leading w*h*2 bytes; only a short
+            // buffer is unusable (decoding it would over-read).
             const int w = s.cap->options().capture_w();
             const int h = s.cap->options().capture_h();
-            if (static_cast<std::size_t>(w) * h * 2 == s.frame.data.size()) {
+            const std::size_t need = static_cast<std::size_t>(w) * h * 2;
+            if (need > 0 && s.frame.data.size() >= need) {
                 cv::Mat yuyv(h, w, CV_8UC2,
                              const_cast<std::uint8_t*>(s.frame.data.data()));
                 cv::Mat bgr;
                 cv::cvtColor(yuyv, bgr, cv::COLOR_YUV2BGR_YUYV);
                 std::vector<int> params{cv::IMWRITE_JPEG_QUALITY, 80};
                 cv::imencode(".jpg", bgr, s.last_jpeg, params);
+            } else if (!s.size_warned) {
+                s.size_warned = true;  // diagnose instead of a silent forever-503
+                FITRA_LOG_WARN("setup-preview: {} YUYV frame is {} B but {}x{} "
+                               "needs {} B — preview disabled (check resolution)",
+                               device, s.frame.data.size(), w, h, need);
             }
         } else {
             // MJPEG/nvjpeg: payload is already a JPEG.

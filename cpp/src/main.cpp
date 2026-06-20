@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <memory>
 
 #include <cuda_runtime_api.h>
@@ -228,6 +229,35 @@ int main(int argc, char** argv) {
         if (early.want_probe) return probe();
 
         if (!early.config_path.empty()) {
+            // Bootstrap: if the --config target doesn't exist yet, seed it from
+            // the tracked example template so a first run has a writable config
+            // the Setup module can compose into. (Refusing to overwrite the
+            // template itself lives in SetupConfigStore::write_union, so users
+            // point --config at e.g. configs/session.yaml, not the .example.)
+            std::error_code fs_ec;
+            if (!std::filesystem::exists(early.config_path, fs_ec)) {
+                const std::filesystem::path tmpl =
+                    "configs/setup_first.yaml.example";
+                if (std::filesystem::exists(tmpl, fs_ec) && !fs_ec) {
+                    const auto parent =
+                        std::filesystem::path{early.config_path}.parent_path();
+                    if (!parent.empty())
+                        std::filesystem::create_directories(parent, fs_ec);
+                    std::filesystem::copy_file(tmpl, early.config_path, fs_ec);
+                    if (fs_ec) {
+                        std::fprintf(stderr,
+                            "bootstrap: cannot seed config %s from %s: %s\n",
+                            early.config_path.c_str(), tmpl.string().c_str(),
+                            fs_ec.message().c_str());
+                        return EXIT_FAILURE;
+                    }
+                    std::fprintf(stderr, "bootstrap: seeded %s from %s\n",
+                                 early.config_path.c_str(),
+                                 tmpl.string().c_str());
+                }
+                // else: template missing -> fall through; load_main_config
+                // below reports the missing file clearly.
+            }
             fitra::config::load_main_config(early.config_path, opts);
         }
         fitra::config::apply_cli_overrides(opts, argc - 1, argv + 1);

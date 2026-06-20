@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "config/main_config.hpp"
+#include "config/setup_config_store.hpp"
 
 namespace {
 
@@ -902,8 +903,9 @@ void test_emit_load_round_trip() {
     // A representative union config: varied non-default values across every
     // section, including the tricky ones (negated kalman/ik, bare slimevr/vmt
     // host/port, excal_method, intrinsic step selector, per-camera arrays).
-    // calibrate / excal_enabled / replay dirs stay at defaults — those are
-    // deliberately not emitted (run-mode-deriving).
+    // excal_enabled / replay dirs stay at defaults — those are deliberately not
+    // emitted (run-mode-deriving). calibrate is set true below to prove it is
+    // dropped on emit while the persistent calibration knobs round-trip.
     MainOptions o;
     o.cam_paths[0] = "/dev/v4l/by-path/cam-A";
     o.cam_paths[2] = "/dev/v4l/by-path/cam-C";
@@ -942,6 +944,14 @@ void test_emit_load_round_trip() {
     o.intrinsic_model = "fisheye"; o.charuco_squares_x = 7; o.charuco_squares_y = 5;
     o.charuco_square_len_m = 0.035; o.charuco_marker_len_m = 0.026;
     o.intrinsic_min_views = 15; o.intrinsic_max_rms_px = 1.2;
+    // calibration block: calibrate is run-mode-deriving (must NOT emit), the rest
+    // are persistent knobs that must round-trip.
+    o.calibrate = true;
+    o.calib_subject_id = "alice"; o.calib_subject_height_m = 1.71;
+    o.calib_frames_per_cam = 90; o.calib_hold_sec = 2.0;
+    o.calib_auto_approve = true; o.calib_auto_exit = true;
+    o.calib_static_dir = "web-ui/dist/subject-calib";
+    o.calib_dump_tool = "/tmp/dump_keypoints_3d";
 
     auto p = write_tmp("round_trip.yaml", "");
     save_main_config(p.string(), o);
@@ -1031,9 +1041,17 @@ void test_emit_load_round_trip() {
     eq_f(o.charuco_marker_len_m, r.charuco_marker_len_m, "charuco_marker_len_m");
     eq_i(o.intrinsic_min_views, r.intrinsic_min_views, "intrinsic_min_views");
     eq_f(o.intrinsic_max_rms_px, r.intrinsic_max_rms_px, "intrinsic_max_rms_px");
+    eq_s(o.calib_subject_id, r.calib_subject_id, "calib_subject_id");
+    eq_f(o.calib_subject_height_m, r.calib_subject_height_m, "calib_subject_height_m");
+    eq_i(o.calib_frames_per_cam, r.calib_frames_per_cam, "calib_frames_per_cam");
+    eq_f(o.calib_hold_sec, r.calib_hold_sec, "calib_hold_sec");
+    eq_b(o.calib_auto_approve, r.calib_auto_approve, "calib_auto_approve");
+    eq_b(o.calib_auto_exit, r.calib_auto_exit, "calib_auto_exit");
+    eq_s(o.calib_static_dir, r.calib_static_dir, "calib_static_dir");
+    eq_s(o.calib_dump_tool, r.calib_dump_tool, "calib_dump_tool");
 
     // Run-mode-deriving flags must NOT have been emitted: the reloaded config is
-    // a clean union config (no calib mode derived).
+    // a clean union config (no calib mode derived) even though o.calibrate=true.
     check(!r.calibrate && !r.excal_enabled && r.excal_replay.empty()
           && r.intrinsic_replay.empty(),
           "emitted config carries no run-mode-deriving flags");
@@ -1056,6 +1074,45 @@ void test_absolutize_paths() {
     check(o.calib.empty(), "empty calib stays empty");
     check(!o.intrinsic_out.empty() && o.intrinsic_out.front() == '/',
           "relative intrinsic_out becomes absolute");
+}
+
+void test_validate_rejects_duplicate_cameras() {
+    MainOptions o;
+    o.cam_paths[0] = "/dev/v4l/by-path/cam-A";
+    o.cam_paths[1] = "/dev/v4l/by-path/cam-A";  // same device in two slots
+    o.det_engine = "/tmp/y.engine";
+    o.pose_engine = "/tmp/r.engine";
+    bool threw = false;
+    try { validate_options(o); } catch (const std::exception&) { threw = true; }
+    check(threw, "duplicate cam_paths must be rejected");
+    o.cam_paths[1] = "/dev/v4l/by-path/cam-B";  // distinct now
+    validate_options(o);                        // must not throw
+}
+
+void test_setup_store_refuses_example_path() {
+    using fitra::config::SetupConfigStore;
+    MainOptions seed;
+    seed.cam_paths[0] = "/dev/v4l/by-path/cam-A";
+    seed.det_engine = "/tmp/y.engine";
+    seed.pose_engine = "/tmp/r.engine";
+    {
+        SetupConfigStore store{seed, "configs/foo.yaml.example"};
+        std::string err;
+        check(!store.write_union(err), "write_union must refuse a .example path");
+        check(err.find(".example") != std::string::npos
+              || err.find("template") != std::string::npos,
+              "refusal error names the template");
+    }
+    {
+        auto dir = std::filesystem::temp_directory_path() / "fitra_test_main_config";
+        std::filesystem::create_directories(dir);
+        const std::string out = (dir / "session.yaml").string();
+        std::filesystem::remove(out);
+        SetupConfigStore store{seed, out};
+        std::string err;
+        check(store.write_union(err), "write_union to a .yaml path succeeds: " + err);
+        check(std::filesystem::exists(out), "write_union created the runtime config");
+    }
 }
 
 struct TestCase {
@@ -1086,6 +1143,8 @@ const TestCase kTests[] = {
     {"setup_mode_and_daemon_blank_config",     test_setup_mode_and_daemon_blank_config},
     {"emit_load_round_trip",                   test_emit_load_round_trip},
     {"absolutize_paths",                       test_absolutize_paths},
+    {"validate_rejects_duplicate_cameras",     test_validate_rejects_duplicate_cameras},
+    {"setup_store_refuses_example_path",       test_setup_store_refuses_example_path},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},

@@ -20,6 +20,7 @@ import {
   validateConfig,
 } from "../lib/api";
 import { httpUrl } from "../lib/config";
+import { numOr } from "../lib/format";
 import type {
   CameraFormat,
   ConfigCameraOverride,
@@ -238,11 +239,14 @@ export function SetupPage() {
     if (previewImg.current) previewImg.current.src = "";
   }, []);
 
-  // Tear down preview on unmount (and stop the backend stream).
+  // Tear down preview on unmount (and stop the backend stream). Read the live
+  // device from previewDevice (a ref) rather than the previewing state: with []
+  // deps the cleanup closure would otherwise capture the first-render value
+  // (null) and never stop an active stream, leaking the camera fd (#8).
   useEffect(() => {
     return () => {
       stopPreviewTimer();
-      if (previewing) void stopCameraPreview(previewing);
+      if (previewDevice.current) void stopCameraPreview(previewDevice.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -259,11 +263,16 @@ export function SetupPage() {
         await stopCameraPreview(previewing);
       }
       const r = await startCameraPreview({ device: cam.by_path, ...eff });
+      // Record the attempted settings regardless of outcome: a failed start
+      // (e.g. the camera rejects the resolution) must not leave the key stale,
+      // or the live-reflect effect re-POSTs the same failing config on every
+      // subsequent keystroke (#7). A real settings change updates the key and
+      // legitimately retries.
+      appliedPreviewKey.current = JSON.stringify(eff);
       if (!r.ok) {
         setScanMsg({ text: r.err || "preview failed", err: true });
         return;
       }
-      appliedPreviewKey.current = JSON.stringify(eff);
       previewDevice.current = cam.by_path;
       setPreviewing(cam.by_path);
       if (previewTimer.current === null) {
@@ -360,7 +369,16 @@ export function SetupPage() {
     setDraft((d) => {
       if (!d) return d;
       const cur = (d.cameras[slot] as string) || "";
-      return { ...d, cameras: { ...d.cameras, [slot]: cur === byPath ? "" : byPath } };
+      const cams = { ...d.cameras, [slot]: cur === byPath ? "" : byPath };
+      // A physical device may occupy only one slot: assigning it here clears it
+      // from any other slot, so the same /dev node can't be opened twice (the
+      // second V4l2Capture would fail EBUSY at stream start) (#3).
+      if (cur !== byPath) {
+        for (const s of SLOTS) {
+          if (s !== slot && cams[s] === byPath) cams[s] = "";
+        }
+      }
+      return { ...d, cameras: cams };
     });
   };
 
@@ -528,7 +546,37 @@ export function SetupPage() {
                     pixel_format
                     <select
                       value={draft.cameras.pixel_format}
-                      onChange={(e) => setCameras_({ pixel_format: e.target.value })}
+                      onChange={(e) => {
+                        const pf = e.target.value;
+                        // Snap resolution/fps to a value the new format actually
+                        // supports, so an incompatible format+resolution combo
+                        // can't be submitted (#12). When nothing is assigned yet
+                        // (no enumerated sizes) just switch the format.
+                        const firstAssigned = SLOTS.map((s) => draft.cameras[s])
+                          .filter(Boolean)
+                          .map((bp) => cameras.find((c) => c.by_path === bp))
+                          .find(Boolean);
+                        const sizes = formatFor(firstAssigned, pf)?.sizes ?? [];
+                        const cur = sizes.find(
+                          (s) =>
+                            s.width === draft.cameras.width &&
+                            s.height === draft.cameras.height,
+                        );
+                        if (sizes.length && !cur) {
+                          const s0 = sizes[0];
+                          const fps0 = s0.fps.length
+                            ? Math.round(s0.fps[0])
+                            : draft.cameras.fps;
+                          setCameras_({
+                            pixel_format: pf,
+                            width: s0.width,
+                            height: s0.height,
+                            fps: fps0,
+                          });
+                        } else {
+                          setCameras_({ pixel_format: pf });
+                        }
+                      }}
                     >
                       {PIXEL_FORMATS.map((pf) => <option key={pf} value={pf}>{pf}</option>)}
                     </select>
@@ -586,7 +634,7 @@ export function SetupPage() {
                       min={1}
                       max={16}
                       value={draft.cameras.n_buffers}
-                      onChange={(e) => setCameras_({ n_buffers: Number(e.target.value) })}
+                      onChange={(e) => setCameras_({ n_buffers: numOr(e.target.value, draft.cameras.n_buffers) })}
                     />
                   </label>
                 </div>
@@ -615,14 +663,14 @@ export function SetupPage() {
                                 type="number"
                                 min={0}
                                 value={ov.capture_width}
-                                onChange={(e) => setOverride(i, { capture_width: Number(e.target.value) })}
+                                onChange={(e) => setOverride(i, { capture_width: numOr(e.target.value, ov.capture_width) })}
                               />
                               <span>×</span>
                               <input
                                 type="number"
                                 min={0}
                                 value={ov.capture_height}
-                                onChange={(e) => setOverride(i, { capture_height: Number(e.target.value) })}
+                                onChange={(e) => setOverride(i, { capture_height: numOr(e.target.value, ov.capture_height) })}
                               />
                             </span>
                           </label>
@@ -656,7 +704,7 @@ export function SetupPage() {
                                   type="number"
                                   min={0}
                                   value={ov.exposure}
-                                  onChange={(e) => setOverride(i, { exposure: Number(e.target.value) })}
+                                  onChange={(e) => setOverride(i, { exposure: numOr(e.target.value, ov.exposure) })}
                                 />
                               </label>
                               <label>
@@ -665,7 +713,7 @@ export function SetupPage() {
                                   type="number"
                                   min={-1}
                                   value={ov.gain}
-                                  onChange={(e) => setOverride(i, { gain: Number(e.target.value) })}
+                                  onChange={(e) => setOverride(i, { gain: numOr(e.target.value, ov.gain) })}
                                 />
                               </label>
                             </>
@@ -678,7 +726,7 @@ export function SetupPage() {
                                 min={0}
                                 max={255}
                                 value={ov.ae_target}
-                                onChange={(e) => setOverride(i, { ae_target: Number(e.target.value) })}
+                                onChange={(e) => setOverride(i, { ae_target: numOr(e.target.value, ov.ae_target) })}
                               />
                             </label>
                           )}
@@ -724,7 +772,7 @@ export function SetupPage() {
                     type="number"
                     min={1}
                     value={draft.inference.det_frequency}
-                    onChange={(e) => setInference({ det_frequency: Number(e.target.value) })}
+                    onChange={(e) => setInference({ det_frequency: numOr(e.target.value, draft.inference.det_frequency) })}
                   />
                 </label>
                 <label>
@@ -735,7 +783,7 @@ export function SetupPage() {
                     max={1}
                     step={0.01}
                     value={draft.inference.det_score}
-                    onChange={(e) => setInference({ det_score: Number(e.target.value) })}
+                    onChange={(e) => setInference({ det_score: numOr(e.target.value, draft.inference.det_score) })}
                   />
                 </label>
                 <label className="inline">
@@ -777,7 +825,7 @@ export function SetupPage() {
                   <input
                     type="number"
                     value={draft.vmt.port}
-                    onChange={(e) => setVmt({ port: Number(e.target.value) })}
+                    onChange={(e) => setVmt({ port: numOr(e.target.value, draft.vmt.port) })}
                   />
                 </label>
                 <label className="inline">
@@ -812,7 +860,7 @@ export function SetupPage() {
                   <input
                     type="number"
                     value={draft.slimevr.port}
-                    onChange={(e) => setSlimevr({ port: Number(e.target.value) })}
+                    onChange={(e) => setSlimevr({ port: numOr(e.target.value, draft.slimevr.port) })}
                   />
                 </label>
               </div>
@@ -899,7 +947,7 @@ export function SetupPage() {
                   <input
                     type="number"
                     value={draft.web.port}
-                    onChange={(e) => setWeb({ port: Number(e.target.value) })}
+                    onChange={(e) => setWeb({ port: numOr(e.target.value, draft.web.port) })}
                   />
                 </label>
               </div>

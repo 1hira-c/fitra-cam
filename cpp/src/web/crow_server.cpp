@@ -320,9 +320,11 @@ void CrowServer::set_calibration_next_step(std::string guidance) {
 
 void CrowServer::set_setup_handlers(
     config::SetupConfigStore* store,
-    std::function<bool(std::string&, std::string&)> on_proceed) {
+    std::function<bool(std::string&, std::string&)> on_proceed,
+    std::function<bool(std::string&)> on_validate) {
     setup_store_ = store;
     setup_on_proceed_ = std::move(on_proceed);
+    setup_on_validate_ = std::move(on_validate);
 }
 
 void CrowServer::set_setup_camera_manager(camera::SetupCameraManager* cameras) {
@@ -939,6 +941,14 @@ void CrowServer::start() {
         if (canon_req.string().rfind(root_str, 0) != 0) {
             return crow::response{403, "forbidden"};
         }
+        // An unregistered /api/* path must not fall through to the SPA fallback:
+        // returning index.html (HTML/200) makes the frontend's JSON parse throw
+        // on what should be a clean 404 (e.g. an endpoint absent in this mode).
+        if (sub == "api" || sub.rfind("api/", 0) == 0) {
+            crow::response resp{404, "{\"ok\":false,\"err\":\"not found\"}"};
+            resp.set_header("Content-Type", "application/json");
+            return resp;
+        }
         if (!std::filesystem::is_regular_file(canon_req)) {
             // SPA history fallback: a client-side route (no file extension, e.g.
             // /setup, /intrinsic-calib, /subject-calib) returns index.html so a
@@ -1050,9 +1060,10 @@ void CrowServer::register_intrinsic_calib_routes_() {
 
 void CrowServer::register_setup_mode_routes_() {
     detail::SetupRouteDeps deps;
-    deps.store      = setup_store_;
-    deps.cameras    = setup_cameras_;
-    deps.on_proceed = setup_on_proceed_;
+    deps.store       = setup_store_;
+    deps.cameras     = setup_cameras_;
+    deps.on_proceed  = setup_on_proceed_;
+    deps.on_validate = setup_on_validate_;
     detail::register_setup_mode_routes(impl_->app, deps);
 }
 

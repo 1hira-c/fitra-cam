@@ -281,10 +281,18 @@ void register_setup_mode_routes(crow::SimpleApp& app, const SetupRouteDeps& deps
         const std::string path = p ? p : "";
         std::error_code ec;
         std::string abs;
-        bool exists = false, is_file = false;
+        bool exists = false, is_file = false, allowed = false;
         if (!path.empty()) {
-            abs = std::filesystem::absolute(path, ec).lexically_normal().string();
-            if (!ec) {
+            abs = std::filesystem::weakly_canonical(
+                      std::filesystem::absolute(path, ec), ec).string();
+            const std::string root = std::filesystem::weakly_canonical(
+                      std::filesystem::current_path(ec), ec).string();
+            // Containment: only probe paths under the daemon CWD (engines/calib
+            // live under outputs/ + configs/). Never let the 0.0.0.0-bound setup
+            // server become a filesystem-existence oracle for arbitrary absolute
+            // paths (e.g. /etc/shadow); report exists=false for anything outside.
+            allowed = !abs.empty() && !root.empty() && abs.rfind(root, 0) == 0;
+            if (allowed) {
                 exists  = std::filesystem::exists(abs, ec) && !ec;
                 is_file = exists && std::filesystem::is_regular_file(abs, ec) && !ec;
             }
@@ -292,6 +300,7 @@ void register_setup_mode_routes(crow::SimpleApp& app, const SetupRouteDeps& deps
         std::ostringstream o;
         o << "{\"path\":\"" << json_escape(path) << "\""
           << ",\"abs\":\"" << json_escape(abs) << "\""
+          << ",\"allowed\":" << b(allowed)
           << ",\"exists\":" << b(exists)
           << ",\"is_file\":" << b(is_file) << "}";
         return json_response(o.str());
@@ -319,9 +328,13 @@ void register_setup_mode_routes(crow::SimpleApp& app, const SetupRouteDeps& deps
         });
 
         CROW_ROUTE(app, "/api/config/validate").methods(crow::HTTPMethod::POST)
-        ([store](const crow::request&) {
+        ([store, on_validate = deps.on_validate](const crow::request&) {
             std::string err;
-            return ok_or_err(store->validate_draft(err), err);
+            // on_validate (app layer) is mode-aware and rejects a cameras-but-no-
+            // engines draft; fall back to the relaxed range/enum check when unset.
+            const bool ok =
+                on_validate ? on_validate(err) : store->validate_draft(err);
+            return ok_or_err(ok, err);
         });
 
         CROW_ROUTE(app, "/api/config/list")
