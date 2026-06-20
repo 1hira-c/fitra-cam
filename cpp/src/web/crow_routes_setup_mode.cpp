@@ -10,11 +10,15 @@
 // their seed values and are still written verbatim by write_union (emit covers
 // the whole struct).
 
+#include <cstdint>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include <crow.h>
 
+#include "camera/setup_camera_manager.hpp"
+#include "camera/v4l2_enumerate.hpp"
 #include "config/main_config.hpp"
 #include "config/setup_config_store.hpp"
 #include "web/crow_routes_setup.hpp"
@@ -160,6 +164,59 @@ crow::response ok_or_err(bool ok, const std::string& err) {
     return json_response(o.str());
 }
 
+std::string cameras_json() {
+    const auto devices = camera::enumerate_v4l2_cameras();
+    std::ostringstream o;
+    o << "{\"cameras\":[";
+    for (std::size_t i = 0; i < devices.size(); ++i) {
+        const auto& d = devices[i];
+        if (i) o << ",";
+        o << "{\"by_path\":\"" << json_escape(d.by_path) << "\""
+          << ",\"dev_node\":\"" << json_escape(d.dev_node) << "\""
+          << ",\"card\":\"" << json_escape(d.card) << "\""
+          << ",\"driver\":\"" << json_escape(d.driver) << "\""
+          << ",\"formats\":[";
+        for (std::size_t fi = 0; fi < d.formats.size(); ++fi) {
+            const auto& f = d.formats[fi];
+            if (fi) o << ",";
+            o << "{\"fourcc\":\"" << json_escape(f.fourcc) << "\""
+              << ",\"description\":\"" << json_escape(f.description) << "\""
+              << ",\"sizes\":[";
+            for (std::size_t si = 0; si < f.sizes.size(); ++si) {
+                const auto& s = f.sizes[si];
+                if (si) o << ",";
+                o << "{\"width\":" << s.width << ",\"height\":" << s.height
+                  << ",\"fps\":[";
+                for (std::size_t pi = 0; pi < s.fps.size(); ++pi) {
+                    if (pi) o << ",";
+                    o << s.fps[pi];
+                }
+                o << "]}";
+            }
+            o << "]}";
+        }
+        o << "]}";
+    }
+    o << "]}";
+    return o.str();
+}
+
+// Build a PreviewRequest from a JSON body (device required).
+bool parse_preview(const crow::json::rvalue& body, camera::PreviewRequest& req,
+                   std::string& err) {
+    if (!body || !body.has("device") ||
+        body["device"].t() != crow::json::type::String) {
+        err = "device required";
+        return false;
+    }
+    req.device = body["device"].s();
+    if (body.has("width")  && body["width"].t()  == crow::json::type::Number) req.width  = static_cast<int>(body["width"].i());
+    if (body.has("height") && body["height"].t() == crow::json::type::Number) req.height = static_cast<int>(body["height"].i());
+    if (body.has("fps")    && body["fps"].t()    == crow::json::type::Number) req.fps    = static_cast<int>(body["fps"].i());
+    if (body.has("pixel_format") && body["pixel_format"].t() == crow::json::type::String) req.pixel_format = body["pixel_format"].s();
+    return true;
+}
+
 }  // namespace
 
 void register_setup_mode_routes(crow::SimpleApp& app, const SetupRouteDeps& deps) {
@@ -233,8 +290,51 @@ void register_setup_mode_routes(crow::SimpleApp& app, const SetupRouteDeps& deps
         });
     }
 
-    // Camera enumeration + preview routes are added in M3 (deps.cameras).
-    (void)deps.cameras;
+    if (deps.cameras) {
+        auto* cams = deps.cameras;
+
+        // Enumeration is fresh per call (cheap, opens read-only + closes).
+        CROW_ROUTE(app, "/api/cameras")
+        ([]() { return json_response(cameras_json()); });
+
+        CROW_ROUTE(app, "/api/cameras/preview/start").methods(crow::HTTPMethod::POST)
+        ([cams](const crow::request& req) {
+            camera::PreviewRequest pr;
+            std::string err;
+            if (!parse_preview(crow::json::load(req.body), pr, err))
+                return ok_or_err(false, err);
+            return ok_or_err(cams->start(pr, err), err);
+        });
+
+        CROW_ROUTE(app, "/api/cameras/preview/stop").methods(crow::HTTPMethod::POST)
+        ([cams](const crow::request& req) {
+            auto body = crow::json::load(req.body);
+            std::string device;
+            if (body && body.has("device") &&
+                body["device"].t() == crow::json::type::String) {
+                device = body["device"].s();
+            }
+            if (device.empty()) return ok_or_err(false, "device required");
+            cams->stop(device);
+            return json_response("{\"ok\":true}");
+        });
+
+        // GET /api/cameras/preview.jpg?cam=<device> — single JPEG snapshot the
+        // browser polls (Crow cannot stream multipart from a handler).
+        CROW_ROUTE(app, "/api/cameras/preview.jpg")
+        ([cams](const crow::request& req) {
+            const char* cam = req.url_params.get("cam");
+            if (!cam) return crow::response{400, "cam query param required"};
+            std::vector<std::uint8_t> jpeg;
+            if (!cams->latest_jpeg(cam, jpeg)) {
+                return crow::response{503, "preview not ready"};
+            }
+            crow::response resp{std::string(jpeg.begin(), jpeg.end())};
+            resp.set_header("Content-Type", "image/jpeg");
+            resp.set_header("Cache-Control", "no-store");
+            return resp;
+        });
+    }
 }
 
 }  // namespace fitra::web::detail

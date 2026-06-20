@@ -7,6 +7,7 @@
 
 #include "app/daemon.hpp"          // initial_mode, profile_path
 #include "app/server_builder.hpp"
+#include "camera/setup_camera_manager.hpp"
 #include "config/setup_config_store.hpp"
 #include "pipeline/snapshot.hpp"
 #include "util/logging.hpp"
@@ -70,11 +71,13 @@ int run_mode_setup(const config::MainOptions& opts, const std::string& config_pa
         FITRA_LOG_WARN("setup: --no-web set — no web surface to configure from; exiting");
         return EXIT_SUCCESS;
     }
+    camera::SetupCameraManager cameras;
     server->set_setup_handlers(
         &store,
         [&store, &flow](std::string& next_mode, std::string& err) {
             return do_proceed(store, flow, next_mode, err);
         });
+    server->set_setup_camera_manager(&cameras);
 
     server->start();
     FITRA_LOG_INFO("setup: serving WebUI on {}:{} — choose cameras, compose the "
