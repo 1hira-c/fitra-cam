@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -257,6 +258,32 @@ bool parse_preview(const crow::json::rvalue& body, camera::PreviewRequest& req,
 }  // namespace
 
 void register_setup_mode_routes(crow::SimpleApp& app, const SetupRouteDeps& deps) {
+    // GET /api/setup/check-path?path=<p> — resolve `path` against the CWD (the
+    // same base the run/calib children open engines + calib artifacts from) and
+    // report existence, so the WebUI can flag a missing engine/calib path on the
+    // spot whether the user typed an absolute or a relative path.
+    CROW_ROUTE(app, "/api/setup/check-path")
+    ([](const crow::request& req) {
+        const char* p = req.url_params.get("path");
+        const std::string path = p ? p : "";
+        std::error_code ec;
+        std::string abs;
+        bool exists = false, is_file = false;
+        if (!path.empty()) {
+            abs = std::filesystem::absolute(path, ec).lexically_normal().string();
+            if (!ec) {
+                exists  = std::filesystem::exists(abs, ec) && !ec;
+                is_file = exists && std::filesystem::is_regular_file(abs, ec) && !ec;
+            }
+        }
+        std::ostringstream o;
+        o << "{\"path\":\"" << json_escape(path) << "\""
+          << ",\"abs\":\"" << json_escape(abs) << "\""
+          << ",\"exists\":" << b(exists)
+          << ",\"is_file\":" << b(is_file) << "}";
+        return json_response(o.str());
+    });
+
     if (deps.store) {
         auto* store = deps.store;
 

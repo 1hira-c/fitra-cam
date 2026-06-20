@@ -150,3 +150,15 @@
   background: #000;
 }
 .setup-page .preview-caption { margin-top: 0.3em; font-size: 0.8em; }
+
+/* Path inputs with an on-the-spot existence check */
+.setup-page .path-field { min-width: 0; }
+.setup-page .path-status {
+  margin-top: 0.2em;
+  font-size: 0.75em;
+  color: #788;
+  word-break: break-all;
+}
+.setup-page .path-status.ok   { color: #6c9; }
+.setup-page .path-status.warn { color: #db4; }
+.setup-page .path-status.err  { color: #f77; }

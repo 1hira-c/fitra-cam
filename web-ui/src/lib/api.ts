@@ -18,6 +18,7 @@ import type {
   FlowState,
   FlowSwitchResponse,
   IncalState,
+  PathCheckResponse,
   SetupProceedResponse,
   VmtAlignment,
   VmtAlignmentResponse,
@@ -211,6 +212,11 @@ export async function stopCameraPreview(device: string): Promise<CameraPreviewRe
 
 export function fetchConfig(): Promise<ConfigResponse> {
   return getJson<ConfigResponse>("/api/config");
+}
+
+/** Resolve `path` against the backend CWD and report existence (engine/calib paths). */
+export function checkPath(path: string): Promise<PathCheckResponse> {
+  return getJson<PathCheckResponse>("/api/setup/check-path?path=" + encodeURIComponent(path));
 }
 
 /** Persist a (partial) config; the backend merges only the present keys. */

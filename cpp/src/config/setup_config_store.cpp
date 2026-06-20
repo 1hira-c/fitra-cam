@@ -51,6 +51,10 @@ bool SetupConfigStore::write_union(std::string& err) {
         std::lock_guard<std::mutex> lk{mu_};
         copy = draft_;
     }
+    // Persist absolute paths so the daemon's mode children resolve engines /
+    // calib artifacts unambiguously (they open CWD-relative; the setup module
+    // shares the daemon CWD, so absolutize here against that same base).
+    absolutize_config_paths(copy);
     try {
         save_main_config(union_path_, copy);
         return true;
@@ -81,6 +85,7 @@ bool SetupConfigStore::save_named(const std::string& name, std::string& err) {
         std::lock_guard<std::mutex> lk{mu_};
         copy = draft_;
     }
+    absolutize_config_paths(copy);  // same as write_union: persist absolute paths
     try {
         std::error_code ec;
         std::filesystem::create_directories(named_dir_, ec);  // best-effort

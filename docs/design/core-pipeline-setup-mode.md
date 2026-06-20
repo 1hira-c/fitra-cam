@@ -55,6 +55,24 @@ loader の各キーと 1:1 で往復させる。要点:
   常に daemon が食える union config。
 - atomic 書き込み (tmp + rename)。ctest `emit_load_round_trip` で全フィールド往復一致を固定。
 
+### パス解決 (採用: 保存時に絶対化 + その場 existence チェック)
+
+エンジン (`det_engine`/`pose_engine`) や calib 成果物は実行時に **CWD 相対**で `std::ifstream`
+で開かれる (基準ディレクトリの付与なし、`trt_engine.cpp`)。daemon は各モード子を **daemon の
+CWD のまま** `execvp` するので、相対パスは「daemon を起動したディレクトリ」基準。これが
+config ファイルの場所・リポジトリルート・バイナリ位置のいずれとも違い事故りやすい
+(静的 UI だけは `paths.cpp` がバイナリ位置基準で別系統)。対策:
+
+- **保存時に絶対化**: `absolutize_config_paths(MainOptions&)` が path フィールド
+  (engines / calib / intrinsic_out / extrinsic out / floor_* / subjects_dir / subject_profile) を
+  `std::filesystem::absolute`(CWD 基準) で絶対化。Setup モジュールは daemon と CWD を共有するので、
+  ここで絶対化した先 = 後段の run/calib 子が相対解決する先と一致する。`SetupConfigStore::write_union`
+  と `save_named` で適用 (出力パスも対象。存在不要。絶対パスは不変)。WebUI 入力は相対/絶対どちらでも可。
+- **その場 existence チェック**: `GET /api/setup/check-path?path=` が CWD 基準で絶対化 +
+  `exists`/`is_file` を返す。SetupPage の `PathField` がエンジン/calib 入力をデバウンス(500ms)で
+  チェックし ✓/✗ と絶対パスをインライン表示。ブラウザは Jetson の FS を直接見られないため
+  バックエンド経由。
+
 ### 設定編集サーフェス (採用: 編集サブセットの JSON、全量は YAML)
 
 draft は完全な `MainOptions`。`/api/config` の GET/POST はウィザードが触る **サブセット**だけを

@@ -1040,6 +1040,24 @@ void test_emit_load_round_trip() {
     validate_options(r);  // emitted config must be runnable-as-loaded
 }
 
+void test_absolutize_paths() {
+    using fitra::config::absolutize_config_paths;
+    MainOptions o;
+    o.det_engine  = "outputs/y.engine";   // relative -> absolutized
+    o.pose_engine = "/abs/r.engine";      // already absolute -> unchanged
+    o.calib       = "";                   // empty -> stays empty
+    o.intrinsic_out = "calibrations/intrinsics.yaml";
+    absolutize_config_paths(o);
+    check(!o.det_engine.empty() && o.det_engine.front() == '/',
+          "relative det_engine becomes absolute");
+    check(o.det_engine.find("outputs/y.engine") != std::string::npos,
+          "absolutized det_engine keeps the relative tail");
+    check(o.pose_engine == "/abs/r.engine", "absolute pose_engine unchanged");
+    check(o.calib.empty(), "empty calib stays empty");
+    check(!o.intrinsic_out.empty() && o.intrinsic_out.front() == '/',
+          "relative intrinsic_out becomes absolute");
+}
+
 struct TestCase {
     const char* name;
     void (*fn)();
@@ -1067,6 +1085,7 @@ const TestCase kTests[] = {
     {"daemon_flags_and_validate",              test_daemon_flags_and_validate},
     {"setup_mode_and_daemon_blank_config",     test_setup_mode_and_daemon_blank_config},
     {"emit_load_round_trip",                   test_emit_load_round_trip},
+    {"absolutize_paths",                       test_absolutize_paths},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},

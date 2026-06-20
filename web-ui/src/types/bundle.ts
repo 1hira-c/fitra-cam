@@ -448,3 +448,10 @@ export interface CameraPreviewResponse {
   ok?: boolean;
   err?: string;
 }
+
+export interface PathCheckResponse {
+  path: string;
+  abs: string;      // resolved against the backend CWD (where engines are opened)
+  exists: boolean;
+  is_file: boolean;
+}

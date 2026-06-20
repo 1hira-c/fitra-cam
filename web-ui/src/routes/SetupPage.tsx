@@ -3,11 +3,12 @@
 // keypoint format / 3D / calib), named-config load/save, validate, and proceed.
 // All editable config lives in one ConfigDraft state with controlled inputs.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { WizardLayout } from "../components/WizardLayout";
 import { useFlowWatch } from "../hooks/useFlowWatch";
 import {
+  checkPath,
   fetchCameras,
   fetchConfig,
   loadNamedConfig,
@@ -32,6 +33,7 @@ import type {
   ConfigWeb,
   DetectedCamera,
   KpFormat,
+  PathCheckResponse,
 } from "../types/bundle";
 import "../styles/setup.css";
 
@@ -88,6 +90,69 @@ function effectiveSettings(cam: DetectedCamera, draft: ConfigDraft): PreviewSett
     gain: ov ? ov.gain : -1,
     ae_target: ov ? ov.ae_target : 110,
   };
+}
+
+// A text input for a filesystem path with an on-the-spot existence check. The
+// path is resolved by the backend against the daemon CWD (where engines/calib
+// are actually opened), so relative and absolute inputs both report correctly.
+function PathField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  const [check, setCheck] = useState<PathCheckResponse | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  useEffect(() => {
+    if (!value.trim()) {
+      setCheck(null);
+      return;
+    }
+    let cancelled = false;
+    setChecking(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await checkPath(value);
+        if (!cancelled) setCheck(r);
+      } catch {
+        if (!cancelled) setCheck(null);
+      } finally {
+        if (!cancelled) setChecking(false);
+      }
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [value]);
+
+  let status: ReactNode = null;
+  if (!value.trim()) status = null;
+  else if (checking) status = <span className="path-status">確認中…</span>;
+  else if (check?.is_file) status = <span className="path-status ok">✓ {check.abs}</span>;
+  else if (check?.exists)
+    status = <span className="path-status warn">△ 存在（ファイルではない）: {check.abs}</span>;
+  else if (check)
+    status = <span className="path-status err">✗ 見つかりません: {check.abs}</span>;
+
+  return (
+    <label className="path-field">
+      {label}
+      <input
+        type="text"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {status}
+    </label>
+  );
 }
 
 export function SetupPage() {
@@ -583,22 +648,18 @@ export function SetupPage() {
             <section className="card">
               <h2>2. 推論エンジン</h2>
               <div className="form-grid">
-                <label>
-                  det_engine
-                  <input
-                    type="text"
-                    value={draft.inference.det_engine}
-                    onChange={(e) => setInference({ det_engine: e.target.value })}
-                  />
-                </label>
-                <label>
-                  pose_engine
-                  <input
-                    type="text"
-                    value={draft.inference.pose_engine}
-                    onChange={(e) => setInference({ pose_engine: e.target.value })}
-                  />
-                </label>
+                <PathField
+                  label="det_engine"
+                  value={draft.inference.det_engine}
+                  onChange={(v) => setInference({ det_engine: v })}
+                  placeholder="outputs/tensorrt_engines/yolox.engine"
+                />
+                <PathField
+                  label="pose_engine"
+                  value={draft.inference.pose_engine}
+                  onChange={(v) => setInference({ pose_engine: v })}
+                  placeholder="outputs/tensorrt_engines/rtmpose.engine"
+                />
                 <label>
                   keypoint_format
                   <select
@@ -723,14 +784,12 @@ export function SetupPage() {
                   />
                   enable_3d
                 </label>
-                <label>
-                  calib path
-                  <input
-                    type="text"
-                    value={draft.three_d.calib}
-                    onChange={(e) => setThreeD({ calib: e.target.value })}
-                  />
-                </label>
+                <PathField
+                  label="calib path"
+                  value={draft.three_d.calib}
+                  onChange={(v) => setThreeD({ calib: v })}
+                  placeholder="calibrations/extrinsics.yaml"
+                />
                 <label className="inline">
                   <input
                     type="checkbox"

@@ -305,6 +305,15 @@ std::string emit_main_config(const MainOptions& opts);
 // Throws std::runtime_error on an I/O failure.
 void save_main_config(const std::string& path, const MainOptions& opts);
 
+// Rewrite the CWD-relative path fields (engines, calib artifacts, subject dir,
+// ...) to absolute, resolved against the current working directory. Engine /
+// calib paths are opened CWD-relative at runtime (std::ifstream, no base dir);
+// the daemon spawns every mode child with the daemon's CWD, so absolutizing in
+// the (CWD-sharing) setup module removes the ambiguity of a relative path
+// resolving differently later. Idempotent for already-absolute paths; empty
+// fields are left empty. Output paths are absolutized too (they need not exist).
+void absolutize_config_paths(MainOptions& opts);
+
 // Load a YAML config from `path` into `out`. Unknown keys, type mismatches,
 // missing `schema`, or wrong `schema` value all throw std::runtime_error
 // with a key-path-qualified message (e.g. "config: unknown key three_d.foo").

@@ -553,6 +553,30 @@ void save_main_config(const std::string& path, const MainOptions& opts) {
     if (ec) fail("cannot rename " + tmp + " -> " + path + ": " + ec.message());
 }
 
+namespace {
+void abs_path(std::string& p) {
+    if (p.empty()) return;
+    std::error_code ec;
+    auto a = std::filesystem::absolute(p, ec);
+    if (!ec) p = a.lexically_normal().string();
+}
+}  // namespace
+
+void absolutize_config_paths(MainOptions& o) {
+    abs_path(o.det_engine);
+    abs_path(o.pose_engine);
+    abs_path(o.calib);
+    abs_path(o.excal_intrinsics);
+    abs_path(o.excal_out);
+    abs_path(o.floor_map);
+    abs_path(o.floor_intrinsics);
+    abs_path(o.floor_out_intrinsics);
+    abs_path(o.floor_out);
+    abs_path(o.intrinsic_out);
+    abs_path(o.subjects_dir);
+    abs_path(o.subject_profile);
+}
+
 EarlyArgs scan_early_args(int argc, char** argv) {
     EarlyArgs ea;
     for (int i = 0; i < argc; ++i) {
