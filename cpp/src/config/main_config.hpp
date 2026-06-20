@@ -101,16 +101,18 @@ struct MainOptions {
     double vr_quat_beta      = 1.5;
     double vr_quat_dcutoff   = 1.0;
 
-    // subject
+    // subject — identity (used by both run and subject calibration). Lives in
+    // the YAML `subject:` block; subject_id + subject_height_m are the single
+    // source of truth (no separate calib_subject_* anymore).
     std::string subjects_dir = "calibrations/subjects";
     std::string subject_id;
     std::string subject_profile;
     double subject_height_m = 0.0;
 
-    // calibration (wizard)
-    bool   calibrate = false;
-    std::string calib_subject_id;
-    double calib_subject_height_m = 0.0;
+    // subject calibration — process knobs only (YAML `subject_calib:` block,
+    // de-prefixed keys; the legacy `calibration:` block + calib_* keys still
+    // load as deprecated aliases). The subject id/height come from `subject:`.
+    bool   calibrate = false;  // run-mode-deriving; CLI/--calibrate only
     int    calib_frames_per_cam = 75;
     double calib_hold_sec = 1.5;
     bool   calib_auto_approve = false;

@@ -42,8 +42,13 @@ three_d:
 # calibrate). The subject-calib stage runs when subject_id is set AND no profile
 # exists yet under subjects_dir/<id>/ — use a fresh id to (re)calibrate, or
 # delete that profile. Leave subject_id empty to skip subject calibration.
-# (A separate `calibration:` block is only for optional process tuning:
-#  calib_frames_per_cam / calib_hold_sec / calib_auto_approve / calib_auto_exit.)
 #subject:
 #    subject_id: subject01
 #    subject_height_m: 1.70
+# Optional subject-calibration process tuning (parallels intrinsic_calib /
+# extrinsic_calib). No subject id/height here — those live in `subject:` above.
+#subject_calib:
+#    frames_per_cam: 75
+#    hold_sec: 1.5
+#    auto_approve: false
+#    auto_exit: false

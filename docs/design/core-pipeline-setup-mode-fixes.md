@@ -87,13 +87,19 @@
 - **E4** pixel_format 変更時に新 format の有効解像度へ snap。
 - **subject identity の一元化 (レビュー後の追加修正)**: `subject.subject_id`/`subject_height_m`(run 用)と
   `calibration.calib_subject_id`/`calib_subject_height_m`(校正用)が**別物なのに重複**し、自然な
-  `subject:` 配下に書いても subject 校正が走らないという罠があった (daemon フローでは同一被験者なのに
-  二重定義)。ローダーで**双方向ブリッジ**(片側が空なら他方から補完、両方あれば保持)を追加し、
-  `subject.subject_id`(+ `subject_height_m`)を**1か所**設定すれば run/校正の両方を駆動するようにした。
-  emit は重複回避(`calib_subject_*` は `subject.*` と相違する稀な場合のみ出力)。`calibration:` ブロックは
-  プロセス調整 (frames_per_cam 等) 専用の任意ブロックに格下げ。schema 非破壊・旧 config 互換
-  (`calib_subject_*` も引き続き有効)。ウィザードの seed も `subject.*` を埋めるよう変更。
-  validate の不足エラーは `subject.subject_id` を案内するよう改善。
+  `subject:` 配下に書いても subject 校正が走らない / `subject.calib_subject_height_m` が unknown key で
+  弾かれる罠があった (daemon フローでは同一被験者なのに二重定義)。
+  - **段階1 (PR #42 / c2e143c)**: ローダーに双方向ブリッジを入れ、暫定的に `subject.subject_id` 1か所で
+    両方を駆動できるようにした(構造は温存=ごまかし)。
+  - **段階2 (本修正)**: 構造そのものを `intrinsic_calib`/`extrinsic_calib` と同じ「1関心1ブロック」へ整理。
+    `calib_subject_id`/`calib_subject_height_m` フィールドを**撤去**し、identity は `subject:` の
+    `subject_id`/`subject_height_m` に一本化(run/校正/daemon すべてこれを参照)。校正プロセス調整は
+    `calibration:` → **`subject_calib:`** に改名し `calib_` 接頭辞を落とした(`frames_per_cam` 等)。
+    全使用箇所(daemon `profile_path`/`profile_now`/`module_argv`、calib-subject/extrinsic の
+    `has_subject_stage`、validate、CLI、emit、ブリッジ)を `subject_id`/`subject_height_m` へ移行し
+    ブリッジは撤去。**schema 非破壊・旧 config 互換**: 旧 `calibration:` ブロック(`calib_subject_*` 含む)は
+    deprecated read alias として引き続き load 可(`subject:` が優先)。`--calib-subject-id` 等の CLI も
+    `--subject-id` の alias に。emit は `subject:` + `subject_calib:` のみ(旧 `calibration:` は書かない)。
 
 ## Milestone
 

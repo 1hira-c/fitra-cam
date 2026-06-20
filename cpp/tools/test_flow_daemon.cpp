@@ -49,7 +49,7 @@ std::string join(const std::vector<std::string>& args) {
 
 void test_module_argv() {
     MainOptions opts;
-    opts.calib_subject_id = "subj";
+    opts.subject_id = "subj";
 
     // run, profile present: config + managed + subject-id.
     auto run_args = module_argv(RunMode::Run, opts, "/tmp/session.yaml", true);
@@ -58,7 +58,7 @@ void test_module_argv() {
           "run argv starts with --config PATH");
     check(run_args[2] == "--flow-managed", "run argv has --flow-managed");
     check(run_args[3] == "--subject-id" && run_args[4] == "subj",
-          "run argv carries --subject-id from calib_subject_id");
+          "run argv carries --subject-id from subject_id");
     check(!has_arg(run_args, "--no-vmt-out"),
           "run argv keeps the YAML publishers");
 
@@ -71,12 +71,12 @@ void test_module_argv() {
     MainOptions no_subj;
     auto run_nosubj = module_argv(RunMode::Run, no_subj, "/tmp/s.yaml", true);
     check(!has_arg(run_nosubj, "--subject-id"),
-          "run argv omits --subject-id when calib_subject_id is empty");
+          "run argv omits --subject-id when subject_id is empty");
 
     // run, non-sanitized id: --subject-id must match the wizard's sanitized
     // directory ("alice.v1" -> "alicev1"), else run loads nothing.
     MainOptions dotted;
-    dotted.calib_subject_id = "alice.v1";
+    dotted.subject_id = "alice.v1";
     auto run_dotted = module_argv(RunMode::Run, dotted, "/tmp/s.yaml", true);
     bool found_sanitized = false;
     for (std::size_t i = 0; i + 1 < run_dotted.size(); ++i) {
@@ -222,13 +222,13 @@ void test_initial_mode() {
 
     MainOptions p;
     p.subjects_dir = "/data/subjects";
-    p.calib_subject_id = "alice";
+    p.subject_id = "alice";
     check(profile_path(p) == "/data/subjects/alice/latest_profile.yaml",
           "profile_path layout");
-    p.calib_subject_id = "alice.v1";  // sanitized to alicev1 (wizard's rule)
+    p.subject_id = "alice.v1";  // sanitized to alicev1 (wizard's rule)
     check(profile_path(p) == "/data/subjects/alicev1/latest_profile.yaml",
           "profile_path sanitizes the id like the wizard");
-    p.calib_subject_id.clear();
+    p.subject_id.clear();
     check(profile_path(p).empty(), "profile_path empty without a subject id");
 }
 
@@ -276,7 +276,7 @@ void test_run_daemon_chain() {
     MainOptions opts;
     opts.daemon = true;
     opts.daemon_initial = "calib-extrinsic";
-    opts.calib_subject_id = "subj";
+    opts.subject_id = "subj";
     // calib-extrinsic's precheck needs intrinsics present (extrinsic_calib.intrinsics
     // or three_d.calib). Point calib at an existing file so the initial-mode
     // precheck passes and the spawn chain under test actually runs.

@@ -129,7 +129,7 @@ int run_mode_calib_extrinsic_floor(const config::MainOptions& opts,
     auto session = build_floor_session(opts, n_cams);
     if (!session) return EXIT_FAILURE;
 
-    const bool has_subject_stage = !opts.calib_subject_id.empty();
+    const bool has_subject_stage = !opts.subject_id.empty();
     const config::RunMode next_after_solve =
         has_subject_stage ? config::RunMode::CalibSubject : config::RunMode::Run;
     const std::string guidance = flow.managed

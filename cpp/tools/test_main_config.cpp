@@ -413,8 +413,8 @@ extrinsic_calib:
     opts.calibrate = true;
     opts.enable_3d = true;
     opts.calib = "/tmp/cam.yaml";
-    opts.calib_subject_id = "subj";
-    opts.calib_subject_height_m = 1.7;
+    opts.subject_id = "subj";
+    opts.subject_height_m = 1.7;
     bool threw = false;
     try { validate_options(opts); }
     catch (const std::exception& e) {
@@ -441,8 +441,8 @@ void test_run_mode_derivation_and_publisher_exclusivity() {
     subj.calibrate = true;
     subj.enable_3d = true;
     subj.calib = "/tmp/cam.yaml";
-    subj.calib_subject_id = "subj";
-    subj.calib_subject_height_m = 1.7;
+    subj.subject_id = "subj";
+    subj.subject_height_m = 1.7;
     validate_options(subj);
     check(run_mode(subj) == RunMode::CalibSubject,
           "--calibrate -> calib-subject mode");
@@ -528,8 +528,8 @@ extrinsic_calib:
     o2.calibrate = true;
     o2.enable_3d = true;
     o2.calib = "/tmp/cam.yaml";
-    o2.calib_subject_id = "s";
-    o2.calib_subject_height_m = 1.7;
+    o2.subject_id = "s";
+    o2.subject_height_m = 1.7;
     bool threw = false;
     try { validate_options(o2); }
     catch (const std::exception& e) {
@@ -944,10 +944,9 @@ void test_emit_load_round_trip() {
     o.intrinsic_model = "fisheye"; o.charuco_squares_x = 7; o.charuco_squares_y = 5;
     o.charuco_square_len_m = 0.035; o.charuco_marker_len_m = 0.026;
     o.intrinsic_min_views = 15; o.intrinsic_max_rms_px = 1.2;
-    // calibration block: calibrate is run-mode-deriving (must NOT emit), the rest
-    // are persistent knobs that must round-trip.
+    // subject_calib block: calibrate is run-mode-deriving (must NOT emit), the
+    // process knobs must round-trip (subject id/height live in `subject:` above).
     o.calibrate = true;
-    o.calib_subject_id = "alice"; o.calib_subject_height_m = 1.71;
     o.calib_frames_per_cam = 90; o.calib_hold_sec = 2.0;
     o.calib_auto_approve = true; o.calib_auto_exit = true;
     o.calib_static_dir = "web-ui/dist/subject-calib";
@@ -1041,8 +1040,6 @@ void test_emit_load_round_trip() {
     eq_f(o.charuco_marker_len_m, r.charuco_marker_len_m, "charuco_marker_len_m");
     eq_i(o.intrinsic_min_views, r.intrinsic_min_views, "intrinsic_min_views");
     eq_f(o.intrinsic_max_rms_px, r.intrinsic_max_rms_px, "intrinsic_max_rms_px");
-    eq_s(o.calib_subject_id, r.calib_subject_id, "calib_subject_id");
-    eq_f(o.calib_subject_height_m, r.calib_subject_height_m, "calib_subject_height_m");
     eq_i(o.calib_frames_per_cam, r.calib_frames_per_cam, "calib_frames_per_cam");
     eq_f(o.calib_hold_sec, r.calib_hold_sec, "calib_hold_sec");
     eq_b(o.calib_auto_approve, r.calib_auto_approve, "calib_auto_approve");
@@ -1122,42 +1119,63 @@ void test_setup_store_refuses_example_path() {
     }
 }
 
-void test_subject_calib_id_bridge() {
-    // subject.* alone fills calib_subject_* (the canonical, single-place path).
-    auto p = write_tmp("bridge_subject.yaml", R"(schema: fitra_main_config_v1
+void test_subject_calib_schema() {
+    // Canonical: subject.* is the single source of identity; subject_calib: holds
+    // the (de-prefixed) process knobs.
+    auto p = write_tmp("subj_canonical.yaml", R"(schema: fitra_main_config_v1
 subject:
   subject_id: subjectX
   subject_height_m: 1.66
+subject_calib:
+  frames_per_cam: 90
+  hold_sec: 2.0
+  auto_exit: true
 )");
     MainOptions a;
     load_main_config(p.string(), a);
-    check(a.calib_subject_id == "subjectX", "subject_id bridges to calib_subject_id");
-    check(std::abs(a.calib_subject_height_m - 1.66) < 1e-6,
-          "subject_height_m bridges to calib_subject_height_m");
+    check(a.subject_id == "subjectX", "subject.subject_id loads");
+    check(std::abs(a.subject_height_m - 1.66) < 1e-6, "subject.subject_height_m loads");
+    check(a.calib_frames_per_cam == 90, "subject_calib.frames_per_cam loads");
+    check(std::abs(a.calib_hold_sec - 2.0) < 1e-6, "subject_calib.hold_sec loads");
+    check(a.calib_auto_exit, "subject_calib.auto_exit loads");
 
-    // calibration.* alone fills subject_* (legacy configs keep working).
-    auto q = write_tmp("bridge_calib.yaml", R"(schema: fitra_main_config_v1
+    // Deprecated calibration: block still loads — calib_subject_* alias to
+    // subject.*, the rest map to the same process knobs.
+    auto q = write_tmp("subj_legacy.yaml", R"(schema: fitra_main_config_v1
 calibration:
   calib_subject_id: subjectY
   calib_subject_height_m: 1.80
+  calib_frames_per_cam: 50
 )");
     MainOptions b;
     load_main_config(q.string(), b);
-    check(b.subject_id == "subjectY", "calib_subject_id bridges to subject_id");
+    check(b.subject_id == "subjectY", "deprecated calib_subject_id aliases to subject_id");
     check(std::abs(b.subject_height_m - 1.80) < 1e-6,
-          "calib_subject_height_m bridges to subject_height_m");
+          "deprecated calib_subject_height_m aliases to subject_height_m");
+    check(b.calib_frames_per_cam == 50, "deprecated calib_frames_per_cam still loads");
 
-    // Both present and distinct → preserved (the rare calibrate-A / run-B case).
-    auto r = write_tmp("bridge_both.yaml", R"(schema: fitra_main_config_v1
+    // Explicit subject.* wins over the deprecated calibration alias.
+    auto r = write_tmp("subj_wins.yaml", R"(schema: fitra_main_config_v1
 subject:
-  subject_id: runSubj
+  subject_id: realSubj
 calibration:
-  calib_subject_id: calibSubj
+  calib_subject_id: legacySubj
 )");
     MainOptions c;
     load_main_config(r.string(), c);
-    check(c.subject_id == "runSubj" && c.calib_subject_id == "calibSubj",
-          "distinct subject/calib ids are preserved");
+    check(c.subject_id == "realSubj", "subject.subject_id wins over deprecated alias");
+
+    // Round-trip emits subject_calib (not calibration) and no duplicate identity.
+    MainOptions o;
+    o.subject_id = "rtSubj"; o.subject_height_m = 1.72;
+    o.calib_frames_per_cam = 42;
+    auto rt = write_tmp("subj_rt.yaml", "");
+    save_main_config(rt.string(), o);
+    MainOptions back;
+    load_main_config(rt.string(), back);
+    check(back.subject_id == "rtSubj" && std::abs(back.subject_height_m - 1.72) < 1e-6,
+          "subject identity round-trips");
+    check(back.calib_frames_per_cam == 42, "subject_calib knob round-trips");
 }
 
 struct TestCase {
@@ -1190,7 +1208,7 @@ const TestCase kTests[] = {
     {"absolutize_paths",                       test_absolutize_paths},
     {"validate_rejects_duplicate_cameras",     test_validate_rejects_duplicate_cameras},
     {"setup_store_refuses_example_path",       test_setup_store_refuses_example_path},
-    {"subject_calib_id_bridge",                test_subject_calib_id_bridge},
+    {"subject_calib_schema",                   test_subject_calib_schema},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},

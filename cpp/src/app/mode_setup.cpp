@@ -53,10 +53,10 @@ bool compose_and_switch(config::SetupConfigStore& store, FlowControl& flow,
     // cameras + inference engines the terminal stages (run, subject-calib) need,
     // and seed a subject id/height. Without the engines a later run/subject child
     // dies on missing --det-engine/--pose-engine with no way to fix it from the
-    // UI; without a subject id the extrinsic stage keys on an empty
-    // calib_subject_id and routes straight to run, silently skipping subject
-    // calibration (mode_calib_extrinsic.cpp's has_subject_stage). The relaxed
-    // validate_draft alone would let such a half-config through.
+    // UI; without a subject id the extrinsic stage keys on an empty subject_id
+    // and routes straight to run, silently skipping subject calibration
+    // (mode_calib_extrinsic.cpp's has_subject_stage). The relaxed validate_draft
+    // alone would let such a half-config through.
     if (next != config::RunMode::Setup) {
         if (d.cam_paths[0].empty()) {
             err = "configure at least cam0 before proceeding";

@@ -20,13 +20,10 @@ int run_mode_calib_subject(const config::MainOptions& opts, FlowControl& flow) {
     // For the headless --calibrate path, prime the live IkSolver with the
     // calibration height up-front. Without this, the IK is unlocked at boot
     // and the 3D angle recognizer would have to wait for ~150 frames of
-    // observational locking before it can judge pose holds. If the user
-    // already passed --subject-height-m we honor that instead.
-    double subject_height_m = opts.subject_height_m;
-    if (subject_height_m <= 0.0
-        && opts.subject_profile.empty() && opts.subject_id.empty()) {
-        subject_height_m = opts.calib_subject_height_m;
-    }
+    // observational locking before it can judge pose holds.
+    // subject_id/subject_height_m are the single source of truth (the old
+    // calib_subject_height_m fallback collapsed into subject_height_m).
+    const double subject_height_m = opts.subject_height_m;
 
     std::size_t requested_cam_count = 0;
     for (const auto& path : opts.cam_paths) {
@@ -157,7 +154,7 @@ int run_mode_calib_subject(const config::MainOptions& opts, FlowControl& flow) {
             ? "profile written. Flow daemon switches to run mode."
             : "profile written. Restart in run mode: ./main --enable-3d"
               " --calib " + opts.calib + " --subject-id "
-              + opts.calib_subject_id + " ...");
+              + opts.subject_id + " ...");
         server->set_tracker_bus(threed.tracker_bus.get());
         server->start();
     }
@@ -165,8 +162,8 @@ int run_mode_calib_subject(const config::MainOptions& opts, FlowControl& flow) {
     // Boot-time auto preflight + start (--calibrate always set in this mode).
     {
         pipeline::CalibPreflight in = calib_defaults;
-        in.subject_id = opts.calib_subject_id;
-        in.subject_height_m = opts.calib_subject_height_m;
+        in.subject_id = opts.subject_id;
+        in.subject_height_m = opts.subject_height_m;
         std::string err;
         if (!calib_session.preflight(in, err)) {
             std::fprintf(stderr, "calibrate preflight failed: %s\n", err.c_str());
@@ -177,7 +174,7 @@ int run_mode_calib_subject(const config::MainOptions& opts, FlowControl& flow) {
             return EXIT_FAILURE;
         }
         FITRA_LOG_INFO("calibration auto-start: subject={} height={} m",
-                       opts.calib_subject_id, opts.calib_subject_height_m);
+                       opts.subject_id, opts.subject_height_m);
     }
 
     run_stats_loop(*driver, opts.log_every_s, flow.stop);

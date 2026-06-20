@@ -163,6 +163,28 @@ void load_subject(const YAML::Node& section, MainOptions& out) {
     if (section["subject_height_m"]) out.subject_height_m = parse_scalar<double>(section["subject_height_m"],     "subject.subject_height_m");
 }
 
+// Subject calibration process knobs (canonical YAML block: `subject_calib:`,
+// de-prefixed keys). Subject id/height are NOT here — they live in `subject:`.
+void load_subject_calib(const YAML::Node& section, MainOptions& out) {
+    ensure_map(section, "subject_calib");
+    static const std::set<std::string> allowed{
+        "calibrate", "frames_per_cam", "hold_sec", "auto_approve",
+        "auto_exit", "static_dir", "dump_tool",
+    };
+    check_keys(section, allowed, "subject_calib");
+    if (section["calibrate"])      out.calibrate            = parse_scalar<bool>(section["calibrate"],          "subject_calib.calibrate");
+    if (section["frames_per_cam"]) out.calib_frames_per_cam = parse_scalar<int>(section["frames_per_cam"],      "subject_calib.frames_per_cam");
+    if (section["hold_sec"])       out.calib_hold_sec       = parse_scalar<double>(section["hold_sec"],         "subject_calib.hold_sec");
+    if (section["auto_approve"])   out.calib_auto_approve   = parse_scalar<bool>(section["auto_approve"],       "subject_calib.auto_approve");
+    if (section["auto_exit"])      out.calib_auto_exit      = parse_scalar<bool>(section["auto_exit"],          "subject_calib.auto_exit");
+    if (section["static_dir"])     out.calib_static_dir     = parse_scalar<std::string>(section["static_dir"], "subject_calib.static_dir");
+    if (section["dump_tool"])      out.calib_dump_tool      = parse_scalar<std::string>(section["dump_tool"],   "subject_calib.dump_tool");
+}
+
+// DEPRECATED `calibration:` block. Kept for backward compatibility with configs
+// written before the subject-side consolidation: calib_subject_id/height map to
+// the canonical subject.* fields (only when `subject:` did not already set them),
+// the rest map to the same process knobs as subject_calib.
 void load_calibration(const YAML::Node& section, MainOptions& out) {
     ensure_map(section, "calibration");
     static const std::set<std::string> allowed{
@@ -171,15 +193,17 @@ void load_calibration(const YAML::Node& section, MainOptions& out) {
         "calib_auto_exit", "calib_static_dir", "calib_dump_tool",
     };
     check_keys(section, allowed, "calibration");
-    if (section["calibrate"])              out.calibrate              = parse_scalar<bool>(section["calibrate"],                 "calibration.calibrate");
-    if (section["calib_subject_id"])       out.calib_subject_id       = parse_scalar<std::string>(section["calib_subject_id"],  "calibration.calib_subject_id");
-    if (section["calib_subject_height_m"]) out.calib_subject_height_m = parse_scalar<double>(section["calib_subject_height_m"], "calibration.calib_subject_height_m");
-    if (section["calib_frames_per_cam"])   out.calib_frames_per_cam   = parse_scalar<int>(section["calib_frames_per_cam"],      "calibration.calib_frames_per_cam");
-    if (section["calib_hold_sec"])         out.calib_hold_sec         = parse_scalar<double>(section["calib_hold_sec"],         "calibration.calib_hold_sec");
-    if (section["calib_auto_approve"])     out.calib_auto_approve     = parse_scalar<bool>(section["calib_auto_approve"],       "calibration.calib_auto_approve");
-    if (section["calib_auto_exit"])        out.calib_auto_exit        = parse_scalar<bool>(section["calib_auto_exit"],          "calibration.calib_auto_exit");
-    if (section["calib_static_dir"])       out.calib_static_dir       = parse_scalar<std::string>(section["calib_static_dir"],  "calibration.calib_static_dir");
-    if (section["calib_dump_tool"])        out.calib_dump_tool        = parse_scalar<std::string>(section["calib_dump_tool"],   "calibration.calib_dump_tool");
+    if (section["calibrate"])              out.calibrate            = parse_scalar<bool>(section["calibrate"],                 "calibration.calibrate");
+    if (section["calib_subject_id"] && out.subject_id.empty())
+        out.subject_id = parse_scalar<std::string>(section["calib_subject_id"], "calibration.calib_subject_id");
+    if (section["calib_subject_height_m"] && out.subject_height_m <= 0.0)
+        out.subject_height_m = parse_scalar<double>(section["calib_subject_height_m"], "calibration.calib_subject_height_m");
+    if (section["calib_frames_per_cam"])   out.calib_frames_per_cam = parse_scalar<int>(section["calib_frames_per_cam"],      "calibration.calib_frames_per_cam");
+    if (section["calib_hold_sec"])         out.calib_hold_sec       = parse_scalar<double>(section["calib_hold_sec"],         "calibration.calib_hold_sec");
+    if (section["calib_auto_approve"])     out.calib_auto_approve   = parse_scalar<bool>(section["calib_auto_approve"],       "calibration.calib_auto_approve");
+    if (section["calib_auto_exit"])        out.calib_auto_exit      = parse_scalar<bool>(section["calib_auto_exit"],          "calibration.calib_auto_exit");
+    if (section["calib_static_dir"])       out.calib_static_dir     = parse_scalar<std::string>(section["calib_static_dir"],  "calibration.calib_static_dir");
+    if (section["calib_dump_tool"])        out.calib_dump_tool      = parse_scalar<std::string>(section["calib_dump_tool"],   "calibration.calib_dump_tool");
 }
 
 void load_logging(const YAML::Node& section, MainOptions& out) {
@@ -360,7 +384,7 @@ void load_main_config(const std::string& path, MainOptions& out) {
 
     static const std::set<std::string> top_allowed{
         "schema", "cameras", "inference", "web", "three_d",
-        "subject", "calibration", "logging", "slimevr", "vmt",
+        "subject", "subject_calib", "calibration", "logging", "slimevr", "vmt",
         "extrinsic_calib", "intrinsic_calib",
     };
     for (auto it = root.begin(); it != root.end(); ++it) {
@@ -375,24 +399,16 @@ void load_main_config(const std::string& path, MainOptions& out) {
     if (root["web"])         load_web       (root["web"],         out);
     if (root["three_d"])     load_three_d   (root["three_d"],     out);
     if (root["subject"])     load_subject   (root["subject"],     out);
-    if (root["calibration"]) load_calibration(root["calibration"], out);
+    // DEPRECATED calibration: block first (may set subject_id from
+    // calib_subject_id when subject: did not), then the canonical subject_calib:
+    // block, which wins for process knobs if both are present.
+    if (root["calibration"])   load_calibration (root["calibration"],   out);
+    if (root["subject_calib"]) load_subject_calib(root["subject_calib"], out);
     if (root["logging"])     load_logging   (root["logging"],     out);
     if (root["slimevr"])     load_slimevr   (root["slimevr"],     out);
     if (root["vmt"])         load_vmt       (root["vmt"],         out);
     if (root["extrinsic_calib"]) load_extrinsic_calib(root["extrinsic_calib"], out);
     if (root["intrinsic_calib"]) load_intrinsic_calib(root["intrinsic_calib"], out);
-
-    // Subject identity lives canonically in the `subject` block. The subject-calib
-    // stage and the daemon's run --subject-id synthesis read calib_subject_id /
-    // calib_subject_height_m, so bridge the two when only one side is set: setting
-    // `subject.subject_id` (+ subject_height_m) once drives both run and
-    // calibration, and the `calibration:` block is needed only for process knobs.
-    // The legacy `calibration.calib_subject_*` keys still work and win when both
-    // sides are present (the rare calibrate-A / run-B case).
-    if (out.calib_subject_id.empty())      out.calib_subject_id = out.subject_id;
-    else if (out.subject_id.empty())       out.subject_id = out.calib_subject_id;
-    if (out.calib_subject_height_m <= 0.0) out.calib_subject_height_m = out.subject_height_m;
-    else if (out.subject_height_m <= 0.0)  out.subject_height_m = out.calib_subject_height_m;
 }
 
 std::string emit_main_config(const MainOptions& o) {
@@ -471,22 +487,17 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.subject_height_m != d.subject_height_m) e << YAML::Key << "subject_height_m" << YAML::Value << o.subject_height_m;
     e << YAML::EndMap;
 
-    // calibration — process knobs only. NB: never emit `calibrate` (run-mode-
-    // deriving: run_mode() derives RunMode::CalibSubject from it). Subject id +
-    // height live canonically in the `subject` block (the loader bridges them to
-    // calib_subject_*); only emit calib_subject_* when they DIVERGE from subject,
-    // so a config never carries the same identity twice.
-    e << YAML::Key << "calibration" << YAML::Value << YAML::BeginMap;
-    if (!o.calib_subject_id.empty() && o.calib_subject_id != o.subject_id)
-        e << YAML::Key << "calib_subject_id" << YAML::Value << o.calib_subject_id;
-    if (o.calib_subject_height_m > 0.0 && o.calib_subject_height_m != o.subject_height_m)
-        e << YAML::Key << "calib_subject_height_m" << YAML::Value << o.calib_subject_height_m;
-    if (o.calib_frames_per_cam != d.calib_frames_per_cam)  e << YAML::Key << "calib_frames_per_cam"   << YAML::Value << o.calib_frames_per_cam;
-    if (o.calib_hold_sec != d.calib_hold_sec)              e << YAML::Key << "calib_hold_sec"         << YAML::Value << o.calib_hold_sec;
-    if (o.calib_auto_approve != d.calib_auto_approve)      e << YAML::Key << "calib_auto_approve"     << YAML::Value << o.calib_auto_approve;
-    if (o.calib_auto_exit != d.calib_auto_exit)            e << YAML::Key << "calib_auto_exit"        << YAML::Value << o.calib_auto_exit;
-    if (!o.calib_static_dir.empty())                       e << YAML::Key << "calib_static_dir"       << YAML::Value << o.calib_static_dir;
-    if (!o.calib_dump_tool.empty())                        e << YAML::Key << "calib_dump_tool"        << YAML::Value << o.calib_dump_tool;
+    // subject_calib — process knobs only (de-prefixed keys; subject id/height
+    // live in the `subject` block). NB: never emit `calibrate` (run-mode-deriving:
+    // run_mode() derives RunMode::CalibSubject from it). The legacy `calibration:`
+    // block is no longer emitted — only read (deprecated alias).
+    e << YAML::Key << "subject_calib" << YAML::Value << YAML::BeginMap;
+    if (o.calib_frames_per_cam != d.calib_frames_per_cam) e << YAML::Key << "frames_per_cam" << YAML::Value << o.calib_frames_per_cam;
+    if (o.calib_hold_sec != d.calib_hold_sec)             e << YAML::Key << "hold_sec"       << YAML::Value << o.calib_hold_sec;
+    if (o.calib_auto_approve != d.calib_auto_approve)     e << YAML::Key << "auto_approve"   << YAML::Value << o.calib_auto_approve;
+    if (o.calib_auto_exit != d.calib_auto_exit)           e << YAML::Key << "auto_exit"      << YAML::Value << o.calib_auto_exit;
+    if (!o.calib_static_dir.empty())                      e << YAML::Key << "static_dir"     << YAML::Value << o.calib_static_dir;
+    if (!o.calib_dump_tool.empty())                       e << YAML::Key << "dump_tool"      << YAML::Value << o.calib_dump_tool;
     e << YAML::EndMap;
 
     // logging --------------------------------------------------------------
@@ -722,8 +733,10 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--vmt-continuous-resolve-s"){ out.vmt_continuous_resolve_s = std::stod(need(i, "--vmt-continuous-resolve-s")); }
         else if (a == "--vmt-continuous-blend")    { out.vmt_continuous_blend     = std::stod(need(i, "--vmt-continuous-blend")); }
         else if (a == "--calibrate")             { out.calibrate = true; }
-        else if (a == "--calib-subject-id")      { out.calib_subject_id = need(i, "--calib-subject-id"); }
-        else if (a == "--calib-subject-height-m"){ out.calib_subject_height_m = std::stod(need(i, "--calib-subject-height-m")); }
+        // Deprecated aliases for --subject-id / --subject-height-m (subject id +
+        // height are now a single field used by both run and calibration).
+        else if (a == "--calib-subject-id")      { out.subject_id = need(i, "--calib-subject-id"); }
+        else if (a == "--calib-subject-height-m"){ out.subject_height_m = std::stod(need(i, "--calib-subject-height-m")); }
         else if (a == "--calib-frames-per-cam")  { out.calib_frames_per_cam = std::atoi(need(i, "--calib-frames-per-cam")); }
         else if (a == "--calib-hold-sec")        { out.calib_hold_sec = std::stod(need(i, "--calib-hold-sec")); }
         else if (a == "--calib-auto-approve")    { out.calib_auto_approve = true; }
@@ -1073,10 +1086,9 @@ void validate_options(const MainOptions& opts) {
         fail("--calibrate requires --enable-3d");
     }
     if (opts.calibrate
-        && (opts.calib_subject_id.empty() || opts.calib_subject_height_m <= 0.0)) {
+        && (opts.subject_id.empty() || opts.subject_height_m <= 0.0)) {
         fail("subject calibration needs a subject id + height — set "
-             "subject.subject_id and subject.subject_height_m in the config "
-             "(or --calib-subject-id / --calib-subject-height-m)");
+             "subject.subject_id and subject.subject_height_m in the config");
     }
     if (mode == RunMode::CalibExtrinsic) {
         // Dedicated mode — mutually exclusive with the subject wizard.

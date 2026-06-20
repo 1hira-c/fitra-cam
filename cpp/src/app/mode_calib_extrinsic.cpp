@@ -138,12 +138,12 @@ int run_mode_calib_extrinsic(const config::MainOptions& opts, FlowControl& flow)
     // calibration input; the HMD feeds the /extrinsic-calib scene.
     auto relay = make_pose_relay(opts, /*listen=*/true);
 
-    // A daemon without a subject stage (no calib_subject_id) skips
-    // calib-subject — the daemon treats the profile as "present" — so the
-    // auto-chain must go straight to run. Otherwise we would spawn a
-    // calib-subject child that dies on "--calibrate requires
-    // --calib-subject-id" and only reach run via the crash fallback.
-    const bool has_subject_stage = !opts.calib_subject_id.empty();
+    // A daemon without a subject stage (no subject_id) skips calib-subject —
+    // the daemon treats the profile as "present" — so the auto-chain must go
+    // straight to run. Otherwise we would spawn a calib-subject child that dies
+    // on "subject calibration needs a subject id" and only reach run via the
+    // crash fallback.
+    const bool has_subject_stage = !opts.subject_id.empty();
     const config::RunMode next_after_solve =
         has_subject_stage ? config::RunMode::CalibSubject : config::RunMode::Run;
     const std::string guidance = flow.managed
