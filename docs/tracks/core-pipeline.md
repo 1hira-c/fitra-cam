@@ -33,6 +33,23 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-06-20 — WebUI 主導セットアップ (RunMode::Setup daemon モジュール)
+「初回セットアップから実推論まで」をほぼ全部ブラウザから回せるようにした。残っていた gap
+(カメラ選択 UI 無し / portless daemon の bootstrap 鶏卵 / 名前付き config 無し /
+calib UI が vanilla-JS と React に分裂) を、flow daemon の「モード=モジュール」パターンを
+再利用して解消。**新 `RunMode::Setup`** = daemon が最初に spawn する軽量モジュール
+(Crow + V4L2 列挙/preview のみ、TRT/CUDA 不使用)。cameras 未設定の config なら `initial_mode`
+が Setup に着地し、ブラウザで cameras/engines/出力先を合成 → union config を書き出し →
+exit code (`kExitFlowToSetup=85`) で intrinsic→extrinsic→subject→run へ連鎖
+(子が config 再ロード)。reverse-proxy/別バイナリ不要 (旧 launcher 設計を supersede)。
+新規: `emit/save_main_config` (loader の逆、往復 ctest)、`SetupConfigStore`、
+`v4l2_enumerate` + `setup_camera_manager` (単発 JPEG preview)、`/api/{cameras,config,setup}*`、
+React の Setup/Intrinsic/Extrinsic ページ + WizardSteps、Crow の SPA history-fallback。
+calib 静的配信を `web-ui/dist` へ向け直し legacy `web/{extrinsic,intrinsic}_calibration` を retire。
+validate は `!opts.daemon` で run-form を緩め daemon 親が空 config で起動できるようにした。
+ctest 全 29 pass。実機 smoke: 3 カメラ列挙 + preview + proceed 連鎖を確認。
+設計: [`core-pipeline-setup-mode.md`](../design/core-pipeline-setup-mode.md)。
+
 ### 2026-06-19 — per-camera 露出/gain 制御 (手動固定 + 簡易ソフトAE)
 cam1 の「ガタつき + ブラー + 妙に明るい」を追及 → **カメラ純正の自動露出が原因**と確定
 (Windows でも MJPEG/YUYV 両方でもガタつく → ホスト/圧縮非依存。`exposure_time_absolute`

@@ -48,6 +48,9 @@
 | 80 | 次は run | spawn |
 | 81 | 次は calib-subject | spawn |
 | 82 | 次は calib-extrinsic | spawn |
+| 83 | 次は calib-extrinsic-floor (案D) | spawn |
+| 84 | 次は calib-intrinsic | spawn |
+| 85 | 次は setup (WebUI 主導セットアップ; [core-pipeline-setup-mode.md](core-pipeline-setup-mode.md)) | spawn |
 | その他 / シグナル死 | クラッシュ | backoff 2s → **run を spawn** (安全側のデフォルト)。正常 exit を挟まず 3 連続で give-up (`kMaxConsecutiveFailures`) |
 
 `FlowControl` (stop 参照 + `managed` + `next_mode`) を main → runner → Crow ハンドラで

@@ -21,11 +21,16 @@ std::filesystem::path guess_subject_calib_static_dir() {
 }
 
 std::filesystem::path guess_extrinsic_calib_static_dir() {
-    return repo_root() / "web" / "extrinsic_calibration";
+    // The extrinsic-calib UI is now the React SPA route /extrinsic-calib
+    // (web-ui/), so the /extrinsic-calib page route serves the SPA index like
+    // subject-calib. The legacy web/extrinsic_calibration vanilla page is
+    // superseded (docs/design/core-pipeline-setup-mode.md).
+    return repo_root() / "web-ui" / "dist";
 }
 
 std::filesystem::path guess_intrinsic_calib_static_dir() {
-    return repo_root() / "web" / "intrinsic_calibration";
+    // Likewise the intrinsic-calib UI is the React SPA route /intrinsic-calib.
+    return repo_root() / "web-ui" / "dist";
 }
 
 std::filesystem::path guess_dump_tool_path() {
