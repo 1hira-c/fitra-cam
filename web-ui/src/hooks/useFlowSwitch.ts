@@ -38,9 +38,9 @@ export function useFlowSwitch(): FlowSwitch {
       setPending(true);
       try {
         const res = await requestFlowSwitch(mode);
-        if (res.ok) {
-          setPending(true);
-        } else {
+        // On success pending stays true (set above) until useFlowWatch redirects
+        // away and unmounts; only a failure flips it back.
+        if (!res.ok) {
           setPending(false);
           setBanner({ text: `切替失敗: ${res.err || "unknown error"}`, cls: "err" });
         }

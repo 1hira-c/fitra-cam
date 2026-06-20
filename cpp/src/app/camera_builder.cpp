@@ -42,12 +42,7 @@ CameraSet make_frame_sources(const config::MainOptions& opts,
                                    : camera::PixFmt::Mjpeg;
         // Per-camera exposure control (anti-blur + steady fps). Empty/"auto"
         // leaves the camera's own controls untouched (no regression).
-        const std::string& em = opts.cam_exposure_mode[i];
-        o.exposure_mode = (em == "manual")
-                              ? camera::V4l2Options::ExposureMode::Manual
-                              : (em == "assist")
-                                    ? camera::V4l2Options::ExposureMode::Assist
-                                    : camera::V4l2Options::ExposureMode::Auto;
+        o.exposure_mode = camera::parse_exposure_mode(opts.cam_exposure_mode[i]);
         o.exposure_us100 = opts.cam_exposure[i];
         o.gain           = opts.cam_gain[i];
         o.ae_target      = opts.cam_ae_target[i];

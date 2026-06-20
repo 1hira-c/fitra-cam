@@ -84,6 +84,15 @@ struct V4l2Options {
     }
 };
 
+// Map a config exposure-mode string to the enum. Shared by camera_builder (the
+// live pipeline) and setup_camera_manager (the wizard preview) so both interpret
+// the same config token identically.
+inline V4l2Options::ExposureMode parse_exposure_mode(const std::string& s) {
+    if (s == "manual") return V4l2Options::ExposureMode::Manual;
+    if (s == "assist") return V4l2Options::ExposureMode::Assist;
+    return V4l2Options::ExposureMode::Auto;
+}
+
 class V4l2Capture {
 public:
     explicit V4l2Capture(V4l2Options opts);

@@ -69,4 +69,18 @@ inline void append_age_ms_json(std::ostringstream& out, double age_ms) {
     out << (std::isfinite(age_ms) ? age_ms : -1.0);
 }
 
+// True iff absolute path `abs` is `root` itself or lies beneath it. Both args
+// must already be weakly_canonical-resolved by the caller. The match is anchored
+// at a directory boundary: a bare prefix test (rfind(root, 0) == 0) would also
+// accept a sibling like "<root>-secret" that escapes the sandbox, so require an
+// exact match or a separator immediately after root. Shared by the static-file
+// handler and the setup check-path probe so the boundary rule lives in one place.
+inline bool path_within(const std::string& root, const std::string& abs) {
+    if (root.empty() || abs.empty()) return false;
+    if (abs == root) return true;
+    return abs.size() > root.size() &&
+           abs.compare(0, root.size(), root) == 0 &&
+           abs[root.size()] == '/';
+}
+
 }  // namespace fitra::web::detail

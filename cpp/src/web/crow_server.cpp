@@ -33,6 +33,7 @@ using detail::read_file;
 using detail::guess_content_type;
 using detail::json_escape;
 using detail::append_age_ms_json;
+using detail::path_within;
 
 namespace {
 
@@ -933,12 +934,16 @@ void CrowServer::start() {
 
     CROW_ROUTE(app, "/<path>")
     ([static_root](const std::string& sub) {
-        // Reject anything that escapes the static root.
+        // Reject anything that escapes the static root. Anchor at the directory
+        // boundary (path_within) — a bare prefix match would let a sibling dir
+        // like "<root>-secret" through. Only enforced when a static dir is
+        // actually configured; with none (canon_root empty) every request just
+        // resolves to "no file" and falls through to the 404 logic below.
         std::filesystem::path req = static_root / sub;
         auto canon_req  = std::filesystem::weakly_canonical(req);
         auto canon_root = std::filesystem::weakly_canonical(static_root);
-        auto root_str = canon_root.string();
-        if (canon_req.string().rfind(root_str, 0) != 0) {
+        if (!canon_root.empty() &&
+            !path_within(canon_root.string(), canon_req.string())) {
             return crow::response{403, "forbidden"};
         }
         // An unregistered /api/* path must not fall through to the SPA fallback:

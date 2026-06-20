@@ -33,6 +33,21 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-06-21 — Setup モード コードレビュー (2巡目)
+PR #42 全体に `/code-review xhigh` を再実行し、確認できた指摘を修正。**security/routing が主**:
+静的配信の containment が bare-prefix で `<root>-secret` 兄弟ディレクトリへ脱出可能だったのを
+共有 `path_within` ヘルパ (crow_util.hpp) に一本化し3コピーを統合 (check-path/serve_static_sub も)、
+ウィザードの汎用「外部校正」ステップが常に controller を要求し floor リグで誤起動する問題を backend
+で `excal_method` に正規化 (do_switch + viewer ハンドラ)、`do_switch` の手動移動が `validate_draft` の
+range/enum を素通りしていたのを `compose_and_switch` に集約、`check-path` を `deps.store` ガード内へ
+移し Setup 専用化 (run/calib での CWD 存在オラクルを封鎖)。**frontend**: `getJson` が res.ok 非確認の
+ため /api/config の JSON-404 で `r.config` undefined → loadConfig が throw する穴を guard、解像度変更時に
+fps を再 snap (非対応 size+fps の送信を防止)、`clamp01(NaN)` の `width:'NaN%'` を 0% 化。**cleanup**:
+手書き `ends_with` を `std::string::ends_with` に、exposure_mode の string→enum 重複を
+`parse_exposure_mode` (v4l2_capture.hpp) に共有化、useFlowSwitch の no-op 除去。ctest 全 29 pass +
+`pnpm build` 通過。設計 doc の「2巡目」節参照。
+設計: [`core-pipeline-setup-mode-fixes.md`](../design/core-pipeline-setup-mode-fixes.md)。
+
 ### 2026-06-20 — Setup モード コードレビュー指摘 15 件の修正
 `/code-review xhigh` で confirmed の 15 件を一括修正し、ウィザードを実運用前の状態に。
 **config 往復**: `emit_main_config` に `calibration:` 節追加で `calib_subject_id` 等の消失を解消、

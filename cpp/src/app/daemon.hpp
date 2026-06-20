@@ -55,8 +55,8 @@ config::RunMode initial_mode(const config::MainOptions& opts,
                              bool profile_exists);
 
 // Subject profile the run module would load:
-// <subjects_dir>/<calib_subject_id>/latest_profile.yaml.
-// Empty when calib_subject_id is empty (no profile stage configured).
+// <subjects_dir>/<subject_id>/latest_profile.yaml.
+// Empty when subject_id is empty (no profile stage configured).
 std::string profile_path(const config::MainOptions& opts);
 
 // ---- the daemon loop ----

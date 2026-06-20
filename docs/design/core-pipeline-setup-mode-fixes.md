@@ -85,6 +85,21 @@
 - **E2** `applyPreview` が成功/失敗を問わず `appliedPreviewKey` を更新 (失敗設定の連打再 POST を停止)。
 - **E3** アンマウント cleanup を state でなく `previewDevice` ref から読む。
 - **E4** pixel_format 変更時に新 format の有効解像度へ snap。
+- **subject identity の一元化 (レビュー後の追加修正)**: `subject.subject_id`/`subject_height_m`(run 用)と
+  `calibration.calib_subject_id`/`calib_subject_height_m`(校正用)が**別物なのに重複**し、自然な
+  `subject:` 配下に書いても subject 校正が走らない / `subject.calib_subject_height_m` が unknown key で
+  弾かれる罠があった (daemon フローでは同一被験者なのに二重定義)。
+  - **段階1 (PR #42 / c2e143c)**: ローダーに双方向ブリッジを入れ、暫定的に `subject.subject_id` 1か所で
+    両方を駆動できるようにした(構造は温存=ごまかし)。
+  - **段階2 (本修正)**: 構造そのものを `intrinsic_calib`/`extrinsic_calib` と同じ「1関心1ブロック」へ整理。
+    `calib_subject_id`/`calib_subject_height_m` フィールドを**撤去**し、identity は `subject:` の
+    `subject_id`/`subject_height_m` に一本化(run/校正/daemon すべてこれを参照)。校正プロセス調整は
+    `calibration:` → **`subject_calib:`** に改名し `calib_` 接頭辞を落とした(`frames_per_cam` 等)。
+    全使用箇所(daemon `profile_path`/`profile_now`/`module_argv`、calib-subject/extrinsic の
+    `has_subject_stage`、validate、CLI、emit、ブリッジ)を `subject_id`/`subject_height_m` へ移行し
+    ブリッジは撤去。**schema 非破壊・旧 config 互換**: 旧 `calibration:` ブロック(`calib_subject_*` 含む)は
+    deprecated read alias として引き続き load 可(`subject:` が優先)。`--calib-subject-id` 等の CLI も
+    `--subject-id` の alias に。emit は `subject:` + `subject_calib:` のみ(旧 `calibration:` は書かない)。
 
 ## Milestone
 
@@ -102,6 +117,42 @@
   受けない解像度で連打再 POST なし / engine 未設定で検証 NG / 新規リグで「次へ」が subject 校正へ /
   別タブ run 切替でカメラ無し run が起動しない / `.example` 直指定で proceed 拒否 / 未登録 `/api/foo` が
   JSON 404 / `check-path?path=/etc/shadow` が拒否。
+
+## 2巡目レビュー (2026-06-21)
+
+PR #42 全体 (`Develop...HEAD`) に `/code-review xhigh` を再実行。新規に確認できた指摘を修正:
+
+- **R1 (security)** 静的配信 catch-all (`crow_server.cpp`) の containment が bare-prefix
+  (`canon_req.rfind(root, 0)`) で、`<root>-secret` のような兄弟ディレクトリへ脱出可能だった
+  (check-path と serve_static_sub は既に境界アンカー済みなのにここだけ穴)。**採用**: 境界判定を
+  `crow_util.hpp` の共有 `path_within(root, abs)` に一本化し、static handler / serve_static_sub /
+  check-path の3コピーを統合。static dir 未設定 (`canon_root` 空) のときは 403 を出さず file-not-found
+  経路へ通す (旧 `rfind("",0)==0` の挙動を保持、`test_crow_excal` の 404 期待に整合)。
+- **R2 (routing)** ウィザードの「外部校正」ステップは方式非依存 (`MODE_FOR_STEP['extrinsic'] =
+  calib-extrinsic`) なため、floor リグで手動ステップ移動すると controller 版を起動し precheck で失敗/誤起動。
+  **採用 (altitude)**: frontend を方式対応にするのでなく、方式を知っている backend で正規化 —
+  `do_switch` と viewer の flow-switch ハンドラ (`server_builder.cpp`) で extrinsic target を
+  `excal_method` に合わせて floor/controller へ寄せる (auto-chain の `initial_mode` と一致)。
+- **R3 (routing)** `do_switch` (手動ステップ移動) が `do_proceed` の `validate_draft` を通らず、
+  range/enum 不正 draft を書いて子が落ち daemon が run へ fallback。**採用**: validate を
+  `compose_and_switch` の冒頭に集約し両経路で実行 (`do_proceed` 側の重複呼出は除去)。
+- **R4 (info-disc)** `check-path` が `deps.store` ガード外で全モードに登録され、run/calib でも
+  CWD 配下の存在オラクルになっていた。**採用**: ガード内へ移し Setup モジュール専用化。
+- **R5 (frontend)** `getJson` が `res.ok` を見ず body を parse するため、/api/config の JSON-404
+  (R 系で意図通り返る) で `r.config` undefined → `normalizeCalibPaths` が throw し SetupPage が
+  「connecting…」固着。**採用**: `loadConfig` で `!r.config` を guard し retry へ。
+- **R6 (UX)** 解像度 select 変更時に fps を再 snap せず、非対応の size+fps 組合せを送信可能
+  (pixel_format select は snap 済)。**採用**: pixel_format と同じ snap を解像度変更にも適用。
+- **cleanup**: `clamp01(NaN)` の `width:'NaN%'` を NaN-safe 0% 化、手書き `ends_with` を C++20
+  `std::string::ends_with` へ、exposure_mode の string→enum 重複を `v4l2_capture.hpp` の
+  `parse_exposure_mode` に共有化 (pixfmt は preview=CPU/runtime=HW で意図的に差異があるため統合しない)、
+  `useFlowSwitch` 成功枝の no-op `setPending(true)` 除去。
+
+**見送り** (意図的設計 / 別軸 / 軽微): `compose_and_switch` の engine 必須 (intrinsic/extrinsic でも要求)
+は前回承認済みの意図的設計、subject01/1.70m の seed も意図的 (subject-calib preflight で上書き) ——
+ただしウィザードに subject_id/身長の入力欄が無いのは真の UX ギャップで別トピック候補。daemon の
+blank-config クラッシュ→Run fallback→giveup、bootstrap の CWD 相対パス、`do_validate` が calib-stage
+precheck を通さない偽 OK、`jint` の exponent/範囲、`latest_jpeg` の mutex は本巡もスコープ外。
 
 ## 残課題 (今回スコープ外・cap で落とした confirmed)
 

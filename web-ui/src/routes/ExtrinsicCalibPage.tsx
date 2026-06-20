@@ -20,7 +20,8 @@ import "../styles/calib.css";
 
 const fmt = (n: unknown, d = 2): string =>
   typeof n === "number" && isFinite(n) ? n.toFixed(d) : "-";
-const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+// NaN-safe (before the first velocity sample lin/ang are NaN → render 0%, not "NaN%").
+const clamp01 = (x: number) => (Number.isFinite(x) ? Math.max(0, Math.min(1, x)) : 0);
 
 const BADGE: Record<string, string> = {
   idle: "",

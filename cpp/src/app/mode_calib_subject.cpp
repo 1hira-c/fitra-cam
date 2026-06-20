@@ -16,30 +16,37 @@
 
 namespace fitra::app {
 
-int run_mode_calib_subject(const config::MainOptions& opts, FlowControl& flow) {
+int run_mode_calib_subject(const config::MainOptions& opts_in, FlowControl& flow) {
+    // Subject calibration's recording session + dump_keypoints_3d are two-camera
+    // (cam0,cam1) by design. On a rig with more cameras, calibrate from the first
+    // two — a 2-view bone-length profile is valid for an N-view run — rather than
+    // refusing. Trim a local copy so everything downstream builds exactly two
+    // sources; the extra cameras' calib entries are simply left unused.
+    config::MainOptions opts = opts_in;
+    std::size_t configured = 0;
+    for (const auto& path : opts.cam_paths) {
+        if (!path.empty()) ++configured;
+    }
+    if (configured < 2) {
+        std::fprintf(stderr,
+            "subject calibration needs at least 2 cameras (got %zu)\n", configured);
+        return EXIT_FAILURE;
+    }
+    if (configured > 2) {
+        FITRA_LOG_WARN("calibrate: rig has {} cameras; subject calibration uses "
+                       "cam0+cam1 only (a 2-view bone-length profile is valid for "
+                       "the N-view run)", configured);
+        for (std::size_t i = 2; i < opts.cam_paths.size(); ++i)
+            opts.cam_paths[i].clear();
+    }
+
     // For the headless --calibrate path, prime the live IkSolver with the
     // calibration height up-front. Without this, the IK is unlocked at boot
     // and the 3D angle recognizer would have to wait for ~150 frames of
-    // observational locking before it can judge pose holds. If the user
-    // already passed --subject-height-m we honor that instead.
-    double subject_height_m = opts.subject_height_m;
-    if (subject_height_m <= 0.0
-        && opts.subject_profile.empty() && opts.subject_id.empty()) {
-        subject_height_m = opts.calib_subject_height_m;
-    }
-
-    std::size_t requested_cam_count = 0;
-    for (const auto& path : opts.cam_paths) {
-        if (!path.empty()) ++requested_cam_count;
-    }
-    // The session orchestrator and dump_keypoints_3d both assume cam0/cam1;
-    // refuse 1- or 3-camera runs rather than silently dropping cam2.
-    if (requested_cam_count != 2) {
-        std::fprintf(stderr,
-            "--calibrate currently requires exactly 2 cameras (got %zu)\n",
-            requested_cam_count);
-        return EXIT_FAILURE;
-    }
+    // observational locking before it can judge pose holds.
+    // subject_id/subject_height_m are the single source of truth (the old
+    // calib_subject_height_m fallback collapsed into subject_height_m).
+    const double subject_height_m = opts.subject_height_m;
 
     // Shared "calibration is recording" flag. When true:
     //   - FrameSource skips YOLOX + RTMPose pre-bake and retains BGR
@@ -49,11 +56,12 @@ int run_mode_calib_subject(const config::MainOptions& opts, FlowControl& flow) {
 
     auto trt = make_trt_stack(opts);
     auto cams = make_frame_sources(opts, trt.get(), calib_recording_flag);
+    // After trimming to cam0+cam1 above, we expect two sources; fewer means a
+    // camera failed to open (the two-camera recording session can't proceed).
     const std::size_t n_cams = cams.sources.size();
     if (n_cams != 2) {
         std::fprintf(stderr,
-            "--calibrate currently requires exactly 2 cameras (got %zu)\n",
-            n_cams);
+            "subject calibration needs 2 working cameras (opened %zu)\n", n_cams);
         return EXIT_FAILURE;
     }
 
@@ -157,7 +165,7 @@ int run_mode_calib_subject(const config::MainOptions& opts, FlowControl& flow) {
             ? "profile written. Flow daemon switches to run mode."
             : "profile written. Restart in run mode: ./main --enable-3d"
               " --calib " + opts.calib + " --subject-id "
-              + opts.calib_subject_id + " ...");
+              + opts.subject_id + " ...");
         server->set_tracker_bus(threed.tracker_bus.get());
         server->start();
     }
@@ -165,8 +173,8 @@ int run_mode_calib_subject(const config::MainOptions& opts, FlowControl& flow) {
     // Boot-time auto preflight + start (--calibrate always set in this mode).
     {
         pipeline::CalibPreflight in = calib_defaults;
-        in.subject_id = opts.calib_subject_id;
-        in.subject_height_m = opts.calib_subject_height_m;
+        in.subject_id = opts.subject_id;
+        in.subject_height_m = opts.subject_height_m;
         std::string err;
         if (!calib_session.preflight(in, err)) {
             std::fprintf(stderr, "calibrate preflight failed: %s\n", err.c_str());
@@ -177,7 +185,7 @@ int run_mode_calib_subject(const config::MainOptions& opts, FlowControl& flow) {
             return EXIT_FAILURE;
         }
         FITRA_LOG_INFO("calibration auto-start: subject={} height={} m",
-                       opts.calib_subject_id, opts.calib_subject_height_m);
+                       opts.subject_id, opts.subject_height_m);
     }
 
     run_stats_loop(*driver, opts.log_every_s, flow.stop);

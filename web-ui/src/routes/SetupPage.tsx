@@ -218,6 +218,10 @@ export function SetupPage() {
   const loadConfig = useCallback(async () => {
     try {
       const r = await fetchConfig();
+      // getJson does not gate on res.ok, so an /api/config that 404s mid-respawn
+      // returns an {ok:false} body with no `config`. Guard before deref so the
+      // page retries cleanly instead of throwing inside normalizeCalibPaths.
+      if (!r || !r.config) throw new Error("config unavailable (retrying…)");
       setDraft(normalizeCalibPaths(r.config));
       setNamed(r.named ?? []);
     } catch (e) {
@@ -591,7 +595,21 @@ export function SetupPage() {
                       value={`${draft.cameras.width}x${draft.cameras.height}`}
                       onChange={(e) => {
                         const [w, h] = e.target.value.split("x").map(Number);
-                        setCameras_({ width: w, height: h });
+                        // Snap fps to one the new resolution supports — the prior
+                        // fps may not exist at this size; mirrors the pixel_format
+                        // snap so an unsupported size+fps combo can't be submitted.
+                        const firstAssigned = SLOTS.map((s) => draft.cameras[s])
+                          .filter(Boolean)
+                          .map((bp) => cameras.find((c) => c.by_path === bp))
+                          .find(Boolean);
+                        const fmt = formatFor(firstAssigned, draft.cameras.pixel_format);
+                        const size = fmt?.sizes.find((s) => s.width === w && s.height === h);
+                        const fpsList = (size?.fps ?? []).map((f) => Math.round(f));
+                        const fps =
+                          fpsList.length && !fpsList.includes(draft.cameras.fps)
+                            ? fpsList[0]
+                            : draft.cameras.fps;
+                        setCameras_({ width: w, height: h, fps });
                       }}
                     >
                       {(() => {

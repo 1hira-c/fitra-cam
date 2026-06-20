@@ -64,12 +64,12 @@ std::vector<std::string> module_argv(config::RunMode mode,
             args.push_back("--setup");
             break;
         case config::RunMode::Run:
-            if (profile_exists && !opts.calib_subject_id.empty()) {
+            if (profile_exists && !opts.subject_id.empty()) {
                 args.push_back("--subject-id");
                 // Same sanitize the wizard applied when writing the profile,
                 // so run reads the directory the wizard actually created.
                 args.push_back(pipeline::CalibrationSession::sanitize_id(
-                    opts.calib_subject_id));
+                    opts.subject_id));
             }
             break;
         case config::RunMode::CalibSubject:
@@ -177,13 +177,13 @@ config::RunMode initial_mode(const config::MainOptions& opts,
 }
 
 std::string profile_path(const config::MainOptions& opts) {
-    if (opts.calib_subject_id.empty()) return {};
+    if (opts.subject_id.empty()) return {};
     // The wizard sanitizes the id before writing <subjects_dir>/<id>/..., so
     // the daemon must look at (and pass on) the same sanitized form — an id
     // like "alice.v1" or a non-ASCII name otherwise yields a path the wizard
     // never wrote, and run never gets --subject-id.
     const std::string id =
-        pipeline::CalibrationSession::sanitize_id(opts.calib_subject_id);
+        pipeline::CalibrationSession::sanitize_id(opts.subject_id);
     return (std::filesystem::path{opts.subjects_dir}
             / id / "latest_profile.yaml").string();
 }
@@ -209,7 +209,7 @@ int run_daemon(const config::MainOptions& opts,
     const auto profile_now = [&opts]() {
         // Empty id = no profile stage configured; treat as present so auto
         // initial mode (and run argv synthesis) skips it.
-        if (opts.calib_subject_id.empty()) return true;
+        if (opts.subject_id.empty()) return true;
         // error_code overload: a permission/encoding error must not throw
         // out of a long-running daemon.
         std::error_code ec;

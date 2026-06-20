@@ -36,3 +36,19 @@ extrinsic_calib:
 
 three_d:
     calib: calibrations/extrinsics.yaml
+
+# Subject identity lives here (one place). subject_id + subject_height_m drive
+# BOTH run (which profile to load) and subject calibration (which subject to
+# calibrate). The subject-calib stage runs when subject_id is set AND no profile
+# exists yet under subjects_dir/<id>/ — use a fresh id to (re)calibrate, or
+# delete that profile. Leave subject_id empty to skip subject calibration.
+#subject:
+#    subject_id: subject01
+#    subject_height_m: 1.70
+# Optional subject-calibration process tuning (parallels intrinsic_calib /
+# extrinsic_calib). No subject id/height here — those live in `subject:` above.
+#subject_calib:
+#    frames_per_cam: 75
+#    hold_sec: 1.5
+#    auto_approve: false
+#    auto_exit: false

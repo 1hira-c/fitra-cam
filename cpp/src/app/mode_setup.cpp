@@ -46,6 +46,12 @@ config::RunMode derive_next_mode(const config::MainOptions& d) {
 bool compose_and_switch(config::SetupConfigStore& store, FlowControl& flow,
                         config::RunMode next, std::string& next_mode,
                         std::string& err) {
+    // Range/enum sanity on the live draft. do_proceed used to run this on its
+    // own, but an explicit WizardSteps jump (do_switch) reaches here too — so
+    // gate both paths here, else a draft with an out-of-range value (bad port,
+    // det_score, ...) would be written and only rejected when the spawned child
+    // hits validate_options, dropping the daemon back to run.
+    if (!store.validate_draft(err)) return false;
     config::MainOptions d = store.draft();
     // Leaving setup commits to the whole auto-chain: the spawned children re-read
     // this union config and the browser can no longer edit it. So when entering
@@ -53,10 +59,10 @@ bool compose_and_switch(config::SetupConfigStore& store, FlowControl& flow,
     // cameras + inference engines the terminal stages (run, subject-calib) need,
     // and seed a subject id/height. Without the engines a later run/subject child
     // dies on missing --det-engine/--pose-engine with no way to fix it from the
-    // UI; without a subject id the extrinsic stage keys on an empty
-    // calib_subject_id and routes straight to run, silently skipping subject
-    // calibration (mode_calib_extrinsic.cpp's has_subject_stage). The relaxed
-    // validate_draft alone would let such a half-config through.
+    // UI; without a subject id the extrinsic stage keys on an empty subject_id
+    // and routes straight to run, silently skipping subject calibration
+    // (mode_calib_extrinsic.cpp's has_subject_stage). The relaxed validate_draft
+    // alone would let such a half-config through.
     if (next != config::RunMode::Setup) {
         if (d.cam_paths[0].empty()) {
             err = "configure at least cam0 before proceeding";
@@ -67,13 +73,15 @@ bool compose_and_switch(config::SetupConfigStore& store, FlowControl& flow,
                   "(subject calibration and run require them)";
             return false;
         }
+        // Seed the canonical subject.* fields (the loader bridges them to
+        // calib_subject_* when the child re-reads the config).
         bool seeded = false;
-        if (d.calib_subject_id.empty()) {
-            d.calib_subject_id = kDefaultSubjectId;
+        if (d.subject_id.empty()) {
+            d.subject_id = kDefaultSubjectId;
             seeded = true;
         }
-        if (d.calib_subject_height_m <= 0.0) {
-            d.calib_subject_height_m = kDefaultSubjectHeightM;
+        if (d.subject_height_m <= 0.0) {
+            d.subject_height_m = kDefaultSubjectHeightM;
             seeded = true;
         }
         if (seeded) store.set_draft(d);
@@ -94,7 +102,6 @@ bool compose_and_switch(config::SetupConfigStore& store, FlowControl& flow,
 // Auto-proceed: derive the next stage from artifacts and hand off.
 bool do_proceed(config::SetupConfigStore& store, FlowControl& flow,
                 std::string& next_mode, std::string& err) {
-    if (!store.validate_draft(err)) return false;
     const config::MainOptions d = store.draft();
     const config::RunMode next = derive_next_mode(d);
     if (next == config::RunMode::Setup) {
@@ -112,6 +119,16 @@ bool do_switch(config::SetupConfigStore& store, FlowControl& flow,
     if (!config::parse_run_mode_name(mode_name, next)) {
         err = "unknown mode: " + mode_name;
         return false;
+    }
+    // The wizard's single "extrinsic" step is method-agnostic; honor the
+    // configured extrinsic_calib.method so a floor rig lands in the floor variant
+    // (matching the auto-chain's initial_mode pick) instead of spawning the
+    // controller stage, which would fail its precheck on a floor config.
+    if (next == config::RunMode::CalibExtrinsic ||
+        next == config::RunMode::CalibExtrinsicFloor) {
+        next = store.draft().excal_method == "floor"
+                   ? config::RunMode::CalibExtrinsicFloor
+                   : config::RunMode::CalibExtrinsic;
     }
     std::string next_mode;
     return compose_and_switch(store, flow, next, next_mode, err);
