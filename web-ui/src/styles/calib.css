@@ -1,0 +1,161 @@
+/* Ported from legacy web/{intrinsic,extrinsic}_calibration/styles.css, scoped
+   under .calib-page so it never bleeds into other pages. Shared by
+   IntrinsicCalibPage and ExtrinsicCalibPage. */
+
+.calib-page {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+               "Noto Sans CJK JP", "Yu Gothic", sans-serif;
+  background: #0e1116;
+  color: #e6e6e6;
+  min-height: 100vh;
+}
+.calib-page header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5em 1em;
+  background: #181e26;
+  border-bottom: 1px solid #2a323d;
+}
+.calib-page header h1 { margin: 0; font-size: 1.1em; }
+.calib-page .conn-group { display: flex; gap: 0.5em; }
+.calib-page .conn {
+  font-size: 0.85em;
+  padding: 0.15em 0.6em;
+  background: #2a323d;
+  border-radius: 0.25em;
+  color: #e6e6e6;
+  text-decoration: none;
+}
+.calib-page .conn.link { background: #2d4762; }
+.calib-page main {
+  padding: 1em;
+  display: flex;
+  flex-direction: column;
+  gap: 1em;
+  max-width: 880px;
+}
+.calib-page .card {
+  background: #181e26;
+  border: 1px solid #2a323d;
+  border-radius: 0.4em;
+  padding: 1em;
+}
+.calib-page .card h2 { margin: 0 0 0.4em 0; font-size: 1em; color: #6cf; }
+.calib-page .card p { margin: 0.2em 0 0.6em 0; font-size: 0.85em; color: #aab2bc; line-height: 1.5; }
+.calib-page .hint { font-size: 0.8em; color: #788; font-weight: normal; }
+
+.calib-page .actions { margin-top: 0.7em; display: flex; gap: 0.5em; align-items: center; flex-wrap: wrap; }
+.calib-page .actions button {
+  padding: 0.4em 0.9em;
+  background: #2d4762;
+  color: #fff;
+  border: 1px solid #3b5e85;
+  border-radius: 0.3em;
+  cursor: pointer;
+}
+.calib-page .actions button:hover:not(:disabled) { background: #3b5e85; }
+.calib-page .actions button:disabled { background: #2a323d; color: #777; cursor: not-allowed; border-color: #2a323d; }
+/* Active method in the method selector (the disabled current-method button). */
+.calib-page .actions button.active { background: #1f7a4d; border-color: #2fae6f; color: #fff; }
+.calib-page .actions button.active:disabled { background: #1f7a4d; color: #cfe; border-color: #2fae6f; }
+
+.calib-page .msg { margin-top: 0.5em; font-size: 0.85em; color: #ffa; min-height: 1.1em; }
+.calib-page .msg.err { color: #f88; }
+.calib-page .status-line { font-size: 0.85em; color: #aab2bc; margin-top: 0.4em; }
+
+.calib-page .badge {
+  padding: 0.05em 0.5em;
+  border-radius: 0.3em;
+  background: #2a323d;
+  font-weight: bold;
+}
+.calib-page .badge.ok   { background: #234; color: #6cf; }
+.calib-page .badge.warn { background: #642; color: #fc8; }
+.calib-page .badge.pass { background: #163; color: #afa; }
+.calib-page .badge.fail { background: #511; color: #f88; }
+
+/* Glanceable capture gate */
+.calib-page .gate {
+  font-size: 1.6em;
+  font-weight: bold;
+  text-align: center;
+  padding: 0.5em;
+  border-radius: 0.4em;
+  background: #2a323d;
+  color: #aab2bc;
+  margin-bottom: 0.6em;
+}
+.calib-page .gate.idle   { background: #2a323d; color: #889; }
+.calib-page .gate.good   { background: #163; color: #afa; }
+.calib-page .gate.moving { background: #642; color: #fc8; }
+
+.calib-page .bar {
+  height: 0.6em;
+  background: #0e1116;
+  border: 1px solid #2a323d;
+  border-radius: 0.3em;
+  overflow: hidden;
+  margin: 0.2em 0 0.1em 0;
+}
+.calib-page .bar-fill { height: 100%; transition: width 0.1s linear; background: linear-gradient(90deg, #6cf, #6f6); }
+.calib-page .bar-fill.over { background: linear-gradient(90deg, #fa6, #f55); }
+.calib-page .bar-label { font-size: 0.8em; color: #aab2bc; }
+
+/* Coverage matrix */
+.calib-page .matrix { border-collapse: collapse; font-size: 0.85em; margin-bottom: 0.4em; }
+.calib-page .matrix th, .calib-page .matrix td {
+  border: 1px solid #2a323d;
+  padding: 0.3em 0.7em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.calib-page .matrix th { color: #aab2bc; background: #0e1116; }
+.calib-page .matrix td.muted { color: #788; }
+.calib-page .cell { display: inline-block; min-width: 1.4em; }
+.calib-page .cell.empty { background: #511; color: #f88; }
+.calib-page .cell.low   { background: #642; color: #fc8; }
+.calib-page .cell.ok    { background: #163; color: #afa; }
+
+/* Result / per-camera table */
+.calib-page .result { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+.calib-page .result th, .calib-page .result td {
+  padding: 0.25em 0.5em;
+  border-bottom: 1px solid #2a323d;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.calib-page .result th:first-child, .calib-page .result td:first-child { text-align: left; }
+.calib-page .result th { color: #aab2bc; }
+
+/* Live detections table */
+.calib-page .detections { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+.calib-page .detections th, .calib-page .detections td {
+  padding: 0.25em 0.5em;
+  border-bottom: 1px solid #2a323d;
+  text-align: left;
+}
+.calib-page .detections th { color: #aab2bc; }
+.calib-page .detections td.muted, .calib-page .matrix td.muted, .calib-page .muted { color: #788; }
+.calib-page .ok-txt { color: #afa; }
+.calib-page .bad-txt { color: #f88; }
+.calib-page .tag {
+  display: inline-block;
+  padding: 0.05em 0.4em;
+  border-radius: 0.25em;
+  font-variant-numeric: tabular-nums;
+  margin-right: 0.1em;
+}
+.calib-page .tag.ok { background: #163; color: #afa; }
+.calib-page .tag.bad { background: #511; color: #f88; }
+
+.calib-page .log {
+  background: #0e1116;
+  border: 1px solid #2a323d;
+  border-radius: 0.3em;
+  padding: 0.5em;
+  font-size: 0.78em;
+  max-height: 16em;
+  overflow: auto;
+  white-space: pre-wrap;
+}

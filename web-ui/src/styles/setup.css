@@ -1,0 +1,134 @@
+/* First-run setup page. Every selector prefixed .setup-page so it never bleeds
+   into other pages. Palette matches subject-calib / calib. */
+
+.setup-page {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+               "Noto Sans CJK JP", "Yu Gothic", sans-serif;
+  background: #0e1116;
+  color: #e6e6e6;
+  min-height: 100vh;
+}
+.setup-page header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5em 1em;
+  background: #181e26;
+  border-bottom: 1px solid #2a323d;
+}
+.setup-page header h1 { margin: 0; font-size: 1.1em; }
+.setup-page .conn-group { display: flex; gap: 0.5em; }
+.setup-page .conn {
+  font-size: 0.85em;
+  padding: 0.15em 0.6em;
+  background: #2a323d;
+  border-radius: 0.25em;
+  color: #e6e6e6;
+  text-decoration: none;
+}
+.setup-page .conn.link { background: #2d4762; }
+.setup-page main {
+  padding: 1em;
+  display: flex;
+  flex-direction: column;
+  gap: 1em;
+  max-width: 980px;
+}
+.setup-page .card {
+  background: #181e26;
+  border: 1px solid #2a323d;
+  border-radius: 0.4em;
+  padding: 1em;
+}
+.setup-page .card h2 { margin: 0 0 0.4em 0; font-size: 1em; color: #6cf; }
+.setup-page .card h3 { margin: 0.6em 0 0.3em 0; font-size: 0.9em; color: #ccc; }
+.setup-page .card p { margin: 0.2em 0 0.6em 0; font-size: 0.85em; color: #aab2bc; line-height: 1.5; }
+.setup-page .hint { font-size: 0.8em; color: #788; font-weight: normal; }
+
+.setup-page .actions { margin-top: 0.7em; display: flex; gap: 0.5em; align-items: center; flex-wrap: wrap; }
+.setup-page button {
+  padding: 0.4em 0.9em;
+  background: #2d4762;
+  color: #fff;
+  border: 1px solid #3b5e85;
+  border-radius: 0.3em;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85em;
+}
+.setup-page button:hover:not(:disabled) { background: #3b5e85; }
+.setup-page button:disabled { background: #2a323d; color: #777; cursor: not-allowed; border-color: #2a323d; }
+.setup-page button.primary { background: #1f7a4d; border-color: #2fae6f; }
+.setup-page button.primary:hover:not(:disabled) { background: #2fae6f; }
+
+.setup-page label {
+  display: inline-flex;
+  flex-direction: column;
+  font-size: 0.8em;
+  color: #aab2bc;
+  gap: 0.2em;
+}
+.setup-page label.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4em;
+  user-select: none;
+}
+.setup-page input[type="text"],
+.setup-page input[type="number"],
+.setup-page select {
+  padding: 0.3em 0.5em;
+  background: #0e1116;
+  color: #e6e6e6;
+  border: 1px solid #2a323d;
+  border-radius: 0.25em;
+  font: inherit;
+  font-size: 0.85em;
+}
+.setup-page input[type="text"] { min-width: 16em; }
+.setup-page .form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12em, 1fr));
+  gap: 0.7em 1em;
+  align-items: end;
+}
+.setup-page .row { display: flex; gap: 0.7em; flex-wrap: wrap; align-items: end; }
+
+.setup-page .msg { margin-top: 0.5em; font-size: 0.85em; color: #ffa; min-height: 1.1em; }
+.setup-page .msg.err { color: #f88; }
+.setup-page .status-line { font-size: 0.85em; color: #aab2bc; margin-top: 0.4em; }
+
+/* Camera enumeration table */
+.setup-page .cam-table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+.setup-page .cam-table th, .setup-page .cam-table td {
+  padding: 0.35em 0.5em;
+  border-bottom: 1px solid #2a323d;
+  text-align: left;
+  vertical-align: top;
+}
+.setup-page .cam-table th { color: #aab2bc; }
+.setup-page .cam-table td.muted, .setup-page .muted { color: #788; }
+.setup-page .cam-table code {
+  font-size: 0.95em;
+  color: #cdd;
+  word-break: break-all;
+}
+.setup-page .slot-buttons { display: flex; gap: 0.3em; }
+.setup-page .slot-buttons button { padding: 0.2em 0.55em; }
+.setup-page .slot-buttons button.assigned { background: #1f7a4d; border-color: #2fae6f; }
+
+.setup-page .preview-wrap {
+  margin-top: 0.4em;
+  border: 1px solid #2a323d;
+  border-radius: 0.3em;
+  padding: 0.3em;
+  background: #0e1116;
+  display: inline-block;
+}
+.setup-page .preview-wrap img {
+  display: block;
+  max-width: 100%;
+  width: 320px;
+  height: auto;
+  background: #000;
+}

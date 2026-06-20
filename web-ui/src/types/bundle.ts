@@ -209,3 +209,227 @@ export interface CorrectionsResponse {
   roles?: CorrectionRole[];
   preview_no_reset?: boolean;
 }
+
+// ---- Intrinsic calibration (/api/incal/*) ----------------------------------
+
+export interface IncalCamera {
+  cam: number;
+  views: number;
+  coverage: number; // 0..1
+  rms_px: number;
+  solved: boolean;
+}
+
+export interface IncalState {
+  method?: "intrinsic";
+  state: "idle" | "collecting" | "solving" | "solved" | "failed";
+  model?: string;
+  num_cams?: number;
+  min_views?: number;
+  min_corners?: number;
+  cameras?: IncalCamera[];
+  error?: string;
+}
+
+export interface CalibActionResponse {
+  ok?: boolean;
+  err?: string;
+  state?: string;
+  samples?: number;
+  next_step?: string;
+}
+
+// ---- Extrinsic calibration (/api/excal/*) ----------------------------------
+
+export type ExcalMethod = "controller" | "floor";
+
+/** A detected face (controller method) or tag (floor method) within a frame. */
+export interface ExcalFaceDetection {
+  id: number;
+  reproj: number;
+  ok: boolean;
+}
+
+export interface ExcalDetection {
+  cam: number;
+  /** controller method only */
+  ctrl_ok?: boolean;
+  /** controller method */
+  faces?: ExcalFaceDetection[];
+  /** floor method */
+  tags?: ExcalFaceDetection[];
+  age_ms: number;
+}
+
+export interface ExcalCoverage {
+  cam: number;
+  /** controller method */
+  face?: number;
+  /** floor method */
+  tag?: number;
+  count: number;
+}
+
+export interface ExcalGate {
+  lin_max?: number;
+  ang_max?: number;
+}
+
+/** Per-camera solve result. Fields differ by method. */
+export interface ExcalResultCamera {
+  cam: number;
+  // controller
+  n_faces?: number;
+  n_samples?: number;
+  face_spread_trans_m?: number;
+  face_spread_rot_deg?: number;
+  // floor
+  n_tags?: number;
+  reproj_rms_px?: number;
+  planar_degenerate?: boolean;
+  plane_thickness_m?: number;
+}
+
+export interface ExcalState {
+  method?: ExcalMethod;
+  state: string;
+  samples?: number;
+  /** controller method */
+  min_samples?: number;
+  /** floor method */
+  burst_min?: number;
+  num_cams?: number;
+  // controller-only motion gate
+  lin_vel_mps?: number;
+  ang_vel_dps?: number;
+  gate?: ExcalGate;
+  gate_reason?: string;
+  /** controller method face ids */
+  faces?: number[];
+  /** floor method tag ids */
+  tags?: number[];
+  detections?: ExcalDetection[];
+  coverage?: ExcalCoverage[];
+  cameras?: ExcalResultCamera[];
+  error?: string;
+}
+
+// ---- Setup (/api/cameras*, /api/config*, /api/setup/*) ---------------------
+
+export interface CameraFormatSize {
+  width: number;
+  height: number;
+  fps: number[];
+}
+
+export interface CameraFormat {
+  fourcc: string;
+  description: string;
+  sizes: CameraFormatSize[];
+}
+
+export interface DetectedCamera {
+  by_path: string;
+  dev_node: string;
+  card: string;
+  driver: string;
+  formats: CameraFormat[];
+}
+
+export interface CamerasResponse {
+  cameras: DetectedCamera[];
+}
+
+export interface ConfigCameras {
+  cam0: string;
+  cam1: string;
+  cam2: string;
+  width: number;
+  height: number;
+  fps: number;
+  pixel_format: string;
+  n_buffers: number;
+}
+
+export interface ConfigInference {
+  det_engine: string;
+  pose_engine: string;
+  keypoint_format: KpFormat;
+  det_frequency: number;
+  det_score: number;
+  multi_person: boolean;
+}
+
+export interface ConfigWeb {
+  host: string;
+  port: number;
+}
+
+export interface ConfigThreeD {
+  enable_3d: boolean;
+  calib: string;
+}
+
+export interface ConfigVmt {
+  vmt_out: boolean;
+  host: string;
+  port: number;
+  hmd_listen_enabled: boolean;
+}
+
+export interface ConfigSlimevr {
+  slimevr_out: boolean;
+  host: string;
+  port: number;
+}
+
+export interface ConfigIntrinsicCalib {
+  enabled: boolean;
+}
+
+export interface ConfigExtrinsicCalib {
+  method: string;
+  out: string;
+}
+
+export interface ConfigDraft {
+  cameras: ConfigCameras;
+  inference: ConfigInference;
+  web: ConfigWeb;
+  three_d: ConfigThreeD;
+  vmt: ConfigVmt;
+  slimevr: ConfigSlimevr;
+  intrinsic_calib: ConfigIntrinsicCalib;
+  extrinsic_calib: ConfigExtrinsicCalib;
+}
+
+export interface ConfigResponse {
+  config: ConfigDraft;
+  named: string[];
+}
+
+export interface ConfigListResponse {
+  named: string[];
+}
+
+export interface ConfigOkResponse {
+  ok?: boolean;
+  err?: string;
+}
+
+export interface ConfigLoadResponse {
+  ok?: boolean;
+  err?: string;
+  config?: ConfigDraft;
+}
+
+export interface SetupProceedResponse {
+  ok?: boolean;
+  next?: string;
+  err?: string;
+}
+
+export interface CameraPreviewResponse {
+  ok?: boolean;
+  err?: string;
+}
