@@ -1122,6 +1122,44 @@ void test_setup_store_refuses_example_path() {
     }
 }
 
+void test_subject_calib_id_bridge() {
+    // subject.* alone fills calib_subject_* (the canonical, single-place path).
+    auto p = write_tmp("bridge_subject.yaml", R"(schema: fitra_main_config_v1
+subject:
+  subject_id: subjectX
+  subject_height_m: 1.66
+)");
+    MainOptions a;
+    load_main_config(p.string(), a);
+    check(a.calib_subject_id == "subjectX", "subject_id bridges to calib_subject_id");
+    check(std::abs(a.calib_subject_height_m - 1.66) < 1e-6,
+          "subject_height_m bridges to calib_subject_height_m");
+
+    // calibration.* alone fills subject_* (legacy configs keep working).
+    auto q = write_tmp("bridge_calib.yaml", R"(schema: fitra_main_config_v1
+calibration:
+  calib_subject_id: subjectY
+  calib_subject_height_m: 1.80
+)");
+    MainOptions b;
+    load_main_config(q.string(), b);
+    check(b.subject_id == "subjectY", "calib_subject_id bridges to subject_id");
+    check(std::abs(b.subject_height_m - 1.80) < 1e-6,
+          "calib_subject_height_m bridges to subject_height_m");
+
+    // Both present and distinct → preserved (the rare calibrate-A / run-B case).
+    auto r = write_tmp("bridge_both.yaml", R"(schema: fitra_main_config_v1
+subject:
+  subject_id: runSubj
+calibration:
+  calib_subject_id: calibSubj
+)");
+    MainOptions c;
+    load_main_config(r.string(), c);
+    check(c.subject_id == "runSubj" && c.calib_subject_id == "calibSubj",
+          "distinct subject/calib ids are preserved");
+}
+
 struct TestCase {
     const char* name;
     void (*fn)();
@@ -1152,6 +1190,7 @@ const TestCase kTests[] = {
     {"absolutize_paths",                       test_absolutize_paths},
     {"validate_rejects_duplicate_cameras",     test_validate_rejects_duplicate_cameras},
     {"setup_store_refuses_example_path",       test_setup_store_refuses_example_path},
+    {"subject_calib_id_bridge",                test_subject_calib_id_bridge},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},

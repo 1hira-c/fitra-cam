@@ -67,13 +67,15 @@ bool compose_and_switch(config::SetupConfigStore& store, FlowControl& flow,
                   "(subject calibration and run require them)";
             return false;
         }
+        // Seed the canonical subject.* fields (the loader bridges them to
+        // calib_subject_* when the child re-reads the config).
         bool seeded = false;
-        if (d.calib_subject_id.empty()) {
-            d.calib_subject_id = kDefaultSubjectId;
+        if (d.subject_id.empty()) {
+            d.subject_id = kDefaultSubjectId;
             seeded = true;
         }
-        if (d.calib_subject_height_m <= 0.0) {
-            d.calib_subject_height_m = kDefaultSubjectHeightM;
+        if (d.subject_height_m <= 0.0) {
+            d.subject_height_m = kDefaultSubjectHeightM;
             seeded = true;
         }
         if (seeded) store.set_draft(d);

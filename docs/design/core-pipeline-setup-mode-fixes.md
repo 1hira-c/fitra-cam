@@ -85,6 +85,15 @@
 - **E2** `applyPreview` が成功/失敗を問わず `appliedPreviewKey` を更新 (失敗設定の連打再 POST を停止)。
 - **E3** アンマウント cleanup を state でなく `previewDevice` ref から読む。
 - **E4** pixel_format 変更時に新 format の有効解像度へ snap。
+- **subject identity の一元化 (レビュー後の追加修正)**: `subject.subject_id`/`subject_height_m`(run 用)と
+  `calibration.calib_subject_id`/`calib_subject_height_m`(校正用)が**別物なのに重複**し、自然な
+  `subject:` 配下に書いても subject 校正が走らないという罠があった (daemon フローでは同一被験者なのに
+  二重定義)。ローダーで**双方向ブリッジ**(片側が空なら他方から補完、両方あれば保持)を追加し、
+  `subject.subject_id`(+ `subject_height_m`)を**1か所**設定すれば run/校正の両方を駆動するようにした。
+  emit は重複回避(`calib_subject_*` は `subject.*` と相違する稀な場合のみ出力)。`calibration:` ブロックは
+  プロセス調整 (frames_per_cam 等) 専用の任意ブロックに格下げ。schema 非破壊・旧 config 互換
+  (`calib_subject_*` も引き続き有効)。ウィザードの seed も `subject.*` を埋めるよう変更。
+  validate の不足エラーは `subject.subject_id` を案内するよう改善。
 
 ## Milestone
 

@@ -381,6 +381,18 @@ void load_main_config(const std::string& path, MainOptions& out) {
     if (root["vmt"])         load_vmt       (root["vmt"],         out);
     if (root["extrinsic_calib"]) load_extrinsic_calib(root["extrinsic_calib"], out);
     if (root["intrinsic_calib"]) load_intrinsic_calib(root["intrinsic_calib"], out);
+
+    // Subject identity lives canonically in the `subject` block. The subject-calib
+    // stage and the daemon's run --subject-id synthesis read calib_subject_id /
+    // calib_subject_height_m, so bridge the two when only one side is set: setting
+    // `subject.subject_id` (+ subject_height_m) once drives both run and
+    // calibration, and the `calibration:` block is needed only for process knobs.
+    // The legacy `calibration.calib_subject_*` keys still work and win when both
+    // sides are present (the rare calibrate-A / run-B case).
+    if (out.calib_subject_id.empty())      out.calib_subject_id = out.subject_id;
+    else if (out.subject_id.empty())       out.subject_id = out.calib_subject_id;
+    if (out.calib_subject_height_m <= 0.0) out.calib_subject_height_m = out.subject_height_m;
+    else if (out.subject_height_m <= 0.0)  out.subject_height_m = out.calib_subject_height_m;
 }
 
 std::string emit_main_config(const MainOptions& o) {
@@ -459,11 +471,16 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.subject_height_m != d.subject_height_m) e << YAML::Key << "subject_height_m" << YAML::Value << o.subject_height_m;
     e << YAML::EndMap;
 
-    // calibration — persistent subject-calib knobs. NB: never emit `calibrate`
-    // (run-mode-deriving: run_mode() derives RunMode::CalibSubject from it).
+    // calibration — process knobs only. NB: never emit `calibrate` (run-mode-
+    // deriving: run_mode() derives RunMode::CalibSubject from it). Subject id +
+    // height live canonically in the `subject` block (the loader bridges them to
+    // calib_subject_*); only emit calib_subject_* when they DIVERGE from subject,
+    // so a config never carries the same identity twice.
     e << YAML::Key << "calibration" << YAML::Value << YAML::BeginMap;
-    if (!o.calib_subject_id.empty())                       e << YAML::Key << "calib_subject_id"       << YAML::Value << o.calib_subject_id;
-    if (o.calib_subject_height_m != d.calib_subject_height_m) e << YAML::Key << "calib_subject_height_m" << YAML::Value << o.calib_subject_height_m;
+    if (!o.calib_subject_id.empty() && o.calib_subject_id != o.subject_id)
+        e << YAML::Key << "calib_subject_id" << YAML::Value << o.calib_subject_id;
+    if (o.calib_subject_height_m > 0.0 && o.calib_subject_height_m != o.subject_height_m)
+        e << YAML::Key << "calib_subject_height_m" << YAML::Value << o.calib_subject_height_m;
     if (o.calib_frames_per_cam != d.calib_frames_per_cam)  e << YAML::Key << "calib_frames_per_cam"   << YAML::Value << o.calib_frames_per_cam;
     if (o.calib_hold_sec != d.calib_hold_sec)              e << YAML::Key << "calib_hold_sec"         << YAML::Value << o.calib_hold_sec;
     if (o.calib_auto_approve != d.calib_auto_approve)      e << YAML::Key << "calib_auto_approve"     << YAML::Value << o.calib_auto_approve;
@@ -1057,7 +1074,9 @@ void validate_options(const MainOptions& opts) {
     }
     if (opts.calibrate
         && (opts.calib_subject_id.empty() || opts.calib_subject_height_m <= 0.0)) {
-        fail("--calibrate requires --calib-subject-id and --calib-subject-height-m");
+        fail("subject calibration needs a subject id + height — set "
+             "subject.subject_id and subject.subject_height_m in the config "
+             "(or --calib-subject-id / --calib-subject-height-m)");
     }
     if (mode == RunMode::CalibExtrinsic) {
         // Dedicated mode — mutually exclusive with the subject wizard.
