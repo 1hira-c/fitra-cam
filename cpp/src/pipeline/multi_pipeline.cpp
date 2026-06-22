@@ -307,11 +307,23 @@ void MultiCameraDriver::loop() {
         // Standby throttle: cap the central loop at idle_tick_hz so we stop
         // spinning on every decoded frame. Cameras + per-camera decode keep
         // running (latest-frame-wins drops the backlog); only this loop sleeps.
+        // Split the sleep into short slices so a resume (idle flag cleared) or
+        // stop is observed within ~10ms — a single sleep_for(1/tick_hz) would
+        // pin the central loop idle for up to 0.5s (or longer at a low
+        // idle_tick_hz), breaking the "<100ms / next frame" resume contract.
         if (idle) {
             const double hz = idle_tick_hz_ > 0.1 ? idle_tick_hz_ : 0.1;
-            std::this_thread::sleep_for(
+            const auto deadline = std::chrono::steady_clock::now() +
                 std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                    std::chrono::duration<double>(1.0 / hz)));
+                    std::chrono::duration<double>(1.0 / hz));
+            const auto slice = std::chrono::milliseconds(10);
+            while (!stop_.load()
+                   && idle_flag_ && idle_flag_->load(std::memory_order_relaxed)) {
+                auto now = std::chrono::steady_clock::now();
+                if (now >= deadline) break;
+                std::this_thread::sleep_for(std::min<std::chrono::steady_clock::duration>(
+                    slice, deadline - now));
+            }
         }
     }
 }
@@ -519,7 +531,11 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         Skeleton3DSnapshot snap;
         snap.ts = std::chrono::system_clock::now();
         snap.stats.enabled = true;
-        snap.stats.ik_locked = ik_.locked();
+        // ik_locked=false (even when the subject is calibrated) so both the VMT
+        // and SlimeVR publishers' `!ik_locked` gate skips this frame: otherwise
+        // VMT's degeneracy "hold" mode would keep re-sending the frozen pose for
+        // the whole idle period instead of dropping it.
+        snap.stats.ik_locked = false;
         snap.stats.subject_height_m = threed_.subject_height_m;
         snap.stats.profile_loaded = ik_.profile_loaded();
         snap.stats.subject_id = ik_.subject_id();

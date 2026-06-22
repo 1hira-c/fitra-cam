@@ -173,6 +173,10 @@ intrinsic は 1280 校正→`scale_intrinsics` 640。設計: `docs/design/core-p
   入れない)。status に `vr_observable` を出して理由を可視化。
 - 検証: `tools/test_idle_evaluator` (ヒステリシス / 観測可否 / 安全既定の純ロジック)、ctest 全通過。
   実機の GPU%/復帰挙動は別途確認。WebUI バッジ表示・手動 wake・decode 間引きは残課題。
+- **レビュー反映** (Codex review): idle マーカーを `ik_locked=false` で発行 (VMT hold で凍結 pose を
+  送り続けない)、復帰初フレームで強制再検出 (stale bbox ゴースト回避)、driver スロットルを分割 sleep に
+  (復帰 <100ms 死守)、VR 観測可否は receiver 実起動 (`relay.receiver`) で判定 (bind 失敗時の誤 idle 回避)、
+  `--bench-fake-bbox` で idle 暗黙無効化 (ベンチ測定の保護)。
 → [design/core-pipeline-idle-standby.md](../design/core-pipeline-idle-standby.md)
 
 ### 2026-06-18 — WebUI/VMT 未接続時の待機 (idle) モード仕様起票 (仕様のみ)

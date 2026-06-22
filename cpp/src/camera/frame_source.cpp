@@ -182,6 +182,7 @@ void FrameSource::decode_loop() {
     // (glibc mmap path), mirroring the capture-thread cap fixed in
     // v4l2_capture.cpp -- it would otherwise cap the decode thread at ~53fps.
     Frame raw;
+    bool was_idle = false;   // idle/standby edge tracker (force re-detect on resume)
     while (!stop_.load()) {
         // Event-driven: block until the capture worker publishes a new frame
         // (or stop_ is set, or the 100ms safety timeout fires). Replaces the
@@ -199,6 +200,12 @@ void FrameSource::decode_loop() {
         const bool idle =
             opts_.idle_flag
             && opts_.idle_flag->load(std::memory_order_relaxed);
+        // On resume (idle->active) the cached bbox is stale (the subject may
+        // have moved/left while detection was paused). Force a fresh YOLOX
+        // detection on the first active frame so RTMPose never runs on a stale
+        // crop (ghost pose) and we don't wait out the det_frequency schedule.
+        const bool just_resumed = was_idle && !idle;
+        was_idle = idle;
 
         // Guard the HW NVJPEG decoder against malformed frames (it segfaults on
         // them; the CPU cv::imdecode path tolerates them on its own). Drop the
@@ -341,7 +348,7 @@ void FrameSource::decode_loop() {
             // don't all land on the same frame and stall the shared GPU. The
             // det_frequency <= 0 short-circuit guards the modulo against a
             // zero/negative frequency (config bug) -> detect every frame.
-            bool do_detect = (opts_.det_frequency <= 0) ||
+            bool do_detect = just_resumed || (opts_.det_frequency <= 0) ||
                 ((frame_idx_ % opts_.det_frequency) == (opts_.det_phase % opts_.det_frequency));
             if (do_detect) {
                 // GPU YOLOX: the preprocess kernel fills the engine input from
