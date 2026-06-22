@@ -20,6 +20,7 @@
 #include <string>
 #include <thread>
 
+#include "app/idle_state.hpp"   // header-only consumer-presence state (idle mode)
 #include "pipeline/calibration_session.hpp"
 #include "pipeline/snapshot.hpp"
 
@@ -187,6 +188,15 @@ public:
     // cleared before destruction).
     void set_continuous_aligner(vmt::ContinuousAligner* aligner);
 
+    // Attach the idle/standby shared state (issue #37). The /ws + /ws3d
+    // onopen/onclose handlers then maintain its ws_client_count, and /stats3d,
+    // the /ws3d bundle, and /api/state expose an `idle` status object. `enabled`
+    // / `enter_after_s` / `tick_hz` are config echoes for the status surface.
+    // Caller retains ownership (the IdleState must outlive the server). Never
+    // attached in calib modes.
+    void set_idle_state(app::IdleState* state, bool enabled,
+                        double enter_after_s, double tick_hz);
+
     // Start listening + broadcasting on a background thread. Returns when
     // the server is bound and ready (best-effort; Crow's run() blocks).
     void start();
@@ -227,6 +237,10 @@ private:
     vmt::HmdPoseBus*               hmd_pose_bus_    = nullptr;
     vmt::ControllerPoseBus*        excal_controller_pose_bus_ = nullptr;
     vmt::ContinuousAligner*        continuous_aligner_ = nullptr;
+    app::IdleState*                idle_state_      = nullptr;
+    bool                           idle_enabled_      = false;
+    double                         idle_enter_after_s_ = 10.0;
+    double                         idle_tick_hz_       = 2.0;
     double                         hmd_stale_ms_    = 200.0;
     double                         excal_controller_stale_ms_ = 200.0;
     std::string                    excal_controller_role_ = "right";

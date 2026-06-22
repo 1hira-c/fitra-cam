@@ -114,6 +114,21 @@ void load_web(const YAML::Node& section, MainOptions& out) {
     if (section["no_web"]) out.no_web     = parse_scalar<bool>(section["no_web"],        "web.no_web");
 }
 
+void load_idle(const YAML::Node& section, MainOptions& out) {
+    ensure_map(section, "idle");
+    static const std::set<std::string> allowed{
+        "no_idle", "enter_after_s", "tick_hz",
+    };
+    check_keys(section, allowed, "idle");
+    // YAML uses the CLI-flag-equivalent negated name (no_idle); flip into the
+    // positive runtime predicate idle_enabled.
+    if (section["no_idle"]) {
+        out.idle_enabled = !parse_scalar<bool>(section["no_idle"], "idle.no_idle");
+    }
+    if (section["enter_after_s"]) out.idle_enter_after_s = parse_scalar<double>(section["enter_after_s"], "idle.enter_after_s");
+    if (section["tick_hz"])       out.idle_tick_hz       = parse_scalar<double>(section["tick_hz"],       "idle.tick_hz");
+}
+
 void load_three_d(const YAML::Node& section, MainOptions& out) {
     ensure_map(section, "three_d");
     static const std::set<std::string> allowed{
@@ -383,7 +398,7 @@ void load_main_config(const std::string& path, MainOptions& out) {
     }
 
     static const std::set<std::string> top_allowed{
-        "schema", "cameras", "inference", "web", "three_d",
+        "schema", "cameras", "inference", "web", "idle", "three_d",
         "subject", "subject_calib", "calibration", "logging", "slimevr", "vmt",
         "extrinsic_calib", "intrinsic_calib",
     };
@@ -397,6 +412,7 @@ void load_main_config(const std::string& path, MainOptions& out) {
     if (root["cameras"])     load_cameras   (root["cameras"],     out);
     if (root["inference"])   load_inference (root["inference"],   out);
     if (root["web"])         load_web       (root["web"],         out);
+    if (root["idle"])        load_idle      (root["idle"],        out);
     if (root["three_d"])     load_three_d   (root["three_d"],     out);
     if (root["subject"])     load_subject   (root["subject"],     out);
     // DEPRECATED calibration: block first (may set subject_id from
@@ -456,6 +472,14 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.port != d.port)            e << YAML::Key << "port"   << YAML::Value << o.port;
     if (!o.static_dir.empty())       e << YAML::Key << "static" << YAML::Value << o.static_dir;
     if (o.no_web != d.no_web)        e << YAML::Key << "no_web" << YAML::Value << o.no_web;
+    e << YAML::EndMap;
+
+    // idle -----------------------------------------------------------------
+    e << YAML::Key << "idle" << YAML::Value << YAML::BeginMap;
+    // Negated CLI-equivalent key: emit the inverse of the positive predicate.
+    if (o.idle_enabled != d.idle_enabled)             e << YAML::Key << "no_idle"       << YAML::Value << !o.idle_enabled;
+    if (o.idle_enter_after_s != d.idle_enter_after_s) e << YAML::Key << "enter_after_s" << YAML::Value << o.idle_enter_after_s;
+    if (o.idle_tick_hz != d.idle_tick_hz)             e << YAML::Key << "tick_hz"       << YAML::Value << o.idle_tick_hz;
     e << YAML::EndMap;
 
     // three_d --------------------------------------------------------------
@@ -674,6 +698,9 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--host")              { out.host = need(i, "--host"); }
         else if (a == "--static")            { out.static_dir = need(i, "--static"); }
         else if (a == "--no-web")            { out.no_web = true; }
+        else if (a == "--no-idle")           { out.idle_enabled = false; }
+        else if (a == "--idle-enter-after-s"){ out.idle_enter_after_s = std::stod(need(i, "--idle-enter-after-s")); }
+        else if (a == "--idle-tick-hz")      { out.idle_tick_hz = std::stod(need(i, "--idle-tick-hz")); }
         else if (a == "--width")             { out.width  = std::atoi(need(i, "--width")); }
         else if (a == "--height")            { out.height = std::atoi(need(i, "--height")); }
         else if (a == "--fps")               { out.fps    = std::atoi(need(i, "--fps")); }
@@ -984,6 +1011,12 @@ void validate_options(const MainOptions& opts) {
     }
     if (opts.n_buffers < 2) {
         fail("--n-buffers must be >= 2 (driver needs at least 2 to pipeline)");
+    }
+    if (opts.idle_enter_after_s < 0.0) {
+        fail("--idle-enter-after-s must be >= 0");
+    }
+    if (opts.idle_tick_hz <= 0.0) {
+        fail("--idle-tick-hz must be > 0");
     }
     if (opts.enable_3d && opts.calib.empty()) {
         fail("--enable-3d requires --calib PATH");

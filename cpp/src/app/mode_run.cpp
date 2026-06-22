@@ -5,6 +5,8 @@
 #include <memory>
 
 #include "app/camera_builder.hpp"
+#include "app/idle_evaluator.hpp"
+#include "app/idle_state.hpp"
 #include "app/output_builder.hpp"
 #include "app/pose_relay_builder.hpp"
 #include "app/server_builder.hpp"
@@ -16,6 +18,10 @@ namespace fitra::app {
 
 int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     auto trt = make_trt_stack(opts);
+    // Consumer-presence state for idle/standby (issue #37). Declared first so it
+    // outlives every component that reads or writes it. Run mode only — calib
+    // modes never construct one, so their components are never throttled.
+    app::IdleState idle_state;
     auto cams = make_frame_sources(opts, trt.get(), nullptr);
     const std::size_t n_cams = cams.sources.size();
     if (opts.enable_3d && n_cams < 2) {
@@ -81,11 +87,32 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
             server->set_hmd_pose_bus(relay.hmd_bus.get(), opts.hmd_stale_ms);
         }
         if (outputs.aligner) server->set_continuous_aligner(outputs.aligner.get());
+        server->set_idle_state(&idle_state, opts.idle_enabled,
+                               opts.idle_enter_after_s, opts.idle_tick_hz);
         server->start();
     }
 
+    // Idle/standby evaluator: derives consumer presence from the WS client
+    // count (maintained by the server) + HMD-pose freshness, and confirms
+    // idle_state.idle with asymmetric hysteresis. hmd_bus is passed only when
+    // HMD listen is enabled (otherwise VR presence is unobservable).
+    app::IdleEvaluator::Config idle_cfg;
+    idle_cfg.enabled            = opts.idle_enabled;
+    idle_cfg.enter_after_s      = opts.idle_enter_after_s;
+    idle_cfg.tick_hz            = opts.idle_tick_hz;
+    idle_cfg.hmd_stale_ms       = opts.hmd_stale_ms;
+    idle_cfg.has_vr_output      = opts.vmt_out || opts.slimevr_out;
+    idle_cfg.hmd_listen_enabled = opts.hmd_listen_enabled;
+    app::IdleEvaluator idle_eval{
+        idle_state,
+        opts.hmd_listen_enabled ? relay.hmd_bus.get() : nullptr,
+        idle_cfg};
+    idle_eval.start();
+
     run_stats_loop(*driver, opts.log_every_s, flow.stop);
 
+    // Stop the evaluator before the relay/outputs it observes are torn down.
+    idle_eval.stop();
     if (server) server->stop();
     outputs.stop();
     driver->stop();
