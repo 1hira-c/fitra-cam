@@ -25,6 +25,9 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
   calibration `slot::decode` assert に当たる。calibrator infra は RTMPose INT8 計画で salvage 予定。
 - **keypoint topology**: `kMaxKeypoints=26` で配列統一、`kp_count` で論理点数を伝搬。
   subject profile schema (v1/v2) はマイグレーションしない (pose-3d トラック参照)。
+- **idle/standby 既定 ON** (issue #37): 消費者 (WS ビューア / ライブ VR ピア) がゼロのまま
+  `idle_enter_after_s` (既定 10s) 経過で YOLOX/RTMPose/3D をスキップして省電力待機。capture/decode/
+  TRT は温存し復帰は次フレーム (<100ms)。`--no-idle` で無効、calib モードは対象外。Run mode のみ。
 
 ### 検証
 
@@ -148,6 +151,29 @@ decode 経路を可能に。(3) **VIC スケール decode**: `fitra_nvjpeg_decod
 nvjpeg .so が VIC スケールを露出しないため all-GPU front-end を切り BGR scratch + CPU prebake へ
 降ろす (HW JPEG decode は維持)。新カメラは 1280×960 撮影→640 縮小で既存機と画角・座標系が一致。
 intrinsic は 1280 校正→`scale_intrinsics` 640。設計: `docs/design/core-pipeline-per-camera-capture-downscale.md`。
+
+### 2026-06-22 — WebUI/VMT 未接続時の待機 (idle) モード 実装 (M1〜M5)
+2026-06-18 起票の idle モードを実装 (issue #37、`core-pipeline/idle-standby`)。
+- **M1** 消費者プレゼンス: header-only な `IdleState` (`cpp/src/app/idle_state.hpp`、
+  ws_client_count / vr_peer_live / vr_observable / idle の atomic 群) を mode_run が所有し
+  各コンポーネントへ配布。`IdleEvaluator` (`cpp/src/app/idle_evaluator.*`、~10Hz スレッド) が
+  HMD pose freshness から vr_peer_live を導出し非対称ヒステリシスで idle 確定。ヒステリシス /
+  VR 観測可否 / 安全既定は header-only 純関数に分離。CrowServer が `/ws`・`/ws3d` の
+  onopen/onclose で ws_client_count を増減、`/stats3d`・`/ws3d`・`/api/state` に idle status。
+  config は新 `idle:` YAML + `--no-idle`/`--idle-enter-after-s`/`--idle-tick-hz`。
+- **M2** driver ゲート: `MultiCameraDriver::loop` が idle 中 RTMPose バッチ + `maybe_update_3d`
+  をスキップ、`idle_tick_hz` (既定 2Hz) へスロットル。突入時に「鮮度なし」3D snapshot を 1 回流す。
+- **M3** FrameSource ゲート (省電力本体): decode worker が idle 中 YOLOX + RTMPose pre-bake を
+  スキップ。JPEG decode / HW decoder / EGL / TRT は温存、BGR clone も強制しない → 復帰は次フレーム。
+- **M4** 復帰ジャンプ対策: idle→active で `SkeletonKalman::reset()` + One Euro (TrackerExtractor)
+  の `reset_smoothing()`。idle 中は更新が来ず missing-frame 安全網が効かないため明示リセットが必須
+  (固定レートでは dt が常に nominal で自己回復しない)。IK ロック/ボーン長は温存。
+- **M5** VR 観測不能の安全既定: `(vmt_out||slimevr_out) && !hmd_listen_enabled` なら戻り信号が
+  無く VR ピアを観測できないため `vr_observable=false` 固定かつ VR 軸では present 扱い (idle に
+  入れない)。status に `vr_observable` を出して理由を可視化。
+- 検証: `tools/test_idle_evaluator` (ヒステリシス / 観測可否 / 安全既定の純ロジック)、ctest 全通過。
+  実機の GPU%/復帰挙動は別途確認。WebUI バッジ表示・手動 wake・decode 間引きは残課題。
+→ [design/core-pipeline-idle-standby.md](../design/core-pipeline-idle-standby.md)
 
 ### 2026-06-18 — WebUI/VMT 未接続時の待機 (idle) モード仕様起票 (仕様のみ)
 消費者 (WebUI の WS ビューア / VR 側 VMT) が誰も繋がっていない時に重い GPU 推論を自動で止めて

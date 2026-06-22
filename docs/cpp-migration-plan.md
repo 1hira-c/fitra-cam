@@ -85,6 +85,16 @@ USB cam 2 ┘                                 │
 > 詳細は [`design/core-pipeline-per-camera-capture-downscale.md`](design/core-pipeline-per-camera-capture-downscale.md) /
 > [`design/core-pipeline-3cam-60fps-smoothing.md`](design/core-pipeline-3cam-60fps-smoothing.md) /
 > [`design/core-pipeline-camera-exposure-control.md`](design/core-pipeline-camera-exposure-control.md)。
+>
+> **2026-06-22 更新 (idle/standby、issue #37)**: 検証基準 (IoU/kpt L2/170fps) は不変。消費者
+> (WS ビューア / ライブ VR ピア) がゼロのまま継続したら重い GPU 推論を止める**待機 (idle) モード**を
+> 既定 ON で追加。`calib_recording_flag` と同型の共有 atomic フラグ (素の `const std::atomic<bool>*`)
+> を `FrameSource::decode_loop` (YOLOX + RTMPose pre-bake をスキップ) と `MultiCameraDriver::loop`
+> (RTMPose バッチ + 3D をスキップし `idle_tick_hz` へスロットル) に通す **in-process throttle**。
+> capture / decode / HW NVJPEG / EGL / TRT context は温存し、復帰は atomic 反転の次フレーム (<100ms)。
+> プレゼンスは `IdleState` + ~10Hz `IdleEvaluator` (WS 計数 + HMD pose freshness、非対称ヒステリシス)。
+> 復帰時は Kalman / One Euro を明示リセットして pose lurch を防ぐ。Run mode のみ (calib は対象外)。
+> 詳細は [`design/core-pipeline-idle-standby.md`](design/core-pipeline-idle-standby.md)。
 
 ## リポジトリレイアウト
 
