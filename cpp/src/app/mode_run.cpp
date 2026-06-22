@@ -38,6 +38,10 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     pipeline::SnapshotBus bus{n_cams};
     auto driver = make_driver(std::move(cams.sources), *trt->rtmpose, bus, opts,
                               enable_3d ? &threed : nullptr);
+    // Idle/standby gate (issue #37): while idle the driver skips the 3D update
+    // and throttles to idle_tick_hz. Run mode only — calib never sets it.
+    driver->set_idle_gate(opts.idle_enabled ? &idle_state.idle : nullptr,
+                          opts.idle_tick_hz);
     driver->start();
 
     // Stop the driver worker on any scope exit (exception path); normal

@@ -91,6 +91,14 @@ public:
     void set_frame_tap(FrameTapFn fn);
     void set_skeleton3d_tap(Skeleton3DTapFn fn);
 
+    // Idle/standby gate (issue #37). `idle_flag` points at the shared idle
+    // atomic (owned by the IdleState in mode_run; must outlive the driver);
+    // null disables idling (calib modes never set it). While idle the central
+    // loop skips the 3D update and throttles to `idle_tick_hz`. Set before
+    // start(). A plain atomic pointer (not the app::IdleState type) keeps this
+    // layer free of an app/ dependency, mirroring calib_recording_flag.
+    void set_idle_gate(const std::atomic<bool>* idle_flag, double idle_tick_hz);
+
     // For the calib-subject preflight: primes the live IK with the subject
     // height (apply_subject_height) so the 3D angle recognizer has a sensible
     // bone-length lock from frame 1. Profile loading happens at construction
@@ -110,6 +118,9 @@ private:
                       std::chrono::steady_clock::time_point captured_at);
     void maybe_update_3d(std::chrono::steady_clock::time_point now,
                          std::chrono::system_clock::time_point wall_now);
+    // Idle/standby edge handler: on entry push one "no fresh data" 3D snapshot
+    // so consumers drop the frozen pose; on resume reset the smoothers (M4).
+    void handle_idle_transition(bool now_idle);
 
     std::vector<std::unique_ptr<camera::FrameSource>> sources_;
     infer::RtmPose&      rtmpose_;
@@ -138,6 +149,10 @@ private:
     std::uint64_t                     tri_processed_ = 0;
     std::uint64_t                     tri_sync_miss_ = 0;
     bool                              has_last_3d_update_ = false;
+    // Idle/standby gate state (issue #37).
+    const std::atomic<bool>*          idle_flag_   = nullptr;
+    double                            idle_tick_hz_ = 2.0;
+    bool                              idle_active_ = false;   // edge tracker
     std::thread                       worker_;
     std::atomic<bool>                 stop_{false};
 };
