@@ -527,8 +527,15 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         snap.stats.processed = tri_processed_;
         snap.stats.sync_miss = tri_sync_miss_;
         bus->update(snap);
+    } else {
+        // Resuming from standby: drop the Kalman's stale pre-idle state so the
+        // first post-idle measurement re-anchors instead of interpolating from
+        // the frozen pose (no lurch). dt also resets to the nominal step. IK
+        // lock / bone lengths (subject calibration) are preserved. Runs on the
+        // loop thread, the only writer of kalman_ / has_last_3d_update_.
+        kalman_.reset();
+        has_last_3d_update_ = false;
     }
-    // Resume reset (Kalman / One Euro) is added in M4.
 }
 
 }  // namespace fitra::pipeline

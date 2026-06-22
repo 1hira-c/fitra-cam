@@ -80,6 +80,20 @@ void TrackerExtractor::stop() {
     running_.store(false);
 }
 
+void TrackerExtractor::reset_smoothing() {
+    // Mirror the constructor's history init: identity quats, zero positions,
+    // no first-frame anchor. The One Euro / position contexts and FK foot
+    // anchors are also dropped so the next valid frame seeds fresh. Rolling
+    // stats rings are left alone (they self-flush via the window).
+    for (auto& q : prev_quat_)         q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
+    for (auto& p : prev_pos_)          p = cv::Vec3f{0.0f, 0.0f, 0.0f};
+    for (auto& q : last_emitted_quat_) q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
+    have_last_emitted_ = false;
+    quat_ctx_    = QuatSmoothingContext{};
+    pos_ctx_     = PosSmoothingContext{};
+    extract_ctx_ = ExtractContext{};
+}
+
 void TrackerExtractor::run_loop() {
     using clk = std::chrono::steady_clock;
     const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, opts_.extract_rate_hz));
@@ -91,8 +105,18 @@ void TrackerExtractor::run_loop() {
     auto next = clk::now() + period_d;
     auto last_tick = clk::now();
     std::uint64_t last_update_seq = 0;
+    bool was_idle = false;
 
     while (!stop_.load(std::memory_order_relaxed)) {
+        // Idle/standby edge: on resume (idle->active) drop the stale pre-idle
+        // smoothing history so the first fresh frame re-anchors instead of
+        // lerping from the frozen pose. Checked before this iteration's
+        // snapshot so the reset precedes the first post-idle smoothing step.
+        const bool idle =
+            idle_flag_ && idle_flag_->load(std::memory_order_relaxed);
+        if (was_idle && !idle) reset_smoothing();
+        was_idle = idle;
+
         // dt for angular-velocity / freeze stats. Fixed-rate mode uses the
         // nominal period; event-driven mode measures the real interval (which
         // varies with the triangulation cadence) and clamps it so a post-idle

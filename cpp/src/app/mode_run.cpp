@@ -57,7 +57,8 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     std::unique_ptr<slimevr::TrackerExtractor> tracker_extractor;
     if (threed.bus3d && threed.tracker_bus) {
         tracker_extractor =
-            make_tracker_extractor(opts, *threed.bus3d, *threed.tracker_bus);
+            make_tracker_extractor(opts, *threed.bus3d, *threed.tracker_bus,
+                                   opts.idle_enabled ? &idle_state.idle : nullptr);
     }
 
     // Pose relay (input) + publishers/aligner (output). Publishers spin up

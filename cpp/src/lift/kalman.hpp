@@ -53,6 +53,12 @@ public:
 
     infer::Skeleton3D update(const infer::Skeleton3D& measurement, double dt_s);
 
+    // Drop all per-joint state so the next update() re-anchors from the
+    // measurement instead of interpolating from a stale pose. Used after an
+    // idle/standby gap (no updates ran during idle, so the missing-frame safety
+    // net never fired). Tuning (Options) and the topology cache are preserved.
+    void reset();
+
 private:
     struct JointState {
         bool initialized = false;

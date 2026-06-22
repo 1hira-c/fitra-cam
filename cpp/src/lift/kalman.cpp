@@ -99,6 +99,13 @@ void SkeletonKalman::ensure_topology() {
     topo_format_tag_ = tag;
 }
 
+void SkeletonKalman::reset() {
+    // Re-default every joint (initialized=false, missing=0, P=eye). The
+    // topology cache (topo_order_/root_idx_/topo_format_tag_) is left intact —
+    // it is rebuilt lazily only when the keypoint format changes.
+    states_.fill(JointState{});
+}
+
 infer::Skeleton3D SkeletonKalman::update(const infer::Skeleton3D& measurement,
                                          double dt_s) {
     ensure_topology();
