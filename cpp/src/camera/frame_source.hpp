@@ -126,6 +126,14 @@ public:
         // inference thread naturally sees no bboxes => no pose work either.
         // Stays empty when no shared flag is needed.
         std::shared_ptr<std::atomic<bool>> calib_recording_flag;
+        // Idle/standby gate (issue #37). Points at the shared idle atomic
+        // (owned by the IdleState in mode_run; must outlive the FrameSource);
+        // null disables idling. When set + true the decode worker skips YOLOX
+        // and drops bboxes (so the RTMPose pre-bake is skipped too) — the bulk
+        // of the GPU cost. JPEG decode / HW decoder / EGL stay warm and the BGR
+        // copy is NOT forced (unlike calib recording), so resume is the next
+        // frame. A plain atomic pointer keeps this layer app/-independent.
+        const std::atomic<bool>* idle_flag = nullptr;
         // Debug/bench: when YOLOX is enabled but the cache is empty after
         // detection, inject a synthetic bbox covering the central 60% of
         // the frame so the downstream RTMPose stage always has work. Use

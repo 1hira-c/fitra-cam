@@ -22,7 +22,8 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     // outlives every component that reads or writes it. Run mode only — calib
     // modes never construct one, so their components are never throttled.
     app::IdleState idle_state;
-    auto cams = make_frame_sources(opts, trt.get(), nullptr);
+    auto cams = make_frame_sources(opts, trt.get(), nullptr,
+                                   opts.idle_enabled ? &idle_state.idle : nullptr);
     const std::size_t n_cams = cams.sources.size();
     if (opts.enable_3d && n_cams < 2) {
         std::fprintf(stderr, "--enable-3d requires at least two cameras\n");

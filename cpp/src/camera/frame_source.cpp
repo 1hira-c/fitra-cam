@@ -193,6 +193,12 @@ void FrameSource::decode_loop() {
         const bool calib_recording =
             opts_.calib_recording_flag
             && opts_.calib_recording_flag->load(std::memory_order_relaxed);
+        // Idle/standby (issue #37): skip YOLOX + RTMPose pre-bake to drop the
+        // bulk of the GPU load, but keep decoding so resume is the next frame.
+        // Unlike calib_recording it does NOT force a BGR copy.
+        const bool idle =
+            opts_.idle_flag
+            && opts_.idle_flag->load(std::memory_order_relaxed);
 
         // Guard the HW NVJPEG decoder against malformed frames (it segfaults on
         // them; the CPU cv::imdecode path tolerates them on its own). Drop the
@@ -321,7 +327,7 @@ void FrameSource::decode_loop() {
         // so all cameras detect in parallel. Skipped during calib recording —
         // raw mp4 capture is the priority, and dump_keypoints_3d re-runs
         // detection offline on the resulting clips anyway.
-        if (yolox_ && !calib_recording) {
+        if (yolox_ && !calib_recording && !idle) {
             // Detect on the decimation schedule only. The old `||
             // cached_bboxes_.empty()` clause forced YOLOX EVERY frame whenever
             // nothing was detected -- so an empty/no-person scene ran the
@@ -391,10 +397,10 @@ void FrameSource::decode_loop() {
         df.captured_at = raw.captured_at;
         df.t_decode    = t_decode;
         df.t_detect    = t_detect;
-        // During calib recording we drop bboxes too — the central thread sees
-        // bboxes.empty() and naturally skips RTMPose. (Without this the
-        // "missing prebake" warning would spam.)
-        if (!calib_recording) {
+        // During calib recording (and idle/standby) we drop bboxes too — the
+        // central thread sees bboxes.empty() and naturally skips RTMPose.
+        // (Without this the "missing prebake" warning would spam.)
+        if (!calib_recording && !idle) {
             df.bboxes  = cached_bboxes_;  // copy of current cache
         }
 
