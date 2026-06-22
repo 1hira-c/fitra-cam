@@ -28,3 +28,6 @@ compile_commands.json
 # Per-machine `cpp/build/main --config PATH` files. Samples are tracked as
 # `configs/*.yaml.example`; copy to `configs/*.yaml` and edit locally.
 configs/*.yaml
+# Named config profiles written by the WebUI Setup mode — per-machine, not
+# tracked (same rationale as configs/*.yaml above).
+configs/named/
