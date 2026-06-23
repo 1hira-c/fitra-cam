@@ -1,11 +1,14 @@
 # vr-output: VMT ⇔ Jetson zeroconf ディスカバリ
 
 (着手日 2026-06-18 / 関連: [`vr-output-vmt-pose-relay-wire-spec.md`](vr-output-vmt-pose-relay-wire-spec.md),
+[`vr-output-zeroconf-discovery-vmt-spec.md`](vr-output-zeroconf-discovery-vmt-spec.md) (VMT 側受け渡し仕様),
 [`archive/phase15.5-vmt-registration-gate.md`](../archive/phase15.5-vmt-registration-gate.md) /
 memory `project-vmt-ip-learning-punch`)
 
-> **ステータス: 仕様起票のみ (2026-06-18)。実装は未着手。** Windows VMT フォーク側
-> (`vmt_manager`) の開発と歩調を合わせるため、wire / 挙動の契約を先に固定する。
+> **ステータス: M1/M2 実装済 (2026-06-23、`vr-output/zeroconf-discovery`)。** Jetson 側の純ロジック
+> (M1) + ランタイム配線・config/CLI・`/stats3d`/WebUI (M2) が完了。Windows VMT フォーク側 (M3) は
+> [`vr-output-zeroconf-discovery-vmt-spec.md`](vr-output-zeroconf-discovery-vmt-spec.md) を受け渡して
+> 別途実装。両機 IP 無指定の実機確認 (M4) は未実施。
 
 ## 背景 / 動機
 
@@ -115,14 +118,19 @@ args    = role(s)            "jetson" | "vmt"
 
 各 M = コミット境界。M1/M2 は fitra-cam (Jetson) 側、M3 は Windows VMT フォーク側。
 
-- **M1 (Jetson, fitra-cam)**: `DiscoveryBeacon` + `PeerRegistry` 新設。announce encode/parse、
-  ピア選択 (最小 id / token フィルタ / stale timeout) を純関数で実装。まだ pose 経路へは未配線。
-  ── ctest で固定。
-- **M2 (Jetson, fitra-cam)**: 解決エンドポイントを `VmtPublisher` 送信先 + `TrackedPoseReceiver`
-  punch 先へランタイム配線。`vmt.host` 空 → discovery / 非空 → 手動。`/stats3d` + WebUI に
-  検出ピア (name / id / age) を表示。CLI `--vmt-discovery` 系を追加。
+- **M1 (Jetson, fitra-cam)** — ✅ 実装済 (2026-06-23): `discovery_announce` (announce encode/parse +
+  `stable_instance_id`) + `peer_registry` (`announce_admissible` / `select_peer` / `PeerRegistry` /
+  `DiscoveryEndpointBus`) を純関数で新設。pose 経路へは未配線。`cpp/tools/test_discovery.cpp` の
+  10 ケース (golden / round-trip / reject / id 決定性 / 単一・最小 id・pin・token・stale・proto) で固定。
+- **M2 (Jetson, fitra-cam)** — ✅ 実装済 (2026-06-23): `DiscoveryBeacon` (39580 multicast+broadcast,
+  1 Hz) を新設し `PoseRelay` に所有。`VmtPublisher` を `sendto()`+差し替え可能宛先化、
+  `TrackedPoseReceiver` の punch をランタイム解決。`vmt.host` 空 → discovery / 非空 → 手動
+  (既定を空に変更)。`vmt.{discovery,pair_id,pairing_token,discovery_group,discovery_port,
+  instance_name,peer_timeout_s}` を config/CLI/emit/validate に追加。`/stats3d`+`/ws3d`+WebUI に
+  検出ピア表示。pose wire は不変 (既存 golden が回帰ガード)。
 - **M3 (Windows, vmt_manager)**: `role=vmt` announce + `role=jetson` browse を実装し、pose-relay
   送信先を自動設定。Manager UI に検出リスト + pin。fitra-cam 側は M1/M2 のままで無改修。
+  → 受け渡し仕様: [`vr-output-zeroconf-discovery-vmt-spec.md`](vr-output-zeroconf-discovery-vmt-spec.md)。
 - **M4 (実機)**: Jetson / Windows を**両方 IP 無指定**で起動 → 自動接続 → VMT pose +
   HMD continuous align が成立することを確認。複数ピア時の pin / token も確認。
 

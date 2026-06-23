@@ -40,6 +40,28 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-23 — VMT ⇔ Jetson zeroconf ディスカバリ M1/M2 実装 (Jetson 側)
+6/18 に起票した zeroconf ディスカバリ (issue #36) の Jetson 側を実装。**M1 (純ロジック)**:
+`discovery_announce` (`/fitra/announce`・typetag `,sssiiss` の encode/parse + ホスト名 FNV-1a の
+`stable_instance_id`) と `peer_registry` (`announce_admissible` / `select_peer` / `PeerRegistry` +
+`HmdPoseBus` 同形の `DiscoveryEndpointBus`) を socket/thread なしの純関数で新設。時刻は引数で受け
+決定的。`test_discovery.cpp` の 10 ケース (golden バイト列 / round-trip / 不正 reject / id 決定性 /
+単一・最小 id・pin・token・stale・proto) で固定。**M2 (配線)**: `DiscoveryBeacon` (39580 を INADDR_ANY
+で bind + group join + SO_BROADCAST、1 Hz で multicast 239.255.42.99 と 255.255.255.255 へ二段送信、
+TTL=1) を新設し `PoseRelay` に所有 (run / calib-extrinsic 両方で共有)。`VmtPublisher` を
+`connect()`+`send()` から `sendto()`+mutex 保護の差し替え可能宛先へ変更し、空 host で落ちず discovery
+bus から宛先を解決 (last-known latch、未解決は `skipped_no_endpoint` でスキップ)。`TrackedPoseReceiver`
+の punch も recv スレッドでランタイム解決。`vmt.host` 既定を空に変更 (空+discovery on で自動 /
+非空で従来どおり手動・discovery 完全バイパス)。`vmt.{discovery,pair_id,pairing_token,discovery_group,
+discovery_port,instance_name,peer_timeout_s}` を config/CLI/emit/validate に追加。`/stats3d`+`/ws3d`+
+WebUI (`bundle.ts`/`statsText.ts`) に検出ピア (resolved / peers / age) を表示。**pose wire
+(`/VMT/Room/Driver` / `/fitra/tracked_pose` / `/fitra/punch`) は不変** — 既存 `test_vmt_osc_writer` /
+`test_tracked_pose_receiver` が回帰ガード。loopback 2 ビーコンの相互発見 smoke で multicast/broadcast/
+src-IP 学習/role 選択/self 除外/冪等 dedup を確認。**M3 (Windows `vmt_manager`)** は受け渡し仕様
+[design/vr-output-zeroconf-discovery-vmt-spec.md](../design/vr-output-zeroconf-discovery-vmt-spec.md)
+を別途実装。**M4 (両機 IP 無指定の実機確認)** は未実施。
+→ [design/vr-output-zeroconf-discovery.md](../design/vr-output-zeroconf-discovery.md)
+
 ### 2026-06-19 — 3D カメラ/HMD マーカーの PR#40 レビュー指摘修正 (バグ修正)
 PR #40 の Codex / Gemini レビュー指摘を反映。(1) **HMD 向きバグ**: HMD マーカーの姿勢を
 `B·R` から `B·R·B⁻¹` (トラッカーと同じ共役) へ修正。HMD `quat_wxyz` は `vmt_pose_to_world()`
