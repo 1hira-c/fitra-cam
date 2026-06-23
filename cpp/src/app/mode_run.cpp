@@ -55,7 +55,9 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     auto outputs = make_run_outputs(opts, threed.bus3d.get(),
                                     threed.tracker_bus.get(),
                                     opts.hmd_listen_enabled
-                                        ? relay.hmd_bus.get() : nullptr);
+                                        ? relay.hmd_bus.get() : nullptr,
+                                    relay.beacon
+                                        ? &relay.beacon->endpoint_bus() : nullptr);
 
     // Stop outputs + relay + extractor on any scope exit. Must outlive the
     // server (so /stats3d never reads a dead pointer) and the driver (they
@@ -76,6 +78,7 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     if (server) {
         if (outputs.slime_pub) server->set_native_publisher(outputs.slime_pub.get());
         if (outputs.vmt_pub)   server->set_vmt_publisher(outputs.vmt_pub.get());
+        if (relay.beacon)      server->set_discovery_beacon(relay.beacon.get());
         if (threed.tracker_bus) server->set_tracker_bus(threed.tracker_bus.get());
         if (opts.hmd_listen_enabled) {
             server->set_hmd_pose_bus(relay.hmd_bus.get(), opts.hmd_stale_ms);

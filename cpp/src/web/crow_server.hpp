@@ -39,6 +39,7 @@ class VmtPublisher;      // fwd decl; full header in crow_server.cpp
 class HmdPoseBus;        // HMD pose source for auto-alignment routes
 class ControllerPoseBus; // selected-controller pose source for excal scene
 class ContinuousAligner; // always-on HMD-driven alignment refiner
+class DiscoveryBeacon;   // zeroconf peer discovery (resolved peer in /stats3d)
 }
 
 namespace fitra::config { class SetupConfigStore; }   // setup-mode config draft
@@ -187,6 +188,10 @@ public:
     // cleared before destruction).
     void set_continuous_aligner(vmt::ContinuousAligner* aligner);
 
+    // Attach the zeroconf discovery beacon so /stats3d reports the resolved
+    // peer + the live peer list. Same ownership rules as set_vmt_publisher.
+    void set_discovery_beacon(vmt::DiscoveryBeacon* beacon);
+
     // Start listening + broadcasting on a background thread. Returns when
     // the server is bound and ready (best-effort; Crow's run() blocks).
     void start();
@@ -227,6 +232,7 @@ private:
     vmt::HmdPoseBus*               hmd_pose_bus_    = nullptr;
     vmt::ControllerPoseBus*        excal_controller_pose_bus_ = nullptr;
     vmt::ContinuousAligner*        continuous_aligner_ = nullptr;
+    vmt::DiscoveryBeacon*          discovery_beacon_ = nullptr;
     double                         hmd_stale_ms_    = 200.0;
     double                         excal_controller_stale_ms_ = 200.0;
     std::string                    excal_controller_role_ = "right";

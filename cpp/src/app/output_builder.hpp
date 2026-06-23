@@ -41,9 +41,12 @@ struct RunOutputs {
 // Each output starts on construction; a member stays nullptr when its flag is
 // off or its socket/handshake failed (warn-and-continue, pose pipeline
 // unaffected). `hmd_bus` may be null — the aligner additionally requires it.
+// `disc_bus` (may be null) is the zeroconf endpoint bus the VMT publisher polls
+// for its send destination when vmt.host is empty; a non-null host ignores it.
 RunOutputs make_run_outputs(const config::MainOptions& opts,
                             pipeline::Skeleton3DBus* bus3d,
                             slimevr::SlimeTrackerBus* tracker_bus,
-                            vmt::HmdPoseBus* hmd_bus);
+                            vmt::HmdPoseBus* hmd_bus,
+                            const vmt::DiscoveryEndpointBus* disc_bus = nullptr);
 
 }  // namespace fitra::app

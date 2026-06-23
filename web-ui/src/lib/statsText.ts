@@ -78,6 +78,24 @@ export function build3dStatsText(
     }
   }
 
+  // Zeroconf discovery status. The block is present only in discovery mode; a
+  // pinned vmt.host runs no beacon, so an absent block (with VMT active) means
+  // the destination was configured manually.
+  const disc = bundle.discovery || null;
+  let discLine = "";
+  if (disc) {
+    const r = disc.resolved;
+    if (r && r.have) {
+      discLine =
+        `\ndiscovery      ${r.name || r.id || "peer"} ` +
+        `${r.ip ?? "?"}:${r.port ?? 0} (${Math.round(r.age_ms ?? 0)}ms)`;
+    } else {
+      discLine = `\ndiscovery      searching… (${disc.peer_count ?? 0} peers)`;
+    }
+  } else if (vmt) {
+    discLine = "\ndiscovery      manual";
+  }
+
   // Continuous HMD-driven alignment status (block exists iff aligner attached).
   const cont = bundle.continuous_align || null;
   let contLine = "";
@@ -107,6 +125,7 @@ export function build3dStatsText(
     `ik_locked      ${s.ik_locked ? "true" : "false"}\n` +
     `bundle_seq     ${server3dSeq}` +
     vmtLine +
+    discLine +
     hmdLine +
     contLine;
   return { text, hmdStatus };

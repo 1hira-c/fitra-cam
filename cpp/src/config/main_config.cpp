@@ -251,6 +251,9 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
     static const std::set<std::string> allowed{
         "vmt_out", "host", "port", "rate_hz", "index_base", "pos_smooth",
         "degeneracy_mode", "disable_below_floor",
+        // Zeroconf discovery.
+        "discovery", "pair_id", "pairing_token", "discovery_group",
+        "discovery_port", "instance_name", "peer_timeout_s",
         // HMD pose receiver.
         "hmd_listen_enabled", "hmd_listen_port", "hmd_listen_bind", "hmd_stale_ms",
         // Continuous HMD-driven alignment refinement.
@@ -265,6 +268,13 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
     if (section["pos_smooth"])          out.vmt_pos_smooth          = parse_scalar<double>(section["pos_smooth"],                  "vmt.pos_smooth");
     if (section["degeneracy_mode"])     out.vmt_degeneracy_mode     = parse_scalar<std::string>(section["degeneracy_mode"],        "vmt.degeneracy_mode");
     if (section["disable_below_floor"]) out.vmt_disable_below_floor = parse_scalar<bool>(section["disable_below_floor"],           "vmt.disable_below_floor");
+    if (section["discovery"])           out.vmt_discovery           = parse_scalar<bool>(section["discovery"],                     "vmt.discovery");
+    if (section["pair_id"])             out.vmt_pair_id             = parse_scalar<std::string>(section["pair_id"],                 "vmt.pair_id");
+    if (section["pairing_token"])       out.vmt_pairing_token       = parse_scalar<std::string>(section["pairing_token"],           "vmt.pairing_token");
+    if (section["discovery_group"])     out.vmt_discovery_group     = parse_scalar<std::string>(section["discovery_group"],         "vmt.discovery_group");
+    if (section["discovery_port"])      out.vmt_discovery_port      = parse_scalar<int>(section["discovery_port"],                  "vmt.discovery_port");
+    if (section["instance_name"])       out.vmt_instance_name       = parse_scalar<std::string>(section["instance_name"],           "vmt.instance_name");
+    if (section["peer_timeout_s"])      out.vmt_peer_timeout_s      = parse_scalar<double>(section["peer_timeout_s"],               "vmt.peer_timeout_s");
     if (section["hmd_listen_enabled"])  out.hmd_listen_enabled      = parse_scalar<bool>(section["hmd_listen_enabled"],            "vmt.hmd_listen_enabled");
     if (section["hmd_listen_port"])     out.hmd_listen_port         = parse_scalar<int>(section["hmd_listen_port"],                "vmt.hmd_listen_port");
     if (section["hmd_listen_bind"])     out.hmd_listen_bind         = parse_scalar<std::string>(section["hmd_listen_bind"],        "vmt.hmd_listen_bind");
@@ -525,6 +535,13 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.vmt_pos_smooth != d.vmt_pos_smooth)           e << YAML::Key << "pos_smooth"          << YAML::Value << o.vmt_pos_smooth;
     if (o.vmt_degeneracy_mode != d.vmt_degeneracy_mode) e << YAML::Key << "degeneracy_mode"     << YAML::Value << o.vmt_degeneracy_mode;
     if (o.vmt_disable_below_floor != d.vmt_disable_below_floor) e << YAML::Key << "disable_below_floor" << YAML::Value << o.vmt_disable_below_floor;
+    if (o.vmt_discovery != d.vmt_discovery)             e << YAML::Key << "discovery"           << YAML::Value << o.vmt_discovery;
+    if (o.vmt_pair_id != d.vmt_pair_id)                 e << YAML::Key << "pair_id"             << YAML::Value << o.vmt_pair_id;
+    if (o.vmt_pairing_token != d.vmt_pairing_token)     e << YAML::Key << "pairing_token"       << YAML::Value << o.vmt_pairing_token;
+    if (o.vmt_discovery_group != d.vmt_discovery_group) e << YAML::Key << "discovery_group"     << YAML::Value << o.vmt_discovery_group;
+    if (o.vmt_discovery_port != d.vmt_discovery_port)   e << YAML::Key << "discovery_port"      << YAML::Value << o.vmt_discovery_port;
+    if (o.vmt_instance_name != d.vmt_instance_name)     e << YAML::Key << "instance_name"       << YAML::Value << o.vmt_instance_name;
+    if (o.vmt_peer_timeout_s != d.vmt_peer_timeout_s)   e << YAML::Key << "peer_timeout_s"      << YAML::Value << o.vmt_peer_timeout_s;
     if (o.hmd_listen_enabled != d.hmd_listen_enabled)   e << YAML::Key << "hmd_listen_enabled"  << YAML::Value << o.hmd_listen_enabled;
     if (o.hmd_listen_port != d.hmd_listen_port)         e << YAML::Key << "hmd_listen_port"     << YAML::Value << o.hmd_listen_port;
     if (o.hmd_listen_bind != d.hmd_listen_bind)         e << YAML::Key << "hmd_listen_bind"     << YAML::Value << o.hmd_listen_bind;
@@ -723,6 +740,14 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--vmt-pos-smooth")    { out.vmt_pos_smooth = std::stod(need(i, "--vmt-pos-smooth")); }
         else if (a == "--vmt-degeneracy-mode"){ out.vmt_degeneracy_mode = need(i, "--vmt-degeneracy-mode"); }
         else if (a == "--vmt-disable-below-floor"){ out.vmt_disable_below_floor = true; }
+        else if (a == "--vmt-discovery")     { out.vmt_discovery = true; }
+        else if (a == "--no-vmt-discovery")  { out.vmt_discovery = false; }
+        else if (a == "--vmt-pair-id")       { out.vmt_pair_id = need(i, "--vmt-pair-id"); }
+        else if (a == "--vmt-pairing-token") { out.vmt_pairing_token = need(i, "--vmt-pairing-token"); }
+        else if (a == "--vmt-discovery-group"){ out.vmt_discovery_group = need(i, "--vmt-discovery-group"); }
+        else if (a == "--vmt-discovery-port"){ out.vmt_discovery_port = std::atoi(need(i, "--vmt-discovery-port")); }
+        else if (a == "--vmt-instance-name") { out.vmt_instance_name = need(i, "--vmt-instance-name"); }
+        else if (a == "--vmt-peer-timeout-s"){ out.vmt_peer_timeout_s = std::stod(need(i, "--vmt-peer-timeout-s")); }
         else if (a == "--hmd-listen-enabled") { out.hmd_listen_enabled = true; }
         else if (a == "--hmd-listen-port")    { out.hmd_listen_port    = std::atoi(need(i, "--hmd-listen-port")); }
         else if (a == "--hmd-listen-bind")    { out.hmd_listen_bind    = need(i, "--hmd-listen-bind"); }
@@ -1048,6 +1073,20 @@ void validate_options(const MainOptions& opts) {
             && opts.vmt_degeneracy_mode != "disable"
             && opts.vmt_degeneracy_mode != "skip") {
             fail("--vmt-degeneracy-mode must be one of hold|disable|skip");
+        }
+        if (!opts.vmt_discovery && opts.vmt_host.empty()) {
+            fail("--vmt-out needs a destination: set vmt.host (or --vmt-host) "
+                 "or leave discovery enabled (drop --no-vmt-discovery)");
+        }
+    }
+    // Discovery transport validation runs whenever discovery is on (run mode
+    // builds the beacon for the punch path even without --vmt-out).
+    if (opts.vmt_discovery && opts.vmt_host.empty()) {
+        if (opts.vmt_discovery_port <= 0 || opts.vmt_discovery_port > 65535) {
+            fail("--vmt-discovery-port must be in [1, 65535]");
+        }
+        if (opts.vmt_peer_timeout_s <= 0.0 || opts.vmt_peer_timeout_s > 120.0) {
+            fail("--vmt-peer-timeout-s must be in (0, 120]");
         }
     }
     if (opts.hmd_listen_enabled) {

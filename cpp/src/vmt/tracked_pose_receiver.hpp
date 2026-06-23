@@ -25,6 +25,7 @@
 
 #include "vmt/controller_pose_receiver.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
+#include "vmt/peer_registry.hpp"   // DiscoveryEndpointBus
 
 namespace fitra::vmt {
 
@@ -93,6 +94,11 @@ public:
     bool start();
     void stop();
 
+    // Discovery wiring. Call BEFORE start(). When `punch_host` is empty and a
+    // bus is attached, the punch destination is resolved at runtime from the
+    // bus (zeroconf); a non-empty `punch_host` always wins (manual override).
+    void set_discovery_bus(const DiscoveryEndpointBus* bus) { disc_bus_ = bus; }
+
     // Test/diagnostic entry point: parse and dispatch one UDP payload without
     // using the socket receive loop. Accepts either a single OSC message or an
     // OSC bundle containing pose messages.
@@ -115,10 +121,18 @@ private:
     std::thread                recv_thread_;
     std::atomic<bool>          stop_{false};
 
-    // Punch state (resolved in start(); used only by recv_loop's thread).
+    // Punch state. In manual mode it is resolved in start(); in discovery mode
+    // recv_loop refreshes punch_addr_ from disc_bus_. All punch fields are
+    // touched only by the recv thread (refresh + send both run there), so no
+    // lock is needed.
     bool                       punch_enabled_ = false;
     sockaddr_in                punch_addr_{};
     std::vector<std::uint8_t>  punch_packet_;
+
+    const DiscoveryEndpointBus* disc_bus_ = nullptr;
+    bool                        punch_use_discovery_ = false;
+    std::string                 punch_applied_ip_;     // recv-thread only
+    std::uint16_t               punch_applied_port_ = 0;
 
     mutable std::mutex         stats_mu_;
     TrackedPoseReceiverStats   stats_;

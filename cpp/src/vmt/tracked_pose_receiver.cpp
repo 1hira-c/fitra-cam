@@ -171,9 +171,12 @@ bool TrackedPoseReceiver::start() {
         return false;
     }
 
-    // Resolve the optional punch destination (VMT host). The punch goes out
-    // from this same bound socket so the VMT driver sees our real source IP.
-    punch_enabled_ = false;
+    // Resolve the punch destination (VMT host). The punch goes out from this
+    // same bound socket so the VMT driver sees our real source IP. A non-empty
+    // punch_host is a fixed manual destination; an empty punch_host with a
+    // discovery bus attached resolves the destination at runtime in recv_loop.
+    punch_enabled_       = false;
+    punch_use_discovery_ = false;
     if (!opts_.punch_host.empty() && opts_.punch_port != 0) {
         punch_addr_ = sockaddr_in{};
         punch_addr_.sin_family = AF_INET;
@@ -194,6 +197,18 @@ bool TrackedPoseReceiver::start() {
             std::fprintf(stderr, "[tracked_pose_receiver] invalid punch_host "
                          "'%s' — punch disabled\n", opts_.punch_host.c_str());
         }
+    } else if (disc_bus_ != nullptr) {
+        // Discovery: punch packet is constant; only the destination is resolved
+        // at runtime once a peer is adopted.
+        OscWriter w;
+        w.begin_message("/fitra/punch");
+        w.end_message();
+        auto sp = w.data();
+        punch_packet_.assign(sp.begin(), sp.end());
+        punch_use_discovery_ = true;
+        std::printf("[tracked_pose_receiver] punch via discovery "
+                    "(destination resolved at runtime, every %.0f ms)\n",
+                    opts_.punch_interval_ms);
     }
 
     stop_.store(false);
@@ -310,6 +325,25 @@ void TrackedPoseReceiver::recv_loop() {
 
     std::uint8_t buf[2048];
     while (!stop_.load()) {
+        // Discovery: refresh the punch destination from the bus (recv-thread
+        // only). last-known latch — a transient peer loss keeps the last dest.
+        if (punch_use_discovery_ && disc_bus_) {
+            ResolvedPeer rp = disc_bus_->snapshot();
+            if (rp.have && (rp.ip != punch_applied_ip_ ||
+                            rp.port != punch_applied_port_)) {
+                sockaddr_in a{};
+                a.sin_family = AF_INET;
+                a.sin_port   = htons(rp.port);
+                if (::inet_pton(AF_INET, rp.ip.c_str(), &a.sin_addr) == 1) {
+                    punch_addr_         = a;
+                    punch_enabled_      = true;
+                    punch_applied_ip_   = rp.ip;
+                    punch_applied_port_ = rp.port;
+                    std::printf("[tracked_pose_receiver] discovery punch -> "
+                                "%s:%u\n", rp.ip.c_str(), rp.port);
+                }
+            }
+        }
         if (punch_enabled_) {
             const auto now = clock::now();
             if (now - last_punch >= punch_interval) {

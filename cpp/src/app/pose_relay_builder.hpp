@@ -10,6 +10,7 @@
 
 #include "config/main_config.hpp"
 #include "vmt/controller_pose_receiver.hpp"
+#include "vmt/discovery_beacon.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
 #include "vmt/tracked_pose_receiver.hpp"
 
@@ -20,10 +21,17 @@ struct PoseRelay {
     std::unique_ptr<vmt::ControllerPoseBus>   controller_bus;
     // Receiver thread; nullptr when `listen` was false or the socket failed.
     std::unique_ptr<vmt::TrackedPoseReceiver> receiver;
+    // Zeroconf discovery beacon; nullptr when discovery is off or vmt.host is
+    // pinned. Shared with the VMT publisher (output_builder reads its bus), so
+    // it lives here — the relay outlives the publisher in the shutdown order.
+    std::unique_ptr<vmt::DiscoveryBeacon>     beacon;
     vmt::TrackedPoseRole controller_role = vmt::TrackedPoseRole::RightController;
 
     void stop() {
+        // Consumers (receiver, and the publisher in RunOutputs) must stop
+        // reading the endpoint bus before the beacon that owns it goes away.
         if (receiver) receiver->stop();
+        if (beacon)   beacon->stop();
     }
 };
 
