@@ -3,8 +3,34 @@
 (着手日 2026-06-18 / 関連: `vr-output-vmt-pose-relay-wire-spec.md`,
 `pose-3d-flow-daemon.md`, memory `project-vmt-ip-learning-punch`)
 
-> **ステータス: 仕様起票のみ (2026-06-18)。実装は未着手。** zeroconf ディスカバリ
-> ([`vr-output-zeroconf-discovery.md`](vr-output-zeroconf-discovery.md)) と同じく設計だけ先行確定する。
+> **ステータス: 実装済み (2026-06-22)。** M1〜M5 を `core-pipeline/idle-standby`
+> ブランチで実装。仕様 (2026-06-18 起票) からの差分:
+> - 消費者プレゼンスは `IdleState` (`cpp/src/app/idle_state.hpp`、header-only な
+>   atomic 群) を mode_run が所有し、各コンポーネントへ raw pointer 配布
+>   (`std::shared_ptr<IdleState>` でなく所有 1 箇所 + 生ポインタ。下位層には
+>   `app::IdleState` 型を持ち込まず素の `const std::atomic<bool>*` を渡してレイヤ
+>   依存を避けた)。
+> - 評価器は専用 ~10Hz スレッド `IdleEvaluator` (`cpp/src/app/idle_evaluator.*`)。
+>   ヒステリシス / VR 観測可否 / 安全既定は header-only 純関数
+>   (`IdleDecision::step` / `idle_consumer_present` / `idle_vr_observable`) に分離し
+>   `tools/test_idle_evaluator.cpp` で単体テスト。
+> - 復帰リセットは所有スレッド内で実施 (driver: `SkeletonKalman::reset()` +
+>   `has_last_3d_update_=false`、TrackerExtractor: `reset_smoothing()`)。One Euro は
+>   固定レートで dt が常に nominal のため自己回復せず、明示リセットが必須だった。
+>
+> **レビュー反映 (Codex review, 2026-06-22)**:
+> - idle 突入マーカーは `ik_locked=false` で発行 (設計 §3 どおり)。`ik_.locked()` だと
+>   VMT/SlimeVR publisher の `!ik_locked` ゲートを通過し、VMT `degeneracy=hold` で凍結 pose を
+>   送り続けてしまう。
+> - 復帰時の stale bbox 対策: FrameSource は idle→active の初フレームで det スケジュールを無視して
+>   強制再検出 (`just_resumed`)。idle 中に被写体が移動/退出しても古い crop で RTMPose がゴーストを
+>   出さない。
+> - driver の idle スロットルは単一 `sleep_for(1/tick_hz)` でなく ~10ms 刻みの分割 sleep。復帰
+>   (idle flag クリア) / stop を即座に観測し「<100ms 復帰」を守る。
+> - VR 観測可否は `--hmd-listen-enabled` フラグでなく **receiver が実際に起動できたか**
+>   (`relay.receiver != nullptr`) で判定。socket bind 失敗時に VR を observable 扱いして
+>   VMT/SlimeVR 出力中に誤って idle するのを防ぐ。
+> - `--bench-fake-bbox` (live ベンチ経路、消費者不在) では idle を暗黙無効化し測定値が崩れないように。
 
 ## 背景 / 動機
 

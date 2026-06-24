@@ -180,6 +180,24 @@ std::string make_discovery_fragment(const vmt::DiscoveryBeacon& beacon) {
     return out.str();
 }
 
+// Idle/standby status (issue #37). `enabled`/`enter_after_s`/`tick_hz` are
+// config echoes; `active` is the confirmed standby state; `vr_observable`
+// surfaces the VR-presence safe default so the WebUI can explain why a
+// VMT-without-HMD-listen rig never idles.
+std::string make_idle_status_fragment(const app::IdleState& st, bool enabled,
+                                       double enter_after_s, double tick_hz) {
+    std::ostringstream out;
+    out << "\"idle\":{\"enabled\":" << (enabled ? "true" : "false")
+        << ",\"active\":"        << (st.idle.load(std::memory_order_relaxed) ? "true" : "false")
+        << ",\"ws_clients\":"    << st.ws_client_count.load(std::memory_order_relaxed)
+        << ",\"vr_observable\":" << (st.vr_observable.load(std::memory_order_relaxed) ? "true" : "false")
+        << ",\"vr_peer_live\":"  << (st.vr_peer_live.load(std::memory_order_relaxed) ? "true" : "false")
+        << ",\"enter_after_s\":" << enter_after_s
+        << ",\"tick_hz\":"       << tick_hz
+        << "}";
+    return out.str();
+}
+
 // Convert a chest tracker (world Z-up RH frame, see SlimeTracker docs) into
 // VMT Driver frame (Y-up RH). Mirrors the per-tracker transform the VMT
 // publisher applies before sending /VMT/Room/Driver.
@@ -407,6 +425,14 @@ void CrowServer::set_discovery_beacon(vmt::DiscoveryBeacon* beacon) {
     discovery_beacon_ = beacon;
 }
 
+void CrowServer::set_idle_state(app::IdleState* state, bool enabled,
+                                double enter_after_s, double tick_hz) {
+    idle_state_         = state;
+    idle_enabled_       = enabled;
+    idle_enter_after_s_ = enter_after_s;
+    idle_tick_hz_       = tick_hz;
+}
+
 void CrowServer::start() {
     auto& app     = impl_->app;
     auto& clients2d = impl_->clients2d;
@@ -416,15 +442,17 @@ void CrowServer::start() {
     // shadow upgrade requests (Crow's BaseRule::handle_upgrade returns
     // 404 without writing it, which the client sees as a closed socket).
     CROW_WEBSOCKET_ROUTE(app, "/ws")
-    .onopen([&clients2d](crow::websocket::connection& c) {
+    .onopen([this, &clients2d](crow::websocket::connection& c) {
         std::lock_guard<std::mutex> lk{clients2d.mu};
         clients2d.conns.insert(&c);
+        if (idle_state_) idle_state_->ws_client_count.fetch_add(1, std::memory_order_relaxed);
     })
-    .onclose([&clients2d](crow::websocket::connection& c,
+    .onclose([this, &clients2d](crow::websocket::connection& c,
                        const std::string& /*reason*/,
                        uint16_t /*code*/) {
         std::lock_guard<std::mutex> lk{clients2d.mu};
-        clients2d.conns.erase(&c);
+        if (clients2d.conns.erase(&c) && idle_state_)
+            idle_state_->ws_client_count.fetch_sub(1, std::memory_order_relaxed);
     })
     .onmessage([](crow::websocket::connection& /*c*/,
                   const std::string& /*data*/,
@@ -433,15 +461,17 @@ void CrowServer::start() {
     });
 
     CROW_WEBSOCKET_ROUTE(app, "/ws3d")
-    .onopen([&clients3d](crow::websocket::connection& c) {
+    .onopen([this, &clients3d](crow::websocket::connection& c) {
         std::lock_guard<std::mutex> lk{clients3d.mu};
         clients3d.conns.insert(&c);
+        if (idle_state_) idle_state_->ws_client_count.fetch_add(1, std::memory_order_relaxed);
     })
-    .onclose([&clients3d](crow::websocket::connection& c,
+    .onclose([this, &clients3d](crow::websocket::connection& c,
                        const std::string& /*reason*/,
                        uint16_t /*code*/) {
         std::lock_guard<std::mutex> lk{clients3d.mu};
-        clients3d.conns.erase(&c);
+        if (clients3d.conns.erase(&c) && idle_state_)
+            idle_state_->ws_client_count.fetch_sub(1, std::memory_order_relaxed);
     })
     .onmessage([](crow::websocket::connection& /*c*/,
                   const std::string& /*data*/,
@@ -457,7 +487,13 @@ void CrowServer::start() {
         std::ostringstream o;
         o << "{\"mode\":\"" << json_escape(opts_.mode_label) << "\""
           << ",\"managed\":" << (opts_.flow_managed ? "true" : "false")
-          << ",\"enable_3d\":" << (bus3d_ ? "true" : "false") << "}";
+          << ",\"enable_3d\":" << (bus3d_ ? "true" : "false");
+        if (idle_state_) {
+            o << "," << make_idle_status_fragment(
+                            *idle_state_, idle_enabled_,
+                            idle_enter_after_s_, idle_tick_hz_);
+        }
+        o << "}";
         return json_response(o.str());
     });
 
@@ -564,6 +600,17 @@ void CrowServer::start() {
         if (discovery_beacon_) {
             std::ostringstream extra;
             extra << "," << make_discovery_fragment(*discovery_beacon_) << "}";
+            if (!body.empty() && body.back() == '}') {
+                body.pop_back();
+                body += extra.str();
+            }
+        }
+        // Idle/standby status block (issue #37).
+        if (idle_state_) {
+            std::ostringstream extra;
+            extra << "," << make_idle_status_fragment(
+                                *idle_state_, idle_enabled_,
+                                idle_enter_after_s_, idle_tick_hz_) << "}";
             if (!body.empty() && body.back() == '}') {
                 body.pop_back();
                 body += extra.str();
@@ -1165,6 +1212,13 @@ void CrowServer::publisher_loop() {
         if (discovery_beacon_) {
             if (!extra3d.empty()) extra3d += ",";
             extra3d += make_discovery_fragment(*discovery_beacon_);
+        }
+        // Idle/standby status — the WebUI reads this from the /ws3d bundle so
+        // it can badge standby without polling /stats3d.
+        if (idle_state_) {
+            if (!extra3d.empty()) extra3d += ",";
+            extra3d += make_idle_status_fragment(
+                *idle_state_, idle_enabled_, idle_enter_after_s_, idle_tick_hz_);
         }
         auto msg3d = bus3d_ ? bus3d_->make_bundle_json(extra3d)
                             : pipeline::make_disabled_3d_json();

@@ -9,7 +9,8 @@ namespace fitra::app {
 std::unique_ptr<slimevr::TrackerExtractor> make_tracker_extractor(
     const config::MainOptions& opts,
     pipeline::Skeleton3DBus& bus3d,
-    slimevr::SlimeTrackerBus& tracker_bus) {
+    slimevr::SlimeTrackerBus& tracker_bus,
+    const std::atomic<bool>* idle_flag) {
     slimevr::TrackerExtractorOptions tex_opts;
     tex_opts.extract_rate_hz = opts.slimevr_rate_hz;
     tex_opts.quat_smooth     = static_cast<float>(opts.slimevr_quat_smooth);
@@ -31,6 +32,7 @@ std::unique_ptr<slimevr::TrackerExtractor> make_tracker_extractor(
                                 static_cast<float>(opts.vr_quat_dcutoff)};
     auto extractor = std::make_unique<slimevr::TrackerExtractor>(
         bus3d, tracker_bus, tex_opts);
+    extractor->set_idle_gate(idle_flag);  // before start(); null = no idling
     extractor->start();
     return extractor;
 }

@@ -671,6 +671,24 @@ set_target_properties(fitra_test_main_config PROPERTIES
 
 add_test(NAME test_main_config COMMAND fitra_test_main_config)
 
+# Idle/standby evaluator pure-logic test (issue #37). Header-only predicates
+# (IdleDecision::step / idle_consumer_present / idle_vr_observable) — links
+# fitra_config only for the cpp/src include path; no app symbols are used.
+add_executable(fitra_test_idle_evaluator
+    test_idle_evaluator.cpp
+)
+
+target_link_libraries(fitra_test_idle_evaluator PRIVATE
+    fitra_config
+)
+
+set_target_properties(fitra_test_idle_evaluator PROPERTIES
+    OUTPUT_NAME "test_idle_evaluator"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_idle_evaluator COMMAND fitra_test_idle_evaluator)
+
 # Flow daemon: module_argv / next_action / initial_mode decision helpers and
 # the run_daemon() spawn loop against a stub module script. Links fitra_app
 # for daemon.cpp; the test itself never touches CUDA/TRT/sockets.

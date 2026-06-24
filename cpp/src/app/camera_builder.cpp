@@ -7,7 +7,8 @@ namespace fitra::app {
 
 CameraSet make_frame_sources(const config::MainOptions& opts,
                              TrtStack* trt,
-                             std::shared_ptr<std::atomic<bool>> recording_flag) {
+                             std::shared_ptr<std::atomic<bool>> recording_flag,
+                             const std::atomic<bool>* idle_flag) {
     CameraSet set;
     // Count active cameras up front so each can be given a distinct YOLOX
     // detection phase slot (stagger), spreading the per-camera detection bursts
@@ -80,6 +81,9 @@ CameraSet make_frame_sources(const config::MainOptions& opts,
         // disk I/O has the CPU/GPU headroom and we don't burn cycles on a
         // pose feed nobody is watching.
         src_opts.calib_recording_flag = recording_flag;
+        // Idle/standby gate (issue #37): same flag for every camera; skips
+        // YOLOX + RTMPose pre-bake while idle. Run mode only (null otherwise).
+        src_opts.idle_flag = idle_flag;
         // Have the per-camera worker pre-bake the RTMPose input so the
         // central inference thread only does memcpy + GPU + decode.
         const auto& rtmpose_opts = trt->rtmpose->options();
