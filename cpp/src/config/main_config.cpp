@@ -1,5 +1,6 @@
 #include "config/main_config.hpp"
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -1012,11 +1013,15 @@ void validate_options(const MainOptions& opts) {
     if (opts.n_buffers < 2) {
         fail("--n-buffers must be >= 2 (driver needs at least 2 to pipeline)");
     }
-    if (opts.idle_enter_after_s < 0.0) {
-        fail("--idle-enter-after-s must be >= 0");
+    // std::isfinite first: std::stod parses "nan"/"inf", and a NaN slips past
+    // the `< 0.0` / `<= 0.0` comparisons (both false for NaN). The value would
+    // then reach make_idle_status_fragment, which streams it verbatim, emitting
+    // `nan`/`inf` into the WebUI JSON and crashing its JSON.parse.
+    if (!std::isfinite(opts.idle_enter_after_s) || opts.idle_enter_after_s < 0.0) {
+        fail("--idle-enter-after-s must be a finite number >= 0");
     }
-    if (opts.idle_tick_hz <= 0.0) {
-        fail("--idle-tick-hz must be > 0");
+    if (!std::isfinite(opts.idle_tick_hz) || opts.idle_tick_hz <= 0.0) {
+        fail("--idle-tick-hz must be a finite number > 0");
     }
     if (opts.enable_3d && opts.calib.empty()) {
         fail("--enable-3d requires --calib PATH");

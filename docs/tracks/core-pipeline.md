@@ -177,6 +177,11 @@ intrinsic は 1280 校正→`scale_intrinsics` 640。設計: `docs/design/core-p
   送り続けない)、復帰初フレームで強制再検出 (stale bbox ゴースト回避)、driver スロットルを分割 sleep に
   (復帰 <100ms 死守)、VR 観測可否は receiver 実起動 (`relay.receiver`) で判定 (bind 失敗時の誤 idle 回避)、
   `--bench-fake-bbox` で idle 暗黙無効化 (ベンチ測定の保護)。
+- **PR #43 レビュー反映** (Codex / Gemini): TrackerExtractor の復帰エッジ判定を wait/sleep 後・snapshot
+  直前へ移動 — 待機解除が wait 中に着地した場合に M4 リセットが次ループへ滑り、復帰初フレームを
+  pre-idle pose で smoothing して 1 フレーム lurch する競合を解消。`--idle-enter-after-s`/`--idle-tick-hz`
+  のバリデーションに `std::isfinite` を追加 — `std::stod("nan")` が `< 0`/`<= 0` 比較をすり抜け、
+  `make_idle_status_fragment` が `nan`/`inf` を吐いて WebUI の `JSON.parse` を落とす経路を封鎖。
 → [design/core-pipeline-idle-standby.md](../design/core-pipeline-idle-standby.md)
 
 ### 2026-06-18 — WebUI/VMT 未接続時の待機 (idle) モード仕様起票 (仕様のみ)

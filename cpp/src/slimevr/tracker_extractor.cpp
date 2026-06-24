@@ -108,15 +108,6 @@ void TrackerExtractor::run_loop() {
     bool was_idle = false;
 
     while (!stop_.load(std::memory_order_relaxed)) {
-        // Idle/standby edge: on resume (idle->active) drop the stale pre-idle
-        // smoothing history so the first fresh frame re-anchors instead of
-        // lerping from the frozen pose. Checked before this iteration's
-        // snapshot so the reset precedes the first post-idle smoothing step.
-        const bool idle =
-            idle_flag_ && idle_flag_->load(std::memory_order_relaxed);
-        if (was_idle && !idle) reset_smoothing();
-        was_idle = idle;
-
         // dt for angular-velocity / freeze stats. Fixed-rate mode uses the
         // nominal period; event-driven mode measures the real interval (which
         // varies with the triangulation cadence) and clamps it so a post-idle
@@ -140,6 +131,20 @@ void TrackerExtractor::run_loop() {
             dt_s  = nominal_dt_s;
             dt_ms = nominal_dt_ms;
         }
+
+        // Idle/standby edge: on resume (idle->active) drop the stale pre-idle
+        // smoothing history so the first fresh frame re-anchors instead of
+        // lerping from the frozen pose. Checked AFTER the wait/sleep and
+        // immediately before snapshot: a resume that lands *during* the wait
+        // (idle clears and the first post-idle 3D frame arrives while we are
+        // blocked in wait_for_update / sleep_until) is caught in this same
+        // iteration. Checking at the top of the loop instead would let the
+        // reset slip to the next iteration, smoothing that first post-idle
+        // frame against the frozen pre-idle pose and leaving a one-frame lurch.
+        const bool idle =
+            idle_flag_ && idle_flag_->load(std::memory_order_relaxed);
+        if (was_idle && !idle) reset_smoothing();
+        was_idle = idle;
 
         auto snap = skel_bus_.snapshot();
         const infer::Skeleton3D* sk =
