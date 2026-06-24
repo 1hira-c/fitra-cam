@@ -40,6 +40,23 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-25 — zeroconf ディスカバリ M3/M4 完了 (Windows 実装 + 両機 IP 無指定の実機確認)
+issue #36 の残り M3/M4 を完了し、zeroconf ディスカバリをクローズ。**M3 (Windows `vmt_manager`)**:
+VMT フォーク (`refs/VirtualMotionTracker`) に `DiscoveryAnnounce.cs` (OSC 1.0 codec、golden と byte 一致) +
+`ZeroconfDiscovery.cs` (39580 を `ReuseAddress`+`Broadcast`+`MulticastTTL=1` で bind / group join、1 Hz で
+multicast+broadcast 二段送信、`role="vmt"`/`osc_recv_port=39570` announce + `role="jetson"` browse、
+admission/最小 id 選択/pin/token/`peer_timeout` 5 s) を実装。採用 jetson の `src_ip:osc_recv_port` を
+pose-relay 送信先へ自動設定 (`UpdateJetsonSender(...,"discovery")`、driver-learned fallback より優先)。
+Manager UI に検出ピア一覧 + pin/token。instance_id は GUID 由来 16hex を Settings に永続。**M4 (実機)**:
+Jetson / Windows を**両方 IP 無指定**で起動 → 自動接続を確認。`/stats3d` で Jetson 側
+`discovery.mode=discovery` / `resolved.have=true` (→ `VMT-SH_MAIN @ 172.34.1.9:39570`) / `vmt.host=""` /
+`sent_bundles` 増加 / HMD pose `valid=true` `age_ms≈3.8` (基準 <100 をクリア)、VR 内トラッカー表示まで
+正常。診断メモ: 逆経路 (`/fitra/tracked_pose`) は Windows で SteamVR 未起動だと `HmdPoseTick` の
+`util==null` ガードで一切送られない (起動で復帰) — discovery 不具合ではない。golden 一致の独立 Python
+プローブ (`peer`/`sniff`/`self-test`) でワイヤ照合に使用。fitra-cam 側は M1/M2 のまま無改修。
+→ [design/vr-output-zeroconf-discovery.md](../design/vr-output-zeroconf-discovery.md) /
+[design/vr-output-zeroconf-discovery-vmt-spec.md](../design/vr-output-zeroconf-discovery-vmt-spec.md)
+
 ### 2026-06-23 — VMT ⇔ Jetson zeroconf ディスカバリ M1/M2 実装 (Jetson 側)
 6/18 に起票した zeroconf ディスカバリ (issue #36) の Jetson 側を実装。**M1 (純ロジック)**:
 `discovery_announce` (`/fitra/announce`・typetag `,sssiiss` の encode/parse + ホスト名 FNV-1a の
