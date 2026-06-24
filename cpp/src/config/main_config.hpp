@@ -72,6 +72,15 @@ struct MainOptions {
     std::string static_dir;
     bool no_web = false;
 
+    // idle (standby) — auto power-save when no consumer (a WS viewer or a live
+    // VR peer) is connected. Skips YOLOX/RTMPose/3D while keeping cameras, JPEG
+    // decode, and the TRT contexts warm, so resume is a single atomic flip
+    // (<100ms, next frame). Default on; --no-idle disables. Never engaged in
+    // calib modes. See docs/design/core-pipeline-idle-standby.md.
+    bool   idle_enabled       = true;
+    double idle_enter_after_s = 10.0;  // consumer-zero dwell before standby
+    double idle_tick_hz       = 2.0;   // driver loop throttle while idle (Hz)
+
     // three_d
     bool   enable_3d = false;
     std::string calib;

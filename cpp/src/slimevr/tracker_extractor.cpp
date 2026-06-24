@@ -80,6 +80,20 @@ void TrackerExtractor::stop() {
     running_.store(false);
 }
 
+void TrackerExtractor::reset_smoothing() {
+    // Mirror the constructor's history init: identity quats, zero positions,
+    // no first-frame anchor. The One Euro / position contexts and FK foot
+    // anchors are also dropped so the next valid frame seeds fresh. Rolling
+    // stats rings are left alone (they self-flush via the window).
+    for (auto& q : prev_quat_)         q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
+    for (auto& p : prev_pos_)          p = cv::Vec3f{0.0f, 0.0f, 0.0f};
+    for (auto& q : last_emitted_quat_) q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
+    have_last_emitted_ = false;
+    quat_ctx_    = QuatSmoothingContext{};
+    pos_ctx_     = PosSmoothingContext{};
+    extract_ctx_ = ExtractContext{};
+}
+
 void TrackerExtractor::run_loop() {
     using clk = std::chrono::steady_clock;
     const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, opts_.extract_rate_hz));
@@ -91,6 +105,7 @@ void TrackerExtractor::run_loop() {
     auto next = clk::now() + period_d;
     auto last_tick = clk::now();
     std::uint64_t last_update_seq = 0;
+    bool was_idle = false;
 
     while (!stop_.load(std::memory_order_relaxed)) {
         // dt for angular-velocity / freeze stats. Fixed-rate mode uses the
@@ -116,6 +131,20 @@ void TrackerExtractor::run_loop() {
             dt_s  = nominal_dt_s;
             dt_ms = nominal_dt_ms;
         }
+
+        // Idle/standby edge: on resume (idle->active) drop the stale pre-idle
+        // smoothing history so the first fresh frame re-anchors instead of
+        // lerping from the frozen pose. Checked AFTER the wait/sleep and
+        // immediately before snapshot: a resume that lands *during* the wait
+        // (idle clears and the first post-idle 3D frame arrives while we are
+        // blocked in wait_for_update / sleep_until) is caught in this same
+        // iteration. Checking at the top of the loop instead would let the
+        // reset slip to the next iteration, smoothing that first post-idle
+        // frame against the frozen pre-idle pose and leaving a one-frame lurch.
+        const bool idle =
+            idle_flag_ && idle_flag_->load(std::memory_order_relaxed);
+        if (was_idle && !idle) reset_smoothing();
+        was_idle = idle;
 
         auto snap = skel_bus_.snapshot();
         const infer::Skeleton3D* sk =

@@ -182,6 +182,7 @@ void FrameSource::decode_loop() {
     // (glibc mmap path), mirroring the capture-thread cap fixed in
     // v4l2_capture.cpp -- it would otherwise cap the decode thread at ~53fps.
     Frame raw;
+    bool was_idle = false;   // idle/standby edge tracker (force re-detect on resume)
     while (!stop_.load()) {
         // Event-driven: block until the capture worker publishes a new frame
         // (or stop_ is set, or the 100ms safety timeout fires). Replaces the
@@ -193,6 +194,18 @@ void FrameSource::decode_loop() {
         const bool calib_recording =
             opts_.calib_recording_flag
             && opts_.calib_recording_flag->load(std::memory_order_relaxed);
+        // Idle/standby (issue #37): skip YOLOX + RTMPose pre-bake to drop the
+        // bulk of the GPU load, but keep decoding so resume is the next frame.
+        // Unlike calib_recording it does NOT force a BGR copy.
+        const bool idle =
+            opts_.idle_flag
+            && opts_.idle_flag->load(std::memory_order_relaxed);
+        // On resume (idle->active) the cached bbox is stale (the subject may
+        // have moved/left while detection was paused). Force a fresh YOLOX
+        // detection on the first active frame so RTMPose never runs on a stale
+        // crop (ghost pose) and we don't wait out the det_frequency schedule.
+        const bool just_resumed = was_idle && !idle;
+        was_idle = idle;
 
         // Guard the HW NVJPEG decoder against malformed frames (it segfaults on
         // them; the CPU cv::imdecode path tolerates them on its own). Drop the
@@ -321,7 +334,7 @@ void FrameSource::decode_loop() {
         // so all cameras detect in parallel. Skipped during calib recording —
         // raw mp4 capture is the priority, and dump_keypoints_3d re-runs
         // detection offline on the resulting clips anyway.
-        if (yolox_ && !calib_recording) {
+        if (yolox_ && !calib_recording && !idle) {
             // Detect on the decimation schedule only. The old `||
             // cached_bboxes_.empty()` clause forced YOLOX EVERY frame whenever
             // nothing was detected -- so an empty/no-person scene ran the
@@ -335,7 +348,7 @@ void FrameSource::decode_loop() {
             // don't all land on the same frame and stall the shared GPU. The
             // det_frequency <= 0 short-circuit guards the modulo against a
             // zero/negative frequency (config bug) -> detect every frame.
-            bool do_detect = (opts_.det_frequency <= 0) ||
+            bool do_detect = just_resumed || (opts_.det_frequency <= 0) ||
                 ((frame_idx_ % opts_.det_frequency) == (opts_.det_phase % opts_.det_frequency));
             if (do_detect) {
                 // GPU YOLOX: the preprocess kernel fills the engine input from
@@ -391,10 +404,10 @@ void FrameSource::decode_loop() {
         df.captured_at = raw.captured_at;
         df.t_decode    = t_decode;
         df.t_detect    = t_detect;
-        // During calib recording we drop bboxes too — the central thread sees
-        // bboxes.empty() and naturally skips RTMPose. (Without this the
-        // "missing prebake" warning would spam.)
-        if (!calib_recording) {
+        // During calib recording (and idle/standby) we drop bboxes too — the
+        // central thread sees bboxes.empty() and naturally skips RTMPose.
+        // (Without this the "missing prebake" warning would spam.)
+        if (!calib_recording && !idle) {
             df.bboxes  = cached_bboxes_;  // copy of current cache
         }
 

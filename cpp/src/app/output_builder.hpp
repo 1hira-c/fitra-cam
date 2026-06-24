@@ -5,6 +5,7 @@
 // the publishers + continuous aligner are run-mode-only — setup modes never
 // emit tracker output (docs/design/pose-3d-calib-mode-separation.md).
 
+#include <atomic>
 #include <memory>
 
 #include "config/main_config.hpp"
@@ -20,10 +21,13 @@ namespace fitra::app {
 
 // Started on return. Single producer for the smoothed tracker stream shared
 // by SlimeVR/VMT publishers and the WebUI.
+// `idle_flag` (issue #37): non-null wires the standby gate so the extractor
+// resets its smoothing on resume. Run mode only; calib passes null.
 std::unique_ptr<slimevr::TrackerExtractor> make_tracker_extractor(
     const config::MainOptions& opts,
     pipeline::Skeleton3DBus& bus3d,
-    slimevr::SlimeTrackerBus& tracker_bus);
+    slimevr::SlimeTrackerBus& tracker_bus,
+    const std::atomic<bool>* idle_flag = nullptr);
 
 struct RunOutputs {
     std::unique_ptr<slimevr::NativePublisher> slime_pub;

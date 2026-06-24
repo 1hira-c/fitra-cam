@@ -80,8 +80,19 @@ public:
 
     const TrackerExtractorOptions& options() const { return opts_; }
 
+    // Idle/standby gate (issue #37). Points at the shared idle atomic (owned by
+    // the IdleState in mode_run; must outlive the extractor); null disables.
+    // On the idle->active edge the run loop drops its smoothing history so the
+    // first post-idle frame re-anchors instead of lerping from the frozen pose
+    // (the One Euro does NOT self-heal: fixed-rate dt is always nominal). Set
+    // before start(). A plain atomic pointer keeps the slimevr layer
+    // app/-independent.
+    void set_idle_gate(const std::atomic<bool>* idle_flag) { idle_flag_ = idle_flag; }
+
 private:
     void run_loop();
+    // Drop all smoothing/anchor history back to the constructed state.
+    void reset_smoothing();
 
     pipeline::Skeleton3DBus&            skel_bus_;
     SlimeTrackerBus&                    tracker_bus_;
@@ -90,6 +101,7 @@ private:
     std::thread                         thread_;
     std::atomic<bool>                   stop_{false};
     std::atomic<bool>                   running_{false};
+    const std::atomic<bool>*            idle_flag_ = nullptr;  // idle/standby gate
 
     // Quaternion smoothing history; owned here so the bus consumers never see
     // raw (unsmoothed) extractions and so the prev_quat history is preserved

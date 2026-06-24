@@ -71,6 +71,12 @@ void MultiCameraDriver::set_skeleton3d_tap(Skeleton3DTapFn fn) {
     skeleton3d_tap_ = std::move(fn);
 }
 
+void MultiCameraDriver::set_idle_gate(const std::atomic<bool>* idle_flag,
+                                      double idle_tick_hz) {
+    idle_flag_    = idle_flag;
+    idle_tick_hz_ = idle_tick_hz;
+}
+
 void MultiCameraDriver::stop() {
     if (!worker_.joinable() && sources_.empty()) return;
     stop_.store(true);
@@ -109,6 +115,17 @@ void MultiCameraDriver::loop() {
         pending.clear();
         reqs.clear();
         auto iter_start = std::chrono::steady_clock::now();
+
+        // Idle/standby gate (issue #37). While idle the heavy 3D update is
+        // skipped and the loop throttles to idle_tick_hz; cameras + decode stay
+        // warm (frames keep arriving and are dropped-old), so resume is the
+        // next frame. The flag is a hint that flips a few times a second.
+        const bool idle =
+            idle_flag_ && idle_flag_->load(std::memory_order_relaxed);
+        if (idle != idle_active_) {
+            handle_idle_transition(idle);
+            idle_active_ = idle;
+        }
 
         // Pass 1: pull the latest (frame, bboxes) from each FrameSource.
         // Decode + YOLOX already ran in the per-camera worker thread.
@@ -194,7 +211,7 @@ void MultiCameraDriver::loop() {
         // Preprocess already ran on per-camera worker threads — this is
         // just memcpy + GPU enqueue + sync + SimCC decode.
         std::vector<infer::Person> all_persons;
-        if (!reqs.empty()) {
+        if (!idle && !reqs.empty()) {
             all_persons = rtmpose_.infer_prebaked(reqs);
         }
         auto t_after_rtm = std::chrono::steady_clock::now();
@@ -227,7 +244,11 @@ void MultiCameraDriver::loop() {
             auto lag = std::chrono::duration_cast<std::chrono::milliseconds>(
                           now - df.captured_at);
             snap.captured_wall = wall_now - lag;
-            if (pc.person_count > 0) {
+            // Bounds guard: while idle (or any frame RTMPose was skipped)
+            // all_persons is empty though person_count was set in Pass 1, so
+            // slicing it would read past the end.
+            if (pc.person_count > 0 &&
+                all_persons.size() >= pc.person_offset + pc.person_count) {
                 snap.persons.assign(
                     all_persons.begin() + pc.person_offset,
                     all_persons.begin() + pc.person_offset + pc.person_count);
@@ -243,7 +264,7 @@ void MultiCameraDriver::loop() {
             bus_.update(snap);
             latest_snapshots_[pc.idx] = std::move(snap);
         }
-        maybe_update_3d(now, wall_now);
+        if (!idle) maybe_update_3d(now, wall_now);
         auto t_after_snap = std::chrono::steady_clock::now();
 
         ++iter_count;
@@ -281,6 +302,28 @@ void MultiCameraDriver::loop() {
             sum_bake_pose = sum_pose_pub = sum_cap_pub = 0.0;
             sum_frames = 0;
             stats_anchor = t_after_snap;
+        }
+
+        // Standby throttle: cap the central loop at idle_tick_hz so we stop
+        // spinning on every decoded frame. Cameras + per-camera decode keep
+        // running (latest-frame-wins drops the backlog); only this loop sleeps.
+        // Split the sleep into short slices so a resume (idle flag cleared) or
+        // stop is observed within ~10ms — a single sleep_for(1/tick_hz) would
+        // pin the central loop idle for up to 0.5s (or longer at a low
+        // idle_tick_hz), breaking the "<100ms / next frame" resume contract.
+        if (idle) {
+            const double hz = idle_tick_hz_ > 0.1 ? idle_tick_hz_ : 0.1;
+            const auto deadline = std::chrono::steady_clock::now() +
+                std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    std::chrono::duration<double>(1.0 / hz));
+            const auto slice = std::chrono::milliseconds(10);
+            while (!stop_.load()
+                   && idle_flag_ && idle_flag_->load(std::memory_order_relaxed)) {
+                auto now = std::chrono::steady_clock::now();
+                if (now >= deadline) break;
+                std::this_thread::sleep_for(std::min<std::chrono::steady_clock::duration>(
+                    slice, deadline - now));
+            }
         }
     }
 }
@@ -471,6 +514,44 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     }
     last_3d_update_ = now;
     has_last_3d_update_ = true;
+}
+
+void MultiCameraDriver::handle_idle_transition(bool now_idle) {
+    if (now_idle) {
+        // Entering standby: push one "no fresh data" 3D snapshot (enabled, no
+        // persons) so the tracker extractor + publishers + WS viewer drop the
+        // last live pose instead of holding a frozen skeleton for the whole
+        // idle period. 2D-only runs have no 3D bus → nothing to emit.
+        Skeleton3DBus* bus = nullptr;
+        {
+            std::lock_guard<std::mutex> g(threed_mu_);
+            bus = threed_.bus;
+        }
+        if (!bus) return;
+        Skeleton3DSnapshot snap;
+        snap.ts = std::chrono::system_clock::now();
+        snap.stats.enabled = true;
+        // ik_locked=false (even when the subject is calibrated) so both the VMT
+        // and SlimeVR publishers' `!ik_locked` gate skips this frame: otherwise
+        // VMT's degeneracy "hold" mode would keep re-sending the frozen pose for
+        // the whole idle period instead of dropping it.
+        snap.stats.ik_locked = false;
+        snap.stats.subject_height_m = threed_.subject_height_m;
+        snap.stats.profile_loaded = ik_.profile_loaded();
+        snap.stats.subject_id = ik_.subject_id();
+        snap.stats.profile_quality_status = ik_.profile_quality_status();
+        snap.stats.processed = tri_processed_;
+        snap.stats.sync_miss = tri_sync_miss_;
+        bus->update(snap);
+    } else {
+        // Resuming from standby: drop the Kalman's stale pre-idle state so the
+        // first post-idle measurement re-anchors instead of interpolating from
+        // the frozen pose (no lurch). dt also resets to the nominal step. IK
+        // lock / bone lengths (subject calibration) are preserved. Runs on the
+        // loop thread, the only writer of kalman_ / has_last_3d_update_.
+        kalman_.reset();
+        has_last_3d_update_ = false;
+    }
 }
 
 }  // namespace fitra::pipeline
