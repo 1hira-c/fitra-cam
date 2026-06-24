@@ -3,6 +3,7 @@ import { CameraPane } from "../components/CameraPane";
 import { ThreeDView } from "../components/ThreeDView";
 import { VmtAlignForm, type VmtAlignHandle } from "../components/VmtAlignForm";
 import { VmtAutoForm } from "../components/VmtAutoForm";
+import { VmtPresetForm } from "../components/VmtPresetForm";
 import { SlimeCorrectionTable } from "../components/SlimeCorrectionTable";
 import { TrackerStatsTable } from "../components/TrackerStatsTable";
 import { WizardLayout } from "../components/WizardLayout";
@@ -186,6 +187,7 @@ export function ViewerPage() {
       <section className="view3d">
         <ThreeDView onViewer={onViewer} />
         <pre className="stats">{stats3dText}</pre>
+        <VmtPresetForm />
         <VmtAlignForm ref={vmtAlignRef} />
         <VmtAutoForm
           hmdStatus={hmdStatus}

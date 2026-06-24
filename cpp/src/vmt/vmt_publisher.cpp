@@ -52,7 +52,10 @@ VmtPublisher::VmtPublisher(pipeline::Skeleton3DBus&  skel_bus,
                            VmtPublisherOptions       opts)
     : skel_bus_{skel_bus},
       tracker_bus_{tracker_bus},
-      opts_{std::move(opts)} {}
+      opts_{std::move(opts)} {
+    preset_       = opts_.preset;
+    role_enabled_ = role_mask_for(opts_.preset);
+}
 
 VmtPublisher::~VmtPublisher() {
     try { stop(); } catch (...) {}
@@ -83,10 +86,12 @@ bool VmtPublisher::start() {
 
     stop_.store(false);
     send_thread_ = std::thread([this]() { send_loop(); });
-    FITRA_LOG_INFO("[vmt] publisher up: {}:{} @ {} Hz, 10 trackers, index={}..{}, degen={}",
+    int enabled = 0;
+    for (bool b : role_enabled_) enabled += b ? 1 : 0;
+    FITRA_LOG_INFO("[vmt] publisher up: {}:{} @ {} Hz, {} trackers (preset={}), index base={}, degen={}",
                    opts_.host, opts_.port, opts_.send_rate_hz,
+                   enabled, vmt_preset_name(opts_.preset),
                    opts_.index_base,
-                   opts_.index_base + static_cast<int>(slimevr::kTrackerCount) - 1,
                    degen_mode_name(opts_.degeneracy_mode));
     return true;
 }
@@ -113,6 +118,17 @@ void VmtPublisher::set_alignment(const VmtAlignment& alignment) {
 VmtAlignment VmtPublisher::alignment() const {
     std::lock_guard<std::mutex> lk{alignment_mu_};
     return alignment_;
+}
+
+void VmtPublisher::set_preset(VmtTrackerPreset preset) {
+    std::lock_guard<std::mutex> lk{preset_mu_};
+    preset_       = preset;
+    role_enabled_ = role_mask_for(preset);
+}
+
+VmtTrackerPreset VmtPublisher::preset() const {
+    std::lock_guard<std::mutex> lk{preset_mu_};
+    return preset_;
 }
 
 void VmtPublisher::send_loop() {
@@ -149,11 +165,17 @@ void VmtPublisher::send_loop() {
         writer.clear();
         writer.begin_bundle(OscWriter::ntp_timetag_now());
         const VmtAlignment alignment = this->alignment();
+        std::array<bool, slimevr::kTrackerCount> mask;
+        {
+            std::lock_guard<std::mutex> lk{preset_mu_};
+            mask = role_enabled_;
+        }
 
         std::uint64_t msgs_this_bundle = 0;
         std::uint64_t disabled_this_bundle = 0;
 
         for (std::size_t i = 0; i < slimevr::kTrackerCount; ++i) {
+            if (!mask[i]) continue;   // role excluded by the active preset
             const auto& t = tracker_snap.trackers[i];
             int  enable = 1;
             bool emit   = true;

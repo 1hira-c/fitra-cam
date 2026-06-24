@@ -18,6 +18,15 @@
 - **10 trackers の TrackerRole 順は固定**: LeftUpperArm / RightUpperArm / Chest / Hip /
   LeftUpperLeg / RightUpperLeg / LeftLowerLeg / RightLowerLeg / LeftFoot / RightFoot。
   SlimeVR `TrackerPosition` enum に完全一致 (骨盤は `HIP(6)`、`WAIST(5)` は auto-assign されない)。
+- **VMT 送信トラッカーは preset で選択** (`--vmt-preset {p3,p6,p8,full}`, 既定 `p8`)。VRChat FBT は
+  最大 8 点 (hip/chest/両足/両膝/両肘) で脛 (LowerLeg) に対応 role が無いため、既定 `p8` は脛 2 本を落とす。
+  `p3`=腰+両足 / `p6`=+胸+両膝 / `full`=全 10 (SlimeVR 互換)。**間引きは VMT publisher のみ**で行い
+  extractor は 10 点維持 (SlimeVR 路は不変)。**VMT index は role 固定**なので preset を変えても
+  SteamVR「Manage Trackers」の role 割当 (VMT_10=Left Elbow … 18=Left Foot / 19=Right Foot) は安定。
+  ランタイム切替は `POST /api/vmt/preset` / Web UI `VmtPresetForm`。設計: [`../design/vr-output-vrchat-tracker-presets.md`](../design/vr-output-vrchat-tracker-presets.md)。
+- **足トラッカー位置は `--foot-tracker-pos {ankle,midpoint}`** (既定 `ankle`)。`ankle` は足首位置、
+  `midpoint` は足首/足先中点。回転は両モードとも不変 (`fwd = ankle→toe` で足先方向を保持)。位置を
+  消費するのは VMT 送信と WebUI viz のみ (SlimeVR は回転のみ)。VRChat 実機で A/B して既定を確定する。
 - **Bridge relay (Jetson → Windows .NET relay → Named Pipe → SlimeVR Server) は没**。理由は
   SteamVR 起動中の `\\.\pipe\SlimeVRInput` 排他 + 座標系整合の不安定。位置を VR に流す要求は
   VMT 経路で解決済み。実装一式は `archive/botsu-phase12-bridge-relay` ブランチに凍結。
@@ -39,6 +48,17 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 詳細な合格基準は [`cpp-migration-plan.md` 検証戦略表](../cpp-migration-plan.md) の旧 Phase 11/14/15/15.5 行。
 
 ## Changelog (新しい順)
+
+### 2026-06-24 — VRChat 向けトラッカープリセット + 足位置モード
+VMT 送信を VRChat 標準 8 点に既定で一致させ、本数を `--vmt-preset {p3,p6,p8,full}` (既定 `p8`) で
+選択可能にした。従来は 10 点固定送信だったが、VRChat FBT は最大 8 点で脛 (LowerLeg) に対応 role が
+無く浮いていた。既定 `p8` は脛 2 本を落とし、残り 8 本 (両肘=上腕 / 胸 / 腰 / 両膝=腿 / 両足) が
+VRChat 仕様と body part・装着位置まで一致する。間引きは **VMT publisher の role マスク**のみで行い、
+extractor は 10 点維持 (SlimeVR Firmware UDP 路は不変)。VMT index は role 固定なので SteamVR の role
+割当が preset 間で安定。ランタイム切替は `GET/POST /api/vmt/preset` + Web UI `VmtPresetForm`。
+あわせて足トラッカー位置を `--foot-tracker-pos {ankle,midpoint}` (既定 `ankle`) で切替可能にした
+(回転は不変、位置のみ・VMT/viz だけに影響)。設計:
+[`../design/vr-output-vrchat-tracker-presets.md`](../design/vr-output-vrchat-tracker-presets.md)。
 
 ### 2026-06-19 — 3D カメラ/HMD マーカーの PR#40 レビュー指摘修正 (バグ修正)
 PR #40 の Codex / Gemini レビュー指摘を反映。(1) **HMD 向きバグ**: HMD マーカーの姿勢を

@@ -174,7 +174,7 @@ void TrackerExtractor::run_loop() {
         // world-absolute hold (the legacy behavior).
         pos_ctx_.hip_valid = false;
         if (sk != nullptr && halpe) {
-            raw_trackers = extract_trackers(*sk, &extract_ctx_);
+            raw_trackers = extract_trackers(*sk, &extract_ctx_, opts_.foot_pos_mode);
             // Halpe26 idx 19 = hip_center. The waist tracker's position is
             // built from this same joint, so sharing it as the hip reference
             // keeps the two consistent.

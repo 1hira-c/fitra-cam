@@ -378,7 +378,8 @@ bool build_tracker(TrackerRole role,
 }  // namespace
 
 std::array<SlimeTracker, kTrackerCount>
-extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx) {
+extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
+                 FootPosMode foot_pos_mode) {
     if (lift::active_keypoint_format() != lift::KeypointFormat::Halpe26) {
         throw std::runtime_error(
             "extract_trackers requires --keypoint-format=halpe26");
@@ -572,7 +573,12 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx) {
             return;
         }
 
-        cv::Vec3f pos = (ap + tp) * 0.5f;
+        // Ankle: pos = ankle joint (foot bone is perceived at the ankle by
+        // VRChat FBT). Midpoint: legacy pos = (ankle + toe)/2. Rotation is the
+        // same either way — fwd = ankle→toe still carries the toe direction.
+        cv::Vec3f pos = (foot_pos_mode == FootPosMode::Ankle)
+                            ? ap
+                            : (ap + tp) * 0.5f;
         cv::Vec3f fwd = tp - ap;
         cv::Vec3f up  = kp - ap;            // tibia axis (ankle → knee)
         const float weight = (ap_synth || tp_synth)

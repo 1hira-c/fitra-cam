@@ -64,6 +64,7 @@ std::string make_vmt_stats_fragment(const vmt::VmtPublisher& publisher) {
         << ",\"rate_hz\":"                        << o.send_rate_hz
         << ",\"port\":"                           << o.port
         << ",\"index_base\":"                     << o.index_base
+        << ",\"preset\":\""                       << json_escape(vmt::vmt_preset_name(publisher.preset())) << "\""
         << ",\"host\":\""                         << json_escape(o.host) << "\""
         << ",\"degeneracy_mode\":\""              << json_escape(vmt::degen_mode_name(o.degeneracy_mode)) << "\""
         << ",\"alignment\":";
@@ -605,6 +606,39 @@ void CrowServer::start() {
         out << "{\"ok\":true,\"enabled\":true,\"alignment\":";
         append_vmt_alignment_json(out, a);
         out << "}";
+        return json_response(out.str());
+    });
+
+    // Tracker preset: which TrackerRoles are published (p3|p6|p8|full).
+    // Changing it requires re-running VRChat FBT calibration.
+    CROW_ROUTE(app, "/api/vmt/preset")
+    ([this]() {
+        std::ostringstream out;
+        out << "{\"enabled\":" << (vmt_publisher_ ? "true" : "false")
+            << ",\"preset\":\""
+            << json_escape(vmt::vmt_preset_name(
+                   vmt_publisher_ ? vmt_publisher_->preset() : vmt::VmtTrackerPreset::P8))
+            << "\"}";
+        return json_response(out.str());
+    });
+
+    CROW_ROUTE(app, "/api/vmt/preset").methods(crow::HTTPMethod::POST)
+    ([this](const crow::request& req) {
+        if (!vmt_publisher_) {
+            return json_response("{\"ok\":false,\"err\":\"vmt publisher disabled\"}", 409);
+        }
+        auto body = crow::json::load(req.body);
+        if (!body || !body.has("preset")
+            || body["preset"].t() != crow::json::type::String) {
+            return json_response("{\"ok\":false,\"err\":\"missing/invalid preset\"}", 400);
+        }
+        vmt::VmtTrackerPreset preset;
+        if (!vmt::parse_vmt_preset(std::string(body["preset"].s()), preset)) {
+            return json_response("{\"ok\":false,\"err\":\"preset must be p3|p6|p8|full\"}", 400);
+        }
+        vmt_publisher_->set_preset(preset);
+        std::ostringstream out;
+        out << "{\"ok\":true,\"preset\":\"" << json_escape(vmt::vmt_preset_name(preset)) << "\"}";
         return json_response(out.str());
     });
 

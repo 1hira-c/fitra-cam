@@ -89,8 +89,16 @@ export interface VmtAlignment {
 export interface VmtBlock {
   sent_bundles?: number;
   disabled_count?: number;
+  preset?: string;
   alignment?: VmtAlignment;
   [k: string]: unknown;
+}
+
+export interface VmtPresetResponse {
+  enabled?: boolean;
+  preset?: string;
+  ok?: boolean;
+  err?: string;
 }
 
 export interface HmdBlock {

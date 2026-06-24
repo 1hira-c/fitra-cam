@@ -130,6 +130,70 @@ void test_index_base_mapping() {
     if (vmt_index_for(TrackerRole::RightFoot, 10)     != 19) throw std::runtime_error("RightFoot base 10 != 19");
 }
 
+int mask_count(const std::array<bool, fitra::slimevr::kTrackerCount>& m) {
+    int n = 0;
+    for (bool b : m) n += b ? 1 : 0;
+    return n;
+}
+
+void test_preset_parse_roundtrip() {
+    using fitra::vmt::VmtTrackerPreset;
+    using fitra::vmt::parse_vmt_preset;
+    using fitra::vmt::vmt_preset_name;
+    for (auto p : {VmtTrackerPreset::P3, VmtTrackerPreset::P6,
+                   VmtTrackerPreset::P8, VmtTrackerPreset::Full}) {
+        VmtTrackerPreset got;
+        if (!parse_vmt_preset(vmt_preset_name(p), got) || got != p) {
+            throw std::runtime_error(std::string("preset roundtrip failed: ") + vmt_preset_name(p));
+        }
+    }
+    VmtTrackerPreset dummy;
+    if (parse_vmt_preset("p9", dummy))  throw std::runtime_error("parse_vmt_preset accepted p9");
+    if (parse_vmt_preset("", dummy))    throw std::runtime_error("parse_vmt_preset accepted empty");
+}
+
+void test_preset_masks() {
+    using fitra::vmt::VmtTrackerPreset;
+    using fitra::vmt::role_mask_for;
+    using fitra::slimevr::TrackerRole;
+    auto idx = [](TrackerRole r) { return static_cast<std::size_t>(r); };
+
+    auto p3   = role_mask_for(VmtTrackerPreset::P3);
+    auto p6   = role_mask_for(VmtTrackerPreset::P6);
+    auto p8   = role_mask_for(VmtTrackerPreset::P8);
+    auto full = role_mask_for(VmtTrackerPreset::Full);
+
+    if (mask_count(p3)   != 3)  throw std::runtime_error("p3 count != 3");
+    if (mask_count(p6)   != 6)  throw std::runtime_error("p6 count != 6");
+    if (mask_count(p8)   != 8)  throw std::runtime_error("p8 count != 8");
+    if (mask_count(full) != 10) throw std::runtime_error("full count != 10");
+
+    // p3 = hip + feet.
+    if (!p3[idx(TrackerRole::Waist)] || !p3[idx(TrackerRole::LeftFoot)]
+        || !p3[idx(TrackerRole::RightFoot)]) throw std::runtime_error("p3 missing hip/feet");
+    if (p3[idx(TrackerRole::Chest)]) throw std::runtime_error("p3 has chest");
+
+    // VRChat standard p8 = no shins (LowerLeg only in full).
+    if (p8[idx(TrackerRole::LeftLowerLeg)] || p8[idx(TrackerRole::RightLowerLeg)])
+        throw std::runtime_error("p8 must not include LowerLeg");
+    if (!full[idx(TrackerRole::LeftLowerLeg)] || !full[idx(TrackerRole::RightLowerLeg)])
+        throw std::runtime_error("full must include LowerLeg");
+    // p8 covers all 8 VRChat roles.
+    for (auto r : {TrackerRole::LeftUpperArm, TrackerRole::RightUpperArm,
+                   TrackerRole::Chest, TrackerRole::Waist,
+                   TrackerRole::LeftUpperLeg, TrackerRole::RightUpperLeg,
+                   TrackerRole::LeftFoot, TrackerRole::RightFoot}) {
+        if (!p8[idx(r)]) throw std::runtime_error("p8 missing a VRChat role");
+    }
+
+    // Nesting: p3 ⊆ p6 ⊆ p8 ⊆ full.
+    for (std::size_t i = 0; i < fitra::slimevr::kTrackerCount; ++i) {
+        if (p3[i] && !p6[i])   throw std::runtime_error("p3 not subset of p6");
+        if (p6[i] && !p8[i])   throw std::runtime_error("p6 not subset of p8");
+        if (p8[i] && !full[i]) throw std::runtime_error("p8 not subset of full");
+    }
+}
+
 void test_alignment_identity() {
     fitra::vmt::VmtPos pos{1.0f, 2.0f, 3.0f};
     fitra::vmt::VmtQuat quat{0.0f, 0.0f, 0.0f, 1.0f};
@@ -229,6 +293,8 @@ int main() {
         test_quat_cardinals();
         test_index_mapping();
         test_index_base_mapping();
+        test_preset_parse_roundtrip();
+        test_preset_masks();
         test_alignment_identity();
         test_alignment_translation();
         test_alignment_yaw_position();

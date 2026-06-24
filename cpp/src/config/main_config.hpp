@@ -109,6 +109,10 @@ struct MainOptions {
     double vr_quat_mincutoff = 1.5;
     double vr_quat_beta      = 1.5;
     double vr_quat_dcutoff   = 1.0;
+    // Foot tracker position: "ankle" (default — foot bone at the ankle, matches
+    // VRChat FBT) | "midpoint" (legacy ankle/toe midpoint). Rotation is the same
+    // either way. Only affects position consumers (VMT publish + WebUI viz).
+    std::string vr_foot_pos_mode = "ankle";
 
     // subject — identity (used by both run and subject calibration). Lives in
     // the YAML `subject:` block; subject_id + subject_height_m are the single
@@ -148,6 +152,10 @@ struct MainOptions {
     int    vmt_port = 39570;
     double vmt_rate_hz = 60.0;
     int    vmt_index_base = 10;
+    // Which tracker preset to publish to VMT: "p3" | "p6" | "p8" | "full".
+    // Default "p8" = VRChat standard 8-point (drops the shin trackers). See
+    // VmtTrackerPreset in vmt_protocol.hpp.
+    std::string vmt_tracker_preset = "p8";
     double vmt_pos_smooth = 0.5;             // Position EMA alpha
     // "hold" (default) | "disable" | "skip" — see vmt_publisher.hpp DegenMode
     std::string vmt_degeneracy_mode = "hold";

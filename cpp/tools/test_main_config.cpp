@@ -252,6 +252,60 @@ vmt:
     check(threw, "vmt_index_base 49 must throw");
 }
 
+void test_vmt_preset_and_foot_pos_yaml_cli_and_validate() {
+    auto p = write_tmp("vmt_preset.yaml", R"(schema: fitra_main_config_v1
+vmt:
+  preset: p6
+three_d:
+  vr_foot_pos_mode: midpoint
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(opts.vmt_tracker_preset == "p6", "vmt.preset loads");
+    check(opts.vr_foot_pos_mode == "midpoint", "three_d.vr_foot_pos_mode loads");
+
+    // Defaults: VRChat standard 8-point + foot at ankle.
+    MainOptions def;
+    check(def.vmt_tracker_preset == "p8", "default vmt preset is p8");
+    check(def.vr_foot_pos_mode == "ankle", "default foot pos is ankle");
+
+    std::vector<std::string> argv_buf{"--vmt-preset", "p3", "--foot-tracker-pos", "ankle"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(opts.vmt_tracker_preset == "p3", "--vmt-preset CLI overrides YAML");
+    check(opts.vr_foot_pos_mode == "ankle", "--foot-tracker-pos CLI overrides YAML");
+
+    opts.cam_paths[0] = "/tmp/a";
+    opts.det_engine   = "/tmp/y";
+    opts.pose_engine  = "/tmp/r";
+    opts.enable_3d    = true;
+    opts.calib        = "/tmp/cam.yaml";
+    opts.vmt_out      = true;
+    opts.keypoint_format = "halpe26";
+    validate_options(opts);  // p3 + ankle are valid
+
+    opts.vmt_tracker_preset = "p7";
+    bool threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--vmt-preset", "vmt preset range msg");
+    }
+    check(threw, "bad vmt preset must throw");
+    opts.vmt_tracker_preset = "p8";
+
+    opts.vr_foot_pos_mode = "heel";
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--foot-tracker-pos", "foot pos range msg");
+    }
+    check(threw, "bad foot pos must throw");
+}
+
 void test_validate_required_missing() {
     MainOptions opts;
     bool threw = false;
@@ -1194,6 +1248,8 @@ const TestCase kTests[] = {
     {"negated_three_d_keys_invert_bools",      test_negated_three_d_keys_invert_runtime_bools},
     {"slimevr_preview_no_reset_yaml_and_cli",  test_slimevr_preview_no_reset_yaml_and_cli},
     {"vmt_index_base_yaml_cli_and_validate",   test_vmt_index_base_yaml_cli_and_validate},
+    {"vmt_preset_and_foot_pos_yaml_cli_and_validate",
+                                               test_vmt_preset_and_foot_pos_yaml_cli_and_validate},
     {"extrinsic_calib_yaml_cli_and_validate",  test_extrinsic_calib_yaml_cli_and_validate},
     {"run_mode_derivation_and_publisher_exclusivity",
                                                test_run_mode_derivation_and_publisher_exclusivity},

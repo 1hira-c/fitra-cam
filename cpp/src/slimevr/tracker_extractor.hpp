@@ -63,6 +63,12 @@ struct TrackerExtractorOptions {
     // rotation is on the geodesic angular speed (rad/s).
     OneEuroParams pos_one_euro  {1.0f, 4.0f, 1.0f};   // mincutoff, beta, dcutoff
     OneEuroParams quat_one_euro {1.5f, 1.5f, 1.0f};
+
+    // Foot tracker position (see FootPosMode). Product default Ankle: the foot
+    // bone sits at the ankle for VRChat FBT calibration. Rotation is unchanged.
+    // Only affects position consumers (VMT publish + WebUI viz), not the
+    // rotation-only SlimeVR Firmware UDP path.
+    FootPosMode foot_pos_mode = FootPosMode::Ankle;
 };
 
 class TrackerExtractor {

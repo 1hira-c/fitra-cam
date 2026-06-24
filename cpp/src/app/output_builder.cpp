@@ -30,6 +30,11 @@ std::unique_ptr<slimevr::TrackerExtractor> make_tracker_extractor(
     tex_opts.quat_one_euro   = {static_cast<float>(opts.vr_quat_mincutoff),
                                 static_cast<float>(opts.vr_quat_beta),
                                 static_cast<float>(opts.vr_quat_dcutoff)};
+    // Foot tracker position: "ankle" (default) | "midpoint". validate_options
+    // already restricted the string to these two values.
+    tex_opts.foot_pos_mode   = (opts.vr_foot_pos_mode == "midpoint")
+                                   ? slimevr::FootPosMode::Midpoint
+                                   : slimevr::FootPosMode::Ankle;
     auto extractor = std::make_unique<slimevr::TrackerExtractor>(
         bus3d, tracker_bus, tex_opts);
     extractor->set_idle_gate(idle_flag);  // before start(); null = no idling
@@ -66,6 +71,11 @@ RunOutputs make_run_outputs(const config::MainOptions& opts,
         vopts.port         = static_cast<std::uint16_t>(opts.vmt_port);
         vopts.send_rate_hz = opts.vmt_rate_hz;
         vopts.index_base   = opts.vmt_index_base;
+        // Tracker preset (which roles to publish). validate_options already
+        // restricted the string to p3|p6|p8|full; default P8 defends in depth.
+        vmt::VmtTrackerPreset preset = vmt::VmtTrackerPreset::P8;
+        vmt::parse_vmt_preset(opts.vmt_tracker_preset, preset);
+        vopts.preset       = preset;
         vopts.disable_below_floor = opts.vmt_disable_below_floor;
         if (!vmt::parse_degen_mode(opts.vmt_degeneracy_mode, vopts.degeneracy_mode)) {
             // validate_options should have caught this, but defend in depth.

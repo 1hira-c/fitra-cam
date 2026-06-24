@@ -22,6 +22,7 @@ import type {
   SetupProceedResponse,
   VmtAlignment,
   VmtAlignmentResponse,
+  VmtPresetResponse,
 } from "../types/bundle";
 
 // ---- Flow daemon -----------------------------------------------------------
@@ -66,6 +67,21 @@ export async function postAutoTpose(): Promise<AutoAlignResponse> {
     "/api/vmt/alignment/auto/tpose",
   );
   return data ?? { ok: false, err: `HTTP ${res.status}` };
+}
+
+// ---- VMT tracker preset ----------------------------------------------------
+
+export function fetchVmtPreset(): Promise<VmtPresetResponse> {
+  return getJson<VmtPresetResponse>("/api/vmt/preset");
+}
+
+/** POST a tracker preset (p3|p6|p8|full). Returns the applied preset or an error. */
+export async function postVmtPreset(preset: string): Promise<VmtPresetResponse> {
+  const { res, data } = await postJson<VmtPresetResponse>("/api/vmt/preset", { preset });
+  if (!res.ok || !data || data.ok === false) {
+    return { ok: false, err: data?.err || `HTTP ${res.status}` };
+  }
+  return data;
 }
 
 export async function postMotionStart(
