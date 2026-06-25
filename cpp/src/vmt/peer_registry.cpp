@@ -7,6 +7,10 @@ namespace fitra::vmt {
 bool announce_admissible(const Announce& a, const PeerRegistryConfig& cfg) {
     if (a.proto_version != kDiscoveryProtoVersion) return false;
     if (a.role != cfg.want_role) return false;
+    // Network input — never trust the port as a send target. A 0/negative/
+    // >65535 value would truncate to a bogus uint16_t (0/65535/4464/...) and
+    // aim the publisher and punch at the wrong UDP port.
+    if (a.osc_recv_port < 1 || a.osc_recv_port > 65535) return false;
     if (!cfg.self_instance_id.empty() && a.instance_id == cfg.self_instance_id) {
         return false;  // our own loopback announce
     }
@@ -97,7 +101,13 @@ void PeerRegistry::clear() {
 
 void DiscoveryEndpointBus::publish(const ResolvedPeer& p) {
     std::lock_guard<std::mutex> lk(mu_);
+    // Bump the generation only on an endpoint-identity change. age_ms drifts
+    // every tick, so a full-struct compare would never dedup; consumers care
+    // only about have/ip/port (the send/punch target), so key on those.
+    const bool changed = p.have != latest_.have || p.ip != latest_.ip ||
+                         p.port != latest_.port;
     latest_ = p;
+    if (changed) generation_.fetch_add(1, std::memory_order_release);
 }
 
 ResolvedPeer DiscoveryEndpointBus::snapshot() const {

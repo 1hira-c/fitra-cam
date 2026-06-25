@@ -27,6 +27,7 @@
 #include "pipeline/snapshot.hpp"
 #include "slimevr/slime_tracker_bus.hpp"
 #include "slimevr/tracker_extract.hpp"
+#include "vmt/discovery_endpoint.hpp"   // DiscoveryEndpointLatch
 #include "vmt/osc_writer.hpp"
 #include "vmt/peer_registry.hpp"   // DiscoveryEndpointBus
 #include "vmt/vmt_protocol.hpp"
@@ -100,14 +101,16 @@ public:
     // wins (manual override) and the bus is ignored.
     void set_discovery_bus(const DiscoveryEndpointBus* bus) { disc_bus_ = bus; }
 
-    // Thread-safe runtime destination setter (mirrors set_alignment). Used by
-    // the send loop when discovery resolves a peer; safe to call externally.
-    void set_destination(const std::string& ip, std::uint16_t port);
+    // Thread-safe runtime destination setter (mirrors set_alignment). Returns
+    // false (and leaves the destination unchanged) when `ip` fails to parse,
+    // so callers never latch a destination that was never applied.
+    bool set_destination(const std::string& ip, std::uint16_t port);
     bool have_destination() const;
 
 private:
     void send_loop();
     void refresh_discovery_destination_();  // send-thread only
+    void apply_destination_(const sockaddr_in& dst);  // locks dst_mu_
 
     pipeline::Skeleton3DBus&    skel_bus_;
     slimevr::SlimeTrackerBus&   tracker_bus_;
@@ -130,9 +133,8 @@ private:
     mutable std::mutex          dst_mu_;
     sockaddr_in                 dst_{};
     bool                        have_dst_ = false;
-    // Last endpoint applied from the bus (send-thread only; change detection).
-    std::string                 applied_ip_;
-    std::uint16_t               applied_port_ = 0;
+    // Bus->destination change detector (send-thread only).
+    DiscoveryEndpointLatch      disc_latch_;
 };
 
 }  // namespace fitra::vmt

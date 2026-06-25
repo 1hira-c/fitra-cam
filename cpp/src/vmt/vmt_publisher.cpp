@@ -73,8 +73,7 @@ bool VmtPublisher::start() {
     // peer change / late discovery never requires reopening the socket.
     use_discovery_ = opts_.host.empty() && disc_bus_ != nullptr;
     if (!opts_.host.empty()) {
-        set_destination(opts_.host, opts_.port);
-        if (!have_destination()) {
+        if (!set_destination(opts_.host, opts_.port)) {
             FITRA_LOG_WARN("[vmt] inet_pton({}) failed", opts_.host);
             ::close(sock_fd_);
             sock_fd_ = -1;
@@ -97,17 +96,22 @@ bool VmtPublisher::start() {
     return true;
 }
 
-void VmtPublisher::set_destination(const std::string& ip, std::uint16_t port) {
+void VmtPublisher::apply_destination_(const sockaddr_in& dst) {
+    std::lock_guard<std::mutex> lk{dst_mu_};
+    dst_      = dst;
+    have_dst_ = true;
+}
+
+bool VmtPublisher::set_destination(const std::string& ip, std::uint16_t port) {
     sockaddr_in d{};
     d.sin_family = AF_INET;
     d.sin_port   = htons(port);
     if (::inet_pton(AF_INET, ip.c_str(), &d.sin_addr) != 1) {
         FITRA_LOG_WARN("[vmt] set_destination: invalid ip '{}'", ip);
-        return;
+        return false;
     }
-    std::lock_guard<std::mutex> lk{dst_mu_};
-    dst_      = d;
-    have_dst_ = true;
+    apply_destination_(d);
+    return true;
 }
 
 bool VmtPublisher::have_destination() const {
@@ -117,15 +121,15 @@ bool VmtPublisher::have_destination() const {
 
 void VmtPublisher::refresh_discovery_destination_() {
     if (!use_discovery_ || !disc_bus_) return;
-    ResolvedPeer rp = disc_bus_->snapshot();
     // last-known latch: once we have a destination we never revert to "none"
-    // on a transient peer loss (design: keep streaming best-effort).
-    if (rp.have && (rp.ip != applied_ip_ || rp.port != applied_port_)) {
-        set_destination(rp.ip, rp.port);
-        applied_ip_   = rp.ip;
-        applied_port_ = rp.port;
+    // on a transient peer loss (design: keep streaming best-effort). The latch
+    // advances only when inet_pton succeeds, so a bad IP is never recorded as
+    // applied.
+    DiscoveryEndpointLatch::Resolved r;
+    if (disc_latch_.poll(*disc_bus_, r)) {
+        apply_destination_(r.addr);
         FITRA_LOG_INFO("[vmt] discovery resolved peer '{}' -> {}:{}",
-                       rp.instance_name, rp.ip, rp.port);
+                       r.instance_name, r.ip, r.port);
     }
 }
 

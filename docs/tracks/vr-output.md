@@ -40,6 +40,25 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-25 — zeroconf ディスカバリのレビュー指摘修正 (バグ修正)
+M1/M2 実装に対する Codex / code-review の指摘を反映。**ライフサイクル**: `PoseRelay` で
+`beacon` を `receiver` より前に宣言し、デフォルト破棄順 (逆順) で receiver を先に停止 —
+受信スレッドは `beacon->endpoint_bus()` を読むため、`stop()` を経ない破棄 (例外巻き戻し)
+でも bus 所有者が受信スレッドより長生きするようにした。**ネットワーク入力検証**:
+`announce_admissible` で `osc_recv_port` の `[1,65535]` 外を reject (壊れた/古いピアの
+0/負/65535超が `uint16_t` 切り詰めで誤送信先になるのを防止)。**設定検証**: `hmd_listen_port`
+の範囲検証を `hmd_listen_enabled` ブロック外へ出して無条件化 — ビーコンは `vmt_out` 経路
+(listener 無効時) でも本ポートを `self_osc_recv_port` として広告/キャストするため。
+**重複解決の集約**: VMT publisher (送信先) と TrackedPoseReceiver (punch) で重複していた
+「bus からの宛先解決」を新ヘッダ `vmt/discovery_endpoint.hpp` の `DiscoveryEndpointLatch`
+へ集約。`inet_pton` 成功時のみ latch を進めるよう統一 (publisher は失敗時も applied を
+更新していた乖離を解消)。`VmtPublisher::set_destination` を `bool` 返りに変更。**hot path**:
+`DiscoveryEndpointBus` に世代カウンタを追加し `have/ip/port` 変化時のみ bump (毎 tick の
+age 更新では bump しない) — consumer は世代未変化なら lock-free に即 return し、毎 tick の
+`ResolvedPeer` (string×4) コピー + ロックを回避。`test_discovery` (世代+latch) /
+`test_main_config` (hmd_listen_port 検証) にケース追加。pose wire は不変。
+→ [design/vr-output-zeroconf-discovery.md](../design/vr-output-zeroconf-discovery.md)
+
 ### 2026-06-25 — zeroconf ディスカバリ M3/M4 完了 (Windows 実装 + 両機 IP 無指定の実機確認)
 issue #36 の残り M3/M4 を完了し、zeroconf ディスカバリをクローズ。**M3 (Windows `vmt_manager`)**:
 VMT フォーク (`refs/VirtualMotionTracker`) に `DiscoveryAnnounce.cs` (OSC 1.0 codec、golden と byte 一致) +

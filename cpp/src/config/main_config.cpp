@@ -1127,10 +1127,16 @@ void validate_options(const MainOptions& opts) {
             fail("--vmt-peer-timeout-s must be in (0, 120]");
         }
     }
+    // hmd_listen_port is bound by the receiver (when hmd_listen_enabled) AND
+    // advertised by the discovery beacon as our pose-plane recv port — which it
+    // does whenever the beacon is built (vmt_discovery && vmt_host empty &&
+    // (hmd_listen_enabled || vmt_out)), casting it to uint16_t. So its range
+    // must hold even with hmd_listen_enabled=false, or e.g. --vmt-out
+    // --hmd-listen-port 70000 would silently advertise the truncated 4464.
+    if (opts.hmd_listen_port <= 0 || opts.hmd_listen_port > 65535) {
+        fail("--hmd-listen-port must be in [1, 65535]");
+    }
     if (opts.hmd_listen_enabled) {
-        if (opts.hmd_listen_port <= 0 || opts.hmd_listen_port > 65535) {
-            fail("--hmd-listen-port must be in [1, 65535]");
-        }
         if (opts.hmd_stale_ms <= 0.0 || opts.hmd_stale_ms > 10000.0) {
             fail("--hmd-stale-ms must be in (0, 10000]");
         }

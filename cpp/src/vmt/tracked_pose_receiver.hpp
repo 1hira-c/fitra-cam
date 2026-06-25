@@ -24,6 +24,7 @@
 #include <netinet/in.h>   // sockaddr_in for the punch destination
 
 #include "vmt/controller_pose_receiver.hpp"
+#include "vmt/discovery_endpoint.hpp"   // DiscoveryEndpointLatch
 #include "vmt/hmd_pose_receiver.hpp"
 #include "vmt/peer_registry.hpp"   // DiscoveryEndpointBus
 
@@ -131,8 +132,7 @@ private:
 
     const DiscoveryEndpointBus* disc_bus_ = nullptr;
     bool                        punch_use_discovery_ = false;
-    std::string                 punch_applied_ip_;     // recv-thread only
-    std::uint16_t               punch_applied_port_ = 0;
+    DiscoveryEndpointLatch      punch_latch_;          // recv-thread only
 
     mutable std::mutex         stats_mu_;
     TrackedPoseReceiverStats   stats_;

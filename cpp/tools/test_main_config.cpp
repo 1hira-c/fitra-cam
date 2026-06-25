@@ -316,6 +316,35 @@ vmt:
     check(threw, "discovery port 70000 must throw");
 }
 
+void test_hmd_listen_port_validated_even_when_listener_off() {
+    // The discovery beacon advertises hmd_listen_port as our pose-plane recv
+    // port whenever it is built — including the --vmt-out path with the HMD
+    // listener disabled. So an out-of-range port must be rejected even with
+    // hmd_listen_enabled=false (otherwise it would silently cast/truncate).
+    MainOptions opts;
+    opts.cam_paths[0]     = "/tmp/a";
+    opts.det_engine       = "/tmp/y";
+    opts.pose_engine      = "/tmp/r";
+    opts.enable_3d        = true;
+    opts.calib            = "/tmp/cam.yaml";
+    opts.keypoint_format  = "halpe26";
+    opts.vmt_out          = true;
+    opts.vmt_discovery    = true;
+    opts.vmt_host         = "";          // beacon resolves the host
+    opts.hmd_listen_enabled = false;     // no receiver, but beacon still advertises
+    opts.hmd_listen_port  = 39571;
+    validate_options(opts);              // valid default port -> must not throw
+
+    opts.hmd_listen_port = 70000;
+    bool threw = false;
+    try { validate_options(opts); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--hmd-listen-port", "hmd_listen_port range msg");
+    }
+    check(threw, "hmd_listen_port 70000 must throw even with listener disabled");
+}
+
 void test_validate_required_missing() {
     MainOptions opts;
     bool threw = false;
@@ -1269,6 +1298,8 @@ const TestCase kTests[] = {
     {"slimevr_preview_no_reset_yaml_and_cli",  test_slimevr_preview_no_reset_yaml_and_cli},
     {"vmt_index_base_yaml_cli_and_validate",   test_vmt_index_base_yaml_cli_and_validate},
     {"vmt_discovery_yaml_cli_and_validate",    test_vmt_discovery_yaml_cli_and_validate},
+    {"hmd_listen_port_validated_even_when_listener_off",
+                                               test_hmd_listen_port_validated_even_when_listener_off},
     {"extrinsic_calib_yaml_cli_and_validate",  test_extrinsic_calib_yaml_cli_and_validate},
     {"run_mode_derivation_and_publisher_exclusivity",
                                                test_run_mode_derivation_and_publisher_exclusivity},

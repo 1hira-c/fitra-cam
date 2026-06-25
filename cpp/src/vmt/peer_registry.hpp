@@ -8,6 +8,7 @@
 // IMPURE socket/announce-thread shell lives in DiscoveryBeacon
 // (discovery_beacon.{hpp,cpp}). See docs/design/vr-output-zeroconf-discovery.md.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -53,6 +54,8 @@ struct PeerRegistryConfig {
 // Is this announce admissible given our config?
 //   - proto_version == kDiscoveryProtoVersion
 //   - role == cfg.want_role
+//   - osc_recv_port in [1, 65535] (network input; a 0/negative/overflowing
+//     port would truncate to a bogus uint16_t send target)
 //   - not our own announce (instance_id != cfg.self_instance_id when set)
 //   - if cfg.pairing_token non-empty, the announce token must match it
 bool announce_admissible(const Announce& a, const PeerRegistryConfig& cfg);
@@ -101,9 +104,19 @@ public:
     void publish(const ResolvedPeer& p);
     ResolvedPeer snapshot() const;
 
+    // Monotonic counter bumped only when the adopted *endpoint identity*
+    // (have / ip / port) changes — NOT on every publish (the beacon republishes
+    // each loop tick to refresh age_ms). Consumers compare this lock-free to
+    // skip the snapshot()+string-copy in the steady state. See
+    // DiscoveryEndpointLatch (vmt/discovery_endpoint.hpp).
+    std::uint64_t generation() const {
+        return generation_.load(std::memory_order_acquire);
+    }
+
 private:
-    mutable std::mutex mu_;
-    ResolvedPeer       latest_{};
+    mutable std::mutex         mu_;
+    ResolvedPeer               latest_{};
+    std::atomic<std::uint64_t> generation_{0};
 };
 
 }  // namespace fitra::vmt

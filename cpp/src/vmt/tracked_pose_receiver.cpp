@@ -328,20 +328,12 @@ void TrackedPoseReceiver::recv_loop() {
         // Discovery: refresh the punch destination from the bus (recv-thread
         // only). last-known latch — a transient peer loss keeps the last dest.
         if (punch_use_discovery_ && disc_bus_) {
-            ResolvedPeer rp = disc_bus_->snapshot();
-            if (rp.have && (rp.ip != punch_applied_ip_ ||
-                            rp.port != punch_applied_port_)) {
-                sockaddr_in a{};
-                a.sin_family = AF_INET;
-                a.sin_port   = htons(rp.port);
-                if (::inet_pton(AF_INET, rp.ip.c_str(), &a.sin_addr) == 1) {
-                    punch_addr_         = a;
-                    punch_enabled_      = true;
-                    punch_applied_ip_   = rp.ip;
-                    punch_applied_port_ = rp.port;
-                    std::printf("[tracked_pose_receiver] discovery punch -> "
-                                "%s:%u\n", rp.ip.c_str(), rp.port);
-                }
+            DiscoveryEndpointLatch::Resolved r;
+            if (punch_latch_.poll(*disc_bus_, r)) {
+                punch_addr_    = r.addr;
+                punch_enabled_ = true;
+                std::printf("[tracked_pose_receiver] discovery punch -> %s:%u\n",
+                            r.ip.c_str(), r.port);
             }
         }
         if (punch_enabled_) {

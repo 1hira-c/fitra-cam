@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "vmt/discovery_announce.hpp"
+#include "vmt/discovery_endpoint.hpp"
 #include "vmt/peer_registry.hpp"
 
 namespace {
@@ -285,6 +286,73 @@ void test_proto_mismatch() {
     check(announce_admissible(a, cfg), "matching proto admitted");
 }
 
+// 11. osc_recv_port out of [1,65535] rejected at admission (network input is
+//     never trusted as a send target — a 0/negative/overflowing port would
+//     truncate to a bogus uint16 and misaim the publisher/punch).
+void test_port_validation() {
+    PeerRegistryConfig cfg;
+    auto mk = [](std::int32_t port) {
+        Announce a; a.role = DiscoveryRole::Vmt; a.instance_id = "vmt1";
+        a.proto_version = 1; a.osc_recv_port = port;
+        return a;
+    };
+    check(!announce_admissible(mk(0), cfg), "port 0 rejected");
+    check(!announce_admissible(mk(-1), cfg), "negative port rejected");
+    check(!announce_admissible(mk(65536), cfg), "port > 65535 rejected");
+    check(announce_admissible(mk(1), cfg), "port 1 admitted");
+    check(announce_admissible(mk(65535), cfg), "port 65535 admitted");
+    check(announce_admissible(mk(39570), cfg), "typical port admitted");
+
+    // observe() drops the bad-port announce entirely (never stored).
+    PeerRegistry reg(cfg);
+    check(!reg.observe(mk(0), "10.0.0.9", 1000.0), "observe drops port 0");
+    check(reg.size() == 0, "no peer stored for bad port");
+}
+
+// 12. endpoint bus generation: bumps only on have/ip/port change (not on the
+//     per-tick age refresh), and DiscoveryEndpointLatch resolves once per change.
+void test_endpoint_bus_generation_and_latch() {
+    DiscoveryEndpointBus bus;
+    DiscoveryEndpointLatch latch;
+    DiscoveryEndpointLatch::Resolved r;
+
+    check(bus.generation() == 0, "fresh bus generation 0");
+    check(!latch.poll(bus, r), "no peer -> latch resolves nothing");
+
+    ResolvedPeer p;
+    p.have = true; p.ip = "10.0.0.5"; p.port = 39570;
+    p.instance_name = "VMT-PC"; p.age_ms = 1.0;
+    bus.publish(p);
+    const std::uint64_t g1 = bus.generation();
+    check(g1 != 0, "first endpoint bumps generation");
+    check(latch.poll(bus, r), "latch resolves the new endpoint");
+    check(r.ip == "10.0.0.5" && r.port == 39570, "resolved ip/port");
+    check(r.addr.sin_family == AF_INET && r.addr.sin_port == htons(39570),
+          "resolved sockaddr filled");
+    check(!latch.poll(bus, r), "no re-resolve when endpoint unchanged");
+
+    // Same identity, only age_ms drifts (the beacon republishes every tick):
+    // generation must NOT move, so the hot path skips the snapshot+copy.
+    p.age_ms = 250.0;
+    bus.publish(p);
+    check(bus.generation() == g1, "age-only republish does not bump generation");
+    check(!latch.poll(bus, r), "age-only change -> latch stays put");
+
+    // Port change is a real endpoint change.
+    p.port = 39571;
+    bus.publish(p);
+    check(bus.generation() == g1 + 1, "port change bumps generation");
+    check(latch.poll(bus, r), "latch picks up the port change");
+    check(r.port == 39571, "resolved new port");
+
+    // Peer lost: generation bumps, but the latch keeps the last destination
+    // (poll returns false so the caller does not clear its target).
+    ResolvedPeer gone; gone.have = false;
+    bus.publish(gone);
+    check(bus.generation() == g1 + 2, "peer-lost bumps generation");
+    check(!latch.poll(bus, r), "peer lost -> latch holds last endpoint");
+}
+
 }  // namespace
 
 int main() {
@@ -299,6 +367,8 @@ int main() {
         test_token_filter();
         test_stale_timeout();
         test_proto_mismatch();
+        test_port_validation();
+        test_endpoint_bus_generation_and_latch();
         std::puts("test_discovery ok");
         return 0;
     } catch (const std::exception& e) {
