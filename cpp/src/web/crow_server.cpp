@@ -22,6 +22,7 @@
 #include "vmt/controller_pose_receiver.hpp"
 #include "vmt/auto_alignment.hpp"
 #include "vmt/continuous_aligner.hpp"
+#include "vmt/discovery_beacon.hpp"
 #include "util/logging.hpp"
 #include "web/crow_routes_setup.hpp"
 #include "web/crow_util.hpp"
@@ -140,6 +141,43 @@ std::string make_continuous_align_fragment(const vmt::ContinuousAligner& a) {
         << ",\"resolve_period_s\":"<< c.resolve_period_s
         << ",\"blend_alpha\":"    << c.blend_alpha
         << "}";
+    return out.str();
+}
+
+std::string make_discovery_fragment(const vmt::DiscoveryBeacon& beacon) {
+    auto s = beacon.stats();
+    auto peers = beacon.peers();
+    std::ostringstream out;
+    // The beacon exists only in discovery mode (manual vmt.host builds no
+    // beacon, so the WebUI infers "manual" from the block's absence).
+    out << "\"discovery\":{\"mode\":\"discovery\""
+        << ",\"socket_up\":"     << (s.socket_up ? "true" : "false")
+        << ",\"self_id\":\""     << json_escape(s.self_id) << "\""
+        << ",\"group\":\""       << json_escape(s.group) << "\""
+        << ",\"discovery_port\":" << s.port
+        << ",\"announces_sent\":" << s.announces_sent
+        << ",\"announces_recv\":" << s.announces_recv
+        << ",\"peer_count\":"     << peers.size()
+        << ",\"resolved\":{\"have\":" << (s.resolved.have ? "true" : "false");
+    if (s.resolved.have) {
+        double age = s.resolved.age_ms;
+        if (!std::isfinite(age)) age = -1.0;
+        out << ",\"name\":\"" << json_escape(s.resolved.instance_name) << "\""
+            << ",\"id\":\""   << json_escape(s.resolved.instance_id) << "\""
+            << ",\"ip\":\""   << json_escape(s.resolved.ip) << "\""
+            << ",\"port\":"   << s.resolved.port
+            << ",\"age_ms\":" << age;
+    }
+    out << "},\"peers\":[";
+    for (std::size_t i = 0; i < peers.size(); ++i) {
+        const auto& p = peers[i];
+        if (i) out << ",";
+        out << "{\"name\":\"" << json_escape(p.instance_name) << "\""
+            << ",\"id\":\""   << json_escape(p.instance_id) << "\""
+            << ",\"ip\":\""   << json_escape(p.ip) << "\""
+            << ",\"port\":"   << p.osc_recv_port << "}";
+    }
+    out << "]}";
     return out.str();
 }
 
@@ -384,6 +422,10 @@ void CrowServer::set_continuous_aligner(vmt::ContinuousAligner* aligner) {
     continuous_aligner_ = aligner;
 }
 
+void CrowServer::set_discovery_beacon(vmt::DiscoveryBeacon* beacon) {
+    discovery_beacon_ = beacon;
+}
+
 void CrowServer::set_idle_state(app::IdleState* state, bool enabled,
                                 double enter_after_s, double tick_hz) {
     idle_state_         = state;
@@ -550,6 +592,15 @@ void CrowServer::start() {
         if (continuous_aligner_) {
             std::ostringstream extra;
             extra << "," << make_continuous_align_fragment(*continuous_aligner_) << "}";
+            if (!body.empty() && body.back() == '}') {
+                body.pop_back();
+                body += extra.str();
+            }
+        }
+        // Zeroconf discovery status block (resolved peer + live peer list).
+        if (discovery_beacon_) {
+            std::ostringstream extra;
+            extra << "," << make_discovery_fragment(*discovery_beacon_) << "}";
             if (!body.empty() && body.back() == '}') {
                 body.pop_back();
                 body += extra.str();
@@ -1191,6 +1242,10 @@ void CrowServer::publisher_loop() {
         if (continuous_aligner_) {
             if (!extra3d.empty()) extra3d += ",";
             extra3d += make_continuous_align_fragment(*continuous_aligner_);
+        }
+        if (discovery_beacon_) {
+            if (!extra3d.empty()) extra3d += ",";
+            extra3d += make_discovery_fragment(*discovery_beacon_);
         }
         // Idle/standby status — the WebUI reads this from the /ws3d bundle so
         // it can badge standby without polling /stats3d.

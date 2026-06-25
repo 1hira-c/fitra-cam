@@ -22,10 +22,14 @@
 #include <string>
 #include <thread>
 
+#include <netinet/in.h>   // sockaddr_in (runtime-swappable destination)
+
 #include "pipeline/snapshot.hpp"
 #include "slimevr/slime_tracker_bus.hpp"
 #include "slimevr/tracker_extract.hpp"
+#include "vmt/discovery_endpoint.hpp"   // DiscoveryEndpointLatch
 #include "vmt/osc_writer.hpp"
+#include "vmt/peer_registry.hpp"   // DiscoveryEndpointBus
 #include "vmt/vmt_protocol.hpp"
 
 namespace fitra::vmt {
@@ -62,6 +66,7 @@ struct VmtPublisherStats {
     std::uint64_t sent_trackers           = 0; // total /VMT/Room/Driver messages
     std::uint64_t disabled_count          = 0; // messages sent with enable=0
     std::uint64_t skipped_invalid_bundles = 0; // bundle skipped: !ik_locked or no data
+    std::uint64_t skipped_no_endpoint     = 0; // discovery: no peer resolved yet
     double        last_send_ms            = 0.0;
     // End-to-end latency: age (ms) of the freshest 3D skeleton at the moment
     // of the last sent bundle (capture -> send). EMA-smoothed.
@@ -101,8 +106,22 @@ public:
     void set_preset(VmtTrackerPreset preset);
     VmtTrackerPreset preset() const;
 
+    // Discovery wiring. Call set_discovery_bus() BEFORE start(). When the
+    // configured `host` is empty and a bus is attached, the send destination is
+    // resolved at runtime from the bus (zeroconf); a non-empty `host` always
+    // wins (manual override) and the bus is ignored.
+    void set_discovery_bus(const DiscoveryEndpointBus* bus) { disc_bus_ = bus; }
+
+    // Thread-safe runtime destination setter (mirrors set_alignment). Returns
+    // false (and leaves the destination unchanged) when `ip` fails to parse,
+    // so callers never latch a destination that was never applied.
+    bool set_destination(const std::string& ip, std::uint16_t port);
+    bool have_destination() const;
+
 private:
     void send_loop();
+    void refresh_discovery_destination_();  // send-thread only
+    void apply_destination_(const sockaddr_in& dst);  // locks dst_mu_
 
     pipeline::Skeleton3DBus&    skel_bus_;
     slimevr::SlimeTrackerBus&   tracker_bus_;
@@ -124,6 +143,16 @@ private:
     VmtTrackerPreset            preset_       = VmtTrackerPreset::P8;
     std::array<bool, slimevr::kTrackerCount> role_enabled_ =
         role_mask_for(VmtTrackerPreset::P8);
+
+    // Runtime-swappable destination. In manual mode it is resolved once in
+    // start(); in discovery mode the send loop updates it from disc_bus_.
+    const DiscoveryEndpointBus* disc_bus_ = nullptr;
+    bool                        use_discovery_ = false;
+    mutable std::mutex          dst_mu_;
+    sockaddr_in                 dst_{};
+    bool                        have_dst_ = false;
+    // Bus->destination change detector (send-thread only).
+    DiscoveryEndpointLatch      disc_latch_;
 };
 
 }  // namespace fitra::vmt

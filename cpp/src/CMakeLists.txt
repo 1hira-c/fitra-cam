@@ -184,6 +184,9 @@ add_library(fitra_vmt STATIC
     vmt/tracked_pose_receiver.cpp
     vmt/auto_alignment.cpp
     vmt/continuous_aligner.cpp
+    vmt/discovery_announce.cpp
+    vmt/peer_registry.cpp
+    vmt/discovery_beacon.cpp
 )
 
 target_include_directories(fitra_vmt PUBLIC

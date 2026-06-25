@@ -32,8 +32,10 @@ bool parse_degen_mode(const std::string& s, DegenMode& out) {
 
 namespace {
 
-bool sendto_buf(int fd, const std::uint8_t* data, std::size_t n) {
-    ssize_t r = ::send(fd, data, n, MSG_NOSIGNAL);
+bool sendto_buf(int fd, const std::uint8_t* data, std::size_t n,
+                const sockaddr_in& dst) {
+    ssize_t r = ::sendto(fd, data, n, MSG_NOSIGNAL,
+                         reinterpret_cast<const sockaddr*>(&dst), sizeof(dst));
     if (r < 0) {
         FITRA_LOG_WARN("[vmt] send failed: {} ({})", std::strerror(errno), errno);
         return false;
@@ -67,33 +69,74 @@ bool VmtPublisher::start() {
         FITRA_LOG_WARN("[vmt] socket() failed: {}", std::strerror(errno));
         return false;
     }
-    sockaddr_in dst{};
-    dst.sin_family = AF_INET;
-    dst.sin_port   = htons(opts_.port);
-    if (::inet_pton(AF_INET, opts_.host.c_str(), &dst.sin_addr) != 1) {
-        FITRA_LOG_WARN("[vmt] inet_pton({}) failed", opts_.host);
-        ::close(sock_fd_);
-        sock_fd_ = -1;
-        return false;
-    }
-    if (::connect(sock_fd_, reinterpret_cast<sockaddr*>(&dst), sizeof(dst)) != 0) {
-        FITRA_LOG_WARN("[vmt] connect({}:{}) failed: {}",
-                       opts_.host, opts_.port, std::strerror(errno));
-        ::close(sock_fd_);
-        sock_fd_ = -1;
-        return false;
+
+    // host non-empty -> manual (resolve once, exact prior behavior). host empty
+    // + a discovery bus -> zeroconf (destination resolved at runtime). We use
+    // sendto() with a runtime-swappable destination instead of connect(), so a
+    // peer change / late discovery never requires reopening the socket.
+    use_discovery_ = opts_.host.empty() && disc_bus_ != nullptr;
+    if (!opts_.host.empty()) {
+        if (!set_destination(opts_.host, opts_.port)) {
+            FITRA_LOG_WARN("[vmt] inet_pton({}) failed", opts_.host);
+            ::close(sock_fd_);
+            sock_fd_ = -1;
+            return false;
+        }
+    } else if (!use_discovery_) {
+        FITRA_LOG_WARN("[vmt] no host and no discovery bus — publisher will idle "
+                       "until a destination is set");
     }
 
     stop_.store(false);
     send_thread_ = std::thread([this]() { send_loop(); });
     int enabled = 0;
     for (bool b : role_enabled_) enabled += b ? 1 : 0;
-    FITRA_LOG_INFO("[vmt] publisher up: {}:{} @ {} Hz, {} trackers (preset={}), index base={}, degen={}",
-                   opts_.host, opts_.port, opts_.send_rate_hz,
-                   enabled, vmt_preset_name(opts_.preset),
+    FITRA_LOG_INFO("[vmt] publisher up: dest={} @ {} Hz, {} trackers (preset={}), "
+                   "index={}..{}, degen={}",
+                   use_discovery_ ? std::string("discovery")
+                                  : (opts_.host + ":" + std::to_string(opts_.port)),
+                   opts_.send_rate_hz, enabled, vmt_preset_name(opts_.preset),
                    opts_.index_base,
+                   opts_.index_base + static_cast<int>(slimevr::kTrackerCount) - 1,
                    degen_mode_name(opts_.degeneracy_mode));
     return true;
+}
+
+void VmtPublisher::apply_destination_(const sockaddr_in& dst) {
+    std::lock_guard<std::mutex> lk{dst_mu_};
+    dst_      = dst;
+    have_dst_ = true;
+}
+
+bool VmtPublisher::set_destination(const std::string& ip, std::uint16_t port) {
+    sockaddr_in d{};
+    d.sin_family = AF_INET;
+    d.sin_port   = htons(port);
+    if (::inet_pton(AF_INET, ip.c_str(), &d.sin_addr) != 1) {
+        FITRA_LOG_WARN("[vmt] set_destination: invalid ip '{}'", ip);
+        return false;
+    }
+    apply_destination_(d);
+    return true;
+}
+
+bool VmtPublisher::have_destination() const {
+    std::lock_guard<std::mutex> lk{dst_mu_};
+    return have_dst_;
+}
+
+void VmtPublisher::refresh_discovery_destination_() {
+    if (!use_discovery_ || !disc_bus_) return;
+    // last-known latch: once we have a destination we never revert to "none"
+    // on a transient peer loss (design: keep streaming best-effort). The latch
+    // advances only when inet_pton succeeds, so a bad IP is never recorded as
+    // applied.
+    DiscoveryEndpointLatch::Resolved r;
+    if (disc_latch_.poll(*disc_bus_, r)) {
+        apply_destination_(r.addr);
+        FITRA_LOG_INFO("[vmt] discovery resolved peer '{}' -> {}:{}",
+                       r.instance_name, r.ip, r.port);
+    }
 }
 
 void VmtPublisher::stop() {
@@ -148,6 +191,9 @@ void VmtPublisher::send_loop() {
         // If we fell behind (system lag / suspend), reset the schedule to
         // avoid a 100% CPU spin until `next` catches up.
         if (next < now) next = now + period_d;
+
+        // Pull the latest discovery-resolved endpoint (no-op in manual mode).
+        refresh_discovery_destination_();
 
         auto skel_snap = skel_bus_.snapshot();
         if (!skel_snap.stats.enabled || !skel_snap.stats.ik_locked) {
@@ -212,8 +258,21 @@ void VmtPublisher::send_loop() {
             continue;
         }
 
+        // Snapshot the runtime destination. No endpoint yet (discovery still
+        // searching) -> drop this tick; paced sleep means no busy-spin.
+        sockaddr_in dst_copy;
+        {
+            std::lock_guard<std::mutex> lk{dst_mu_};
+            if (!have_dst_) {
+                std::lock_guard<std::mutex> slk{stats_mu_};
+                ++stats_.skipped_no_endpoint;
+                continue;
+            }
+            dst_copy = dst_;
+        }
+
         auto span = writer.data();
-        if (!sendto_buf(sock_fd_, span.data(), span.size())) {
+        if (!sendto_buf(sock_fd_, span.data(), span.size(), dst_copy)) {
             std::lock_guard<std::mutex> lk{stats_mu_};
             ++stats_.skipped_invalid_bundles;
             continue;

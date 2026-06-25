@@ -40,6 +40,7 @@ class VmtPublisher;      // fwd decl; full header in crow_server.cpp
 class HmdPoseBus;        // HMD pose source for auto-alignment routes
 class ControllerPoseBus; // selected-controller pose source for excal scene
 class ContinuousAligner; // always-on HMD-driven alignment refiner
+class DiscoveryBeacon;   // zeroconf peer discovery (resolved peer in /stats3d)
 }
 
 namespace fitra::config { class SetupConfigStore; }   // setup-mode config draft
@@ -188,6 +189,10 @@ public:
     // cleared before destruction).
     void set_continuous_aligner(vmt::ContinuousAligner* aligner);
 
+    // Attach the zeroconf discovery beacon so /stats3d reports the resolved
+    // peer + the live peer list. Same ownership rules as set_vmt_publisher.
+    void set_discovery_beacon(vmt::DiscoveryBeacon* beacon);
+
     // Attach the idle/standby shared state (issue #37). The /ws + /ws3d
     // onopen/onclose handlers then maintain its ws_client_count, and /stats3d,
     // the /ws3d bundle, and /api/state expose an `idle` status object. `enabled`
@@ -237,6 +242,7 @@ private:
     vmt::HmdPoseBus*               hmd_pose_bus_    = nullptr;
     vmt::ControllerPoseBus*        excal_controller_pose_bus_ = nullptr;
     vmt::ContinuousAligner*        continuous_aligner_ = nullptr;
+    vmt::DiscoveryBeacon*          discovery_beacon_ = nullptr;
     app::IdleState*                idle_state_      = nullptr;
     bool                           idle_enabled_      = false;
     double                         idle_enter_after_s_ = 10.0;
