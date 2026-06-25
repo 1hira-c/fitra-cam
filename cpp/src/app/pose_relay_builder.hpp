@@ -10,6 +10,7 @@
 
 #include "config/main_config.hpp"
 #include "vmt/controller_pose_receiver.hpp"
+#include "vmt/discovery_beacon.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
 #include "vmt/tracked_pose_receiver.hpp"
 
@@ -18,12 +19,23 @@ namespace fitra::app {
 struct PoseRelay {
     std::unique_ptr<vmt::HmdPoseBus>          hmd_bus;
     std::unique_ptr<vmt::ControllerPoseBus>   controller_bus;
+    // Zeroconf discovery beacon; nullptr when discovery is off or vmt.host is
+    // pinned. Shared with the VMT publisher (output_builder reads its bus), so
+    // it lives here — the relay outlives the publisher in the shutdown order.
+    // Declared BEFORE `receiver` so default destruction (reverse order) tears
+    // the receiver down first: its thread reads beacon->endpoint_bus() (wired
+    // via set_discovery_bus), so the bus owner must outlive that thread even on
+    // the path where stop() never ran (e.g. an exception unwinds the relay).
+    std::unique_ptr<vmt::DiscoveryBeacon>     beacon;
     // Receiver thread; nullptr when `listen` was false or the socket failed.
     std::unique_ptr<vmt::TrackedPoseReceiver> receiver;
     vmt::TrackedPoseRole controller_role = vmt::TrackedPoseRole::RightController;
 
     void stop() {
+        // Consumers (receiver, and the publisher in RunOutputs) must stop
+        // reading the endpoint bus before the beacon that owns it goes away.
         if (receiver) receiver->stop();
+        if (beacon)   beacon->stop();
     }
 };
 

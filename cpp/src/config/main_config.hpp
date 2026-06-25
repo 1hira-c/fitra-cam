@@ -144,7 +144,10 @@ struct MainOptions {
     // Independent of slimevr; both can be enabled simultaneously and share
     // the same TrackerExtractor state (single-producer invariant).
     bool   vmt_out = false;
-    std::string vmt_host = "127.0.0.1";
+    // Empty = resolve the VMT host via zeroconf discovery (when vmt_discovery
+    // is on). A non-empty host is an explicit manual destination and always
+    // wins, fully bypassing discovery for both the pose send and the punch.
+    std::string vmt_host = "";
     int    vmt_port = 39570;
     double vmt_rate_hz = 60.0;
     int    vmt_index_base = 10;
@@ -152,6 +155,18 @@ struct MainOptions {
     // "hold" (default) | "disable" | "skip" — see vmt_publisher.hpp DegenMode
     std::string vmt_degeneracy_mode = "hold";
     bool   vmt_disable_below_floor = false;
+
+    // VMT ⇔ Jetson zeroconf discovery (docs/design/vr-output-zeroconf-discovery.md).
+    // When on and vmt_host is empty, an OSC multicast/broadcast beacon resolves
+    // the VMT host (pose send + punch) automatically on the same LAN.
+    bool        vmt_discovery       = true;
+    std::string vmt_pair_id;                       // pin a peer by instance_id
+    std::string vmt_pairing_token;                 // cross-rig isolation
+    std::string vmt_discovery_group = "239.255.42.99";
+    int         vmt_discovery_port  = 39580;
+    std::string vmt_instance_name;                 // human label advertised to peers
+    double      vmt_peer_timeout_s  = 5.0;         // no announce for this long -> lost
+
     // Receive HMD pose from the Windows-side vmt_hmd_pose_sender.
     // Independent of vmt_out (sender path) — receiver can run alone for
     // diagnostics, but auto-alignment requires both.

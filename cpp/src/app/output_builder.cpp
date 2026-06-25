@@ -40,7 +40,8 @@ std::unique_ptr<slimevr::TrackerExtractor> make_tracker_extractor(
 RunOutputs make_run_outputs(const config::MainOptions& opts,
                             pipeline::Skeleton3DBus* bus3d,
                             slimevr::SlimeTrackerBus* tracker_bus,
-                            vmt::HmdPoseBus* hmd_bus) {
+                            vmt::HmdPoseBus* hmd_bus,
+                            const vmt::DiscoveryEndpointBus* disc_bus) {
     RunOutputs out;
     if (!bus3d || !tracker_bus) return out;  // 2D-only run: no outputs
 
@@ -73,6 +74,10 @@ RunOutputs make_run_outputs(const config::MainOptions& opts,
         }
         out.vmt_pub = std::make_unique<vmt::VmtPublisher>(
             *bus3d, *tracker_bus, vopts);
+        // Empty host -> resolve the destination via discovery at runtime; a
+        // non-empty host pins it manually and the bus is ignored. Must be set
+        // before start() (it decides manual vs discovery).
+        out.vmt_pub->set_discovery_bus(disc_bus);
         if (!out.vmt_pub->start()) {
             out.vmt_pub.reset();
         }

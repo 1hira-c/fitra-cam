@@ -570,6 +570,24 @@ set_target_properties(fitra_test_tracked_pose_receiver PROPERTIES
 
 add_test(NAME test_tracked_pose_receiver COMMAND fitra_test_tracked_pose_receiver)
 
+# VMT zeroconf discovery — /fitra/announce OSC codec (golden bytes + round-trip
+# + reject), stable instance-id determinism, and PeerRegistry peer selection
+# (single / min-id / pin / token / stale timeout / proto). Pure logic, no socket.
+add_executable(fitra_test_discovery
+    test_discovery.cpp
+)
+
+target_link_libraries(fitra_test_discovery PRIVATE
+    fitra_vmt
+)
+
+set_target_properties(fitra_test_discovery PROPERTIES
+    OUTPUT_NAME "test_discovery"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_discovery COMMAND fitra_test_discovery)
+
 # VmtAlignment auto solver — T-pose + 2D Procrustes motion mode.
 add_executable(fitra_test_auto_alignment
     test_auto_alignment.cpp

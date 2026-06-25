@@ -252,6 +252,99 @@ vmt:
     check(threw, "vmt_index_base 49 must throw");
 }
 
+void test_vmt_discovery_yaml_cli_and_validate() {
+    auto p = write_tmp("vmt_discovery.yaml", R"(schema: fitra_main_config_v1
+vmt:
+  discovery: true
+  pair_id: living-rig
+  pairing_token: lab7
+  discovery_group: 239.255.42.50
+  discovery_port: 39581
+  instance_name: Living Rig
+  peer_timeout_s: 7.5
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(opts.vmt_discovery, "vmt.discovery loads");
+    check(opts.vmt_pair_id == "living-rig", "vmt.pair_id loads");
+    check(opts.vmt_pairing_token == "lab7", "vmt.pairing_token loads");
+    check(opts.vmt_discovery_group == "239.255.42.50", "vmt.discovery_group loads");
+    check(opts.vmt_discovery_port == 39581, "vmt.discovery_port loads");
+    check(opts.vmt_instance_name == "Living Rig", "vmt.instance_name loads");
+    check(std::abs(opts.vmt_peer_timeout_s - 7.5) < 1e-9, "vmt.peer_timeout_s loads");
+
+    std::vector<std::string> argv_buf{"--no-vmt-discovery",
+                                      "--vmt-pair-id", "other",
+                                      "--vmt-discovery-port", "40000"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(!opts.vmt_discovery, "--no-vmt-discovery overrides YAML");
+    check(opts.vmt_pair_id == "other", "--vmt-pair-id CLI overrides YAML");
+    check(opts.vmt_discovery_port == 40000, "--vmt-discovery-port CLI overrides YAML");
+
+    // vmt_out with discovery off and no manual host must be rejected.
+    MainOptions bad;
+    bad.cam_paths[0] = "/tmp/a";
+    bad.det_engine   = "/tmp/y";
+    bad.pose_engine  = "/tmp/r";
+    bad.enable_3d    = true;
+    bad.calib        = "/tmp/cam.yaml";
+    bad.keypoint_format = "halpe26";
+    bad.vmt_out      = true;
+    bad.vmt_discovery = false;
+    bad.vmt_host     = "";   // no destination at all
+    bool threw = false;
+    try { validate_options(bad); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "vmt.host", "discovery-off needs host msg");
+    }
+    check(threw, "vmt_out + discovery off + empty host must throw");
+
+    // Same but with discovery left on -> valid (the beacon resolves the host).
+    bad.vmt_discovery = true;
+    validate_options(bad);  // must not throw
+
+    // An out-of-range discovery port is rejected when discovery resolves host.
+    bad.vmt_discovery_port = 70000;
+    threw = false;
+    try { validate_options(bad); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--vmt-discovery-port", "discovery port range msg");
+    }
+    check(threw, "discovery port 70000 must throw");
+}
+
+void test_hmd_listen_port_validated_even_when_listener_off() {
+    // The discovery beacon advertises hmd_listen_port as our pose-plane recv
+    // port whenever it is built — including the --vmt-out path with the HMD
+    // listener disabled. So an out-of-range port must be rejected even with
+    // hmd_listen_enabled=false (otherwise it would silently cast/truncate).
+    MainOptions opts;
+    opts.cam_paths[0]     = "/tmp/a";
+    opts.det_engine       = "/tmp/y";
+    opts.pose_engine      = "/tmp/r";
+    opts.enable_3d        = true;
+    opts.calib            = "/tmp/cam.yaml";
+    opts.keypoint_format  = "halpe26";
+    opts.vmt_out          = true;
+    opts.vmt_discovery    = true;
+    opts.vmt_host         = "";          // beacon resolves the host
+    opts.hmd_listen_enabled = false;     // no receiver, but beacon still advertises
+    opts.hmd_listen_port  = 39571;
+    validate_options(opts);              // valid default port -> must not throw
+
+    opts.hmd_listen_port = 70000;
+    bool threw = false;
+    try { validate_options(opts); }
+    catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--hmd-listen-port", "hmd_listen_port range msg");
+    }
+    check(threw, "hmd_listen_port 70000 must throw even with listener disabled");
+}
+
 void test_validate_required_missing() {
     MainOptions opts;
     bool threw = false;
@@ -933,6 +1026,9 @@ void test_emit_load_round_trip() {
     o.slimevr_rate_hz = 75.0; o.slimevr_quat_smooth = 0.4;
     o.vmt_out = true; o.vmt_host = "172.34.1.9"; o.vmt_port = 39571;
     o.vmt_index_base = 12; o.vmt_degeneracy_mode = "disable";
+    o.vmt_discovery = false; o.vmt_pair_id = "rig-A"; o.vmt_pairing_token = "tok9";
+    o.vmt_discovery_group = "239.255.42.7"; o.vmt_discovery_port = 39581;
+    o.vmt_instance_name = "Bench Rig"; o.vmt_peer_timeout_s = 8.0;
     o.hmd_listen_enabled = true; o.hmd_listen_port = 39572;
     o.vmt_continuous_align = false; o.vmt_continuous_blend = 0.3;
     o.excal_intrinsics = "calibrations/intrinsics.yaml";
@@ -1019,6 +1115,13 @@ void test_emit_load_round_trip() {
     eq_i(o.vmt_port, r.vmt_port, "vmt_port");
     eq_i(o.vmt_index_base, r.vmt_index_base, "vmt_index_base");
     eq_s(o.vmt_degeneracy_mode, r.vmt_degeneracy_mode, "vmt_degeneracy_mode");
+    eq_b(o.vmt_discovery, r.vmt_discovery, "vmt_discovery");
+    eq_s(o.vmt_pair_id, r.vmt_pair_id, "vmt_pair_id");
+    eq_s(o.vmt_pairing_token, r.vmt_pairing_token, "vmt_pairing_token");
+    eq_s(o.vmt_discovery_group, r.vmt_discovery_group, "vmt_discovery_group");
+    eq_i(o.vmt_discovery_port, r.vmt_discovery_port, "vmt_discovery_port");
+    eq_s(o.vmt_instance_name, r.vmt_instance_name, "vmt_instance_name");
+    eq_f(o.vmt_peer_timeout_s, r.vmt_peer_timeout_s, "vmt_peer_timeout_s");
     eq_b(o.hmd_listen_enabled, r.hmd_listen_enabled, "hmd_listen_enabled");
     eq_i(o.hmd_listen_port, r.hmd_listen_port, "hmd_listen_port");
     eq_b(o.vmt_continuous_align, r.vmt_continuous_align, "vmt_continuous_align");
@@ -1194,6 +1297,9 @@ const TestCase kTests[] = {
     {"negated_three_d_keys_invert_bools",      test_negated_three_d_keys_invert_runtime_bools},
     {"slimevr_preview_no_reset_yaml_and_cli",  test_slimevr_preview_no_reset_yaml_and_cli},
     {"vmt_index_base_yaml_cli_and_validate",   test_vmt_index_base_yaml_cli_and_validate},
+    {"vmt_discovery_yaml_cli_and_validate",    test_vmt_discovery_yaml_cli_and_validate},
+    {"hmd_listen_port_validated_even_when_listener_off",
+                                               test_hmd_listen_port_validated_even_when_listener_off},
     {"extrinsic_calib_yaml_cli_and_validate",  test_extrinsic_calib_yaml_cli_and_validate},
     {"run_mode_derivation_and_publisher_exclusivity",
                                                test_run_mode_derivation_and_publisher_exclusivity},

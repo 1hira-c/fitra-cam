@@ -40,6 +40,64 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-25 — zeroconf ディスカバリのレビュー指摘修正 (バグ修正)
+M1/M2 実装に対する Codex / code-review の指摘を反映。**ライフサイクル**: `PoseRelay` で
+`beacon` を `receiver` より前に宣言し、デフォルト破棄順 (逆順) で receiver を先に停止 —
+受信スレッドは `beacon->endpoint_bus()` を読むため、`stop()` を経ない破棄 (例外巻き戻し)
+でも bus 所有者が受信スレッドより長生きするようにした。**ネットワーク入力検証**:
+`announce_admissible` で `osc_recv_port` の `[1,65535]` 外を reject (壊れた/古いピアの
+0/負/65535超が `uint16_t` 切り詰めで誤送信先になるのを防止)。**設定検証**: `hmd_listen_port`
+の範囲検証を `hmd_listen_enabled` ブロック外へ出して無条件化 — ビーコンは `vmt_out` 経路
+(listener 無効時) でも本ポートを `self_osc_recv_port` として広告/キャストするため。
+**重複解決の集約**: VMT publisher (送信先) と TrackedPoseReceiver (punch) で重複していた
+「bus からの宛先解決」を新ヘッダ `vmt/discovery_endpoint.hpp` の `DiscoveryEndpointLatch`
+へ集約。`inet_pton` 成功時のみ latch を進めるよう統一 (publisher は失敗時も applied を
+更新していた乖離を解消)。`VmtPublisher::set_destination` を `bool` 返りに変更。**hot path**:
+`DiscoveryEndpointBus` に世代カウンタを追加し `have/ip/port` 変化時のみ bump (毎 tick の
+age 更新では bump しない) — consumer は世代未変化なら lock-free に即 return し、毎 tick の
+`ResolvedPeer` (string×4) コピー + ロックを回避。`test_discovery` (世代+latch) /
+`test_main_config` (hmd_listen_port 検証) にケース追加。pose wire は不変。
+→ [design/vr-output-zeroconf-discovery.md](../design/vr-output-zeroconf-discovery.md)
+
+### 2026-06-25 — zeroconf ディスカバリ M3/M4 完了 (Windows 実装 + 両機 IP 無指定の実機確認)
+issue #36 の残り M3/M4 を完了し、zeroconf ディスカバリをクローズ。**M3 (Windows `vmt_manager`)**:
+VMT フォーク (`refs/VirtualMotionTracker`) に `DiscoveryAnnounce.cs` (OSC 1.0 codec、golden と byte 一致) +
+`ZeroconfDiscovery.cs` (39580 を `ReuseAddress`+`Broadcast`+`MulticastTTL=1` で bind / group join、1 Hz で
+multicast+broadcast 二段送信、`role="vmt"`/`osc_recv_port=39570` announce + `role="jetson"` browse、
+admission/最小 id 選択/pin/token/`peer_timeout` 5 s) を実装。採用 jetson の `src_ip:osc_recv_port` を
+pose-relay 送信先へ自動設定 (`UpdateJetsonSender(...,"discovery")`、driver-learned fallback より優先)。
+Manager UI に検出ピア一覧 + pin/token。instance_id は GUID 由来 16hex を Settings に永続。**M4 (実機)**:
+Jetson / Windows を**両方 IP 無指定**で起動 → 自動接続を確認。`/stats3d` で Jetson 側
+`discovery.mode=discovery` / `resolved.have=true` (→ `VMT-SH_MAIN @ 172.34.1.9:39570`) / `vmt.host=""` /
+`sent_bundles` 増加 / HMD pose `valid=true` `age_ms≈3.8` (基準 <100 をクリア)、VR 内トラッカー表示まで
+正常。診断メモ: 逆経路 (`/fitra/tracked_pose`) は Windows で SteamVR 未起動だと `HmdPoseTick` の
+`util==null` ガードで一切送られない (起動で復帰) — discovery 不具合ではない。golden 一致の独立 Python
+プローブ (`peer`/`sniff`/`self-test`) でワイヤ照合に使用。fitra-cam 側は M1/M2 のまま無改修。
+→ [design/vr-output-zeroconf-discovery.md](../design/vr-output-zeroconf-discovery.md) /
+[design/vr-output-zeroconf-discovery-vmt-spec.md](../design/vr-output-zeroconf-discovery-vmt-spec.md)
+
+### 2026-06-23 — VMT ⇔ Jetson zeroconf ディスカバリ M1/M2 実装 (Jetson 側)
+6/18 に起票した zeroconf ディスカバリ (issue #36) の Jetson 側を実装。**M1 (純ロジック)**:
+`discovery_announce` (`/fitra/announce`・typetag `,sssiiss` の encode/parse + ホスト名 FNV-1a の
+`stable_instance_id`) と `peer_registry` (`announce_admissible` / `select_peer` / `PeerRegistry` +
+`HmdPoseBus` 同形の `DiscoveryEndpointBus`) を socket/thread なしの純関数で新設。時刻は引数で受け
+決定的。`test_discovery.cpp` の 10 ケース (golden バイト列 / round-trip / 不正 reject / id 決定性 /
+単一・最小 id・pin・token・stale・proto) で固定。**M2 (配線)**: `DiscoveryBeacon` (39580 を INADDR_ANY
+で bind + group join + SO_BROADCAST、1 Hz で multicast 239.255.42.99 と 255.255.255.255 へ二段送信、
+TTL=1) を新設し `PoseRelay` に所有 (run / calib-extrinsic 両方で共有)。`VmtPublisher` を
+`connect()`+`send()` から `sendto()`+mutex 保護の差し替え可能宛先へ変更し、空 host で落ちず discovery
+bus から宛先を解決 (last-known latch、未解決は `skipped_no_endpoint` でスキップ)。`TrackedPoseReceiver`
+の punch も recv スレッドでランタイム解決。`vmt.host` 既定を空に変更 (空+discovery on で自動 /
+非空で従来どおり手動・discovery 完全バイパス)。`vmt.{discovery,pair_id,pairing_token,discovery_group,
+discovery_port,instance_name,peer_timeout_s}` を config/CLI/emit/validate に追加。`/stats3d`+`/ws3d`+
+WebUI (`bundle.ts`/`statsText.ts`) に検出ピア (resolved / peers / age) を表示。**pose wire
+(`/VMT/Room/Driver` / `/fitra/tracked_pose` / `/fitra/punch`) は不変** — 既存 `test_vmt_osc_writer` /
+`test_tracked_pose_receiver` が回帰ガード。loopback 2 ビーコンの相互発見 smoke で multicast/broadcast/
+src-IP 学習/role 選択/self 除外/冪等 dedup を確認。**M3 (Windows `vmt_manager`)** は受け渡し仕様
+[design/vr-output-zeroconf-discovery-vmt-spec.md](../design/vr-output-zeroconf-discovery-vmt-spec.md)
+を別途実装。**M4 (両機 IP 無指定の実機確認)** は未実施。
+→ [design/vr-output-zeroconf-discovery.md](../design/vr-output-zeroconf-discovery.md)
+
 ### 2026-06-19 — 3D カメラ/HMD マーカーの PR#40 レビュー指摘修正 (バグ修正)
 PR #40 の Codex / Gemini レビュー指摘を反映。(1) **HMD 向きバグ**: HMD マーカーの姿勢を
 `B·R` から `B·R·B⁻¹` (トラッカーと同じ共役) へ修正。HMD `quat_wxyz` は `vmt_pose_to_world()`

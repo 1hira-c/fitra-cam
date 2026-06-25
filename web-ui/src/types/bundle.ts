@@ -124,6 +124,30 @@ export interface ContinuousAlignBlock {
   [k: string]: unknown;
 }
 
+export interface DiscoveryPeer {
+  name?: string;
+  id?: string;
+  ip?: string;
+  port?: number;
+  age_ms?: number;
+}
+
+/** Zeroconf discovery status. The block is present only when discovery is
+ *  active (a pinned vmt.host runs no beacon — the viewer then shows "manual"). */
+export interface DiscoveryBlock {
+  mode?: "discovery" | "manual";
+  socket_up?: boolean;
+  self_id?: string;
+  group?: string;
+  discovery_port?: number;
+  announces_sent?: number;
+  announces_recv?: number;
+  peer_count?: number;
+  resolved?: DiscoveryPeer & { have?: boolean };
+  peers?: DiscoveryPeer[];
+  [k: string]: unknown;
+}
+
 export interface Stats3D {
   enabled?: boolean;
   tri_fps?: number;
@@ -153,6 +177,7 @@ export interface Bundle3D {
   vmt?: VmtBlock;
   hmd?: HmdBlock;
   continuous_align?: ContinuousAlignBlock;
+  discovery?: DiscoveryBlock;
 }
 
 // ---- REST payloads ---------------------------------------------------------
