@@ -40,9 +40,23 @@ float yaw_from_vmt_quat(const VmtQuat& q) {
     return std::atan2(sin_y_cos_p, cos_y_cos_p);
 }
 
+HmdAxisXZ hmd_head_axis_xz(const HmdPose& hmd, float forward_offset_m) {
+    // back = R(q)·(0,0,1) = the +Z column of the rotation matrix. Gaze is the
+    // HMD-local -Z, so +Z points *behind* the head; offsetting the HMD origin
+    // along it lands on the head/neck axis. Its horizontal (x,z) components
+    // shrink as the user pitches, which auto-attenuates the correction when
+    // looking up/down (no renormalization — that is the point).
+    const float x = hmd.qx, y = hmd.qy, z = hmd.qz, w = hmd.qw;
+    const float back_x = 2.0f * (x * z + w * y);
+    const float back_z = 1.0f - 2.0f * (x * x + y * y);
+    return {hmd.x + forward_offset_m * back_x,
+            hmd.z + forward_offset_m * back_z};
+}
+
 AutoAlignmentResult solve_tpose(const HmdPose& hmd,
                                 const VmtPos&  chest_vmt_pos,
-                                const VmtQuat& chest_vmt_quat_xyzw) {
+                                const VmtQuat& chest_vmt_quat_xyzw,
+                                float          forward_offset_m) {
     AutoAlignmentResult r;
 
     if (!hmd.valid) {
@@ -64,9 +78,11 @@ AutoAlignmentResult solve_tpose(const HmdPose& hmd,
     const float rotated_x =  c * cx + s * cz;
     const float rotated_z = -s * cx + c * cz;
 
-    r.alignment.x       = hmd.x - rotated_x;
+    // Match the chest to the HMD head-axis (HMD origin minus its face lever arm).
+    const HmdAxisXZ hmd_axis = hmd_head_axis_xz(hmd, forward_offset_m);
+    r.alignment.x       = hmd_axis.x - rotated_x;
     r.alignment.y       = 0.0f;  // intentionally untouched; see header docs
-    r.alignment.z       = hmd.z - rotated_z;
+    r.alignment.z       = hmd_axis.z - rotated_z;
     r.alignment.yaw_deg = rad_to_deg(yaw_rad);
     r.n_samples         = 1;
     r.residual_m        = 0.0f;

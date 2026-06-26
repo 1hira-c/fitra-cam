@@ -430,6 +430,45 @@ void test_hmd_listen_port_validated_even_when_listener_off() {
     check(threw, "hmd_listen_port 70000 must throw even with listener disabled");
 }
 
+void test_vmt_align_hmd_forward_yaml_cli_and_validate() {
+    auto p = write_tmp("align_hmd_forward.yaml", R"(schema: fitra_main_config_v1
+vmt:
+  align_hmd_forward_m: 0.12
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(std::abs(opts.vmt_align_hmd_forward_m - 0.12) < 1e-9, "vmt.align_hmd_forward_m loads");
+
+    MainOptions def;
+    check(std::abs(def.vmt_align_hmd_forward_m - 0.10) < 1e-9, "default align_hmd_forward_m is 0.10");
+
+    std::vector<std::string> argv_buf{"--vmt-align-hmd-forward", "0.05"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(std::abs(opts.vmt_align_hmd_forward_m - 0.05) < 1e-9, "--vmt-align-hmd-forward CLI overrides YAML");
+
+    opts.cam_paths[0] = "/tmp/a";
+    opts.det_engine   = "/tmp/y";
+    opts.pose_engine  = "/tmp/r";
+    opts.enable_3d    = true;
+    opts.calib        = "/tmp/cam.yaml";
+    opts.keypoint_format = "halpe26";
+    opts.vmt_out      = true;
+    validate_options(opts);  // 0.05 in range, 0 = off both valid
+    opts.vmt_align_hmd_forward_m = 0.0;
+    validate_options(opts);
+
+    opts.vmt_align_hmd_forward_m = 0.8;  // > 0.5 m
+    bool threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--vmt-align-hmd-forward", "align hmd forward range msg");
+    }
+    check(threw, "align_hmd_forward_m 0.8 must throw");
+}
+
 void test_validate_required_missing() {
     MainOptions opts;
     bool threw = false;
@@ -1116,6 +1155,7 @@ void test_emit_load_round_trip() {
     o.vmt_instance_name = "Bench Rig"; o.vmt_peer_timeout_s = 8.0;
     o.hmd_listen_enabled = true; o.hmd_listen_port = 39572;
     o.vmt_continuous_align = false; o.vmt_continuous_blend = 0.3;
+    o.vmt_align_hmd_forward_m = 0.13;
     o.excal_intrinsics = "calibrations/intrinsics.yaml";
     o.excal_out = "calibrations/extrinsics.yaml";
     o.excal_method = "floor"; o.excal_tag_size_m = 0.12; o.excal_min_samples = 10;
@@ -1211,6 +1251,7 @@ void test_emit_load_round_trip() {
     eq_i(o.hmd_listen_port, r.hmd_listen_port, "hmd_listen_port");
     eq_b(o.vmt_continuous_align, r.vmt_continuous_align, "vmt_continuous_align");
     eq_f(o.vmt_continuous_blend, r.vmt_continuous_blend, "vmt_continuous_blend");
+    eq_f(o.vmt_align_hmd_forward_m, r.vmt_align_hmd_forward_m, "vmt_align_hmd_forward_m");
     eq_s(o.excal_intrinsics, r.excal_intrinsics, "excal_intrinsics");
     eq_s(o.excal_out, r.excal_out, "excal_out");
     eq_s(o.excal_method, r.excal_method, "excal_method");
@@ -1387,6 +1428,8 @@ const TestCase kTests[] = {
     {"vmt_discovery_yaml_cli_and_validate",    test_vmt_discovery_yaml_cli_and_validate},
     {"hmd_listen_port_validated_even_when_listener_off",
                                                test_hmd_listen_port_validated_even_when_listener_off},
+    {"vmt_align_hmd_forward_yaml_cli_and_validate",
+                                               test_vmt_align_hmd_forward_yaml_cli_and_validate},
     {"extrinsic_calib_yaml_cli_and_validate",  test_extrinsic_calib_yaml_cli_and_validate},
     {"run_mode_derivation_and_publisher_exclusivity",
                                                test_run_mode_derivation_and_publisher_exclusivity},

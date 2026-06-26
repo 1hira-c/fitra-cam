@@ -13,6 +13,8 @@ namespace {
 
 using fitra::vmt::AutoAlignmentResult;
 using fitra::vmt::AutoAlignmentStatus;
+using fitra::vmt::HmdAxisXZ;
+using fitra::vmt::hmd_head_axis_xz;
 using fitra::vmt::HmdPose;
 using fitra::vmt::MotionSample;
 using fitra::vmt::solve_motion;
@@ -194,6 +196,57 @@ void test_motion_edge_cases() {
     CHECK(r2.status == AutoAlignmentStatus::Degenerate);
 }
 
+// 9) HMD head-axis correction. The HMD rides on the face; hmd_head_axis_xz
+//    projects its origin back onto the head axis along the gaze, by `offset`.
+void test_hmd_head_axis() {
+    // offset 0 → identity (no correction).
+    {
+        HmdPose h = make_hmd(1.0f, 2.0f, 0.0f);
+        HmdAxisXZ a = hmd_head_axis_xz(h, 0.0f);
+        CHECK_NEAR(a.x, 1.0, 1e-6);
+        CHECK_NEAR(a.z, 2.0, 1e-6);
+    }
+    // Facing -Z (yaw 0), upright: head axis is `offset` behind (+Z) the HMD.
+    {
+        HmdPose h = make_hmd(1.0f, 2.0f, 0.0f);
+        HmdAxisXZ a = hmd_head_axis_xz(h, 0.10f);
+        CHECK_NEAR(a.x, 1.0, 1e-5);
+        CHECK_NEAR(a.z, 2.10, 1e-5);
+    }
+    // Yaw 90°: "behind" now points +X, so the correction lands on x.
+    {
+        HmdPose h = make_hmd(1.0f, 2.0f, kPi * 0.5f);
+        HmdAxisXZ a = hmd_head_axis_xz(h, 0.10f);
+        CHECK_NEAR(a.x, 1.10, 1e-5);
+        CHECK_NEAR(a.z, 2.0, 1e-5);
+    }
+    // Pitch straight down (gaze = -Y): the horizontal correction shrinks to 0.
+    {
+        HmdPose h = make_hmd(1.0f, 2.0f, 0.0f);
+        const float c = std::cos(kPi * 0.25f), s = std::sin(kPi * 0.25f);
+        h.qx = s; h.qy = 0.0f; h.qz = 0.0f; h.qw = c;  // 90° about +X
+        HmdAxisXZ a = hmd_head_axis_xz(h, 0.10f);
+        CHECK_NEAR(a.x, 1.0, 1e-5);
+        CHECK_NEAR(a.z, 2.0, 1e-5);
+    }
+}
+
+// 10) solve_tpose with the forward offset: identity chest/HMD (yaw 0) should
+//     now resolve to a pure +z shift equal to the offset (head axis is behind
+//     the HMD, so the chest must be pushed back to match it).
+void test_tpose_forward_offset() {
+    HmdPose hmd = make_hmd(0.0f, 0.0f, 0.0f);
+    VmtPos chest{0.0f, 0.2f, 0.0f};
+    VmtQuat q = yaw_quat(0.0f);
+    auto base = solve_tpose(hmd, chest, q, 0.0f);
+    CHECK_NEAR(base.alignment.z, 0.0, 1e-5);
+    auto off = solve_tpose(hmd, chest, q, 0.10f);
+    CHECK(off.status == AutoAlignmentStatus::Ok);
+    CHECK_NEAR(off.alignment.x, 0.0, 1e-5);
+    CHECK_NEAR(off.alignment.z, 0.10, 1e-5);
+    CHECK_NEAR(off.alignment.yaw_deg, 0.0, 1e-4);
+}
+
 }  // namespace
 
 int main() {
@@ -205,6 +258,8 @@ int main() {
     test_motion_yaw_and_translation();
     test_motion_noisy();
     test_motion_edge_cases();
+    test_hmd_head_axis();
+    test_tpose_forward_offset();
     if (g_fail) {
         std::fprintf(stderr, "test_auto_alignment: %d failures\n", g_fail);
         return 1;

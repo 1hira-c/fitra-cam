@@ -143,6 +143,7 @@ void print_help() {
         "  --vmt-continuous-sample-hz F poll rate for HMD/head samples (default 15, [5,120])\n"
         "  --vmt-continuous-resolve-s F re-solve cadence in seconds (default 2, [0.2,30])\n"
         "  --vmt-continuous-blend F     EMA weight applied per solve (default 0.2, (0,1])\n"
+        "  --vmt-align-hmd-forward F    HMD-on-face forward offset removed before align, m (default 0.10, [0,0.5]; 0=off)\n"
         "\n"
         "Subject calibration wizard (dedicated calib-subject mode, requires --enable-3d;\n"
         "VR publishers are unavailable while calibrating):\n"

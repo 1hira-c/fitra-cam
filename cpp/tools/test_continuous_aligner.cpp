@@ -145,6 +145,27 @@ void test_make_sample() {
     }
 }
 
+// HMD head-axis offset: with a non-zero hmd_forward_offset_m the sampled HMD xz
+// is the head axis (HMD origin minus its face lever arm), not the raw origin.
+// hmd_at() faces -Z (identity quat), so "behind" is +Z: only hmd_z shifts.
+void test_make_sample_hmd_offset() {
+    ContinuousAlignerConfig cfg;
+    cfg.hmd_forward_offset_m = 0.10f;
+
+    SampleInputs in;
+    in.hip_center = {0.2f, 0.6f, 0.0f}; in.hip_valid = true; in.hip_score = 0.8f;
+    in.neck       = {0.2f, 0.6f, 0.5f}; in.neck_valid = true; in.neck_score = 0.8f;
+    in.head_top   = {0.4f, 0.7f, 1.6f}; in.head_valid = true; in.head_score = 0.9f;
+
+    AlignSample s = make_sample(in, hmd_at(2.0f, 3.0f), 0.0f, 0.0, cfg);
+    CHECK(s.source == CorrSource::Head);
+    CHECK_NEAR(s.hmd_x, 2.0f, 1e-5);   // no horizontal turn -> x unchanged
+    CHECK_NEAR(s.hmd_z, 3.10f, 1e-5);  // head axis sits 0.10 behind (+Z) the HMD
+    // Body landmark is unaffected by the HMD offset.
+    CHECK_NEAR(s.body_x, 0.4f, 1e-6);
+    CHECK_NEAR(s.body_z, -0.7f, 1e-6);
+}
+
 AlignSample sample_at(float hx, float hz, float quality, double t) {
     AlignSample s;
     s.hmd_x = hx; s.hmd_z = hz;
@@ -314,6 +335,7 @@ int main() {
     test_ramp();
     test_verticality();
     test_make_sample();
+    test_make_sample_hmd_offset();
     test_reservoir();
     test_blend();
     test_lock_state();

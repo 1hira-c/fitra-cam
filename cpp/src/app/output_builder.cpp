@@ -106,6 +106,7 @@ RunOutputs make_run_outputs(const config::MainOptions& opts,
         cacfg.sample_hz        = opts.vmt_continuous_sample_hz;
         cacfg.resolve_period_s = opts.vmt_continuous_resolve_s;
         cacfg.blend_alpha      = static_cast<float>(opts.vmt_continuous_blend);
+        cacfg.hmd_forward_offset_m = static_cast<float>(opts.vmt_align_hmd_forward_m);
         out.aligner = std::make_unique<vmt::ContinuousAligner>(
             *bus3d, *hmd_bus, *out.vmt_pub, opts.hmd_stale_ms, cacfg);
         out.aligner->start();

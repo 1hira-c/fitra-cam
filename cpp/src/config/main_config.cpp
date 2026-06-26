@@ -278,6 +278,7 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
         "hmd_listen_enabled", "hmd_listen_port", "hmd_listen_bind", "hmd_stale_ms",
         // Continuous HMD-driven alignment refinement.
         "continuous_align", "continuous_sample_hz", "continuous_resolve_s", "continuous_blend",
+        "align_hmd_forward_m",
     };
     check_keys(section, allowed, "vmt");
     if (section["vmt_out"])             out.vmt_out                 = parse_scalar<bool>(section["vmt_out"],                       "vmt.vmt_out");
@@ -304,6 +305,7 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
     if (section["continuous_sample_hz"])  out.vmt_continuous_sample_hz = parse_scalar<double>(section["continuous_sample_hz"],        "vmt.continuous_sample_hz");
     if (section["continuous_resolve_s"])  out.vmt_continuous_resolve_s = parse_scalar<double>(section["continuous_resolve_s"],        "vmt.continuous_resolve_s");
     if (section["continuous_blend"])      out.vmt_continuous_blend     = parse_scalar<double>(section["continuous_blend"],            "vmt.continuous_blend");
+    if (section["align_hmd_forward_m"])   out.vmt_align_hmd_forward_m  = parse_scalar<double>(section["align_hmd_forward_m"],         "vmt.align_hmd_forward_m");
 }
 
 void load_extrinsic_calib(const YAML::Node& section, MainOptions& out) {
@@ -584,6 +586,7 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.vmt_continuous_sample_hz != d.vmt_continuous_sample_hz) e << YAML::Key << "continuous_sample_hz" << YAML::Value << o.vmt_continuous_sample_hz;
     if (o.vmt_continuous_resolve_s != d.vmt_continuous_resolve_s) e << YAML::Key << "continuous_resolve_s" << YAML::Value << o.vmt_continuous_resolve_s;
     if (o.vmt_continuous_blend != d.vmt_continuous_blend)         e << YAML::Key << "continuous_blend"     << YAML::Value << o.vmt_continuous_blend;
+    if (o.vmt_align_hmd_forward_m != d.vmt_align_hmd_forward_m)   e << YAML::Key << "align_hmd_forward_m"  << YAML::Value << o.vmt_align_hmd_forward_m;
     e << YAML::EndMap;
 
     // extrinsic_calib — NB: never emit `enabled`/`replay_dir`/`floor_replay_dir`
@@ -798,6 +801,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--vmt-continuous-sample-hz"){ out.vmt_continuous_sample_hz = std::stod(need(i, "--vmt-continuous-sample-hz")); }
         else if (a == "--vmt-continuous-resolve-s"){ out.vmt_continuous_resolve_s = std::stod(need(i, "--vmt-continuous-resolve-s")); }
         else if (a == "--vmt-continuous-blend")    { out.vmt_continuous_blend     = std::stod(need(i, "--vmt-continuous-blend")); }
+        else if (a == "--vmt-align-hmd-forward")   { out.vmt_align_hmd_forward_m  = std::stod(need(i, "--vmt-align-hmd-forward")); }
         else if (a == "--calibrate")             { out.calibrate = true; }
         // Deprecated aliases for --subject-id / --subject-height-m (subject id +
         // height are now a single field used by both run and calibration).
@@ -1170,6 +1174,11 @@ void validate_options(const MainOptions& opts) {
         if (opts.vmt_continuous_blend <= 0.0 || opts.vmt_continuous_blend > 1.0) {
             fail("--vmt-continuous-blend must be in (0, 1]");
         }
+    }
+    // HMD head-axis offset feeds both auto-align paths; validate unconditionally
+    // (0 = correction off). > 0.5 m is non-physical for an HMD-to-head distance.
+    if (opts.vmt_align_hmd_forward_m < 0.0 || opts.vmt_align_hmd_forward_m > 0.5) {
+        fail("--vmt-align-hmd-forward must be in [0, 0.5] metres (0 = off)");
     }
     // One Euro params drive the TrackerExtractor whenever 3D is on (feeds both
     // SlimeVR/VMT and the WebUI viz), so validate unconditionally. mincutoff and

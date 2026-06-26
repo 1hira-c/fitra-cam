@@ -196,6 +196,12 @@ struct MainOptions {
     double vmt_continuous_sample_hz = 15.0;
     double vmt_continuous_resolve_s = 2.0;
     double vmt_continuous_blend     = 0.2;   // EMA weight per resolve, in (0, 1]
+    // HMD-on-face forward offset (m): the HMD sits ~this far ahead of the
+    // head/neck axis along the gaze. Both auto-align paths (continuous + the
+    // one-shot T-pose/motion routes) project the HMD xz back by this much before
+    // pairing it with the body landmark, removing the head-forward lever arm.
+    // 0 disables the correction. Tuned in VR via --vmt-align-hmd-forward.
+    double vmt_align_hmd_forward_m  = 0.10;
 
     // Controller-marker extrinsic calibration (see
     // docs/design/pose-3d-controller-marker-extrinsic.md). When enabled, main

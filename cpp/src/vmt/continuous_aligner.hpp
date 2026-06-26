@@ -64,6 +64,13 @@ struct ContinuousAlignerConfig {
     double resolve_period_s = 2.0;    // re-solve cadence
     float  blend_alpha      = 0.2f;   // EMA weight toward each fresh solve
 
+    // HMD head-axis correction (see auto_alignment.hpp::hmd_head_axis_xz). The
+    // HMD rides on the face, ~this far ahead of the head/neck axis along the
+    // gaze; make_sample projects the HMD xz back by this much before pairing it
+    // with the body landmark. 0 = raw HMD xz (preserves the pure-helper unit
+    // tests); main.cpp sets the product value from --vmt-align-hmd-forward.
+    float  hmd_forward_offset_m = 0.0f;
+
     // ---- sample quality ----
     float  head_conf_thresh = 0.5f;   // head_top.score >= this -> use head, else chest
     float  vert_full_deg    = 15.0f;  // spine tilt <= this -> verticality weight 1

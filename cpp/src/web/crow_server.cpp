@@ -406,6 +406,10 @@ void CrowServer::set_hmd_pose_bus(vmt::HmdPoseBus* bus, double stale_threshold_m
     if (stale_threshold_ms > 0.0) hmd_stale_ms_ = stale_threshold_ms;
 }
 
+void CrowServer::set_align_hmd_forward_m(float meters) {
+    align_hmd_forward_m_ = meters;
+}
+
 void CrowServer::set_extrinsic_calib_pose_bus(vmt::ControllerPoseBus* bus,
                                               std::string role,
                                               double stale_threshold_ms) {
@@ -757,7 +761,7 @@ void CrowServer::start() {
         vmt::VmtPos  cpos;
         vmt::VmtQuat cquat;
         chest_in_vmt(chest, cpos, cquat);
-        auto r = vmt::solve_tpose(hmd_snap.pose, cpos, cquat);
+        auto r = vmt::solve_tpose(hmd_snap.pose, cpos, cquat, align_hmd_forward_m_);
 
         {
             std::lock_guard<std::mutex> g(sess.mu);
@@ -850,8 +854,9 @@ void CrowServer::start() {
         const double               stale   = hmd_stale_ms_;
         slimevr::SlimeTrackerBus*  tracker = tracker_bus_;
         vmt::VmtPublisher*         pub     = vmt_publisher_;
+        const float                fwd_off = align_hmd_forward_m_;
 
-        std::thread new_worker([&sess, hmd, stale, tracker, pub,
+        std::thread new_worker([&sess, hmd, stale, tracker, pub, fwd_off,
                                    duration_s, sample_hz]() {
             using namespace std::chrono;
             const auto period = duration<double>(1.0 / sample_hz);
@@ -870,7 +875,12 @@ void CrowServer::start() {
                         vmt::VmtPos  cpos;
                         vmt::VmtQuat cquat;
                         chest_in_vmt(chest, cpos, cquat);
-                        samples.push_back({h.pose.x, h.pose.z, cpos.x, cpos.z});
+                        // Pair the chest against the HMD head-axis, not the raw
+                        // (head-forward) HMD origin — same correction as the
+                        // continuous aligner / solve_tpose.
+                        const auto hmd_axis =
+                            vmt::hmd_head_axis_xz(h.pose, fwd_off);
+                        samples.push_back({hmd_axis.x, hmd_axis.z, cpos.x, cpos.z});
                     }
                 }
                 {

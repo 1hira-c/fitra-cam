@@ -49,6 +49,19 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-26 — HMD 顔オフセットを除いた頭軸アライメント
+HMD-driven アライメント（連続 + ワンショット T-pose/motion）が **HMD の生 xz** を体ランドマーク
+（head_top / 胸中点 / chest）に直接対応付けていた問題を修正。HMD は顔に乗っていて頭/首の鉛直軸から
+注視方向に ~10cm 前方へずれており、このレバーアームが頭の向きとともに回るため解が頭向き分布に
+引っ張られ、アバター頭が実頭の前にずれていた。新ヘルパー `hmd_head_axis_xz`（`auto_alignment.hpp`）が
+HMD 自身の向きから後方ベクトル `R(q)·(0,0,1)` を取り、`head_axis.xz = hmd.xz + d·back.xz` で頭軸へ
+射影し直す。**HMD 向きだけで決まり解の回転に非依存**（数学的にきれい）、かつ水平成分を**正規化しない**
+ので見上げ/見下ろしで補正が自然に縮む（ピッチ自動対応）。連続(`make_sample`)・ワンショット
+(`solve_tpose` / crow motion 収集)の3経路に同一補正を適用。二段デフォルト（純ヘルパー/関数は
+無補正=0 で既存テスト保護、製品デフォルト `vmt.align_hmd_forward_m=0.10`）。`--vmt-align-hmd-forward`
+(`[0,0.5]`、0=OFF) で VR 内チューニング可。Y(高さ)は従来どおり手動スライダ（xz のみ補正）。
+→ [design/vr-output-hmd-head-offset-alignment.md](../design/vr-output-hmd-head-offset-alignment.md)
+
 ### 2026-06-26 — 胸 / 腰トラッカーの高さを脊椎沿いに調整可能化
 Chest = `midpoint(neck, hip_center)`・Waist(=Hip) = `hip_center` 固定だった胸/腰トラッカーの
 **位置**を、脊椎方向 (neck − hip_center) に沿って引き上げ可能にした

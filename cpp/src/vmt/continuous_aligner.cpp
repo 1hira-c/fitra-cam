@@ -100,8 +100,11 @@ AlignSample make_sample(const SampleInputs& in,
         world_pos_to_vmt(body_world[0], body_world[1], body_world[2]);
     s.body_x  = body_vmt.x;
     s.body_z  = body_vmt.z;
-    s.hmd_x   = hmd.x;
-    s.hmd_z   = hmd.z;
+    // Remove the HMD's face lever arm so the correspondence pairs the body
+    // landmark against the head/neck axis, not the (head-forward) HMD origin.
+    const HmdAxisXZ hmd_axis = hmd_head_axis_xz(hmd, cfg.hmd_forward_offset_m);
+    s.hmd_x   = hmd_axis.x;
+    s.hmd_z   = hmd_axis.z;
     s.quality = clampf(conf, 0.0f, 1.0f) * vert * vel;
 
     // Reject non-finite coords: a NaN/Inf here would poison the reservoir and
