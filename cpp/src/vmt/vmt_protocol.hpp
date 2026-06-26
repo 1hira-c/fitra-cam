@@ -13,12 +13,33 @@
 //   - Driver room space = SteamVR Driver convention: Y-up RH, X-right,
 //     Z-back, units = meters / quaternion in xyzw order.
 
+#include <array>
 #include <cstdint>
+#include <string>
 
 #include "slimevr/tracker_extract.hpp"  // TrackerRole / kTrackerCount
 #include "vmt/osc_writer.hpp"
 
 namespace fitra::vmt {
+
+// Which TrackerRoles are published to VMT. VRChat FBT consumes at most 8
+// trackers (hip, chest, 2 feet, 2 knees, 2 elbows); the shin (LowerLeg) roles
+// have no VRChat role and are only included by `Full` (SlimeVR-compatible).
+// VRChat's own docs note fewer trackers can give a more stable IK solve, so the
+// count is selectable. Index assignment stays role-tied (vmt_index_for), so a
+// disabled role just leaves an index gap — the SteamVR "Manage Trackers" role
+// binding (VMT_10 = Left Elbow, …) is stable across presets.
+//   P3   : Waist, LeftFoot, RightFoot
+//   P6   : P3 + Chest, LeftUpperLeg, RightUpperLeg
+//   P8   : P6 + LeftUpperArm, RightUpperArm  (VRChat standard FBT; default)
+//   Full : all 10 roles (adds LeftLowerLeg, RightLowerLeg; legacy / SlimeVR)
+enum class VmtTrackerPreset : std::uint8_t { P3, P6, P8, Full };
+
+const char* vmt_preset_name(VmtTrackerPreset p);
+bool        parse_vmt_preset(const std::string& s, VmtTrackerPreset& out);
+
+// Per-role enable mask for a preset, indexed by static_cast<int>(TrackerRole).
+std::array<bool, slimevr::kTrackerCount> role_mask_for(VmtTrackerPreset p);
 
 struct VmtPos  { float x, y, z; };
 struct VmtQuat { float x, y, z, w; };  // wire order = xyzw
@@ -61,7 +82,7 @@ inline VmtQuat world_quat_to_vmt(float qw, float qx, float qy, float qz) {
 //   B+3 | Waist (HIP)       | Waist
 //   B+4 | LeftUpperLeg      | LeftKnee
 //   B+5 | RightUpperLeg     | RightKnee
-//   B+6 | LeftLowerLeg      | (function-overlap with Knee; leave unmapped)
+//   B+6 | LeftLowerLeg      | (Full preset only; no VRChat role — leave unmapped)
 //   B+7 | RightLowerLeg     | (ditto)
 //   B+8 | LeftFoot          | LeftFoot
 //   B+9 | RightFoot         | RightFoot

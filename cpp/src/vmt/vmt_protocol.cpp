@@ -4,6 +4,39 @@
 
 namespace fitra::vmt {
 
+const char* vmt_preset_name(VmtTrackerPreset p) {
+    switch (p) {
+        case VmtTrackerPreset::P3:   return "p3";
+        case VmtTrackerPreset::P6:   return "p6";
+        case VmtTrackerPreset::P8:   return "p8";
+        case VmtTrackerPreset::Full: return "full";
+    }
+    return "p8";
+}
+
+bool parse_vmt_preset(const std::string& s, VmtTrackerPreset& out) {
+    if (s == "p3")   { out = VmtTrackerPreset::P3;   return true; }
+    if (s == "p6")   { out = VmtTrackerPreset::P6;   return true; }
+    if (s == "p8")   { out = VmtTrackerPreset::P8;   return true; }
+    if (s == "full") { out = VmtTrackerPreset::Full; return true; }
+    return false;
+}
+
+std::array<bool, slimevr::kTrackerCount> role_mask_for(VmtTrackerPreset p) {
+    using R = slimevr::TrackerRole;
+    std::array<bool, slimevr::kTrackerCount> m{};   // all false
+    auto on = [&](R r) { m[static_cast<std::size_t>(r)] = true; };
+    // Nested supersets (Full only adds the shins).
+    on(R::Waist); on(R::LeftFoot); on(R::RightFoot);            // P3: hip + feet
+    if (p == VmtTrackerPreset::P3) return m;
+    on(R::Chest); on(R::LeftUpperLeg); on(R::RightUpperLeg);    // P6: + chest + knees
+    if (p == VmtTrackerPreset::P6) return m;
+    on(R::LeftUpperArm); on(R::RightUpperArm);                  // P8: + elbows
+    if (p == VmtTrackerPreset::P8) return m;
+    on(R::LeftLowerLeg); on(R::RightLowerLeg);                  // Full: + shins
+    return m;
+}
+
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;

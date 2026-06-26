@@ -138,6 +138,7 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
         "vr_extract_event_driven",
         "vr_one_euro", "vr_pos_mincutoff", "vr_pos_beta", "vr_pos_dcutoff",
         "vr_quat_mincutoff", "vr_quat_beta", "vr_quat_dcutoff",
+        "vr_foot_pos_mode", "vr_chest_height_frac", "vr_waist_height_frac",
     };
     check_keys(section, allowed, "three_d");
     if (section["enable_3d"])         out.enable_3d         = parse_scalar<bool>(section["enable_3d"],            "three_d.enable_3d");
@@ -165,6 +166,9 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
     if (section["vr_quat_mincutoff"]) out.vr_quat_mincutoff = parse_scalar<double>(section["vr_quat_mincutoff"], "three_d.vr_quat_mincutoff");
     if (section["vr_quat_beta"])      out.vr_quat_beta      = parse_scalar<double>(section["vr_quat_beta"],      "three_d.vr_quat_beta");
     if (section["vr_quat_dcutoff"])   out.vr_quat_dcutoff   = parse_scalar<double>(section["vr_quat_dcutoff"],   "three_d.vr_quat_dcutoff");
+    if (section["vr_foot_pos_mode"])  out.vr_foot_pos_mode  = parse_scalar<std::string>(section["vr_foot_pos_mode"], "three_d.vr_foot_pos_mode");
+    if (section["vr_chest_height_frac"]) out.vr_chest_height_frac = parse_scalar<double>(section["vr_chest_height_frac"], "three_d.vr_chest_height_frac");
+    if (section["vr_waist_height_frac"]) out.vr_waist_height_frac = parse_scalar<double>(section["vr_waist_height_frac"], "three_d.vr_waist_height_frac");
 }
 
 void load_subject(const YAML::Node& section, MainOptions& out) {
@@ -265,7 +269,7 @@ void load_slimevr(const YAML::Node& section, MainOptions& out) {
 void load_vmt(const YAML::Node& section, MainOptions& out) {
     ensure_map(section, "vmt");
     static const std::set<std::string> allowed{
-        "vmt_out", "host", "port", "rate_hz", "index_base", "pos_smooth",
+        "vmt_out", "host", "port", "rate_hz", "index_base", "preset", "pos_smooth",
         "degeneracy_mode", "disable_below_floor",
         // Zeroconf discovery.
         "discovery", "pair_id", "pairing_token", "discovery_group",
@@ -274,6 +278,7 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
         "hmd_listen_enabled", "hmd_listen_port", "hmd_listen_bind", "hmd_stale_ms",
         // Continuous HMD-driven alignment refinement.
         "continuous_align", "continuous_sample_hz", "continuous_resolve_s", "continuous_blend",
+        "align_hmd_forward_m",
     };
     check_keys(section, allowed, "vmt");
     if (section["vmt_out"])             out.vmt_out                 = parse_scalar<bool>(section["vmt_out"],                       "vmt.vmt_out");
@@ -281,6 +286,7 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
     if (section["port"])                out.vmt_port                = parse_scalar<int>(section["port"],                           "vmt.port");
     if (section["rate_hz"])             out.vmt_rate_hz             = parse_scalar<double>(section["rate_hz"],                     "vmt.rate_hz");
     if (section["index_base"])          out.vmt_index_base          = parse_scalar<int>(section["index_base"],                    "vmt.index_base");
+    if (section["preset"])              out.vmt_tracker_preset      = parse_scalar<std::string>(section["preset"],                "vmt.preset");
     if (section["pos_smooth"])          out.vmt_pos_smooth          = parse_scalar<double>(section["pos_smooth"],                  "vmt.pos_smooth");
     if (section["degeneracy_mode"])     out.vmt_degeneracy_mode     = parse_scalar<std::string>(section["degeneracy_mode"],        "vmt.degeneracy_mode");
     if (section["disable_below_floor"]) out.vmt_disable_below_floor = parse_scalar<bool>(section["disable_below_floor"],           "vmt.disable_below_floor");
@@ -299,6 +305,7 @@ void load_vmt(const YAML::Node& section, MainOptions& out) {
     if (section["continuous_sample_hz"])  out.vmt_continuous_sample_hz = parse_scalar<double>(section["continuous_sample_hz"],        "vmt.continuous_sample_hz");
     if (section["continuous_resolve_s"])  out.vmt_continuous_resolve_s = parse_scalar<double>(section["continuous_resolve_s"],        "vmt.continuous_resolve_s");
     if (section["continuous_blend"])      out.vmt_continuous_blend     = parse_scalar<double>(section["continuous_blend"],            "vmt.continuous_blend");
+    if (section["align_hmd_forward_m"])   out.vmt_align_hmd_forward_m  = parse_scalar<double>(section["align_hmd_forward_m"],         "vmt.align_hmd_forward_m");
 }
 
 void load_extrinsic_calib(const YAML::Node& section, MainOptions& out) {
@@ -512,6 +519,9 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.vr_quat_mincutoff != d.vr_quat_mincutoff) e << YAML::Key << "vr_quat_mincutoff" << YAML::Value << o.vr_quat_mincutoff;
     if (o.vr_quat_beta      != d.vr_quat_beta)      e << YAML::Key << "vr_quat_beta"      << YAML::Value << o.vr_quat_beta;
     if (o.vr_quat_dcutoff   != d.vr_quat_dcutoff)   e << YAML::Key << "vr_quat_dcutoff"   << YAML::Value << o.vr_quat_dcutoff;
+    if (o.vr_foot_pos_mode  != d.vr_foot_pos_mode)  e << YAML::Key << "vr_foot_pos_mode"  << YAML::Value << o.vr_foot_pos_mode;
+    if (o.vr_chest_height_frac != d.vr_chest_height_frac) e << YAML::Key << "vr_chest_height_frac" << YAML::Value << o.vr_chest_height_frac;
+    if (o.vr_waist_height_frac != d.vr_waist_height_frac) e << YAML::Key << "vr_waist_height_frac" << YAML::Value << o.vr_waist_height_frac;
     e << YAML::EndMap;
 
     // subject --------------------------------------------------------------
@@ -557,6 +567,7 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.vmt_port != d.vmt_port)                       e << YAML::Key << "port"                << YAML::Value << o.vmt_port;
     if (o.vmt_rate_hz != d.vmt_rate_hz)                 e << YAML::Key << "rate_hz"             << YAML::Value << o.vmt_rate_hz;
     if (o.vmt_index_base != d.vmt_index_base)           e << YAML::Key << "index_base"          << YAML::Value << o.vmt_index_base;
+    if (o.vmt_tracker_preset != d.vmt_tracker_preset)   e << YAML::Key << "preset"              << YAML::Value << o.vmt_tracker_preset;
     if (o.vmt_pos_smooth != d.vmt_pos_smooth)           e << YAML::Key << "pos_smooth"          << YAML::Value << o.vmt_pos_smooth;
     if (o.vmt_degeneracy_mode != d.vmt_degeneracy_mode) e << YAML::Key << "degeneracy_mode"     << YAML::Value << o.vmt_degeneracy_mode;
     if (o.vmt_disable_below_floor != d.vmt_disable_below_floor) e << YAML::Key << "disable_below_floor" << YAML::Value << o.vmt_disable_below_floor;
@@ -575,6 +586,7 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.vmt_continuous_sample_hz != d.vmt_continuous_sample_hz) e << YAML::Key << "continuous_sample_hz" << YAML::Value << o.vmt_continuous_sample_hz;
     if (o.vmt_continuous_resolve_s != d.vmt_continuous_resolve_s) e << YAML::Key << "continuous_resolve_s" << YAML::Value << o.vmt_continuous_resolve_s;
     if (o.vmt_continuous_blend != d.vmt_continuous_blend)         e << YAML::Key << "continuous_blend"     << YAML::Value << o.vmt_continuous_blend;
+    if (o.vmt_align_hmd_forward_m != d.vmt_align_hmd_forward_m)   e << YAML::Key << "align_hmd_forward_m"  << YAML::Value << o.vmt_align_hmd_forward_m;
     e << YAML::EndMap;
 
     // extrinsic_calib — NB: never emit `enabled`/`replay_dir`/`floor_replay_dir`
@@ -743,6 +755,9 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--no-3d-kalman")      { out.kalman_3d = false; }
         else if (a == "--no-3d-ik")          { out.ik_3d = false; }
         else if (a == "--vr-extract-event-driven") { out.vr_extract_event_driven = true; }
+        else if (a == "--foot-tracker-pos")  { out.vr_foot_pos_mode = need(i, "--foot-tracker-pos"); }
+        else if (a == "--chest-height-frac") { out.vr_chest_height_frac = std::stod(need(i, "--chest-height-frac")); }
+        else if (a == "--waist-height-frac") { out.vr_waist_height_frac = std::stod(need(i, "--waist-height-frac")); }
         else if (a == "--vr-no-one-euro")    { out.vr_one_euro = false; }
         else if (a == "--vr-pos-mincutoff")  { out.vr_pos_mincutoff  = std::stod(need(i, "--vr-pos-mincutoff")); }
         else if (a == "--vr-pos-beta")       { out.vr_pos_beta       = std::stod(need(i, "--vr-pos-beta")); }
@@ -765,6 +780,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--vmt-port")          { out.vmt_port = std::atoi(need(i, "--vmt-port")); }
         else if (a == "--vmt-rate-hz")       { out.vmt_rate_hz = std::stod(need(i, "--vmt-rate-hz")); }
         else if (a == "--vmt-index-base")    { out.vmt_index_base = std::atoi(need(i, "--vmt-index-base")); }
+        else if (a == "--vmt-preset")        { out.vmt_tracker_preset = need(i, "--vmt-preset"); }
         else if (a == "--vmt-pos-smooth")    { out.vmt_pos_smooth = std::stod(need(i, "--vmt-pos-smooth")); }
         else if (a == "--vmt-degeneracy-mode"){ out.vmt_degeneracy_mode = need(i, "--vmt-degeneracy-mode"); }
         else if (a == "--vmt-disable-below-floor"){ out.vmt_disable_below_floor = true; }
@@ -785,6 +801,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--vmt-continuous-sample-hz"){ out.vmt_continuous_sample_hz = std::stod(need(i, "--vmt-continuous-sample-hz")); }
         else if (a == "--vmt-continuous-resolve-s"){ out.vmt_continuous_resolve_s = std::stod(need(i, "--vmt-continuous-resolve-s")); }
         else if (a == "--vmt-continuous-blend")    { out.vmt_continuous_blend     = std::stod(need(i, "--vmt-continuous-blend")); }
+        else if (a == "--vmt-align-hmd-forward")   { out.vmt_align_hmd_forward_m  = std::stod(need(i, "--vmt-align-hmd-forward")); }
         else if (a == "--calibrate")             { out.calibrate = true; }
         // Deprecated aliases for --subject-id / --subject-height-m (subject id +
         // height are now a single field used by both run and calibration).
@@ -1102,7 +1119,13 @@ void validate_options(const MainOptions& opts) {
             fail("--vmt-rate-hz must be in (0, 240]");
         }
         if (opts.vmt_index_base < 0 || opts.vmt_index_base > 48) {
-            fail("--vmt-index-base must be in [0, 48] so 10 trackers fit VMT index 0..57");
+            fail("--vmt-index-base must be in [0, 48] so all roles (max index 9) fit VMT index 0..57");
+        }
+        if (opts.vmt_tracker_preset != "p3"
+            && opts.vmt_tracker_preset != "p6"
+            && opts.vmt_tracker_preset != "p8"
+            && opts.vmt_tracker_preset != "full") {
+            fail("--vmt-preset must be one of p3|p6|p8|full");
         }
         if (opts.vmt_pos_smooth < 0.0 || opts.vmt_pos_smooth > 1.0) {
             fail("--vmt-pos-smooth must be in [0, 1]");
@@ -1152,6 +1175,11 @@ void validate_options(const MainOptions& opts) {
             fail("--vmt-continuous-blend must be in (0, 1]");
         }
     }
+    // HMD head-axis offset feeds both auto-align paths; validate unconditionally
+    // (0 = correction off). > 0.5 m is non-physical for an HMD-to-head distance.
+    if (opts.vmt_align_hmd_forward_m < 0.0 || opts.vmt_align_hmd_forward_m > 0.5) {
+        fail("--vmt-align-hmd-forward must be in [0, 0.5] metres (0 = off)");
+    }
     // One Euro params drive the TrackerExtractor whenever 3D is on (feeds both
     // SlimeVR/VMT and the WebUI viz), so validate unconditionally. mincutoff and
     // beta may be 0 (0 mincutoff with 0 beta freezes — allowed but degenerate);
@@ -1164,6 +1192,15 @@ void validate_options(const MainOptions& opts) {
     }
     if (opts.vr_pos_dcutoff <= 0.0 || opts.vr_quat_dcutoff <= 0.0) {
         fail("--vr-{pos,quat}-dcutoff must be > 0");
+    }
+    if (opts.vr_foot_pos_mode != "ankle" && opts.vr_foot_pos_mode != "midpoint") {
+        fail("--foot-tracker-pos must be one of ankle|midpoint");
+    }
+    if (opts.vr_chest_height_frac < 0.0 || opts.vr_chest_height_frac > 1.0) {
+        fail("--chest-height-frac must be in [0, 1] (0 = hip_center, 1 = neck)");
+    }
+    if (opts.vr_waist_height_frac < 0.0 || opts.vr_waist_height_frac > 1.0) {
+        fail("--waist-height-frac must be in [0, 1] (0 = hip_center, 1 = neck)");
     }
     if (opts.calibrate && !opts.enable_3d) {
         fail("--calibrate requires --enable-3d");

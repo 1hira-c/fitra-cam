@@ -175,6 +175,11 @@ public:
     // stale and the auto-alignment routes return StaleHmd.
     void set_hmd_pose_bus(vmt::HmdPoseBus* bus, double stale_threshold_ms);
 
+    // HMD-on-face forward offset (m) applied by the one-shot T-pose / motion
+    // auto-align routes when projecting the HMD onto the head axis. The
+    // always-on ContinuousAligner takes the same value via its own config.
+    void set_align_hmd_forward_m(float meters);
+
     // Attach the selected extrinsic-calibration controller pose bus so
     // /api/excal/poses can expose the live HMD + controller markers. The
     // ControllerPoseBus is already filtered to opts.excal_controller_role by
@@ -248,6 +253,9 @@ private:
     double                         idle_enter_after_s_ = 10.0;
     double                         idle_tick_hz_       = 2.0;
     double                         hmd_stale_ms_    = 200.0;
+    // HMD face lever-arm correction for the one-shot auto-align routes (see
+    // auto_alignment.hpp::hmd_head_axis_xz). Set from --vmt-align-hmd-forward.
+    float                          align_hmd_forward_m_ = 0.0f;
     double                         excal_controller_stale_ms_ = 200.0;
     std::string                    excal_controller_role_ = "right";
 

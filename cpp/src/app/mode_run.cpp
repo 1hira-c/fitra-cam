@@ -104,6 +104,8 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
         if (opts.hmd_listen_enabled) {
             server->set_hmd_pose_bus(relay.hmd_bus.get(), opts.hmd_stale_ms);
         }
+        server->set_align_hmd_forward_m(
+            static_cast<float>(opts.vmt_align_hmd_forward_m));
         if (outputs.aligner) server->set_continuous_aligner(outputs.aligner.get());
         server->set_idle_state(&idle_state, idle_enabled,
                                opts.idle_enter_after_s, opts.idle_tick_hz);

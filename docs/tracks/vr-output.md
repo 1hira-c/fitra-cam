@@ -18,6 +18,15 @@
 - **10 trackers の TrackerRole 順は固定**: LeftUpperArm / RightUpperArm / Chest / Hip /
   LeftUpperLeg / RightUpperLeg / LeftLowerLeg / RightLowerLeg / LeftFoot / RightFoot。
   SlimeVR `TrackerPosition` enum に完全一致 (骨盤は `HIP(6)`、`WAIST(5)` は auto-assign されない)。
+- **VMT 送信トラッカーは preset で選択** (`--vmt-preset {p3,p6,p8,full}`, 既定 `p8`)。VRChat FBT は
+  最大 8 点 (hip/chest/両足/両膝/両肘) で脛 (LowerLeg) に対応 role が無いため、既定 `p8` は脛 2 本を落とす。
+  `p3`=腰+両足 / `p6`=+胸+両膝 / `full`=全 10 (SlimeVR 互換)。**間引きは VMT publisher のみ**で行い
+  extractor は 10 点維持 (SlimeVR 路は不変)。**VMT index は role 固定**なので preset を変えても
+  SteamVR「Manage Trackers」の role 割当 (VMT_10=Left Elbow … 18=Left Foot / 19=Right Foot) は安定。
+  ランタイム切替は `POST /api/vmt/preset` / Web UI `VmtPresetForm`。設計: [`../design/vr-output-vrchat-tracker-presets.md`](../design/vr-output-vrchat-tracker-presets.md)。
+- **足トラッカー位置は `--foot-tracker-pos {ankle,midpoint}`** (既定 `ankle`)。`ankle` は足首位置、
+  `midpoint` は足首/足先中点。回転は両モードとも不変 (`fwd = ankle→toe` で足先方向を保持)。位置を
+  消費するのは VMT 送信と WebUI viz のみ (SlimeVR は回転のみ)。VRChat 実機で A/B して既定を確定する。
 - **Bridge relay (Jetson → Windows .NET relay → Named Pipe → SlimeVR Server) は没**。理由は
   SteamVR 起動中の `\\.\pipe\SlimeVRInput` 排他 + 座標系整合の不安定。位置を VR に流す要求は
   VMT 経路で解決済み。実装一式は `archive/botsu-phase12-bridge-relay` ブランチに凍結。
@@ -39,6 +48,32 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 詳細な合格基準は [`cpp-migration-plan.md` 検証戦略表](../cpp-migration-plan.md) の旧 Phase 11/14/15/15.5 行。
 
 ## Changelog (新しい順)
+
+### 2026-06-26 — HMD 顔オフセットを除いた頭軸アライメント
+HMD-driven アライメント（連続 + ワンショット T-pose/motion）が **HMD の生 xz** を体ランドマーク
+（head_top / 胸中点 / chest）に直接対応付けていた問題を修正。HMD は顔に乗っていて頭/首の鉛直軸から
+注視方向に ~10cm 前方へずれており、このレバーアームが頭の向きとともに回るため解が頭向き分布に
+引っ張られ、アバター頭が実頭の前にずれていた。新ヘルパー `hmd_head_axis_xz`（`auto_alignment.hpp`）が
+HMD 自身の向きから後方ベクトル `R(q)·(0,0,1)` を取り、`head_axis.xz = hmd.xz + d·back.xz` で頭軸へ
+射影し直す。**HMD 向きだけで決まり解の回転に非依存**（数学的にきれい）、かつ水平成分を**正規化しない**
+ので見上げ/見下ろしで補正が自然に縮む（ピッチ自動対応）。連続(`make_sample`)・ワンショット
+(`solve_tpose` / crow motion 収集)の3経路に同一補正を適用。二段デフォルト（純ヘルパー/関数は
+無補正=0 で既存テスト保護、製品デフォルト `vmt.align_hmd_forward_m=0.10`）。`--vmt-align-hmd-forward`
+(`[0,0.5]`、0=OFF) で VR 内チューニング可。Y(高さ)は従来どおり手動スライダ（xz のみ補正）。
+→ [design/vr-output-hmd-head-offset-alignment.md](../design/vr-output-hmd-head-offset-alignment.md)
+
+### 2026-06-26 — 胸 / 腰トラッカーの高さを脊椎沿いに調整可能化
+Chest = `midpoint(neck, hip_center)`・Waist(=Hip) = `hip_center` 固定だった胸/腰トラッカーの
+**位置**を、脊椎方向 (neck − hip_center) に沿って引き上げ可能にした
+(`pos = hip_center + frac·spine`, `frac ∈ [0,1]`)。実機で両者がやや低く感じられたため。
+製品デフォルトを引き上げ済み (Chest `0.65` / Waist `0.15`) にしつつ
+`--chest-height-frac` / `--waist-height-frac` (YAML `three_d.vr_{chest,waist}_height_frac`、
+validate `[0,1]`) で微調整可能。**位置のみ**で回転 (forward/up) は不変 — 影響は VMT 送信 +
+WebUI viz のみ、回転だけの SlimeVR Firmware UDP 路は同一。ワールド上方向ではなく脊椎沿いに
+動かすため前傾時もトラッカーが胴体に乗る。`extract_trackers` の**関数デフォルトは歴史的配置
+(0.5/0.0)** で既存 golden test を保護、製品デフォルト (`TrackerExtractorOptions`) のみ引き上げ
+(foot_pos_mode と同じ二段デフォルト)。設計はプリセットの design doc に追記。
+→ [design/vr-output-vrchat-tracker-presets.md](../design/vr-output-vrchat-tracker-presets.md)
 
 ### 2026-06-25 — zeroconf ディスカバリのレビュー指摘修正 (バグ修正)
 M1/M2 実装に対する Codex / code-review の指摘を反映。**ライフサイクル**: `PoseRelay` で
@@ -75,6 +110,17 @@ Jetson / Windows を**両方 IP 無指定**で起動 → 自動接続を確認�
 プローブ (`peer`/`sniff`/`self-test`) でワイヤ照合に使用。fitra-cam 側は M1/M2 のまま無改修。
 → [design/vr-output-zeroconf-discovery.md](../design/vr-output-zeroconf-discovery.md) /
 [design/vr-output-zeroconf-discovery-vmt-spec.md](../design/vr-output-zeroconf-discovery-vmt-spec.md)
+
+### 2026-06-24 — VRChat 向けトラッカープリセット + 足位置モード
+VMT 送信を VRChat 標準 8 点に既定で一致させ、本数を `--vmt-preset {p3,p6,p8,full}` (既定 `p8`) で
+選択可能にした。従来は 10 点固定送信だったが、VRChat FBT は最大 8 点で脛 (LowerLeg) に対応 role が
+無く浮いていた。既定 `p8` は脛 2 本を落とし、残り 8 本 (両肘=上腕 / 胸 / 腰 / 両膝=腿 / 両足) が
+VRChat 仕様と body part・装着位置まで一致する。間引きは **VMT publisher の role マスク**のみで行い、
+extractor は 10 点維持 (SlimeVR Firmware UDP 路は不変)。VMT index は role 固定なので SteamVR の role
+割当が preset 間で安定。ランタイム切替は `GET/POST /api/vmt/preset` + Web UI `VmtPresetForm`。
+あわせて足トラッカー位置を `--foot-tracker-pos {ankle,midpoint}` (既定 `ankle`) で切替可能にした
+(回転は不変、位置のみ・VMT/viz だけに影響)。設計:
+[`../design/vr-output-vrchat-tracker-presets.md`](../design/vr-output-vrchat-tracker-presets.md)。
 
 ### 2026-06-23 — VMT ⇔ Jetson zeroconf ディスカバリ M1/M2 実装 (Jetson 側)
 6/18 に起票した zeroconf ディスカバリ (issue #36) の Jetson 側を実装。**M1 (純ロジック)**:

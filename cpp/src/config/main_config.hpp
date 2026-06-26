@@ -109,6 +109,16 @@ struct MainOptions {
     double vr_quat_mincutoff = 1.5;
     double vr_quat_beta      = 1.5;
     double vr_quat_dcutoff   = 1.0;
+    // Foot tracker position: "ankle" (default — foot bone at the ankle, matches
+    // VRChat FBT) | "midpoint" (legacy ankle/toe midpoint). Rotation is the same
+    // either way. Only affects position consumers (VMT publish + WebUI viz).
+    std::string vr_foot_pos_mode = "ankle";
+    // Chest / Waist (Hip) tracker height as a fraction of the spine up from
+    // hip_center (0 = hip_center, 1 = neck). Defaults sit higher than the
+    // historical 0.5 / 0.0 so the trackers land near the sternum / belt line.
+    // Position only (VMT publish + WebUI viz); rotation is unchanged. [0, 1].
+    double vr_chest_height_frac = 0.65;
+    double vr_waist_height_frac = 0.15;
 
     // subject — identity (used by both run and subject calibration). Lives in
     // the YAML `subject:` block; subject_id + subject_height_m are the single
@@ -151,6 +161,10 @@ struct MainOptions {
     int    vmt_port = 39570;
     double vmt_rate_hz = 60.0;
     int    vmt_index_base = 10;
+    // Which tracker preset to publish to VMT: "p3" | "p6" | "p8" | "full".
+    // Default "p8" = VRChat standard 8-point (drops the shin trackers). See
+    // VmtTrackerPreset in vmt_protocol.hpp.
+    std::string vmt_tracker_preset = "p8";
     double vmt_pos_smooth = 0.5;             // Position EMA alpha
     // "hold" (default) | "disable" | "skip" — see vmt_publisher.hpp DegenMode
     std::string vmt_degeneracy_mode = "hold";
@@ -182,6 +196,12 @@ struct MainOptions {
     double vmt_continuous_sample_hz = 15.0;
     double vmt_continuous_resolve_s = 2.0;
     double vmt_continuous_blend     = 0.2;   // EMA weight per resolve, in (0, 1]
+    // HMD-on-face forward offset (m): the HMD sits ~this far ahead of the
+    // head/neck axis along the gaze. Both auto-align paths (continuous + the
+    // one-shot T-pose/motion routes) project the HMD xz back by this much before
+    // pairing it with the body landmark, removing the head-forward lever arm.
+    // 0 disables the correction. Tuned in VR via --vmt-align-hmd-forward.
+    double vmt_align_hmd_forward_m  = 0.10;
 
     // Controller-marker extrinsic calibration (see
     // docs/design/pose-3d-controller-marker-extrinsic.md). When enabled, main

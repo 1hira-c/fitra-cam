@@ -378,7 +378,9 @@ bool build_tracker(TrackerRole role,
 }  // namespace
 
 std::array<SlimeTracker, kTrackerCount>
-extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx) {
+extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
+                 FootPosMode foot_pos_mode,
+                 float chest_height_frac, float waist_height_frac) {
     if (lift::active_keypoint_format() != lift::KeypointFormat::Halpe26) {
         throw std::runtime_error(
             "extract_trackers requires --keypoint-format=halpe26");
@@ -431,26 +433,32 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx) {
     upper_arm(TrackerRole::RightUpperArm, kRShoulder, kRElbow, kRWrist, 1);
 
     // ---- Chest (mid-torso) ------------------------------------------------
-    // pos = midpoint(neck, hip_center); up = neck - hip_center (spine);
-    // forward = ⊥(shoulder_axis × spine) so the chest faces forward.
+    // pos = hip_center + chest_height_frac · spine; up = neck - hip_center
+    // (spine); forward = ⊥(shoulder_axis × spine) so the chest faces forward.
+    // frac 0.5 reproduces the historical midpoint(neck, hip_center); the
+    // product default is higher (toward the sternum) — see extract_trackers().
     if (joints_valid(skel, {kNeck, kHipCenter, kLShoulder, kRShoulder})) {
         cv::Vec3f neck = to_vec3f(skel.joints[kNeck]);
         cv::Vec3f hc   = to_vec3f(skel.joints[kHipCenter]);
         cv::Vec3f spine = neck - hc;
         cv::Vec3f shoulder_axis = to_vec3f(skel.joints[kLShoulder]) - to_vec3f(skel.joints[kRShoulder]);
         cv::Vec3f fwd = cross(shoulder_axis, spine);
-        cv::Vec3f pos = (neck + hc) * 0.5f;
+        cv::Vec3f pos = hc + chest_height_frac * spine;
         build_tracker(TrackerRole::Chest, pos, fwd, spine, out[2]);
     }
 
     // ---- Waist (pelvis) ---------------------------------------------------
-    // pos = hip_center; up = spine; forward = ⊥(hip_axis × spine).
+    // pos = hip_center + waist_height_frac · spine; up = spine;
+    // forward = ⊥(hip_axis × spine). frac 0.0 reproduces the historical
+    // hip_center placement; the product default is slightly higher (toward the
+    // belt line) — see extract_trackers().
     if (joints_valid(skel, {kHipCenter, kNeck, kLHip, kRHip})) {
         cv::Vec3f hc = to_vec3f(skel.joints[kHipCenter]);
         cv::Vec3f spine = to_vec3f(skel.joints[kNeck]) - hc;
         cv::Vec3f hip_axis = to_vec3f(skel.joints[kLHip]) - to_vec3f(skel.joints[kRHip]);
         cv::Vec3f fwd = cross(hip_axis, spine);
-        build_tracker(TrackerRole::Waist, hc, fwd, spine, out[3]);
+        cv::Vec3f pos = hc + waist_height_frac * spine;
+        build_tracker(TrackerRole::Waist, pos, fwd, spine, out[3]);
     }
 
     // ---- Upper legs (thigh: hip → knee) -----------------------------------
@@ -572,7 +580,12 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx) {
             return;
         }
 
-        cv::Vec3f pos = (ap + tp) * 0.5f;
+        // Ankle: pos = ankle joint (foot bone is perceived at the ankle by
+        // VRChat FBT). Midpoint: legacy pos = (ankle + toe)/2. Rotation is the
+        // same either way — fwd = ankle→toe still carries the toe direction.
+        cv::Vec3f pos = (foot_pos_mode == FootPosMode::Ankle)
+                            ? ap
+                            : (ap + tp) * 0.5f;
         cv::Vec3f fwd = tp - ap;
         cv::Vec3f up  = kp - ap;            // tibia axis (ankle → knee)
         const float weight = (ap_synth || tp_synth)

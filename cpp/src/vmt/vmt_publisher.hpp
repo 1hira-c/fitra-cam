@@ -50,6 +50,10 @@ struct VmtPublisherOptions {
     std::uint16_t port         = 39570;       // VMT receive port
     double        send_rate_hz = 60.0;
     int           index_base   = 10;          // publish as VMT_10..VMT_19 by default
+    // Which TrackerRoles to publish. Default P8 = VRChat standard 8-point
+    // (hip/chest/feet/knees/elbows); the shin roles are dropped. See
+    // VmtTrackerPreset in vmt_protocol.hpp. Runtime-settable via set_preset().
+    VmtTrackerPreset preset     = VmtTrackerPreset::P8;
     DegenMode     degeneracy_mode = DegenMode::Hold;
     // If true, any tracker with pos.z < 0 (= below the world floor, which
     // happens when Room Matrix calibration isn't done yet) is sent with
@@ -95,6 +99,13 @@ public:
     void set_alignment(const VmtAlignment& alignment);
     VmtAlignment alignment() const;
 
+    // Runtime-settable tracker preset (which TrackerRoles are published).
+    // Thread-safe; takes effect on the next send-loop bundle. Same ownership
+    // model as set_alignment. NB: changing the published tracker set requires
+    // re-running VRChat FBT calibration.
+    void set_preset(VmtTrackerPreset preset);
+    VmtTrackerPreset preset() const;
+
     // Discovery wiring. Call set_discovery_bus() BEFORE start(). When the
     // configured `host` is empty and a bus is attached, the send destination is
     // resolved at runtime from the bus (zeroconf); a non-empty `host` always
@@ -125,6 +136,13 @@ private:
 
     mutable std::mutex          alignment_mu_;
     VmtAlignment                alignment_;
+
+    // Tracker preset + its derived per-role publish mask (indexed by
+    // static_cast<int>(TrackerRole)). Guarded together; set_preset updates both.
+    mutable std::mutex          preset_mu_;
+    VmtTrackerPreset            preset_       = VmtTrackerPreset::P8;
+    std::array<bool, slimevr::kTrackerCount> role_enabled_ =
+        role_mask_for(VmtTrackerPreset::P8);
 
     // Runtime-swappable destination. In manual mode it is resolved once in
     // start(); in discovery mode the send loop updates it from disc_bus_.

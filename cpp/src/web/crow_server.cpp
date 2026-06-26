@@ -65,6 +65,7 @@ std::string make_vmt_stats_fragment(const vmt::VmtPublisher& publisher) {
         << ",\"rate_hz\":"                        << o.send_rate_hz
         << ",\"port\":"                           << o.port
         << ",\"index_base\":"                     << o.index_base
+        << ",\"preset\":\""                       << json_escape(vmt::vmt_preset_name(publisher.preset())) << "\""
         << ",\"host\":\""                         << json_escape(o.host) << "\""
         << ",\"degeneracy_mode\":\""              << json_escape(vmt::degen_mode_name(o.degeneracy_mode)) << "\""
         << ",\"alignment\":";
@@ -405,6 +406,10 @@ void CrowServer::set_hmd_pose_bus(vmt::HmdPoseBus* bus, double stale_threshold_m
     if (stale_threshold_ms > 0.0) hmd_stale_ms_ = stale_threshold_ms;
 }
 
+void CrowServer::set_align_hmd_forward_m(float meters) {
+    align_hmd_forward_m_ = meters;
+}
+
 void CrowServer::set_extrinsic_calib_pose_bus(vmt::ControllerPoseBus* bus,
                                               std::string role,
                                               double stale_threshold_ms) {
@@ -659,6 +664,39 @@ void CrowServer::start() {
         return json_response(out.str());
     });
 
+    // Tracker preset: which TrackerRoles are published (p3|p6|p8|full).
+    // Changing it requires re-running VRChat FBT calibration.
+    CROW_ROUTE(app, "/api/vmt/preset")
+    ([this]() {
+        std::ostringstream out;
+        out << "{\"enabled\":" << (vmt_publisher_ ? "true" : "false")
+            << ",\"preset\":\""
+            << json_escape(vmt::vmt_preset_name(
+                   vmt_publisher_ ? vmt_publisher_->preset() : vmt::VmtTrackerPreset::P8))
+            << "\"}";
+        return json_response(out.str());
+    });
+
+    CROW_ROUTE(app, "/api/vmt/preset").methods(crow::HTTPMethod::POST)
+    ([this](const crow::request& req) {
+        if (!vmt_publisher_) {
+            return json_response("{\"ok\":false,\"err\":\"vmt publisher disabled\"}", 409);
+        }
+        auto body = crow::json::load(req.body);
+        if (!body || !body.has("preset")
+            || body["preset"].t() != crow::json::type::String) {
+            return json_response("{\"ok\":false,\"err\":\"missing/invalid preset\"}", 400);
+        }
+        vmt::VmtTrackerPreset preset;
+        if (!vmt::parse_vmt_preset(std::string(body["preset"].s()), preset)) {
+            return json_response("{\"ok\":false,\"err\":\"preset must be p3|p6|p8|full\"}", 400);
+        }
+        vmt_publisher_->set_preset(preset);
+        std::ostringstream out;
+        out << "{\"ok\":true,\"preset\":\"" << json_escape(vmt::vmt_preset_name(preset)) << "\"}";
+        return json_response(out.str());
+    });
+
     // ----------------------------------------------------------------------
     // HMD-driven auto alignment.
     //
@@ -723,7 +761,7 @@ void CrowServer::start() {
         vmt::VmtPos  cpos;
         vmt::VmtQuat cquat;
         chest_in_vmt(chest, cpos, cquat);
-        auto r = vmt::solve_tpose(hmd_snap.pose, cpos, cquat);
+        auto r = vmt::solve_tpose(hmd_snap.pose, cpos, cquat, align_hmd_forward_m_);
 
         {
             std::lock_guard<std::mutex> g(sess.mu);
@@ -816,8 +854,9 @@ void CrowServer::start() {
         const double               stale   = hmd_stale_ms_;
         slimevr::SlimeTrackerBus*  tracker = tracker_bus_;
         vmt::VmtPublisher*         pub     = vmt_publisher_;
+        const float                fwd_off = align_hmd_forward_m_;
 
-        std::thread new_worker([&sess, hmd, stale, tracker, pub,
+        std::thread new_worker([&sess, hmd, stale, tracker, pub, fwd_off,
                                    duration_s, sample_hz]() {
             using namespace std::chrono;
             const auto period = duration<double>(1.0 / sample_hz);
@@ -836,7 +875,12 @@ void CrowServer::start() {
                         vmt::VmtPos  cpos;
                         vmt::VmtQuat cquat;
                         chest_in_vmt(chest, cpos, cquat);
-                        samples.push_back({h.pose.x, h.pose.z, cpos.x, cpos.z});
+                        // Pair the chest against the HMD head-axis, not the raw
+                        // (head-forward) HMD origin — same correction as the
+                        // continuous aligner / solve_tpose.
+                        const auto hmd_axis =
+                            vmt::hmd_head_axis_xz(h.pose, fwd_off);
+                        samples.push_back({hmd_axis.x, hmd_axis.z, cpos.x, cpos.z});
                     }
                 }
                 {

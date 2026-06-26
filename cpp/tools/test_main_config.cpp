@@ -252,6 +252,91 @@ vmt:
     check(threw, "vmt_index_base 49 must throw");
 }
 
+void test_vmt_preset_and_foot_pos_yaml_cli_and_validate() {
+    auto p = write_tmp("vmt_preset.yaml", R"(schema: fitra_main_config_v1
+vmt:
+  preset: p6
+three_d:
+  vr_foot_pos_mode: midpoint
+  vr_chest_height_frac: 0.7
+  vr_waist_height_frac: 0.2
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(opts.vmt_tracker_preset == "p6", "vmt.preset loads");
+    check(opts.vr_foot_pos_mode == "midpoint", "three_d.vr_foot_pos_mode loads");
+    check(std::abs(opts.vr_chest_height_frac - 0.7) < 1e-9, "three_d.vr_chest_height_frac loads");
+    check(std::abs(opts.vr_waist_height_frac - 0.2) < 1e-9, "three_d.vr_waist_height_frac loads");
+
+    // Defaults: VRChat standard 8-point + foot at ankle + raised torso trackers.
+    MainOptions def;
+    check(def.vmt_tracker_preset == "p8", "default vmt preset is p8");
+    check(def.vr_foot_pos_mode == "ankle", "default foot pos is ankle");
+    check(std::abs(def.vr_chest_height_frac - 0.65) < 1e-9, "default chest frac is 0.65");
+    check(std::abs(def.vr_waist_height_frac - 0.15) < 1e-9, "default waist frac is 0.15");
+
+    std::vector<std::string> argv_buf{"--vmt-preset", "p3", "--foot-tracker-pos", "ankle",
+                                      "--chest-height-frac", "0.6", "--waist-height-frac", "0.1"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(opts.vmt_tracker_preset == "p3", "--vmt-preset CLI overrides YAML");
+    check(opts.vr_foot_pos_mode == "ankle", "--foot-tracker-pos CLI overrides YAML");
+    check(std::abs(opts.vr_chest_height_frac - 0.6) < 1e-9, "--chest-height-frac CLI overrides YAML");
+    check(std::abs(opts.vr_waist_height_frac - 0.1) < 1e-9, "--waist-height-frac CLI overrides YAML");
+
+    opts.cam_paths[0] = "/tmp/a";
+    opts.det_engine   = "/tmp/y";
+    opts.pose_engine  = "/tmp/r";
+    opts.enable_3d    = true;
+    opts.calib        = "/tmp/cam.yaml";
+    opts.vmt_out      = true;
+    opts.keypoint_format = "halpe26";
+    validate_options(opts);  // p3 + ankle are valid
+
+    opts.vmt_tracker_preset = "p7";
+    bool threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--vmt-preset", "vmt preset range msg");
+    }
+    check(threw, "bad vmt preset must throw");
+    opts.vmt_tracker_preset = "p8";
+
+    opts.vr_foot_pos_mode = "heel";
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--foot-tracker-pos", "foot pos range msg");
+    }
+    check(threw, "bad foot pos must throw");
+    opts.vr_foot_pos_mode = "ankle";
+
+    opts.vr_chest_height_frac = 1.5;  // out of [0, 1]
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--chest-height-frac", "chest height range msg");
+    }
+    check(threw, "chest height frac > 1 must throw");
+    opts.vr_chest_height_frac = 0.65;
+
+    opts.vr_waist_height_frac = -0.1;  // out of [0, 1]
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--waist-height-frac", "waist height range msg");
+    }
+    check(threw, "waist height frac < 0 must throw");
+}
+
 void test_vmt_discovery_yaml_cli_and_validate() {
     auto p = write_tmp("vmt_discovery.yaml", R"(schema: fitra_main_config_v1
 vmt:
@@ -343,6 +428,45 @@ void test_hmd_listen_port_validated_even_when_listener_off() {
         check_contains(e.what(), "--hmd-listen-port", "hmd_listen_port range msg");
     }
     check(threw, "hmd_listen_port 70000 must throw even with listener disabled");
+}
+
+void test_vmt_align_hmd_forward_yaml_cli_and_validate() {
+    auto p = write_tmp("align_hmd_forward.yaml", R"(schema: fitra_main_config_v1
+vmt:
+  align_hmd_forward_m: 0.12
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(std::abs(opts.vmt_align_hmd_forward_m - 0.12) < 1e-9, "vmt.align_hmd_forward_m loads");
+
+    MainOptions def;
+    check(std::abs(def.vmt_align_hmd_forward_m - 0.10) < 1e-9, "default align_hmd_forward_m is 0.10");
+
+    std::vector<std::string> argv_buf{"--vmt-align-hmd-forward", "0.05"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(std::abs(opts.vmt_align_hmd_forward_m - 0.05) < 1e-9, "--vmt-align-hmd-forward CLI overrides YAML");
+
+    opts.cam_paths[0] = "/tmp/a";
+    opts.det_engine   = "/tmp/y";
+    opts.pose_engine  = "/tmp/r";
+    opts.enable_3d    = true;
+    opts.calib        = "/tmp/cam.yaml";
+    opts.keypoint_format = "halpe26";
+    opts.vmt_out      = true;
+    validate_options(opts);  // 0.05 in range, 0 = off both valid
+    opts.vmt_align_hmd_forward_m = 0.0;
+    validate_options(opts);
+
+    opts.vmt_align_hmd_forward_m = 0.8;  // > 0.5 m
+    bool threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--vmt-align-hmd-forward", "align hmd forward range msg");
+    }
+    check(threw, "align_hmd_forward_m 0.8 must throw");
 }
 
 void test_validate_required_missing() {
@@ -1031,6 +1155,7 @@ void test_emit_load_round_trip() {
     o.vmt_instance_name = "Bench Rig"; o.vmt_peer_timeout_s = 8.0;
     o.hmd_listen_enabled = true; o.hmd_listen_port = 39572;
     o.vmt_continuous_align = false; o.vmt_continuous_blend = 0.3;
+    o.vmt_align_hmd_forward_m = 0.13;
     o.excal_intrinsics = "calibrations/intrinsics.yaml";
     o.excal_out = "calibrations/extrinsics.yaml";
     o.excal_method = "floor"; o.excal_tag_size_m = 0.12; o.excal_min_samples = 10;
@@ -1126,6 +1251,7 @@ void test_emit_load_round_trip() {
     eq_i(o.hmd_listen_port, r.hmd_listen_port, "hmd_listen_port");
     eq_b(o.vmt_continuous_align, r.vmt_continuous_align, "vmt_continuous_align");
     eq_f(o.vmt_continuous_blend, r.vmt_continuous_blend, "vmt_continuous_blend");
+    eq_f(o.vmt_align_hmd_forward_m, r.vmt_align_hmd_forward_m, "vmt_align_hmd_forward_m");
     eq_s(o.excal_intrinsics, r.excal_intrinsics, "excal_intrinsics");
     eq_s(o.excal_out, r.excal_out, "excal_out");
     eq_s(o.excal_method, r.excal_method, "excal_method");
@@ -1297,9 +1423,13 @@ const TestCase kTests[] = {
     {"negated_three_d_keys_invert_bools",      test_negated_three_d_keys_invert_runtime_bools},
     {"slimevr_preview_no_reset_yaml_and_cli",  test_slimevr_preview_no_reset_yaml_and_cli},
     {"vmt_index_base_yaml_cli_and_validate",   test_vmt_index_base_yaml_cli_and_validate},
+    {"vmt_preset_and_foot_pos_yaml_cli_and_validate",
+                                               test_vmt_preset_and_foot_pos_yaml_cli_and_validate},
     {"vmt_discovery_yaml_cli_and_validate",    test_vmt_discovery_yaml_cli_and_validate},
     {"hmd_listen_port_validated_even_when_listener_off",
                                                test_hmd_listen_port_validated_even_when_listener_off},
+    {"vmt_align_hmd_forward_yaml_cli_and_validate",
+                                               test_vmt_align_hmd_forward_yaml_cli_and_validate},
     {"extrinsic_calib_yaml_cli_and_validate",  test_extrinsic_calib_yaml_cli_and_validate},
     {"run_mode_derivation_and_publisher_exclusivity",
                                                test_run_mode_derivation_and_publisher_exclusivity},

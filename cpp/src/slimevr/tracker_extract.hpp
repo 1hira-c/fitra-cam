@@ -55,6 +55,17 @@ inline constexpr std::uint8_t sensor_id_for(TrackerRole r) {
 // calls this once per sensor when sending SensorInfo packets.
 TrackerPosition position_for(TrackerRole role);
 
+// Where to place the foot tracker's POSITION (rotation is unchanged either
+// way: forward = ankle→toe, so the foot's yaw/pitch always tracks the toe).
+//   Ankle    : pos = ankle joint. Matches how a SteamVR/VRChat "foot" tracker
+//              is perceived (the foot bone sits at the ankle), so VRChat FBT
+//              calibration binds it cleanly. Product default.
+//   Midpoint : pos = midpoint(ankle, toe). The historical behavior; kept for
+//              A/B comparison and as the golden-test default of extract_trackers.
+// Only consumers of tracker POSITION are affected (VMT publish + WebUI viz).
+// The SlimeVR Firmware UDP path sends rotation only, so it is identical.
+enum class FootPosMode : std::uint8_t { Ankle, Midpoint };
+
 struct SlimeTracker {
     TrackerRole role  = TrackerRole::LeftUpperArm;
     // World frame: Z-up, X-right, Y-forward, meters. Position is informational
@@ -125,9 +136,27 @@ struct ExtractContext {
 // using the per-foot anchors before giving up. Successful (ankle+toe both
 // real) frames update the anchor; FK-synthesized frames leave it unchanged
 // so the next valid frame re-references the last real measurement.
+//
+// `foot_pos_mode` selects the foot tracker position (see FootPosMode). The
+// function default is Midpoint to preserve existing golden tests; the runtime
+// product default (TrackerExtractorOptions::foot_pos_mode) is Ankle.
+//
+// `chest_height_frac` / `waist_height_frac` slide the Chest and Waist (Hip)
+// tracker POSITIONS up the spine: pos = hip_center + frac · (neck − hip_center),
+// frac ∈ [0, 1] (0 = hip_center, 1 = neck). Sliding along the spine (not world
+// up) keeps the tracker on the torso when the subject leans. Only POSITION is
+// affected — orientation (forward/up) is unchanged — so this is a VMT-publish +
+// WebUI-viz concern only; the rotation-only SlimeVR Firmware UDP path is
+// identical. The function defaults reproduce the historical placement
+// (chest = spine midpoint 0.5, waist = hip_center 0.0) to preserve golden
+// tests; the runtime product defaults (TrackerExtractorOptions) sit higher so
+// the trackers land nearer the sternum / belt line for VRChat FBT.
 std::array<SlimeTracker, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel,
-                 ExtractContext* ctx = nullptr);
+                 ExtractContext* ctx = nullptr,
+                 FootPosMode foot_pos_mode = FootPosMode::Midpoint,
+                 float chest_height_frac = 0.5f,
+                 float waist_height_frac = 0.0f);
 
 // ---- One Euro filter (speed-adaptive low-pass) ----------------------------
 //
