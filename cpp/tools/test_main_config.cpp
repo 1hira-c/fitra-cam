@@ -258,22 +258,31 @@ vmt:
   preset: p6
 three_d:
   vr_foot_pos_mode: midpoint
+  vr_chest_height_frac: 0.7
+  vr_waist_height_frac: 0.2
 )");
     MainOptions opts;
     load_main_config(p.string(), opts);
     check(opts.vmt_tracker_preset == "p6", "vmt.preset loads");
     check(opts.vr_foot_pos_mode == "midpoint", "three_d.vr_foot_pos_mode loads");
+    check(std::abs(opts.vr_chest_height_frac - 0.7) < 1e-9, "three_d.vr_chest_height_frac loads");
+    check(std::abs(opts.vr_waist_height_frac - 0.2) < 1e-9, "three_d.vr_waist_height_frac loads");
 
-    // Defaults: VRChat standard 8-point + foot at ankle.
+    // Defaults: VRChat standard 8-point + foot at ankle + raised torso trackers.
     MainOptions def;
     check(def.vmt_tracker_preset == "p8", "default vmt preset is p8");
     check(def.vr_foot_pos_mode == "ankle", "default foot pos is ankle");
+    check(std::abs(def.vr_chest_height_frac - 0.65) < 1e-9, "default chest frac is 0.65");
+    check(std::abs(def.vr_waist_height_frac - 0.15) < 1e-9, "default waist frac is 0.15");
 
-    std::vector<std::string> argv_buf{"--vmt-preset", "p3", "--foot-tracker-pos", "ankle"};
+    std::vector<std::string> argv_buf{"--vmt-preset", "p3", "--foot-tracker-pos", "ankle",
+                                      "--chest-height-frac", "0.6", "--waist-height-frac", "0.1"};
     auto argv = make_argv(argv_buf);
     apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
     check(opts.vmt_tracker_preset == "p3", "--vmt-preset CLI overrides YAML");
     check(opts.vr_foot_pos_mode == "ankle", "--foot-tracker-pos CLI overrides YAML");
+    check(std::abs(opts.vr_chest_height_frac - 0.6) < 1e-9, "--chest-height-frac CLI overrides YAML");
+    check(std::abs(opts.vr_waist_height_frac - 0.1) < 1e-9, "--waist-height-frac CLI overrides YAML");
 
     opts.cam_paths[0] = "/tmp/a";
     opts.det_engine   = "/tmp/y";
@@ -304,6 +313,28 @@ three_d:
         check_contains(e.what(), "--foot-tracker-pos", "foot pos range msg");
     }
     check(threw, "bad foot pos must throw");
+    opts.vr_foot_pos_mode = "ankle";
+
+    opts.vr_chest_height_frac = 1.5;  // out of [0, 1]
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--chest-height-frac", "chest height range msg");
+    }
+    check(threw, "chest height frac > 1 must throw");
+    opts.vr_chest_height_frac = 0.65;
+
+    opts.vr_waist_height_frac = -0.1;  // out of [0, 1]
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--waist-height-frac", "waist height range msg");
+    }
+    check(threw, "waist height frac < 0 must throw");
 }
 
 void test_vmt_discovery_yaml_cli_and_validate() {

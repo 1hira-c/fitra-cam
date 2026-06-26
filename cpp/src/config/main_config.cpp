@@ -138,7 +138,7 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
         "vr_extract_event_driven",
         "vr_one_euro", "vr_pos_mincutoff", "vr_pos_beta", "vr_pos_dcutoff",
         "vr_quat_mincutoff", "vr_quat_beta", "vr_quat_dcutoff",
-        "vr_foot_pos_mode",
+        "vr_foot_pos_mode", "vr_chest_height_frac", "vr_waist_height_frac",
     };
     check_keys(section, allowed, "three_d");
     if (section["enable_3d"])         out.enable_3d         = parse_scalar<bool>(section["enable_3d"],            "three_d.enable_3d");
@@ -167,6 +167,8 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
     if (section["vr_quat_beta"])      out.vr_quat_beta      = parse_scalar<double>(section["vr_quat_beta"],      "three_d.vr_quat_beta");
     if (section["vr_quat_dcutoff"])   out.vr_quat_dcutoff   = parse_scalar<double>(section["vr_quat_dcutoff"],   "three_d.vr_quat_dcutoff");
     if (section["vr_foot_pos_mode"])  out.vr_foot_pos_mode  = parse_scalar<std::string>(section["vr_foot_pos_mode"], "three_d.vr_foot_pos_mode");
+    if (section["vr_chest_height_frac"]) out.vr_chest_height_frac = parse_scalar<double>(section["vr_chest_height_frac"], "three_d.vr_chest_height_frac");
+    if (section["vr_waist_height_frac"]) out.vr_waist_height_frac = parse_scalar<double>(section["vr_waist_height_frac"], "three_d.vr_waist_height_frac");
 }
 
 void load_subject(const YAML::Node& section, MainOptions& out) {
@@ -516,6 +518,8 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.vr_quat_beta      != d.vr_quat_beta)      e << YAML::Key << "vr_quat_beta"      << YAML::Value << o.vr_quat_beta;
     if (o.vr_quat_dcutoff   != d.vr_quat_dcutoff)   e << YAML::Key << "vr_quat_dcutoff"   << YAML::Value << o.vr_quat_dcutoff;
     if (o.vr_foot_pos_mode  != d.vr_foot_pos_mode)  e << YAML::Key << "vr_foot_pos_mode"  << YAML::Value << o.vr_foot_pos_mode;
+    if (o.vr_chest_height_frac != d.vr_chest_height_frac) e << YAML::Key << "vr_chest_height_frac" << YAML::Value << o.vr_chest_height_frac;
+    if (o.vr_waist_height_frac != d.vr_waist_height_frac) e << YAML::Key << "vr_waist_height_frac" << YAML::Value << o.vr_waist_height_frac;
     e << YAML::EndMap;
 
     // subject --------------------------------------------------------------
@@ -749,6 +753,8 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--no-3d-ik")          { out.ik_3d = false; }
         else if (a == "--vr-extract-event-driven") { out.vr_extract_event_driven = true; }
         else if (a == "--foot-tracker-pos")  { out.vr_foot_pos_mode = need(i, "--foot-tracker-pos"); }
+        else if (a == "--chest-height-frac") { out.vr_chest_height_frac = std::stod(need(i, "--chest-height-frac")); }
+        else if (a == "--waist-height-frac") { out.vr_waist_height_frac = std::stod(need(i, "--waist-height-frac")); }
         else if (a == "--vr-no-one-euro")    { out.vr_one_euro = false; }
         else if (a == "--vr-pos-mincutoff")  { out.vr_pos_mincutoff  = std::stod(need(i, "--vr-pos-mincutoff")); }
         else if (a == "--vr-pos-beta")       { out.vr_pos_beta       = std::stod(need(i, "--vr-pos-beta")); }
@@ -1180,6 +1186,12 @@ void validate_options(const MainOptions& opts) {
     }
     if (opts.vr_foot_pos_mode != "ankle" && opts.vr_foot_pos_mode != "midpoint") {
         fail("--foot-tracker-pos must be one of ankle|midpoint");
+    }
+    if (opts.vr_chest_height_frac < 0.0 || opts.vr_chest_height_frac > 1.0) {
+        fail("--chest-height-frac must be in [0, 1] (0 = hip_center, 1 = neck)");
+    }
+    if (opts.vr_waist_height_frac < 0.0 || opts.vr_waist_height_frac > 1.0) {
+        fail("--waist-height-frac must be in [0, 1] (0 = hip_center, 1 = neck)");
     }
     if (opts.calibrate && !opts.enable_3d) {
         fail("--calibrate requires --enable-3d");

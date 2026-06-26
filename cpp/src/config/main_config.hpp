@@ -113,6 +113,12 @@ struct MainOptions {
     // VRChat FBT) | "midpoint" (legacy ankle/toe midpoint). Rotation is the same
     // either way. Only affects position consumers (VMT publish + WebUI viz).
     std::string vr_foot_pos_mode = "ankle";
+    // Chest / Waist (Hip) tracker height as a fraction of the spine up from
+    // hip_center (0 = hip_center, 1 = neck). Defaults sit higher than the
+    // historical 0.5 / 0.0 so the trackers land near the sternum / belt line.
+    // Position only (VMT publish + WebUI viz); rotation is unchanged. [0, 1].
+    double vr_chest_height_frac = 0.65;
+    double vr_waist_height_frac = 0.15;
 
     // subject — identity (used by both run and subject calibration). Lives in
     // the YAML `subject:` block; subject_id + subject_height_m are the single

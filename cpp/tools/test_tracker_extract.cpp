@@ -187,6 +187,45 @@ void test_t_pose_extracts_all_ten() {
     }
 }
 
+// Chest / Waist height fracs slide the tracker POSITION up the spine without
+// touching orientation. T-pose: neck(0,0,1.45), hip_center(0,0,0.9), so
+// spine = (0,0,0.55) and pos.z = 0.9 + frac·0.55.
+void test_torso_tracker_height_frac() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_t_pose();
+    using R = fitra::slimevr::TrackerRole;
+    auto idx = [](R r) { return static_cast<std::size_t>(r); };
+
+    // Function defaults (0.5 / 0.0) reproduce the historical placement.
+    auto base = fitra::slimevr::extract_trackers(skel);
+    check_vec3_close(base[idx(R::Chest)].pos, cv::Vec3f{0, 0, 1.175f},
+                     "Chest default frac 0.5 == midpoint");
+    check_vec3_close(base[idx(R::Waist)].pos, cv::Vec3f{0, 0, 0.9f},
+                     "Waist default frac 0.0 == hip_center");
+
+    // Product defaults (raised): chest 0.65, waist 0.15.
+    auto raised = fitra::slimevr::extract_trackers(
+        skel, nullptr, fitra::slimevr::FootPosMode::Ankle, 0.65f, 0.15f);
+    check_vec3_close(raised[idx(R::Chest)].pos, cv::Vec3f{0, 0, 1.2575f},
+                     "Chest frac 0.65 slides up the spine");
+    check_vec3_close(raised[idx(R::Waist)].pos, cv::Vec3f{0, 0, 0.9825f},
+                     "Waist frac 0.15 slides up the spine");
+    check(raised[idx(R::Chest)].pos[2] > base[idx(R::Chest)].pos[2],
+          "raised chest sits higher than default");
+    check(raised[idx(R::Waist)].pos[2] > base[idx(R::Waist)].pos[2],
+          "raised waist sits higher than default");
+
+    // Orientation is independent of the height frac (position-only knob).
+    auto qclose = [](const cv::Vec4f& a, const cv::Vec4f& b) {
+        return std::abs(a[0]-b[0]) < 1e-4f && std::abs(a[1]-b[1]) < 1e-4f
+            && std::abs(a[2]-b[2]) < 1e-4f && std::abs(a[3]-b[3]) < 1e-4f;
+    };
+    check(qclose(base[idx(R::Chest)].quat_wxyz, raised[idx(R::Chest)].quat_wxyz),
+          "chest orientation unchanged by height frac");
+    check(qclose(base[idx(R::Waist)].quat_wxyz, raised[idx(R::Waist)].quat_wxyz),
+          "waist orientation unchanged by height frac");
+}
+
 void test_role_to_position_mapping() {
     using fitra::slimevr::position_for;
     using R = fitra::slimevr::TrackerRole;
@@ -1175,6 +1214,7 @@ int main() {
     try {
         test_quat_from_forward_up_degenerate();   std::printf("[ok] quat_from_forward_up degeneracy\n");
         test_t_pose_extracts_all_ten();           std::printf("[ok] T-pose extracts all 10 trackers\n");
+        test_torso_tracker_height_frac();         std::printf("[ok] chest/waist height frac slides position up the spine\n");
         test_role_to_position_mapping();          std::printf("[ok] role → TrackerPosition / sensor_id\n");
         test_missing_joints_yield_invalid();      std::printf("[ok] missing joints → invalid trackers\n");
         test_smoothing_double_cover();            std::printf("[ok] slerp double-cover handling\n");

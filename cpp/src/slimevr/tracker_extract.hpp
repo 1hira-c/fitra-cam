@@ -140,10 +140,23 @@ struct ExtractContext {
 // `foot_pos_mode` selects the foot tracker position (see FootPosMode). The
 // function default is Midpoint to preserve existing golden tests; the runtime
 // product default (TrackerExtractorOptions::foot_pos_mode) is Ankle.
+//
+// `chest_height_frac` / `waist_height_frac` slide the Chest and Waist (Hip)
+// tracker POSITIONS up the spine: pos = hip_center + frac · (neck − hip_center),
+// frac ∈ [0, 1] (0 = hip_center, 1 = neck). Sliding along the spine (not world
+// up) keeps the tracker on the torso when the subject leans. Only POSITION is
+// affected — orientation (forward/up) is unchanged — so this is a VMT-publish +
+// WebUI-viz concern only; the rotation-only SlimeVR Firmware UDP path is
+// identical. The function defaults reproduce the historical placement
+// (chest = spine midpoint 0.5, waist = hip_center 0.0) to preserve golden
+// tests; the runtime product defaults (TrackerExtractorOptions) sit higher so
+// the trackers land nearer the sternum / belt line for VRChat FBT.
 std::array<SlimeTracker, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel,
                  ExtractContext* ctx = nullptr,
-                 FootPosMode foot_pos_mode = FootPosMode::Midpoint);
+                 FootPosMode foot_pos_mode = FootPosMode::Midpoint,
+                 float chest_height_frac = 0.5f,
+                 float waist_height_frac = 0.0f);
 
 // ---- One Euro filter (speed-adaptive low-pass) ----------------------------
 //

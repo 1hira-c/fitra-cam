@@ -35,6 +35,10 @@ std::unique_ptr<slimevr::TrackerExtractor> make_tracker_extractor(
     tex_opts.foot_pos_mode   = (opts.vr_foot_pos_mode == "midpoint")
                                    ? slimevr::FootPosMode::Midpoint
                                    : slimevr::FootPosMode::Ankle;
+    // Chest / Waist tracker height up the spine ([0,1], validated). Position
+    // only — see extract_trackers().
+    tex_opts.chest_height_frac = static_cast<float>(opts.vr_chest_height_frac);
+    tex_opts.waist_height_frac = static_cast<float>(opts.vr_waist_height_frac);
     auto extractor = std::make_unique<slimevr::TrackerExtractor>(
         bus3d, tracker_bus, tex_opts);
     extractor->set_idle_gate(idle_flag);  // before start(); null = no idling

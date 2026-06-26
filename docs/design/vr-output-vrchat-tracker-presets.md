@@ -69,6 +69,29 @@ VRChat 側のトラッカー数・位置と食い違い、IK の挙動が読み�
 - `TrackerExtractorOptions.foot_pos_mode` (既定 `Ankle`) ← `MainOptions.vr_foot_pos_mode`
   (`three_d.vr_foot_pos_mode` / CLI `--foot-tracker-pos {ankle,midpoint}`)。
 
+### 胸 / 腰トラッカーの高さ (脊椎沿い・追加 2026-06-26)
+
+従来 Chest = `midpoint(neck, hip_center)`、Waist (=SteamVR Hip) = `hip_center` 固定で、実機で
+両者がやや低く感じられた。両位置を **脊椎方向に沿って引き上げ可能**にする
+(`pos = hip_center + frac · (neck − hip_center)`, `frac ∈ [0, 1]`, 0=hip_center / 1=neck)。
+
+- **方向は脊椎沿い (ワールド上方向ではない)**。前傾時もトラッカーが胴体に乗ったままになる。
+  ワールド Y 上だと leaning で体から外れる。
+- **位置のみ。回転 (forward/up) は不変** → 影響は VMT 送信 + WebUI viz のみ、回転だけの
+  SlimeVR Firmware UDP 路は完全に同一。foot 位置モードと同じ「位置だけの調整」分類。
+- **関数デフォルト = 歴史的配置** (`extract_trackers` の chest=0.5 / waist=0.0) で既存 golden
+  test (`Chest pos == midpoint`, `Waist pos == hip_center`) を保護。**製品デフォルト = 引き上げ
+  済み** (`TrackerExtractorOptions` chest=`0.65` / waist=`0.15`) で胸郭中央〜ベルトライン寄りに。
+  foot_pos_mode と同じ二段デフォルト方式。
+- `MainOptions.vr_chest_height_frac` / `vr_waist_height_frac` (`three_d.*` / CLI
+  `--chest-height-frac` `--waist-height-frac`、validate `[0,1]`)。`output_builder` →
+  `TrackerExtractorOptions`。hip-relative 位置ホールドの基準は引き続き生 `hip_center` (joint 19)
+  のまま (Waist トラッカーは同 joint から `frac` 分だけ上にオフセット)。
+- **検討した単位**: ① 脊椎長に対する割合 (採用) — 被写体の体格 (身長) が変わっても自動追従。
+  ② cm 固定オフセット (没) — 直感的だが体格差に追従せず、マルチ被写体運用で破綻。
+- ランタイム調整 (Web UI/API) は今回見送り (YAML/CLI で再起動反映)。必要になれば preset/alignment
+  と同じ mutex パターンで後付け可能。
+
 ### SteamVR「Manage Trackers」role 割当 (運用)
 
 VMT_10→Left Elbow / 11→Right Elbow / 12→Chest / 13→Waist / 14→Left Knee / 15→Right Knee /
@@ -82,8 +105,9 @@ VMT_10→Left Elbow / 11→Right Elbow / 12→Chest / 13→Waist / 14→Left Kne
 ## 検証
 
 - `ctest -R 'vmt_protocol|main_config|tracker_extract'`: `role_mask_for` の各 preset 集合
-  (count 3/6/8/10, p8 に脛なし, ネスト) と parse 往復、`vmt.preset` / `vr_foot_pos_mode` の
-  YAML/CLI/validate。
+  (count 3/6/8/10, p8 に脛なし, ネスト) と parse 往復、`vmt.preset` / `vr_foot_pos_mode` /
+  `vr_chest_height_frac` / `vr_waist_height_frac` の YAML/CLI/validate。`tracker_extract` に
+  胸/腰の高さ frac テスト (frac 0.5/0.0=歴史的配置, 0.65/0.15=引き上げ, 回転は frac 非依存)。
 - 起動ログ `{N} trackers (preset=…)`、`/stats3d` の `vmt.preset` と `sent_trackers`/tick。
 - Windows 実機: Manage Trackers で上表 role 割当 → VRChat FBT calibration を p8/p6/p3 で
   比較。`--foot-tracker-pos ankle|midpoint` を切替え、足の接地・向きが自然な方を採用

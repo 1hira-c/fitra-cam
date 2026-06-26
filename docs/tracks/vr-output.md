@@ -49,6 +49,19 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-26 — 胸 / 腰トラッカーの高さを脊椎沿いに調整可能化
+Chest = `midpoint(neck, hip_center)`・Waist(=Hip) = `hip_center` 固定だった胸/腰トラッカーの
+**位置**を、脊椎方向 (neck − hip_center) に沿って引き上げ可能にした
+(`pos = hip_center + frac·spine`, `frac ∈ [0,1]`)。実機で両者がやや低く感じられたため。
+製品デフォルトを引き上げ済み (Chest `0.65` / Waist `0.15`) にしつつ
+`--chest-height-frac` / `--waist-height-frac` (YAML `three_d.vr_{chest,waist}_height_frac`、
+validate `[0,1]`) で微調整可能。**位置のみ**で回転 (forward/up) は不変 — 影響は VMT 送信 +
+WebUI viz のみ、回転だけの SlimeVR Firmware UDP 路は同一。ワールド上方向ではなく脊椎沿いに
+動かすため前傾時もトラッカーが胴体に乗る。`extract_trackers` の**関数デフォルトは歴史的配置
+(0.5/0.0)** で既存 golden test を保護、製品デフォルト (`TrackerExtractorOptions`) のみ引き上げ
+(foot_pos_mode と同じ二段デフォルト)。設計はプリセットの design doc に追記。
+→ [design/vr-output-vrchat-tracker-presets.md](../design/vr-output-vrchat-tracker-presets.md)
+
 ### 2026-06-25 — zeroconf ディスカバリのレビュー指摘修正 (バグ修正)
 M1/M2 実装に対する Codex / code-review の指摘を反映。**ライフサイクル**: `PoseRelay` で
 `beacon` を `receiver` より前に宣言し、デフォルト破棄順 (逆順) で receiver を先に停止 —

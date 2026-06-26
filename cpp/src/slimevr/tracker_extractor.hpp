@@ -69,6 +69,14 @@ struct TrackerExtractorOptions {
     // Only affects position consumers (VMT publish + WebUI viz), not the
     // rotation-only SlimeVR Firmware UDP path.
     FootPosMode foot_pos_mode = FootPosMode::Ankle;
+
+    // Chest / Waist tracker height as a fraction of the spine measured up from
+    // hip_center (0 = hip_center, 1 = neck); see extract_trackers(). Product
+    // defaults sit higher than the historical 0.5 / 0.0 so the trackers land
+    // near the sternum / belt line for VRChat FBT. Position only — orientation
+    // and the rotation-only SlimeVR Firmware UDP path are unchanged.
+    float chest_height_frac = 0.65f;
+    float waist_height_frac = 0.15f;
 };
 
 class TrackerExtractor {

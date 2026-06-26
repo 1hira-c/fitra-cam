@@ -95,6 +95,8 @@ void print_help() {
         "  --vr-quat-beta F          One Euro rotation motion responsiveness (default 1.5)\n"
         "  --vr-quat-dcutoff F       One Euro rotation speed-estimate cutoff Hz (default 1.0)\n"
         "  --foot-tracker-pos S      foot tracker position: ankle|midpoint (default ankle)\n"
+        "  --chest-height-frac F     chest tracker height up the spine, 0=hip 1=neck (default 0.65)\n"
+        "  --waist-height-frac F     waist/hip tracker height up the spine, 0=hip 1=neck (default 0.15)\n"
         "\n"
         "SlimeVR native Firmware UDP output (requires --enable-3d + --keypoint-format=halpe26):\n"
         "  --slimevr-out             enable the native Firmware UDP publisher (10 trackers)\n"
