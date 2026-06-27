@@ -225,6 +225,21 @@ bool clear_calib_latest(const std::string& path) {
     return fs::remove(p, ec) && !ec;
 }
 
+CalibrationSet select_calib_cameras(const CalibrationSet& calib,
+                                    const std::vector<std::string>& ids) {
+    CalibrationSet out;
+    out.schema = calib.schema;
+    out.unit = calib.unit;
+    out.coordinate_system = calib.coordinate_system;
+    out.cameras.reserve(ids.size());
+    for (const auto& id : ids) {
+        for (const auto& cam : calib.cameras) {
+            if (cam.id == id) { out.cameras.push_back(cam); break; }
+        }
+    }
+    return out;
+}
+
 void validate_calibration(const CalibrationSet& calib) {
     if (calib.cameras.empty()) {
         throw std::runtime_error("calibration has no cameras");

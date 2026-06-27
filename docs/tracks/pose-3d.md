@@ -92,6 +92,14 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-27 — dump_keypoints_3d も3カメラ extrinsics を2視点に trim（解析クラッシュ修正）+ 共有ヘルパー化 (バグ修正)
+subject 校正のライブ計測は `make_threed` の trim で2視点化していたが、**録画後の解析**で使う
+`dump_keypoints_3d`（2カメラ専用ツール）が3カメラ calib を読み `require_camera_ids({cam0,cam1})`
+で同じ camera-id 不一致 fatal を起こしていた（`expected [cam0,cam1], got [cam0,cam1,cam2]`）。
+trim ロジックを `lift::select_calib_cameras(calib, ids)` に共通化し、`dump_keypoints_3d` と
+`make_threed` の両方から使用（require_camera_ids の本番呼び出しは triangulator.hpp 除き 2 箇所、
+両方カバー）。ctest `test_calib_io` に `select_calib_cameras`（順序追従・欠損 id スキップ）を追加。
+
 ### 2026-06-27 — subject 校正の "calibration YAML not found"（最後の未解決 calib パス）を修正 (バグ修正)
 calib-latest-resolution で `three_d.calib`(読み) は config 既定空・実行時 `effective_extrinsics_path`
 解決にしたが、`mode_calib_subject.cpp` の preflight に渡す `calib_yaml` だけ **raw `opts.calib`(空)**

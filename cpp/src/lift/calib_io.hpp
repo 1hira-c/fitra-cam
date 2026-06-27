@@ -91,6 +91,16 @@ void write_calibration_versioned(const std::string& path, const CalibrationSet& 
 // no-op for a non-`latest.yaml` path or an absent pointer. Does not throw.
 bool clear_calib_latest(const std::string& path);
 
+// Return a copy of `calib` whose cameras are exactly `ids`, in that order —
+// dropping cameras not in `ids` and skipping ids not present. Used when a stage
+// uses a SUBSET of a rig's cameras (e.g. 2-view subject calibration / the
+// dump_keypoints_3d analyzer on a 3-camera extrinsics file) so the Triangulator
+// is built for exactly those views and require_camera_ids() matches. The extra
+// cameras' entries are simply left out (not an error); a genuinely missing id is
+// caught downstream by require_camera_ids.
+CalibrationSet select_calib_cameras(const CalibrationSet& calib,
+                                    const std::vector<std::string>& ids);
+
 // Rescale an intrinsics block from its calibrated resolution to (new_w, new_h),
 // for the common "calibrate high (robust marker/charuco detection), run low
 // (latency/fps)" split. Valid ONLY for a same-FOV resize (uniform downscale,
