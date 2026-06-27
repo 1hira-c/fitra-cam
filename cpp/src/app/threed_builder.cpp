@@ -38,16 +38,31 @@ ThreeDSet make_threed(const config::MainOptions& opts,
     }
     if (!profile_path.empty()) {
         FITRA_LOG_INFO("loading subject profile: {}", profile_path);
-        t.subject_profile = lift::load_subject_profile(profile_path);
-        if (t.subject_profile.subject_height_m > 0.0) {
-            t.subject_height_m = t.subject_profile.subject_height_m;
-        } else if (t.subject_height_m > 0.0) {
-            t.subject_profile.subject_height_m = t.subject_height_m;
+        // The subject profile is an OPTIONAL IK accuracy input (bone lengths). A
+        // missing / schema-incompatible (wrong keypoint topology, e.g. a v1/COCO17
+        // profile under halpe26) / corrupt profile must NOT take run down — run
+        // works with the height prior + default bone lengths. Warn and continue;
+        // re-run subject calibration to enable per-subject bone lengths. (The
+        // daemon's normal chain routes incompatible profiles to CalibSubject via
+        // subject_profile_compatible; this guard also covers the crash-fallback
+        // and manual-run paths that bypass that routing.)
+        try {
+            t.subject_profile = lift::load_subject_profile(profile_path);
+            if (t.subject_profile.subject_height_m > 0.0) {
+                t.subject_height_m = t.subject_profile.subject_height_m;
+            } else if (t.subject_height_m > 0.0) {
+                t.subject_profile.subject_height_m = t.subject_height_m;
+            }
+            t.has_subject_profile = true;
+            FITRA_LOG_INFO("3D IK subject profile enabled: id={} quality={}",
+                           t.subject_profile.subject_id,
+                           t.subject_profile.quality_status);
+        } catch (const std::exception& e) {
+            FITRA_LOG_WARN("subject profile unavailable ({}): running without it "
+                           "(height prior + default bone lengths; re-run subject "
+                           "calibration to enable per-subject IK)", e.what());
+            t.has_subject_profile = false;
         }
-        t.has_subject_profile = true;
-        FITRA_LOG_INFO("3D IK subject profile enabled: id={} quality={}",
-                       t.subject_profile.subject_id,
-                       t.subject_profile.quality_status);
     }
     return t;
 }
