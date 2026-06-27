@@ -33,6 +33,29 @@ export interface HmdStatus {
   cls: string;
 }
 
+// At-a-glance VMT output-target status for the viewer header, derived from the
+// same /ws3d discovery fragment that build3dStatsText spells out in the stats
+// block. Returns null when there is no VMT output to report (so no chip shows).
+//   - discovery resolved → "出力先 <name> <ip>:<port>" (live)
+//   - discovery searching → "出力先 検索中… (N)"
+//   - no discovery block but vmt active → "出力先 手動" (a pinned host runs no beacon)
+export function discoveryStatus(bundle: Bundle3D | null): HmdStatus | null {
+  if (!bundle || bundle.enabled === false) return null;
+  const disc = bundle.discovery || null;
+  if (disc) {
+    const r = disc.resolved;
+    if (r && r.have) {
+      return {
+        text: `出力先 ${r.name || r.id || "peer"} ${r.ip ?? "?"}:${r.port ?? 0}`,
+        cls: "live",
+      };
+    }
+    return { text: `出力先 検索中… (${disc.peer_count ?? 0})`, cls: "" };
+  }
+  if (bundle.vmt) return { text: "出力先 手動", cls: "" };
+  return null;
+}
+
 export function build3dStatsText(
   bundle: Bundle3D | null,
   server3dSeq: number,

@@ -49,6 +49,20 @@ Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-06-27 — discovery を初期設定 UI に露出 (自動検出/手動の選択)
+zeroconf discovery が出力先 VMT を実行時に自動解決できるのに、Web-UI は手動 IP 入力欄しか
+持たず自動検出を露出していなかった（`/api/config` 往復も `vmt_out/host/port/hmd_listen` の
+4 つだけで `vmt.discovery` が抜けていた。YAML 永続層は対応済み）。**M1**: `merge_config` /
+`draft_to_json` (`crow_routes_setup_mode.cpp`) に `vmt.discovery` を追加し、`ConfigVmt` 型 +
+`SetupPage` VMT カードを「自動検出（ランタイム）/ 手動でIP指定」ラジオに再構成。自動 =
+`discovery=true`+`host=""`（IP を設定時に焼き込まず実行時再解決を維持）、手動 =
+`discovery=false`+`host`。ユーザー要望「設定時固定でなくランタイム自動かを選択」に対応。**M2**:
+`statsText.discoveryStatus()` を起こしビューアのヘッダに「出力先 <name> <ip>:<port> / 検索中… /
+手動」チップを表示（既存 stats `<pre>` の discovery 行は残置）。setup 中のライブ検出は setup
+モードにビーコンが無いため見送り（没案として記録）。検証: `--setup` で `/api/config` の
+discovery 往復を curl 確認、`pnpm build` / `cmake --build` パス。
+→ [design/vr-output-discovery-ui.md](../design/vr-output-discovery-ui.md)
+
 ### 2026-06-26 — HMD 顔オフセットを除いた頭軸アライメント
 HMD-driven アライメント（連続 + ワンショット T-pose/motion）が **HMD の生 xz** を体ランドマーク
 （head_top / 胸中点 / chest）に直接対応付けていた問題を修正。HMD は顔に乗っていて頭/首の鉛直軸から
