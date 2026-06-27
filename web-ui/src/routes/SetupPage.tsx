@@ -334,6 +334,10 @@ export function SetupPage() {
   // run time (docs/design/pose-3d-calib-latest-resolution.md).
   const setIntrinsicEnabled = (enabled: boolean) =>
     setDraft((d) => (d ? { ...d, intrinsic_calib: { ...d.intrinsic_calib, enabled } } : d));
+  // Lens distortion model for the intrinsic (ChArUco) calibration. Strong fisheye
+  // lenses (ELP AR0234) MUST use fisheye or the solve diverges / fails its gate.
+  const setIntrinsicModel = (model: string) =>
+    setDraft((d) => (d ? { ...d, intrinsic_calib: { ...d.intrinsic_calib, model } } : d));
   // Patch one slot's per-camera override (index 0=cam0, 1=cam1, 2=cam2).
   const setOverride = (i: number, patch: Partial<ConfigCameraOverride>) =>
     setDraft((d) => {
@@ -923,6 +927,18 @@ export function SetupPage() {
                   />
                   intrinsics を ChArUco 内部校正で生成する
                 </label>
+                {draft.intrinsic_calib.enabled && (
+                  <label>
+                    レンズモデル（intrinsic 校正）
+                    <select
+                      value={draft.intrinsic_calib.model || "pinhole"}
+                      onChange={(e) => setIntrinsicModel(e.target.value)}
+                    >
+                      <option value="pinhole">pinhole</option>
+                      <option value="fisheye">fisheye（ELP AR0234 等の魚眼）</option>
+                    </select>
+                  </label>
+                )}
                 <label>
                   extrinsic method
                   <select

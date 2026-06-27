@@ -92,6 +92,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-27 — setup で intrinsic 校正の レンズモデル(pinhole/fisheye) を選択可能化 (バグ修正)
+setup ウィザードに intrinsic 校正の `model` 選択が無く、`/api/config` 往復も `intrinsic_calib`
+は `enabled`/`out` しか運ばなかったため、**model は常に既定 `pinhole` 固定**。ELP AR0234 等の
+魚眼レンズで pinhole intrinsic solve が走り、高 RMS で受け入れゲート落ち + 収束遅延（「内部校正が
+失敗する・solve が遅い」の主因）。`merge_config`/`draft_to_json` に `intrinsic_calib.model` を追加、
+`ConfigIntrinsicCalib` 型に `model`、SetupPage の「内部校正で生成」ON 時に pinhole/fisheye セレクタ
+を表示。YAML 層 (`intrinsic_calib.model`) は既対応。注: ChArUco 盤面寸法 (squares_x/y 等) はまだ
+setup 非露出で既定 5×7 のまま（実物盤面が 7×5 なら config で別途設定が必要 = degenerate 回避）。
+
 ### 2026-06-27 — 校正成果物を run-time latest 解決 + setup で latest クリア
 校正ファイル（intrinsics/extrinsics）は**生成物**なのに、`--enable-3d requires --calib PATH`
 が生成物のパスをユーザーに要求し、daemon に生 config を渡すと calib 空で即死していた。原則
