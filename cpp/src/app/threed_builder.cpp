@@ -21,6 +21,25 @@ ThreeDSet make_threed(const config::MainOptions& opts,
     const std::string calib_path = config::effective_extrinsics_path(opts);
     FITRA_LOG_INFO("loading calibration: {}", calib_path);
     auto calib = lift::load_calibration(calib_path);
+    // A stage may use FEWER cameras than the calibration covers — subject
+    // calibration triangulates from cam0+cam1 only (a 2-view bone-length profile
+    // is valid for an N-view run), yet the rig's extrinsics file carries all N
+    // cameras. Select the expected cam0..cam{n-1} (in order) so the Triangulator
+    // is built for exactly the runtime views and require_camera_ids matches; the
+    // extra cameras' entries are simply left unused (not an error).
+    if (calib.cameras.size() > n_cams) {
+        const auto want = expected_camera_ids(n_cams);
+        std::vector<lift::CameraCalibration> kept;
+        kept.reserve(want.size());
+        for (const auto& id : want) {
+            for (const auto& cam : calib.cameras) {
+                if (cam.id == id) { kept.push_back(cam); break; }
+            }
+        }
+        FITRA_LOG_INFO("calibration has {} cameras; using the first {} for this stage",
+                       calib.cameras.size(), kept.size());
+        calib.cameras = std::move(kept);
+    }
     t.triangulator = std::make_shared<lift::Triangulator>(calib, tri_opts);
     t.triangulator->require_camera_ids(expected_camera_ids(n_cams));
     t.bus3d = std::make_unique<pipeline::Skeleton3DBus>();

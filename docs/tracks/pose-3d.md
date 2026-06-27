@@ -92,6 +92,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-27 — subject 校正(2視点)が3カメラ extrinsics で camera-id 不一致クラッシュする問題を修正 (バグ修正)
+subject 校正は cam0+cam1 の2視点だけ使う設計だが、`make_threed` が3カメラの extrinsics 全体で
+triangulator を作り `require_camera_ids([cam0,cam1])` が**完全一致**を要求 → `expected [cam0,cam1],
+got [cam0,cam1,cam2]` で fatal（3カメラリグで subject 校正が必ず落ちる）。`make_threed` で calib の
+カメラ数が `n_cams` より多いとき、`expected_camera_ids(n_cams)`(= cam0..cam{n-1}) を順序どおり
+選んで calib を trim してから triangulator を構築（余分なカメラの calib entry は未使用＝コメントの
+設計意図を実装）。run（n_cams=calib 数）は trim 無しで不変。これで profile-compat が
+「非互換 profile → CalibSubject へ routing」した先で実際に再校正が通る。
+
 ### 2026-06-27 — run は非互換/欠損 subject profile を fatal にせず警告して継続 (バグ修正)
 subject profile は IK 精度のための**任意入力**なのに、`threed_builder` の `load_subject_profile`
 が schema 不一致（v1/COCO17 を halpe26 で読む等）で **fatal throw** → run がクラッシュしていた。
