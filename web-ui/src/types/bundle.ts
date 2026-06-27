@@ -434,6 +434,7 @@ export interface ConfigSlimevr {
 export interface ConfigIntrinsicCalib {
   enabled: boolean;
   out: string;   // where the intrinsic step writes (= the extrinsic step's intrinsics input)
+  model: string; // "pinhole" | "fisheye" — fisheye lenses (ELP AR0234) need fisheye
 }
 
 export interface ConfigExtrinsicCalib {
