@@ -19,6 +19,7 @@ using fitra::lift::CameraCalibration;
 using fitra::lift::clear_calib_latest;
 using fitra::lift::load_calibration;
 using fitra::lift::scale_intrinsics;
+using fitra::lift::select_calib_cameras;
 using fitra::lift::validate_calibration;
 using fitra::lift::write_calibration;
 using fitra::lift::write_calibration_versioned;
@@ -147,6 +148,28 @@ CalibrationSet minimal_set() {
     return set;
 }
 
+// select_calib_cameras: subset a 3-camera calib to the views a stage uses
+// (2-view subject calib / dump_keypoints_3d), in the requested id order.
+void test_select_calib_cameras() {
+    CalibrationSet set;
+    set.schema = "fitra_calibration_v1";
+    set.cameras.push_back(cam("cam0", "pinhole", 5));
+    set.cameras.push_back(cam("cam1", "pinhole", 5));
+    set.cameras.push_back(cam("cam2", "pinhole", 5));
+
+    CalibrationSet two = select_calib_cameras(set, {"cam0", "cam1"});
+    CHECK(two.cameras.size() == 2);
+    CHECK(two.cameras[0].id == "cam0" && two.cameras[1].id == "cam1");
+    CHECK(two.schema == set.schema);  // metadata preserved
+    // require_camera_ids would now match a 2-view stage (cam2 dropped, not error).
+
+    // Order follows `ids`, not the source order; missing ids are skipped.
+    CalibrationSet rev = select_calib_cameras(set, {"cam1", "cam0"});
+    CHECK(rev.cameras.size() == 2 && rev.cameras[0].id == "cam1");
+    CalibrationSet miss = select_calib_cameras(set, {"cam0", "camX"});
+    CHECK(miss.cameras.size() == 1 && miss.cameras[0].id == "cam0");
+}
+
 // latest.yaml convention → timestamped sibling + relative symlink; a second
 // solve accumulates history (collision counter keeps a distinct artifact within
 // the same second). An explicit (non-latest) path stays an in-place write.
@@ -214,6 +237,7 @@ int main() {
     test_scale_intrinsics();
     test_versioned_write_and_symlink();
     test_clear_calib_latest();
+    test_select_calib_cameras();
     if (g_fail) {
         std::fprintf(stderr, "test_calib_io: %d failures\n", g_fail);
         return 1;
