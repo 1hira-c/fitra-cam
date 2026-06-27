@@ -119,7 +119,11 @@ int run_mode_calib_subject(const config::MainOptions& opts_in, FlowControl& flow
 
     calib_defaults.subject_id = "";
     calib_defaults.subjects_dir = opts.subjects_dir;
-    calib_defaults.calib_yaml   = opts.calib;
+    // Resolve like every other read site: three_d.calib is empty by default and
+    // resolves to the extrinsic write target (= calibrations/extrinsics/latest.yaml)
+    // — passing the raw (empty) opts.calib made the preflight report
+    // "calibration YAML not found:" (pose-3d-calib-latest-resolution.md).
+    calib_defaults.calib_yaml   = config::effective_extrinsics_path(opts);
     calib_defaults.det_engine   = opts.det_engine;
     calib_defaults.pose_engine  = opts.pose_engine;
     calib_defaults.recording_frames_per_cam = opts.calib_frames_per_cam;

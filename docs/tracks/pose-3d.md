@@ -92,6 +92,14 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-27 — subject 校正の "calibration YAML not found"（最後の未解決 calib パス）を修正 (バグ修正)
+calib-latest-resolution で `three_d.calib`(読み) は config 既定空・実行時 `effective_extrinsics_path`
+解決にしたが、`mode_calib_subject.cpp` の preflight に渡す `calib_yaml` だけ **raw `opts.calib`(空)**
+のままで、preflight (`calibration_session.cpp:191`) が `"calibration YAML not found: "`(空パス) を
+出し subject 校正が起動できなかった。`calib_defaults.calib_yaml = config::effective_extrinsics_path(opts)`
+に変更（他の読み口 threed_builder / precheck と同じ解決経路へ）。監査の結果これが最後の未解決 raw
+読み口（残る `opts.calib` の raw は daemon の警告ログのみ・空時ガード付き）。
+
 ### 2026-06-27 — subject 校正(2視点)が3カメラ extrinsics で camera-id 不一致クラッシュする問題を修正 (バグ修正)
 subject 校正は cam0+cam1 の2視点だけ使う設計だが、`make_threed` が3カメラの extrinsics 全体で
 triangulator を作り `require_camera_ids([cam0,cam1])` が**完全一致**を要求 → `expected [cam0,cam1],
