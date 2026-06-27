@@ -75,6 +75,24 @@ SubjectProfile make_default_subject_profile() {
     return p;
 }
 
+bool subject_profile_compatible(const std::string& path) {
+    // Presence check for the flow daemon / setup: true only when `path` holds a
+    // profile run could actually USE. A full load+validate (not just a schema
+    // peek) so that a wrong-topology profile (load throws on the schema
+    // mismatch) AND a schema-matching but partial / corrupt / fail-quality
+    // profile (missing subject_id, too few bone lengths, quality_status="fail")
+    // both count as "needs calibration": otherwise the daemon skips CalibSubject,
+    // and make_threed then catches the load failure and silently runs with
+    // default bone lengths, leaving the operator with no route to re-calibrate.
+    // false on missing/unreadable/malformed/invalid; does not throw.
+    try {
+        load_subject_profile(path);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 SubjectProfile load_subject_profile(const std::string& path) {
     cv::FileStorage fs{path, cv::FileStorage::READ};
     if (!fs.isOpened()) {

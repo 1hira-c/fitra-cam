@@ -26,8 +26,7 @@ namespace {
 // intrinsics + the known tag map. Returns nullptr with a message on stderr.
 std::unique_ptr<pipeline::FloorCalibSession>
 build_floor_session(const config::MainOptions& opts, std::size_t n_cams) {
-    const std::string intr_path =
-        opts.floor_intrinsics.empty() ? opts.calib : opts.floor_intrinsics;
+    const std::string intr_path = config::effective_intrinsics_path(opts, /*floor=*/true);
     FITRA_LOG_INFO("floor-calib: loading PnP intrinsics from {}", intr_path);
 
     pipeline::FloorCalibConfig fc;

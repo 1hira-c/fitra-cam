@@ -93,26 +93,17 @@ function effectiveSettings(cam: DetectedCamera, draft: ConfigDraft): PreviewSett
   };
 }
 
-// Establish the 2-file calibration invariant, resolving the out/calib
-// chicken-and-egg: one intrinsics file (intrinsic-step output = extrinsic-step
-// input) and one extrinsics file (extrinsic output = run's calib). Without this
-// the extrinsic step's intrinsics fall back to three_d.calib — the extrinsics
-// output that does not exist yet on first run ("floor PnP intrinsics ... not
-// found: calibrations/extrinsics.yaml").
+// Calibration files are GENERATED outputs; the backend resolves the read paths
+// at run time (explicit > latest > calibrate) and a missing artifact routes to
+// its calibration stage — so the wizard no longer forces the old read-side
+// coupling (three_d.calib = extrinsic_calib.out, intrinsics = intrinsic_calib.out)
+// that pinned an explicit value into the config. We preserve whatever the backend
+// returned: the defaults already are "write targets = calibrations/<kind>/latest.yaml,
+// read (three_d.calib) empty (= resolved)", and an explicitly-pinned config is kept
+// as-is (docs/design/pose-3d-calib-latest-resolution.md). Kept as a normalization
+// hook in case future seams need it.
 function normalizeCalibPaths(c: ConfigDraft): ConfigDraft {
-  const intr =
-    c.extrinsic_calib.intrinsics ||
-    c.extrinsic_calib.floor_intrinsics ||
-    c.intrinsic_calib.out ||
-    "calibrations/intrinsics.yaml";
-  const ext =
-    c.extrinsic_calib.out || c.three_d.calib || "calibrations/extrinsics.yaml";
-  return {
-    ...c,
-    intrinsic_calib: { ...c.intrinsic_calib, out: intr },
-    extrinsic_calib: { ...c.extrinsic_calib, out: ext, intrinsics: intr, floor_intrinsics: intr },
-    three_d: { ...c.three_d, calib: ext },
-  };
+  return c;
 }
 
 // A text input for a filesystem path with an on-the-spot existence check. The
@@ -338,32 +329,15 @@ export function SetupPage() {
     setDraft((d) => (d ? { ...d, slimevr: { ...d.slimevr, ...patch } } : d));
   const setExtrinsic = (patch: Partial<ConfigExtrinsicCalib>) =>
     setDraft((d) => (d ? { ...d, extrinsic_calib: { ...d.extrinsic_calib, ...patch } } : d));
-  // 2-file model couplings (see normalizeCalibPaths).
+  // Whether the intrinsic (ChArUco) calibration STEP runs. Calibration output
+  // paths are no longer edited here — they are generated artifacts resolved at
+  // run time (docs/design/pose-3d-calib-latest-resolution.md).
   const setIntrinsicEnabled = (enabled: boolean) =>
     setDraft((d) => (d ? { ...d, intrinsic_calib: { ...d.intrinsic_calib, enabled } } : d));
-  // The intrinsics file is the intrinsic-step output AND the extrinsic-step
-  // input (controller + floor), so one field drives all three.
-  const setIntrinsicsFile = (v: string) =>
-    setDraft((d) =>
-      d
-        ? {
-            ...d,
-            intrinsic_calib: { ...d.intrinsic_calib, out: v },
-            extrinsic_calib: { ...d.extrinsic_calib, intrinsics: v, floor_intrinsics: v },
-          }
-        : d,
-    );
-  // The extrinsics file is the extrinsic output AND run's calib input.
-  const setExtrinsicsFile = (v: string) =>
-    setDraft((d) =>
-      d
-        ? {
-            ...d,
-            extrinsic_calib: { ...d.extrinsic_calib, out: v },
-            three_d: { ...d.three_d, calib: v },
-          }
-        : d,
-    );
+  // Lens distortion model for the intrinsic (ChArUco) calibration. Strong fisheye
+  // lenses (ELP AR0234) MUST use fisheye or the solve diverges / fails its gate.
+  const setIntrinsicModel = (model: string) =>
+    setDraft((d) => (d ? { ...d, intrinsic_calib: { ...d.intrinsic_calib, model } } : d));
   // Patch one slot's per-camera override (index 0=cam0, 1=cam1, 2=cam2).
   const setOverride = (i: number, patch: Partial<ConfigCameraOverride>) =>
     setDraft((d) => {
@@ -894,10 +868,10 @@ export function SetupPage() {
             <section className="card">
               <h2>4. 3D / 校正</h2>
               <p className="muted">
-                校正は 2 ファイルで回します:
-                <b> intrinsics ファイル</b>（内部校正の出力 = 外部校正の入力）と
-                <b> extrinsics ファイル</b>（外部校正の出力 = 推論が読む calib）。
-                両者は別物で、extrinsics は外部校正で初めて生成されます。
+                校正ファイル（intrinsics / extrinsics）は<b>生成物</b>です。run 時に最新
+                <code>{" calibrations/<kind>/latest.yaml "}</code>を使い、無ければ自動で校正へ
+                進みます。<b>ファイルパスの手入力は不要</b>（手動で固定したい場合だけ下の
+                「詳細設定」で指定）。
               </p>
               <div className="form-grid">
                 <label className="inline">
@@ -908,20 +882,26 @@ export function SetupPage() {
                   />
                   enable_3d
                 </label>
-                <PathField
-                  label="intrinsics ファイル（内部校正の出力 / 外部校正の入力）"
-                  value={draft.intrinsic_calib.out}
-                  onChange={setIntrinsicsFile}
-                  placeholder="calibrations/intrinsics.yaml"
-                />
                 <label className="inline">
                   <input
                     type="checkbox"
                     checked={draft.intrinsic_calib.enabled}
                     onChange={(e) => setIntrinsicEnabled(e.target.checked)}
                   />
-                  この intrinsics を ChArUco 内部校正で生成する
+                  intrinsics を ChArUco 内部校正で生成する
                 </label>
+                {draft.intrinsic_calib.enabled && (
+                  <label>
+                    レンズモデル（intrinsic 校正）
+                    <select
+                      value={draft.intrinsic_calib.model || "pinhole"}
+                      onChange={(e) => setIntrinsicModel(e.target.value)}
+                    >
+                      <option value="pinhole">pinhole</option>
+                      <option value="fisheye">fisheye（ELP AR0234 等の魚眼）</option>
+                    </select>
+                  </label>
+                )}
                 <label>
                   extrinsic method
                   <select
@@ -934,6 +914,7 @@ export function SetupPage() {
                 </label>
                 {draft.extrinsic_calib.method === "floor" && (
                   <>
+                    {/* floor_map は外部入力（生成物でない）なので手入力が要る */}
                     <PathField
                       label="floor_map（タグ配置・floorに必須）"
                       value={draft.extrinsic_calib.floor_map}
@@ -950,12 +931,6 @@ export function SetupPage() {
                     </label>
                   </>
                 )}
-                <PathField
-                  label="extrinsics ファイル（外部校正の出力 = 推論の calib）"
-                  value={draft.extrinsic_calib.out}
-                  onChange={setExtrinsicsFile}
-                  placeholder="calibrations/extrinsics.yaml"
-                />
                 <label>
                   web host
                   <input
@@ -973,6 +948,11 @@ export function SetupPage() {
                   />
                 </label>
               </div>
+              <p className="muted">
+                校正ファイルのパスを明示的に固定したい場合は config YAML の
+                <code> three_d.calib</code> / <code>extrinsic_calib.out</code> /
+                <code> intrinsic_calib.out</code> を直接編集してください（通常は不要）。
+              </p>
             </section>
           )}
 

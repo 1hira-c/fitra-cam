@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "app/flow.hpp"
+#include "lift/subject_profile.hpp"
 #include "pipeline/calibration_session.hpp"
 #include "util/logging.hpp"
 
@@ -210,25 +211,34 @@ int run_daemon(const config::MainOptions& opts,
         // Empty id = no profile stage configured; treat as present so auto
         // initial mode (and run argv synthesis) skips it.
         if (opts.subject_id.empty()) return true;
-        // error_code overload: a permission/encoding error must not throw
-        // out of a long-running daemon.
-        std::error_code ec;
-        return std::filesystem::exists(profile_path(opts), ec) && !ec;
+        // Schema-aware: a profile that exists but was recorded under a different
+        // keypoint topology (e.g. a v1/COCO17 profile while running halpe26)
+        // cannot be migrated, so treat it as absent and route to CalibSubject
+        // rather than letting run load it and crash-loop on the schema mismatch.
+        return lift::subject_profile_compatible(profile_path(opts));
     };
     std::error_code ec;
+    // Calibration files are generated outputs: the run-side read resolves to the
+    // write target (= latest) when unset, so check existence on the RESOLVED path
+    // — a missing one routes to its calibration stage, not an error
+    // (docs/design/pose-3d-calib-latest-resolution.md).
+    const std::string extr = config::effective_extrinsics_path(opts);
     const bool extrinsics_exists =
-        !opts.calib.empty() && std::filesystem::exists(opts.calib, ec) && !ec;
+        !extr.empty() && std::filesystem::exists(extr, ec) && !ec;
     const bool intrinsics_exists =
         !opts.intrinsic_out.empty() &&
         std::filesystem::exists(opts.intrinsic_out, ec) && !ec;
 
+    // Evaluate once: profile_now() opens + parses the profile YAML, so calling
+    // it for both initial_mode and the log line would read the file twice.
+    const bool profile_present = profile_now();
     config::RunMode mode =
-        initial_mode(opts, intrinsics_exists, extrinsics_exists, profile_now());
+        initial_mode(opts, intrinsics_exists, extrinsics_exists, profile_present);
     FITRA_LOG_INFO("[daemon] initial mode: {} (intrinsics {}, extrinsics {}, profile {})",
                    config::run_mode_name(mode),
                    intrinsics_exists ? "present" : "missing",
                    extrinsics_exists ? "present" : "missing",
-                   profile_now() ? "present" : "missing");
+                   profile_present ? "present" : "missing");
 
     // Pre-flight the chosen initial mode's config the same way the flow-switch
     // route does — otherwise a misconfigured calib stage (e.g. method: floor

@@ -8,6 +8,8 @@
 #include "app/daemon.hpp"          // initial_mode, profile_path
 #include "app/server_builder.hpp"
 #include "camera/setup_camera_manager.hpp"
+#include "lift/calib_io.hpp"        // clear_calib_latest
+#include "lift/subject_profile.hpp" // subject_profile_compatible
 #include "config/setup_config_store.hpp"
 #include "pipeline/snapshot.hpp"
 #include "util/logging.hpp"
@@ -27,16 +29,21 @@ constexpr double      kDefaultSubjectHeightM = 1.70;
 // artifact-driven picker.
 config::RunMode derive_next_mode(const config::MainOptions& d) {
     std::error_code ec;
+    // Resolved read paths: a generated artifact that is absent routes to its
+    // calibration stage (see effective_*_path / pose-3d-calib-latest-resolution).
     const bool intrinsics_exists =
         !d.intrinsic_out.empty() && std::filesystem::exists(d.intrinsic_out, ec) && !ec;
+    const std::string extr = config::effective_extrinsics_path(d);
     const bool extrinsics_exists =
-        !d.calib.empty() && std::filesystem::exists(d.calib, ec) && !ec;
+        !extr.empty() && std::filesystem::exists(extr, ec) && !ec;
     const std::string pp = profile_path(d);
     // An empty path means no subject id is configured yet (the Setup wizard never
     // sets one). On a rig that already has intrinsics + extrinsics that means
     // subject calibration has not run — treat the profile as absent so we route
-    // into CalibSubject rather than skipping it (#2).
-    const bool profile_exists = !pp.empty() && std::filesystem::exists(pp, ec) && !ec;
+    // into CalibSubject rather than skipping it (#2). Also treat an existing but
+    // schema-incompatible profile (wrong keypoint topology) as absent so it gets
+    // recalibrated instead of crashing run (subject_profile_compatible).
+    const bool profile_exists = !pp.empty() && lift::subject_profile_compatible(pp);
     return initial_mode(d, intrinsics_exists, extrinsics_exists, profile_exists);
 }
 
@@ -156,6 +163,19 @@ int run_mode_setup(const config::MainOptions& opts, const std::string& config_pa
     // The store seeds from the loaded config and writes back to the same path
     // the daemon reloads on the next spawn.
     config::SetupConfigStore store{opts, config_path};
+
+    // Entering setup means "reconfigure from scratch": drop the calibration
+    // `latest` pointers so the chain regenerates them (the timestamped history is
+    // kept). No-op for explicit (non-latest.yaml) paths and for a fresh rig that
+    // has no latest yet (docs/design/pose-3d-calib-latest-resolution.md).
+    // Include floor_out: it defaults to the same latest.yaml as excal_out (the
+    // second clear is then a harmless no-op), but a rig that pins a distinct
+    // floor write target would otherwise keep a stale floor `latest` pointer.
+    for (const auto& p : {opts.intrinsic_out, opts.excal_out, opts.floor_out}) {
+        if (lift::clear_calib_latest(p)) {
+            FITRA_LOG_INFO("setup: cleared calibration latest pointer {}", p);
+        }
+    }
 
     pipeline::SnapshotBus bus{1};  // unused; CrowServer ctor needs one
     auto server = make_server(opts, config::RunMode::Setup, bus, nullptr, &flow);

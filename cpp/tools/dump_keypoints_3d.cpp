@@ -575,6 +575,12 @@ int main(int argc, char** argv) {
             fitra::lift::set_active_keypoint_format(fmt);
         }
         auto calib = fitra::lift::load_calibration(args.calib);
+        // This analyzer is two-camera (cam0,cam1); a rig's extrinsics file may
+        // carry more cameras, or store them in a different order. Always select
+        // cam0,cam1 in order so a 3-camera extrinsics is valid input and the
+        // order matches require_camera_ids (mirrors make_threed;
+        // pose-3d-calib-latest-resolution.md).
+        calib = fitra::lift::select_calib_cameras(calib, {"cam0", "cam1"});
         fitra::lift::Triangulator::Options tri_opts;
         tri_opts.kp_conf_thresh = args.kp_conf_thresh;
         tri_opts.max_reproj_px = args.max_reproj_px;

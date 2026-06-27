@@ -215,7 +215,11 @@ struct MainOptions {
     // Intrinsics-only calibration YAML (extrinsics ignored). Empty → reuse
     // three_d.calib.
     std::string excal_intrinsics;
-    std::string excal_out            = "calibrations/extrinsics.yaml";
+    // WRITE target for extrinsic calibration. The latest.yaml convention triggers
+    // versioned writes (timestamped sibling + repointed symlink); the run-side
+    // read (three_d.calib) resolves to this when calib is unset — so the config
+    // ships NO read-side default (docs/design/pose-3d-calib-latest-resolution.md).
+    std::string excal_out            = "calibrations/extrinsics/latest.yaml";
     // AprilTag 36h11 face IDs, comma-separated (e.g. "0,1,2").
     std::string excal_faces          = "0,1,2";
     double      excal_tag_size_m     = 0.10;     // uniform face size, metres
@@ -257,7 +261,7 @@ struct MainOptions {
     // Runtime-resolution intrinsics to embed in the output YAML. Empty → write
     // the same intrinsics used for PnP.
     std::string floor_out_intrinsics;
-    std::string floor_out            = "calibrations/extrinsics.yaml";
+    std::string floor_out            = "calibrations/extrinsics/latest.yaml";
     int         floor_burst_min      = 10;
     double      floor_max_reproj_px  = 3.0;     // per-frame detection filter (px)
     bool        floor_fisheye        = false;   // intrinsics use the fisheye model
@@ -276,7 +280,7 @@ struct MainOptions {
     // intrinsics YAML is missing.
     bool        intrinsic_step_enabled = false;
     std::string intrinsic_replay;
-    std::string intrinsic_out      = "calibrations/intrinsics.yaml";
+    std::string intrinsic_out      = "calibrations/intrinsics/latest.yaml";
     std::string intrinsic_model    = "pinhole";  // "pinhole" | "fisheye"
     int         charuco_squares_x  = 5;
     int         charuco_squares_y  = 7;
@@ -315,6 +319,19 @@ enum class RunMode {
 };
 
 RunMode run_mode(const MainOptions& opts);
+
+// Calibration read-path resolution (docs/design/pose-3d-calib-latest-resolution.md).
+// Calibration files are GENERATED, so the run-side read path is not a required
+// config value: an unset read resolves to the corresponding WRITE target (which
+// defaults to the versioned calibrations/<kind>/latest.yaml). Explicit config /
+// CLI paths always win. Callers check existence on the resolved path and route a
+// missing artifact to its calibration stage (never a hard "requires PATH" error).
+//   effective_extrinsics_path: three_d.calib ? : extrinsic_calib.out (=latest)
+//   effective_intrinsics_path: (floor ? floor_intrinsics : excal_intrinsics)
+//                              ? : intrinsic_calib.out (=latest)
+//                              ? : effective_extrinsics_path (extrinsics embed K)
+std::string effective_extrinsics_path(const MainOptions& opts);
+std::string effective_intrinsics_path(const MainOptions& opts, bool floor);
 
 // Stable label for logs and /api/state: "run" / "calib-subject" /
 // "calib-extrinsic".

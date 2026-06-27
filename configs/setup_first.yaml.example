@@ -23,19 +23,21 @@ schema: fitra_main_config_v1
 web:
     port: 8000
 
-# Run the intrinsic calibration step (step 0) once cameras are configured. Set
-# false if you supply calibrations/intrinsics.yaml externally.
+# Run the intrinsic calibration step (step 0) once cameras are configured. Its
+# output is a GENERATED artifact written to calibrations/intrinsics/latest.yaml
+# (a timestamped <date>.yaml history + a `latest` symlink). Set false only if you
+# supply intrinsics another way.
 intrinsic_calib:
     enabled: true
 
-# Where each stage reads/writes its artifact. extrinsic_calib.out and
-# three_d.calib must match so a fresh solve is picked up by the next stage.
+# Calibration files are GENERATED outputs — you do NOT set their paths here.
+# The extrinsic solve writes calibrations/extrinsics/<timestamp>.yaml and repoints
+# calibrations/extrinsics/latest.yaml; run resolves that latest automatically and,
+# when it is missing, routes to calibration (no "--calib required" error). Pin an
+# explicit file (extrinsic_calib.out + three_d.calib, kept equal) only for a fixed
+# external calibration. See docs/design/pose-3d-calib-latest-resolution.md.
 extrinsic_calib:
     method: controller          # controller | floor
-    out: calibrations/extrinsics.yaml
-
-three_d:
-    calib: calibrations/extrinsics.yaml
 
 # Subject identity lives here (one place). subject_id + subject_height_m drive
 # BOTH run (which profile to load) and subject calibration (which subject to

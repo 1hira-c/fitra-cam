@@ -92,6 +92,105 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-27 — calib-latest 解決の堅牢化（レビュー指摘対応・コードレビュー / bot 指摘） (バグ修正)
+latest 解決 PR に対する自動/手動レビューの指摘をまとめて対応。
+**(1) 明示 Run の missing calib クラッシュループ**: `--enable-3d` + extrinsics 未生成のとき、daemon の
+crash-fallback / `--daemon-initial run` / WebUI run 切替 / standalone `./main --enable-3d` のいずれも
+`make_threed`→`load_calibration` で fatal し、daemon が3連敗 give-up していた。`run_mode_run` を try/catch
+し**校正不在は 2D へ degrade**（precheck の「Run は missing calib を 2D 許容」契約と一致）。
+**(2) build_excal_session の load 非対称**: floor 版が try/catch で nullptr 返すのに controller 版は素通しで
+throw が `fatal:` に漏れていた → 対称化。
+**(3) `clear_calib_latest` の例外**: ヘッダの "Does not throw" 契約に反し `fs::is_symlink(p)` が OS エラーで
+throw しうる → `fs::is_symlink(p, ec)` に。
+**(4) calib のカメラ順序非対称**: `make_threed` / `dump_keypoints_3d` の trim を**無条件 `select_calib_cameras`**
+へ一般化（`size>n_cams` 限定を撤廃、`[cam1,cam0]` 等の順序ズレも吸収。`CalibrationSet` 全フィールド保持を確認）。
+**(5) 破損 subject profile の present 誤判定**: `subject_profile_compatible` を schema peek から**全 load+validate**へ
+（schema 一致でも subject_id 欠落 / bone 不足 / quality=fail の部分破損は「未校正」扱いで CalibSubject へ routing）。
+`test_flow_daemon` の chain fixture を valid profile へ更新。
+**(6)** subject 校正の再起動ヒント文字列が raw `opts.calib`（空）を埋め込み `--calib `(空) を案内 → `effective_extrinsics_path`
+解決へ。**(7)** setup の latest クリアに `floor_out` 追加、daemon 起動時 `profile_now()` 二重 open 解消、
+stale コメント / 例 config (`live_2cam_3d`) の焼かれた読み既定を撤去。ctest 31/31 パス。
+
+### 2026-06-27 — dump_keypoints_3d も3カメラ extrinsics を2視点に trim（解析クラッシュ修正）+ 共有ヘルパー化 (バグ修正)
+subject 校正のライブ計測は `make_threed` の trim で2視点化していたが、**録画後の解析**で使う
+`dump_keypoints_3d`（2カメラ専用ツール）が3カメラ calib を読み `require_camera_ids({cam0,cam1})`
+で同じ camera-id 不一致 fatal を起こしていた（`expected [cam0,cam1], got [cam0,cam1,cam2]`）。
+trim ロジックを `lift::select_calib_cameras(calib, ids)` に共通化し、`dump_keypoints_3d` と
+`make_threed` の両方から使用（require_camera_ids の本番呼び出しは triangulator.hpp 除き 2 箇所、
+両方カバー）。ctest `test_calib_io` に `select_calib_cameras`（順序追従・欠損 id スキップ）を追加。
+
+### 2026-06-27 — subject 校正の "calibration YAML not found"（最後の未解決 calib パス）を修正 (バグ修正)
+calib-latest-resolution で `three_d.calib`(読み) は config 既定空・実行時 `effective_extrinsics_path`
+解決にしたが、`mode_calib_subject.cpp` の preflight に渡す `calib_yaml` だけ **raw `opts.calib`(空)**
+のままで、preflight (`calibration_session.cpp:191`) が `"calibration YAML not found: "`(空パス) を
+出し subject 校正が起動できなかった。`calib_defaults.calib_yaml = config::effective_extrinsics_path(opts)`
+に変更（他の読み口 threed_builder / precheck と同じ解決経路へ）。監査の結果これが最後の未解決 raw
+読み口（残る `opts.calib` の raw は daemon の警告ログのみ・空時ガード付き）。
+
+### 2026-06-27 — subject 校正(2視点)が3カメラ extrinsics で camera-id 不一致クラッシュする問題を修正 (バグ修正)
+subject 校正は cam0+cam1 の2視点だけ使う設計だが、`make_threed` が3カメラの extrinsics 全体で
+triangulator を作り `require_camera_ids([cam0,cam1])` が**完全一致**を要求 → `expected [cam0,cam1],
+got [cam0,cam1,cam2]` で fatal（3カメラリグで subject 校正が必ず落ちる）。`make_threed` で calib の
+カメラ数が `n_cams` より多いとき、`expected_camera_ids(n_cams)`(= cam0..cam{n-1}) を順序どおり
+選んで calib を trim してから triangulator を構築（余分なカメラの calib entry は未使用＝コメントの
+設計意図を実装）。run（n_cams=calib 数）は trim 無しで不変。これで profile-compat が
+「非互換 profile → CalibSubject へ routing」した先で実際に再校正が通る。
+
+### 2026-06-27 — run は非互換/欠損 subject profile を fatal にせず警告して継続 (バグ修正)
+subject profile は IK 精度のための**任意入力**なのに、`threed_builder` の `load_subject_profile`
+が schema 不一致（v1/COCO17 を halpe26 で読む等）で **fatal throw** → run がクラッシュしていた。
+profile-compat は daemon の通常チェーンを「非互換 → CalibSubject へ routing」にしたが、**crash-
+fallback to run**（例: CalibSubject が別件でクラッシュ → run へ fallback）や手動 run はその routing を
+通らず、run が v1 profile を読んで fatal → 3連敗 give-up のループになっていた。`threed_builder` の
+profile ロードを try/catch で囲み、失敗時は **警告して profile 無しで継続**（height prior + 既定 bone
+長で 3D は動く）。全経路（通常/fallback/手動）をカバー。
+
+### 2026-06-27 — setup で intrinsic 校正の レンズモデル(pinhole/fisheye) を選択可能化 (バグ修正)
+setup ウィザードに intrinsic 校正の `model` 選択が無く、`/api/config` 往復も `intrinsic_calib`
+は `enabled`/`out` しか運ばなかったため、**model は常に既定 `pinhole` 固定**。ELP AR0234 等の
+魚眼レンズで pinhole intrinsic solve が走り、高 RMS で受け入れゲート落ち + 収束遅延（「内部校正が
+失敗する・solve が遅い」の主因）。`merge_config`/`draft_to_json` に `intrinsic_calib.model` を追加、
+`ConfigIntrinsicCalib` 型に `model`、SetupPage の「内部校正で生成」ON 時に pinhole/fisheye セレクタ
+を表示。YAML 層 (`intrinsic_calib.model`) は既対応。注: ChArUco 盤面寸法 (squares_x/y 等) はまだ
+setup 非露出で既定 5×7 のまま（実物盤面が 7×5 なら config で別途設定が必要 = degenerate 回避）。
+
+### 2026-06-27 — 校正成果物を run-time latest 解決 + setup で latest クリア
+校正ファイル（intrinsics/extrinsics）は**生成物**なのに、`--enable-3d requires --calib PATH`
+が生成物のパスをユーザーに要求し、daemon に生 config を渡すと calib 空で即死していた。原則
+「生成物は **明示 > latest > 校正へ routing** で解決し、無いと作る（hard-error しない）」へ。
+**書き込み先**(excal_out/floor_out/intrinsic_out) の既定を `calibrations/<kind>/latest.yaml`
+にし `write_calibration_versioned` で `<ts>.yaml` + latest symlink を生成。**読み**は config に
+既定値を焼かず（`three_d.calib` 空のまま）、`config::effective_extrinsics_path`(calib ▸ excal_out)
+/ `effective_intrinsics_path`(explicit ▸ intrinsic_out が在れば ▸ extrinsics) で解決。daemon/setup
+の存在判定・threed_builder・extrinsic/floor の intrinsics 入力・precheck を解決経由に変え、
+`--enable-3d requires --calib` を撤廃（未校正→校正へ routing）。**手動 setup 開始で
+`lift::clear_calib_latest` が latest ポインタ symlink のみ削除**（timestamp 履歴は残す）＝
+「入ったら作り直す」。明示パス（既存 `extrinsics_1.yaml` 運用）は最優先で無変更。実機: 生 config
+（enable_3d+calib空）で `initial mode: calib-intrinsic` に routing し hard-error 解消を確認。
+ctest: `test_calib_io`(versioned write/clear=symlinkのみ) + `test_main_config`(enable_3d は calib
+非必須へ更新)。31/31 パス。**UI(M2)**: `SetupPage` から校正ファイルパス欄を撤去（生成物なので
+手入力不要 = 手動入力最小限）、`normalizeCalibPaths` を恒等化して `three_d.calib` を config に
+焼かない（空＝解決）。明示固定は YAML 直編集に倒す。`floor_map` は外部入力なので残置。**サンプル
+config**(`configs/*.yaml.example`) も latest スキームへ更新（`setup_first` は明示 calib パス撤去、
+`intrinsic_calib` の out は latest、`live_2cam_3d`/`medium_3d_floor_calib` の stale な
+`measure_session/cam_params.yaml` を解消）。前回没にした「latest を setup 既定値に焼く」案との差は
+design doc の「検討した案」参照。
+→ [design/pose-3d-calib-latest-resolution.md](../design/pose-3d-calib-latest-resolution.md)
+
+### 2026-06-27 — subject profile の presence 判定を schema-aware 化 (非互換は再校正へ) (バグ修正)
+flow daemon / setup の profile 存在判定が `std::filesystem::exists()` だけで、keypoint
+topology の不一致を見ていなかった。例: config が `halpe26` なのに `subject01` の既存
+プロファイルが `v1`(coco17 時代) だと、「ファイルがある＝present」と誤判定して run に進み、
+run の `validate_subject_profile` が schema 不一致で fatal → daemon が crash-loop して
+3 連敗で giving up していた (再校正にも飛ばない)。`lift::subject_profile_compatible(path)`
+を追加 (profile の `schema` だけ読み `subject_profile_schema(active_keypoint_format())` と
+照合、欠損/不正/不一致は false・throw しない) し、`daemon.cpp::profile_now()` と
+`mode_setup.cpp::derive_next_mode()` を `exists` から compatible 判定へ差し替え。非互換/古い
+プロファイルは「未校正」として **自動で CalibSubject へ routing** されるので、halpe26 に
+切り替えても subject を選び直さずに再校正で復帰できる。実機 (subject01 v1 + halpe26 config)
+で `initial mode: run`→`calib-subject` に変わり crash-loop が解消することを確認。ctest:
+`test_flow_daemon` の chain fixture を schema 付き実プロファイルへ更新。
+
 ### 2026-06-17 — intrinsics 解像度コンバータ (高解像度で校正→低解像度で実行)
 マーカー/ChArUco 検出は高解像度が要るが、ランタイムは低解像度で fps を稼ぎたい。triangulator は
 K をスケールしないので、校正(1280×960)のまま 640×480 で回すと K が2倍ズレて三角測量が崩れる。
