@@ -28,7 +28,7 @@ inference:
 
 three_d:
     enable_3d: true
-    calib: calibrations/measure_session/cam_params.yaml
+    # calib 未指定 → extrinsic_calib.out（下記 floor 出力）を自動解決。明示も可。
 
 web:
     port: 8000

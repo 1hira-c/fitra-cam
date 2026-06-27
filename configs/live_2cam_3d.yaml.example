@@ -38,7 +38,9 @@ inference:
 
 three_d:
   enable_3d: true
-  calib: calibrations/measure_session/cam_params.yaml
+  # calib = 外部校正の出力（生成物）。空欄なら calibrations/extrinsics/latest.yaml を
+  # 自動解決（無ければ校正へ routing）。固定したい既存ファイルがあれば明示する。
+  calib: calibrations/extrinsics/latest.yaml
 
 subject:
   subjects_dir: calibrations/subjects

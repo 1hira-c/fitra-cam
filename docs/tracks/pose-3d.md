@@ -108,8 +108,11 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 ctest: `test_calib_io`(versioned write/clear=symlinkのみ) + `test_main_config`(enable_3d は calib
 非必須へ更新)。31/31 パス。**UI(M2)**: `SetupPage` から校正ファイルパス欄を撤去（生成物なので
 手入力不要 = 手動入力最小限）、`normalizeCalibPaths` を恒等化して `three_d.calib` を config に
-焼かない（空＝解決）。明示固定は YAML 直編集に倒す。`floor_map` は外部入力なので残置。前回没に
-した「latest を setup 既定値に焼く」案との差は design doc の「検討した案」参照。
+焼かない（空＝解決）。明示固定は YAML 直編集に倒す。`floor_map` は外部入力なので残置。**サンプル
+config**(`configs/*.yaml.example`) も latest スキームへ更新（`setup_first` は明示 calib パス撤去、
+`intrinsic_calib` の out は latest、`live_2cam_3d`/`medium_3d_floor_calib` の stale な
+`measure_session/cam_params.yaml` を解消）。前回没にした「latest を setup 既定値に焼く」案との差は
+design doc の「検討した案」参照。
 → [design/pose-3d-calib-latest-resolution.md](../design/pose-3d-calib-latest-resolution.md)
 
 ### 2026-06-27 — subject profile の presence 判定を schema-aware 化 (非互換は再校正へ) (バグ修正)
