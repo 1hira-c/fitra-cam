@@ -1,10 +1,12 @@
 # Intrinsic (ChArUco) calibration config EXAMPLE for the medium 2-camera setup.
 # See docs/design/pose-3d-intrinsic-calibration.md.
 #
-# Produces calibrations/intrinsics.yaml (per-camera K + dist + distortion_model).
+# Produces a per-camera K + dist + distortion_model artifact. The default `out`
+# (calibrations/intrinsics/latest.yaml) is a GENERATED target: each solve writes a
+# timestamped calibrations/intrinsics/<date>.yaml and repoints the `latest` symlink
+# (history kept). The extrinsic/run steps resolve that latest automatically.
 # Calibrate at the SAME field-of-view but the HIGHEST resolution you can — tags
-# project to more pixels → robust corners. The recovered K/dist record that
-# resolution; the extrinsic/run steps then read this file.
+# project to more pixels → robust corners. The recovered K/dist record that resolution.
 #
 # model: pinhole (cv::calibrateCamera, dist k1,k2,p1,p2,k3) or fisheye
 # (cv::fisheye::calibrate, dist k1..k4). Strong fisheye lenses (ELP AR0234) want
@@ -26,7 +28,7 @@ web:
 intrinsic_calib:
     enabled: true
     model: fisheye
-    out: calibrations/intrinsics.yaml
+    out: calibrations/intrinsics/latest.yaml   # generated target (timestamp + latest symlink)
     # ChArUco board geometry (MUST match the printed board, including
     # orientation). squares_x = columns, squares_y = rows. Transposing them
     # (e.g. 5x7 vs 7x5) makes the marker-id → 3D mapping wrong → an anisotropic
