@@ -6,17 +6,22 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 
 namespace {
 
+namespace fs = std::filesystem;
+
 using fitra::lift::CalibrationSet;
 using fitra::lift::CameraCalibration;
+using fitra::lift::clear_calib_latest;
 using fitra::lift::load_calibration;
 using fitra::lift::scale_intrinsics;
 using fitra::lift::validate_calibration;
 using fitra::lift::write_calibration;
+using fitra::lift::write_calibration_versioned;
 
 int g_fail = 0;
 #define CHECK(cond) do { \
@@ -135,6 +140,71 @@ void test_scale_intrinsics() {
     CHECK(threw);
 }
 
+CalibrationSet minimal_set() {
+    CalibrationSet set;
+    set.schema = "fitra_calibration_v1";
+    set.cameras.push_back(cam("cam0", "pinhole", 5));
+    return set;
+}
+
+// latest.yaml convention → timestamped sibling + relative symlink; a second
+// solve accumulates history (collision counter keeps a distinct artifact within
+// the same second). An explicit (non-latest) path stays an in-place write.
+void test_versioned_write_and_symlink() {
+    fs::path base = tmp_path("fitra_calib_lr_ver");
+    fs::remove_all(base);
+    fs::path dir = base / "calibrations" / "extrinsics";
+    fs::path latest = dir / "latest.yaml";
+
+    write_calibration_versioned(latest.string(), minimal_set());
+    write_calibration_versioned(latest.string(), minimal_set());
+
+    CHECK(fs::exists(latest));
+    CHECK(fs::is_symlink(latest));
+    fs::path tgt = fs::read_symlink(latest);
+    CHECK(tgt.parent_path().empty());           // relative (relocatable)
+    CHECK(tgt.filename() != "latest.yaml");
+    int artifacts = 0;
+    for (const auto& e : fs::directory_iterator(dir)) {
+        if (e.is_symlink()) continue;
+        if (e.path().extension() == ".yaml") ++artifacts;
+    }
+    CHECK(artifacts >= 2);                       // history kept, not clobbered
+    CHECK(load_calibration(latest.string()).cameras.size() == 1);
+
+    // explicit path → in-place, no symlink machinery
+    fs::path explicit_path = base / "extrinsics.yaml";
+    write_calibration_versioned(explicit_path.string(), minimal_set());
+    CHECK(fs::exists(explicit_path) && !fs::is_symlink(explicit_path));
+    fs::remove_all(base);
+}
+
+// clear_calib_latest removes ONLY the latest.yaml pointer; the timestamped
+// history survives, and a non-latest path is a no-op.
+void test_clear_calib_latest() {
+    fs::path base = tmp_path("fitra_calib_lr_clear");
+    fs::remove_all(base);
+    fs::path dir = base / "calibrations" / "intrinsics";
+    fs::path latest = dir / "latest.yaml";
+    write_calibration_versioned(latest.string(), minimal_set());
+
+    int before = 0;
+    for (const auto& e : fs::directory_iterator(dir))
+        if (!e.is_symlink() && e.path().extension() == ".yaml") ++before;
+    CHECK(before == 1);
+
+    CHECK(clear_calib_latest(latest.string()));   // pointer removed
+    CHECK(!fs::exists(latest) && !fs::is_symlink(latest));
+    int after = 0;
+    for (const auto& e : fs::directory_iterator(dir))
+        if (!e.is_symlink() && e.path().extension() == ".yaml") ++after;
+    CHECK(after == before);                        // history intact
+
+    CHECK(!clear_calib_latest(latest.string()));   // already gone → no-op
+    CHECK(!clear_calib_latest((base / "extrinsics.yaml").string()));  // non-latest → no-op
+    fs::remove_all(base);
+}
+
 }  // namespace
 
 int main() {
@@ -142,6 +212,8 @@ int main() {
     test_default_pinhole_backcompat();
     test_validate_rejects();
     test_scale_intrinsics();
+    test_versioned_write_and_symlink();
+    test_clear_calib_latest();
     if (g_fail) {
         std::fprintf(stderr, "test_calib_io: %d failures\n", g_fail);
         return 1;

@@ -873,6 +873,30 @@ RunMode run_mode(const MainOptions& opts) {
     return RunMode::Run;
 }
 
+std::string effective_extrinsics_path(const MainOptions& opts) {
+    // Read resolves to the write target (= latest) when not explicitly set.
+    return opts.calib.empty() ? opts.excal_out : opts.calib;
+}
+
+std::string effective_intrinsics_path(const MainOptions& opts, bool floor) {
+    const std::string& explicit_intr = floor ? opts.floor_intrinsics : opts.excal_intrinsics;
+    if (!explicit_intr.empty()) return explicit_intr;  // explicit wins (missing → clear error)
+    // Prefer the intrinsic-calib output (= latest) WHEN IT EXISTS, else fall back
+    // to the extrinsics file (a CalibrationSet embeds per-camera K). intrinsic_out
+    // always has a default value, so an existence check is required here — else a
+    // not-yet-generated latest would shadow a perfectly good extrinsics file.
+    std::error_code ec;
+    if (!opts.intrinsic_out.empty() &&
+        std::filesystem::exists(opts.intrinsic_out, ec) && !ec) {
+        return opts.intrinsic_out;
+    }
+    const std::string ext = effective_extrinsics_path(opts);
+    if (!ext.empty() && std::filesystem::exists(ext, ec) && !ec) return ext;
+    // Nothing exists yet: name the intrinsic_out generate target so routing /
+    // error messages point at where the artifact will appear.
+    return opts.intrinsic_out.empty() ? ext : opts.intrinsic_out;
+}
+
 const char* run_mode_name(RunMode mode) {
     switch (mode) {
         case RunMode::Setup:               return "setup";
@@ -926,17 +950,15 @@ bool precheck_mode_switch(const MainOptions& opts, RunMode target,
                 err = "floor_map not found: " + opts.floor_map;
                 return false;
             }
-            // PnP intrinsics: floor_intrinsics, else three_d.calib.
-            const std::string pnp =
-                opts.floor_intrinsics.empty() ? opts.calib : opts.floor_intrinsics;
+            // PnP intrinsics: floor_intrinsics ▸ intrinsic_out(=latest) ▸ extrinsics.
+            const std::string pnp = effective_intrinsics_path(opts, /*floor=*/true);
             return source_ready(pnp, "floor PnP intrinsics "
-                                "(extrinsic_calib.floor_intrinsics or three_d.calib)", err);
+                                "(extrinsic_calib.floor_intrinsics / intrinsic_calib.out)", err);
         }
         case RunMode::CalibExtrinsic: {
-            const std::string intr =
-                opts.excal_intrinsics.empty() ? opts.calib : opts.excal_intrinsics;
+            const std::string intr = effective_intrinsics_path(opts, /*floor=*/false);
             return source_ready(intr, "intrinsics "
-                                "(extrinsic_calib.intrinsics or three_d.calib)", err);
+                                "(extrinsic_calib.intrinsics / intrinsic_calib.out)", err);
         }
         case RunMode::CalibIntrinsic:
             // Produces the intrinsics YAML from scratch — no input file needed.
@@ -960,7 +982,8 @@ bool precheck_mode_switch(const MainOptions& opts, RunMode target,
             return true;
         case RunMode::CalibSubject:
             // Subject calibration triangulates, so it needs the extrinsics YAML.
-            return source_ready(opts.calib, "extrinsics (three_d.calib)", err);
+            return source_ready(effective_extrinsics_path(opts),
+                                "extrinsics (three_d.calib / extrinsic_calib.out)", err);
         case RunMode::Setup:
             // Setup produces the config from scratch — it needs no input
             // artifact, cameras, or engines (it is how those get configured).
@@ -999,8 +1022,9 @@ void validate_options(const MainOptions& opts) {
         if (opts.floor_map.empty()) {
             fail("calib-extrinsic-floor requires --floor-map PATH");
         }
-        if (opts.floor_intrinsics.empty() && opts.calib.empty()) {
-            fail("calib-extrinsic-floor requires --floor-intrinsics PATH (or --calib)");
+        if (effective_intrinsics_path(opts, /*floor=*/true).empty()) {
+            fail("calib-extrinsic-floor needs intrinsics "
+                 "(--floor-intrinsics / intrinsic_calib.out / --calib)");
         }
     } else if (mode == RunMode::CalibIntrinsic) {
         // Intrinsic path: decode-only, produces the intrinsics YAML. Live needs
@@ -1065,9 +1089,11 @@ void validate_options(const MainOptions& opts) {
     if (!std::isfinite(opts.idle_tick_hz) || opts.idle_tick_hz <= 0.0) {
         fail("--idle-tick-hz must be a finite number > 0");
     }
-    if (opts.enable_3d && opts.calib.empty()) {
-        fail("--enable-3d requires --calib PATH");
-    }
+    // NOTE: --enable-3d does NOT require an explicit --calib. The extrinsics file
+    // is a GENERATED artifact: the run-side read resolves to extrinsic_calib.out
+    // (= calibrations/extrinsics/latest.yaml) when calib is unset, and a missing
+    // one is produced by the calibration chain (daemon routes there) rather than
+    // rejected here (docs/design/pose-3d-calib-latest-resolution.md).
     if (opts.subject_height_m < 0.0 || opts.subject_height_m > 2.5) {
         fail("--subject-height-m must be 0 or a plausible meter value <= 2.5");
     }
@@ -1215,9 +1241,11 @@ void validate_options(const MainOptions& opts) {
         if (opts.calibrate) {
             fail("--extrinsic-calib/--excal-replay cannot be combined with --calibrate");
         }
-        // Needs per-camera intrinsics: a dedicated file or the three_d.calib.
-        if (opts.excal_intrinsics.empty() && opts.calib.empty()) {
-            fail("--extrinsic-calib requires --excal-intrinsics PATH (or --calib PATH)");
+        // Needs per-camera intrinsics: a dedicated file, intrinsic_calib.out
+        // (=latest), or the three_d.calib (extrinsics embed K).
+        if (effective_intrinsics_path(opts, /*floor=*/false).empty()) {
+            fail("--extrinsic-calib needs intrinsics "
+                 "(--excal-intrinsics / intrinsic_calib.out / --calib)");
         }
         if (opts.excal_faces.empty()) {
             fail("--extrinsic-calib requires at least one face id (--excal-faces)");
