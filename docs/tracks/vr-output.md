@@ -61,6 +61,12 @@ zeroconf discovery が出力先 VMT を実行時に自動解決できるのに�
 手動」チップを表示（既存 stats `<pre>` の discovery 行は残置）。setup 中のライブ検出は setup
 モードにビーコンが無いため見送り（没案として記録）。検証: `--setup` で `/api/config` の
 discovery 往復を curl 確認、`pnpm build` / `cmake --build` パス。
+**レビュー反映 (PR #46, 2026-06-27)**: 二重フラグ(`discovery`+`host`)の不整合を是正。`discovery`
+を host 空否から導出する single source of truth に統一（`merge_config` で
+`vmt_discovery = vmt_host.empty()`、UI は `normalizeCalibPaths` で読み込み時正規化）。dead 状態
+`{discovery:false,host:""}`(= `validate_options` の fail) と manual override
+`{discovery:true,host:"x"}` の取り違え/入力欄消失 footgun を解消。`discoveryStatus` は全分岐を
+`bundle.vmt` でゲートし VMT 出力 OFF + HMD-listen discovery 時の `出力先` 誤表示を修正。
 → [design/vr-output-discovery-ui.md](../design/vr-output-discovery-ui.md)
 
 ### 2026-06-26 — HMD 顔オフセットを除いた頭軸アライメント

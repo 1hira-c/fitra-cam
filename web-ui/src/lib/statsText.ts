@@ -39,8 +39,12 @@ export interface HmdStatus {
 //   - discovery resolved → "出力先 <name> <ip>:<port>" (live)
 //   - discovery searching → "出力先 検索中… (N)"
 //   - no discovery block but vmt active → "出力先 手動" (a pinned host runs no beacon)
+// Gated on `bundle.vmt`: the backend emits that block only when VMT output is
+// enabled, whereas the discovery beacon also runs for the HMD-listen punch path
+// (vmt_out=false, see pose_relay_builder.cpp). Without the gate a punch-only rig
+// would falsely advertise an 出力先 (output target) when nothing is sent there.
 export function discoveryStatus(bundle: Bundle3D | null): HmdStatus | null {
-  if (!bundle || bundle.enabled === false) return null;
+  if (!bundle || bundle.enabled === false || !bundle.vmt) return null;
   const disc = bundle.discovery || null;
   if (disc) {
     const r = disc.resolved;
@@ -52,8 +56,7 @@ export function discoveryStatus(bundle: Bundle3D | null): HmdStatus | null {
     }
     return { text: `出力先 検索中… (${disc.peer_count ?? 0})`, cls: "" };
   }
-  if (bundle.vmt) return { text: "出力先 手動", cls: "" };
-  return null;
+  return { text: "出力先 手動", cls: "" };
 }
 
 export function build3dStatsText(

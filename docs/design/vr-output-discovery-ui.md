@@ -53,8 +53,10 @@ discovery（`vmt_discovery=true` かつ `vmt_host=""` で起動時に解決し�
 
 ### M1: config 往復 + setup モードセレクタ
 
-- `crow_routes_setup_mode.cpp`: `merge_config` の vmt 節に `jbool(c,"discovery",d.vmt_discovery)`、
-  `draft_to_json` の vmt 節に `"discovery":<bool>` を追加（JSON キーは YAML と同じ `discovery`）。
+- `crow_routes_setup_mode.cpp`: `draft_to_json` の vmt 節に `"discovery":<bool>` を追加（JSON
+  キーは YAML と同じ `discovery`）。`merge_config` は inbound の `discovery` を読まず
+  `d.vmt_discovery = d.vmt_host.empty()` と **host 空否から導出**する（single source of truth。
+  下記レビュー反映を参照）。
 - `web-ui/src/types/bundle.ts`: `ConfigVmt` に `discovery: boolean` を追加。
 - `web-ui/src/routes/SetupPage.tsx`: VMT カードを「enable / hmd_listen」行 +
   モードラジオ + （自動なら説明文 / 手動なら host・port 欄）に再構成。
@@ -63,7 +65,10 @@ discovery（`vmt_discovery=true` かつ `vmt_host=""` で起動時に解決し�
 
 - `web-ui/src/lib/statsText.ts`: `discoveryStatus(bundle): HmdStatus | null` を追加
   （`resolved.have` → `出力先 <name> <ip>:<port>` cls=live / 未解決 → `出力先 検索中… (N)` /
-  discovery ブロック無しだが vmt 有効 → `出力先 手動` / vmt off → `null`）。
+  discovery ブロック無しだが vmt 有効 → `出力先 手動` / vmt off → `null`）。**全分岐を
+  `bundle.vmt` の有無でゲート**する: backend は VMT 出力有効時のみ `vmt` ブロックを出すが、
+  beacon は HMD-listen punch 経路（`vmt_out=false`）でも起動するため、ゲート無しだと送信して
+  いないのに `出力先` チップが出てしまう（下記レビュー反映）。
 - `web-ui/src/routes/ViewerPage.tsx`: stats throttle で `discoveryStatus` を state 化し、
   ヘッダ `conn-group` に既存 conn チップと並べて表示。既存の stats `<pre>` の
   `discovery` 行はそのまま残す（チップ=一目、pre=詳細）。
@@ -81,6 +86,25 @@ discovery（`vmt_discovery=true` かつ `vmt_host=""` で起動時に解決し�
 - 手動: setup で自動選択 → 保存 → 生成 YAML に `vmt.discovery` 反映 & `host` 空、を確認。
   手動選択で host/port 欄が出ること。Run モードで VMT 検出時にビューアヘッダへ
   `出力先 …` チップが出ること、未検出時 `検索中…` になること。
+
+## レビュー反映 (2026-06-27, PR #46)
+
+自動レビュー (Gemini / Codex) と社内 code-review で二重フラグ (`discovery` bool + `host`
+string) の不整合が指摘された。runtime の真の判定は host 空否のみ（`pose_relay_builder.cpp` /
+`validate_options`）なので、**`discovery` を host 空否から導出する single source of truth** に
+寄せて以下を是正:
+
+- **dead 状態 `{discovery:false, host:""}`**（手動ラジオを選び host 未入力で保存）: 当初認識の
+  「無音 idle」は誤りで、実際は `validate_options` (`main_config.cpp` の
+  `!vmt_discovery && vmt_host.empty()`) が `--vmt-out needs a destination` で **fail** し
+  proceed/保存が弾かれる（Gemini 指摘）。`merge_config` で `vmt_discovery = vmt_host.empty()`
+  と導出し、空 host は auto に正規化（既存の「空欄→自動検出」案内が真になる）。
+- **manual override `{discovery:true, host:"x.x"}` の取り違え / 入力欄消失 footgun**（Codex 指摘）:
+  読み込み時に `normalizeCalibPaths` で `vmt.discovery = host.trim()===""` に正規化。legacy/手編集
+  config でも正しいラジオが選ばれ、manual で host を一旦消しても auto に飛ばない（discovery は
+  false のまま）。server 側も `merge_config` の導出で同じ invariant を担保。
+- **`discoveryStatus` の誤チップ**（code-review 指摘）: 全分岐を `bundle.vmt` でゲートし、
+  VMT 出力 OFF + HMD-listen discovery 時に `出力先` を誤表示しないよう修正。
 
 ## 残課題
 

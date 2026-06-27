@@ -109,6 +109,13 @@ function normalizeCalibPaths(c: ConfigDraft): ConfigDraft {
     c.extrinsic_calib.out || c.three_d.calib || "calibrations/extrinsics.yaml";
   return {
     ...c,
+    // VMT output mode is single-source-of-truth on host emptiness: an empty host
+    // = runtime discovery (auto), a pinned host = manual. Normalize the loaded
+    // draft so a legacy/hand-edited config (e.g. discovery=true + a pinned host)
+    // selects the right radio, and so clearing the host while editing a manual IP
+    // keeps the manual panel instead of flipping to auto. merge_config enforces
+    // the same invariant server-side.
+    vmt: { ...c.vmt, discovery: c.vmt.host.trim() === "" },
     intrinsic_calib: { ...c.intrinsic_calib, out: intr },
     extrinsic_calib: { ...c.extrinsic_calib, out: ext, intrinsics: intr, floor_intrinsics: intr },
     three_d: { ...c.three_d, calib: ext },
@@ -821,7 +828,12 @@ export function SetupPage() {
           )}
 
           {/* 3. Output targets */}
-          {draft && (
+          {draft && (() => {
+            // Auto = runtime discovery (beacon resolves ip:port); manual = a
+            // pinned host. The real switch is host-emptiness, so a blank host is
+            // always auto — keep this single predicate for the radios + panel.
+            const vmtAuto = draft.vmt.discovery && draft.vmt.host.trim() === "";
+            return (
             <section className="card">
               <h2>3. 出力ターゲット</h2>
               <h3>VMT</h3>
@@ -843,14 +855,16 @@ export function SetupPage() {
                   hmd_listen
                 </label>
               </div>
-              {/* 接続先: 自動検出（ランタイム）か手動固定IPか。自動 = discovery+host空、
-                  手動 = discovery無効+host指定。IPは設定時に焼き込まず実行時解決を維持。 */}
+              {/* Output target: runtime auto-discovery vs a pinned manual IP.
+                  auto = discovery + empty host; manual = discovery off + host.
+                  The IP is never baked in at setup time so runtime re-resolution
+                  is preserved. */}
               <div className="row">
                 <label className="inline">
                   <input
                     type="radio"
                     name="vmt-mode"
-                    checked={draft.vmt.discovery && draft.vmt.host.trim() === ""}
+                    checked={vmtAuto}
                     onChange={() => setVmt({ discovery: true, host: "" })}
                   />
                   自動検出（ランタイム）
@@ -859,13 +873,13 @@ export function SetupPage() {
                   <input
                     type="radio"
                     name="vmt-mode"
-                    checked={!(draft.vmt.discovery && draft.vmt.host.trim() === "")}
+                    checked={!vmtAuto}
                     onChange={() => setVmt({ discovery: false })}
                   />
                   手動でIP指定
                 </label>
               </div>
-              {draft.vmt.discovery && draft.vmt.host.trim() === "" ? (
+              {vmtAuto ? (
                 <p className="muted">
                   接続先（VMTマネージャ）は起動後、同一LAN上で自動検出されます。IP /
                   ポートの入力は不要です。検出状況はビューア画面のヘッダで確認できます。
@@ -924,7 +938,8 @@ export function SetupPage() {
                 </label>
               </div>
             </section>
-          )}
+            );
+          })()}
 
           {/* 4. 3D + calibration */}
           {draft && (
