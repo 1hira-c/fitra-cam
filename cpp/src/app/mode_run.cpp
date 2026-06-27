@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <memory>
 
 #include "app/camera_builder.hpp"
@@ -40,9 +41,23 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     }
 
     ThreeDSet threed;
-    const bool enable_3d = opts.enable_3d;
+    bool enable_3d = opts.enable_3d;
     if (enable_3d) {
-        threed = make_threed(opts, n_cams, opts.subject_height_m);
+        // The extrinsics calibration is a generated artifact resolved at run
+        // time and may be missing/unreadable (e.g. the daemon crash-fell back
+        // to Run before calibration completed, or a manual --enable-3d run on a
+        // not-yet-calibrated rig). Degrade to 2D rather than throwing: a hard
+        // failure here exits non-flow, the daemon counts it as a crash, and the
+        // Run fallback crash-loops to give-up. This honors precheck's contract
+        // "Run is the safe fallback; it tolerates a missing calib (2D only)"
+        // (docs/design/pose-3d-calib-latest-resolution.md).
+        try {
+            threed = make_threed(opts, n_cams, opts.subject_height_m);
+        } catch (const std::exception& e) {
+            FITRA_LOG_WARN("3D disabled: calibration unavailable ({}); running 2D "
+                           "only — calibrate extrinsics to enable 3D", e.what());
+            enable_3d = false;
+        }
     }
 
     pipeline::SnapshotBus bus{n_cams};

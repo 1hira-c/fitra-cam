@@ -23,6 +23,7 @@
 #include "app/daemon.hpp"
 #include "app/flow.hpp"
 #include "lift/keypoint_format.hpp"
+#include "lift/subject_profile.hpp"
 
 namespace {
 
@@ -285,17 +286,22 @@ void test_run_daemon_chain() {
     // precheck passes and the spawn chain under test actually runs.
     std::ofstream(stub.dir / "calib.yaml") << "x: 1\n";
     opts.calib = (stub.dir / "calib.yaml").string();
-    // Profile "exists" and is schema-compatible: write a real FileStorage
-    // profile carrying the active keypoint-format schema so
-    // subject_profile_compatible() accepts it (a bare/garbage file is now
-    // treated as "needs calibration", not "present").
+    // Profile "exists" and is fully usable: subject_profile_compatible() now
+    // does a full load+validate (a bare/garbage/partial file is treated as
+    // "needs calibration", not "present"), so write a VALID profile — matching
+    // schema, non-empty subject_id, plausible height, and enough bone lengths to
+    // pass validate_subject_profile — so the run spawn carries --subject-id.
     opts.subjects_dir = stub.dir.string();
     std::filesystem::create_directories(stub.dir / "subj");
     {
-        cv::FileStorage pf((stub.dir / "subj" / "latest_profile.yaml").string(),
-                           cv::FileStorage::WRITE);
-        pf << "schema" << fitra::lift::subject_profile_schema(
-                              fitra::lift::active_keypoint_format());
+        fitra::lift::SubjectProfile prof = fitra::lift::make_default_subject_profile();
+        prof.subject_id       = "subj";
+        prof.subject_height_m = 1.70;
+        prof.quality_status   = "ok";
+        prof.bone_lengths_m.fill(0.3);  // all major-bone children > 0 → passes validate
+        prof.shoulder_width_m = 0.4;
+        fitra::lift::write_subject_profile(
+            (stub.dir / "subj" / "latest_profile.yaml").string(), prof);
     }
 
     std::atomic<bool> stop{false};

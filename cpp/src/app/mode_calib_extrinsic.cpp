@@ -4,6 +4,7 @@
 #include <charconv>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <memory>
 #include <string>
 #include <vector>
@@ -48,7 +49,17 @@ build_excal_session(const config::MainOptions& opts, std::size_t n_cams) {
     const std::string intr_path = config::effective_intrinsics_path(opts, /*floor=*/false);
     FITRA_LOG_INFO("extrinsic-calib: loading intrinsics from {}", intr_path);
     pipeline::ExtrinsicCalibConfig ec;
-    ec.intrinsics = lift::load_calibration(intr_path);
+    // effective_intrinsics_path can resolve to a not-yet-generated path (the
+    // intrinsic_out latest default), so load may throw. Catch it here and return
+    // nullptr with a clean message — mirrors build_floor_session and matches this
+    // function's documented "returns nullptr on stderr" contract (otherwise the
+    // throw escapes to main's generic 'fatal:' handler).
+    try {
+        ec.intrinsics = lift::load_calibration(intr_path);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "extrinsic-calib: %s\n", e.what());
+        return nullptr;
+    }
     if (ec.intrinsics.cameras.size() < n_cams) {
         std::fprintf(stderr,
             "extrinsic-calib: intrinsics file has %zu cameras, need >= %zu\n",

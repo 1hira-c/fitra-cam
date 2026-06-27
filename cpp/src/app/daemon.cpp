@@ -229,13 +229,16 @@ int run_daemon(const config::MainOptions& opts,
         !opts.intrinsic_out.empty() &&
         std::filesystem::exists(opts.intrinsic_out, ec) && !ec;
 
+    // Evaluate once: profile_now() opens + parses the profile YAML, so calling
+    // it for both initial_mode and the log line would read the file twice.
+    const bool profile_present = profile_now();
     config::RunMode mode =
-        initial_mode(opts, intrinsics_exists, extrinsics_exists, profile_now());
+        initial_mode(opts, intrinsics_exists, extrinsics_exists, profile_present);
     FITRA_LOG_INFO("[daemon] initial mode: {} (intrinsics {}, extrinsics {}, profile {})",
                    config::run_mode_name(mode),
                    intrinsics_exists ? "present" : "missing",
                    extrinsics_exists ? "present" : "missing",
-                   profile_now() ? "present" : "missing");
+                   profile_present ? "present" : "missing");
 
     // Pre-flight the chosen initial mode's config the same way the flow-switch
     // route does — otherwise a misconfigured calib stage (e.g. method: floor

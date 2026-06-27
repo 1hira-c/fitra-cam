@@ -221,7 +221,10 @@ bool clear_calib_latest(const std::string& path) {
     fs::path p{path};
     if (p.filename() != kLatestName) return false;
     std::error_code ec;
-    if (!fs::is_symlink(p) && !fs::exists(p, ec)) return false;
+    // Use the error_code overloads throughout: the throwing fs::is_symlink(p)
+    // would propagate an OS error (e.g. EACCES traversing the parent) out of
+    // setup, breaking this function's documented "Does not throw" contract.
+    if (!fs::is_symlink(p, ec) && !fs::exists(p, ec)) return false;
     return fs::remove(p, ec) && !ec;
 }
 

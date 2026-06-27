@@ -65,8 +65,10 @@ int run_mode_calib_subject(const config::MainOptions& opts_in, FlowControl& flow
         return EXIT_FAILURE;
     }
 
-    // 3D is mandatory here (validate_options enforces --enable-3d +
-    // --calib); make_threed throws if the extrinsics YAML is unreadable.
+    // 3D is mandatory here. The extrinsics read path is resolved
+    // (effective_extrinsics_path, see calib_defaults.calib_yaml below) and
+    // precheck_mode_switch(CalibSubject) verifies it exists before this mode is
+    // entered; make_threed still throws if the YAML is unreadable.
     ThreeDSet threed = make_threed(opts, n_cams, subject_height_m);
 
     pipeline::SnapshotBus bus{n_cams};
@@ -93,7 +95,8 @@ int run_mode_calib_subject(const config::MainOptions& opts_in, FlowControl& flow
             FITRA_LOG_INFO(
                 "profile approved (id={}). Restart in run mode to use it: "
                 "./main --enable-3d --calib {} --subject-id {} ...",
-                p.subject_id, opts.calib, p.subject_id);
+                p.subject_id, config::effective_extrinsics_path(opts),
+                p.subject_id);
         }
     });
     // Prime the live IK with the subject's height the moment preflight
@@ -168,8 +171,8 @@ int run_mode_calib_subject(const config::MainOptions& opts_in, FlowControl& flow
             flow.managed
             ? "profile written. Flow daemon switches to run mode."
             : "profile written. Restart in run mode: ./main --enable-3d"
-              " --calib " + opts.calib + " --subject-id "
-              + opts.subject_id + " ...");
+              " --calib " + config::effective_extrinsics_path(opts)
+              + " --subject-id " + opts.subject_id + " ...");
         server->set_tracker_bus(threed.tracker_bus.get());
         server->start();
     }

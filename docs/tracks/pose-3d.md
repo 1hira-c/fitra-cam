@@ -92,6 +92,25 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-27 — calib-latest 解決の堅牢化（レビュー指摘対応・コードレビュー / bot 指摘） (バグ修正)
+latest 解決 PR に対する自動/手動レビューの指摘をまとめて対応。
+**(1) 明示 Run の missing calib クラッシュループ**: `--enable-3d` + extrinsics 未生成のとき、daemon の
+crash-fallback / `--daemon-initial run` / WebUI run 切替 / standalone `./main --enable-3d` のいずれも
+`make_threed`→`load_calibration` で fatal し、daemon が3連敗 give-up していた。`run_mode_run` を try/catch
+し**校正不在は 2D へ degrade**（precheck の「Run は missing calib を 2D 許容」契約と一致）。
+**(2) build_excal_session の load 非対称**: floor 版が try/catch で nullptr 返すのに controller 版は素通しで
+throw が `fatal:` に漏れていた → 対称化。
+**(3) `clear_calib_latest` の例外**: ヘッダの "Does not throw" 契約に反し `fs::is_symlink(p)` が OS エラーで
+throw しうる → `fs::is_symlink(p, ec)` に。
+**(4) calib のカメラ順序非対称**: `make_threed` / `dump_keypoints_3d` の trim を**無条件 `select_calib_cameras`**
+へ一般化（`size>n_cams` 限定を撤廃、`[cam1,cam0]` 等の順序ズレも吸収。`CalibrationSet` 全フィールド保持を確認）。
+**(5) 破損 subject profile の present 誤判定**: `subject_profile_compatible` を schema peek から**全 load+validate**へ
+（schema 一致でも subject_id 欠落 / bone 不足 / quality=fail の部分破損は「未校正」扱いで CalibSubject へ routing）。
+`test_flow_daemon` の chain fixture を valid profile へ更新。
+**(6)** subject 校正の再起動ヒント文字列が raw `opts.calib`（空）を埋め込み `--calib `(空) を案内 → `effective_extrinsics_path`
+解決へ。**(7)** setup の latest クリアに `floor_out` 追加、daemon 起動時 `profile_now()` 二重 open 解消、
+stale コメント / 例 config (`live_2cam_3d`) の焼かれた読み既定を撤去。ctest 31/31 パス。
+
 ### 2026-06-27 — dump_keypoints_3d も3カメラ extrinsics を2視点に trim（解析クラッシュ修正）+ 共有ヘルパー化 (バグ修正)
 subject 校正のライブ計測は `make_threed` の trim で2視点化していたが、**録画後の解析**で使う
 `dump_keypoints_3d`（2カメラ専用ツール）が3カメラ calib を読み `require_camera_ids({cam0,cam1})`

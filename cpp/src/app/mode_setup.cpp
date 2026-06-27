@@ -168,7 +168,10 @@ int run_mode_setup(const config::MainOptions& opts, const std::string& config_pa
     // `latest` pointers so the chain regenerates them (the timestamped history is
     // kept). No-op for explicit (non-latest.yaml) paths and for a fresh rig that
     // has no latest yet (docs/design/pose-3d-calib-latest-resolution.md).
-    for (const auto& p : {opts.intrinsic_out, opts.excal_out}) {
+    // Include floor_out: it defaults to the same latest.yaml as excal_out (the
+    // second clear is then a harmless no-op), but a rig that pins a distinct
+    // floor write target would otherwise keep a stale floor `latest` pointer.
+    for (const auto& p : {opts.intrinsic_out, opts.excal_out, opts.floor_out}) {
         if (lift::clear_calib_latest(p)) {
             FITRA_LOG_INFO("setup: cleared calibration latest pointer {}", p);
         }
