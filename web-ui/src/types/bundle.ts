@@ -420,6 +420,9 @@ export interface ConfigThreeD {
 
 export interface ConfigVmt {
   vmt_out: boolean;
+  // Runtime auto-discovery (zeroconf): true + empty host = resolve the VMT
+  // target on the LAN at runtime; false (or a non-empty host) = manual fixed IP.
+  discovery: boolean;
   host: string;
   port: number;
   hmd_listen_enabled: boolean;

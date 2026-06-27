@@ -103,7 +103,17 @@ function effectiveSettings(cam: DetectedCamera, draft: ConfigDraft): PreviewSett
 // as-is (docs/design/pose-3d-calib-latest-resolution.md). Kept as a normalization
 // hook in case future seams need it.
 function normalizeCalibPaths(c: ConfigDraft): ConfigDraft {
-  return c;
+  return {
+    ...c,
+    // VMT output mode is single-source-of-truth on host emptiness: an empty host
+    // = runtime discovery (auto), a pinned host = manual. Normalize the loaded
+    // draft so a legacy/hand-edited config (e.g. discovery=true + a pinned host)
+    // selects the right radio, and so clearing the host while editing a manual IP
+    // keeps the manual panel instead of flipping to auto. merge_config enforces
+    // the same invariant server-side. (Calib paths are no longer pinned here —
+    // they're resolved at run time, see the comment above.)
+    vmt: { ...c.vmt, discovery: c.vmt.host.trim() === "" },
+  };
 }
 
 // A text input for a filesystem path with an on-the-spot existence check. The
@@ -795,7 +805,12 @@ export function SetupPage() {
           )}
 
           {/* 3. Output targets */}
-          {draft && (
+          {draft && (() => {
+            // Auto = runtime discovery (beacon resolves ip:port); manual = a
+            // pinned host. The real switch is host-emptiness, so a blank host is
+            // always auto — keep this single predicate for the radios + panel.
+            const vmtAuto = draft.vmt.discovery && draft.vmt.host.trim() === "";
+            return (
             <section className="card">
               <h2>3. 出力ターゲット</h2>
               <h3>VMT</h3>
@@ -808,22 +823,6 @@ export function SetupPage() {
                   />
                   enable
                 </label>
-                <label>
-                  host
-                  <input
-                    type="text"
-                    value={draft.vmt.host}
-                    onChange={(e) => setVmt({ host: e.target.value })}
-                  />
-                </label>
-                <label>
-                  port
-                  <input
-                    type="number"
-                    value={draft.vmt.port}
-                    onChange={(e) => setVmt({ port: numOr(e.target.value, draft.vmt.port) })}
-                  />
-                </label>
                 <label className="inline">
                   <input
                     type="checkbox"
@@ -833,6 +832,61 @@ export function SetupPage() {
                   hmd_listen
                 </label>
               </div>
+              {/* Output target: runtime auto-discovery vs a pinned manual IP.
+                  auto = discovery + empty host; manual = discovery off + host.
+                  The IP is never baked in at setup time so runtime re-resolution
+                  is preserved. */}
+              <div className="row">
+                <label className="inline">
+                  <input
+                    type="radio"
+                    name="vmt-mode"
+                    checked={vmtAuto}
+                    onChange={() => setVmt({ discovery: true, host: "" })}
+                  />
+                  自動検出（ランタイム）
+                </label>
+                <label className="inline">
+                  <input
+                    type="radio"
+                    name="vmt-mode"
+                    checked={!vmtAuto}
+                    onChange={() => setVmt({ discovery: false })}
+                  />
+                  手動でIP指定
+                </label>
+              </div>
+              {vmtAuto ? (
+                <p className="muted">
+                  接続先（VMTマネージャ）は起動後、同一LAN上で自動検出されます。IP /
+                  ポートの入力は不要です。検出状況はビューア画面のヘッダで確認できます。
+                </p>
+              ) : (
+                <div className="row">
+                  <label>
+                    host
+                    <input
+                      type="text"
+                      value={draft.vmt.host}
+                      placeholder="例: 192.168.1.100"
+                      onChange={(e) => setVmt({ host: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    port
+                    <input
+                      type="number"
+                      value={draft.vmt.port}
+                      onChange={(e) => setVmt({ port: numOr(e.target.value, draft.vmt.port) })}
+                    />
+                  </label>
+                  {draft.vmt.host.trim() === "" && (
+                    <span className="muted">
+                      手動モードでは host が必要です（空欄のままだと自動検出になります）。
+                    </span>
+                  )}
+                </div>
+              )}
               <h3>SlimeVR</h3>
               <div className="row">
                 <label className="inline">
@@ -861,7 +915,8 @@ export function SetupPage() {
                 </label>
               </div>
             </section>
-          )}
+            );
+          })()}
 
           {/* 4. 3D + calibration */}
           {draft && (

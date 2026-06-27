@@ -11,7 +11,7 @@ import { useWebSocketJson, type WsStatus } from "../hooks/useWebSocketJson";
 import { useRafLoop } from "../hooks/useRafLoop";
 import { useFlowWatch } from "../hooks/useFlowWatch";
 import { drawCamera } from "../lib/draw2d";
-import { build2dStatsText, build3dStatsText, type HmdStatus } from "../lib/statsText";
+import { build2dStatsText, build3dStatsText, discoveryStatus, type HmdStatus } from "../lib/statsText";
 import type { SkeletonViewer } from "../three/SkeletonViewer";
 import type {
   Bundle2D,
@@ -60,6 +60,7 @@ export function ViewerPage() {
   const [hmdStatus, setHmdStatus] = useState<HmdStatus>({ text: "no hmd", cls: "" });
   const [trackers, setTrackers] = useState<Tracker[]>([]);
   const [contAlign, setContAlign] = useState<ContinuousAlignBlock | null>(null);
+  const [discChip, setDiscChip] = useState<HmdStatus | null>(null);
 
   // The viewer follows the flow like the other step pages: opening "/" while
   // the daemon is in setup / a calib mode redirects to that step (so a user can
@@ -132,6 +133,7 @@ export function ViewerPage() {
         setHmdStatus(hs);
         setTrackers(bundle3d.current?.trackers ?? []);
         setContAlign(bundle3d.current?.continuous_align ?? null);
+        setDiscChip(discoveryStatus(bundle3d.current));
       }
     }, []),
   );
@@ -171,6 +173,7 @@ export function ViewerPage() {
         <div className="conn-group">
           <div className={`conn ${conn2d.cls}`.trim()}>{conn2d.text}</div>
           <div className={`conn ${conn3d.cls}`.trim()}>{conn3d.text}</div>
+          {discChip && <div className={`conn ${discChip.cls}`.trim()}>{discChip.text}</div>}
         </div>
       </header>
 

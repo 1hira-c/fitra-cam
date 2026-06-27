@@ -109,6 +109,17 @@ void merge_config(MainOptions& d, const crow::json::rvalue& cfg) {
         jstr(c, "host", d.vmt_host);
         jint(c, "port", d.vmt_port);
         jbool(c, "hmd_listen_enabled", d.hmd_listen_enabled);
+        // Single source of truth: an empty host means runtime zeroconf discovery
+        // (the beacon resolves ip:port); a pinned host means manual. Deriving the
+        // flag from host-emptiness keeps the persisted config coherent and
+        // matches the runtime gate (pose_relay_builder.cpp). It rules out the two
+        // incoherent combinations the WebUI radios could otherwise POST:
+        //   - discovery=false + host="" -> validate_options rejects it as
+        //     "--vmt-out needs a destination" (main_config.cpp), so the setup
+        //     proceed/save would fail; a blank host now means auto-detect.
+        //   - discovery=true + a pinned host -> a misleading flag the runtime
+        //     ignores anyway (a non-empty host always wins and disables the beacon).
+        d.vmt_discovery = d.vmt_host.empty();
     }
     if (cfg.has("slimevr")) {
         const auto c = cfg["slimevr"];
@@ -176,6 +187,7 @@ std::string draft_to_json(const MainOptions& d) {
       << "\"three_d\":{\"enable_3d\":" << b(d.enable_3d)
       << ",\"calib\":\"" << json_escape(d.calib) << "\"},"
       << "\"vmt\":{\"vmt_out\":" << b(d.vmt_out)
+      << ",\"discovery\":" << b(d.vmt_discovery)
       << ",\"host\":\"" << json_escape(d.vmt_host) << "\",\"port\":" << d.vmt_port
       << ",\"hmd_listen_enabled\":" << b(d.hmd_listen_enabled) << "},"
       << "\"slimevr\":{\"slimevr_out\":" << b(d.slimevr_out)
