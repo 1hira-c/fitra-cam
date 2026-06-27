@@ -210,7 +210,7 @@ bool FloorCalibSession::solve_and_write(std::string& err) {
     }
 
     try {
-        lift::write_calibration(cfg_.out_path, result);
+        lift::write_calibration_versioned(cfg_.out_path, result);
     } catch (const std::exception& e) {
         std::lock_guard<std::mutex> g(mu_);
         solution_ = sol;

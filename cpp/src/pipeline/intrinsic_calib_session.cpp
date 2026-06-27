@@ -250,7 +250,7 @@ bool IntrinsicCalibSession::solve_and_write(std::string& err) {
     }
 
     try {
-        lift::write_calibration(cfg_.out_path, out);
+        lift::write_calibration_versioned(cfg_.out_path, out);
     } catch (const std::exception& e) {
         std::lock_guard<std::mutex> g(mu_);
         cams_ = snap;

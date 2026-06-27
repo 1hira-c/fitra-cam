@@ -18,8 +18,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <opencv2/core.hpp>
+
 #include "app/daemon.hpp"
 #include "app/flow.hpp"
+#include "lift/keypoint_format.hpp"
+#include "lift/subject_profile.hpp"
 
 namespace {
 
@@ -282,11 +286,23 @@ void test_run_daemon_chain() {
     // precheck passes and the spawn chain under test actually runs.
     std::ofstream(stub.dir / "calib.yaml") << "x: 1\n";
     opts.calib = (stub.dir / "calib.yaml").string();
-    // Profile "exists": point subjects_dir at the stub dir and create it, so
-    // the run spawn carries --subject-id.
+    // Profile "exists" and is fully usable: subject_profile_compatible() now
+    // does a full load+validate (a bare/garbage/partial file is treated as
+    // "needs calibration", not "present"), so write a VALID profile — matching
+    // schema, non-empty subject_id, plausible height, and enough bone lengths to
+    // pass validate_subject_profile — so the run spawn carries --subject-id.
     opts.subjects_dir = stub.dir.string();
     std::filesystem::create_directories(stub.dir / "subj");
-    std::ofstream(stub.dir / "subj" / "latest_profile.yaml") << "x: 1\n";
+    {
+        fitra::lift::SubjectProfile prof = fitra::lift::make_default_subject_profile();
+        prof.subject_id       = "subj";
+        prof.subject_height_m = 1.70;
+        prof.quality_status   = "ok";
+        prof.bone_lengths_m.fill(0.3);  // all major-bone children > 0 → passes validate
+        prof.shoulder_width_m = 0.4;
+        fitra::lift::write_subject_profile(
+            (stub.dir / "subj" / "latest_profile.yaml").string(), prof);
+    }
 
     std::atomic<bool> stop{false};
     int rc = run_daemon(opts, "/tmp/session.yaml", stub.script.c_str(), stop,

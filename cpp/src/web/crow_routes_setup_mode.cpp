@@ -131,6 +131,7 @@ void merge_config(MainOptions& d, const crow::json::rvalue& cfg) {
         const auto c = cfg["intrinsic_calib"];
         jbool(c, "enabled", d.intrinsic_step_enabled);  // daemon STEP selector
         jstr(c, "out", d.intrinsic_out);                // where the intrinsic step writes
+        jstr(c, "model", d.intrinsic_model);            // pinhole | fisheye (ELP AR0234 = fisheye)
     }
     if (cfg.has("extrinsic_calib")) {
         const auto c = cfg["extrinsic_calib"];
@@ -192,7 +193,8 @@ std::string draft_to_json(const MainOptions& d) {
       << "\"slimevr\":{\"slimevr_out\":" << b(d.slimevr_out)
       << ",\"host\":\"" << json_escape(d.slimevr_host) << "\",\"port\":" << d.slimevr_port << "},"
       << "\"intrinsic_calib\":{\"enabled\":" << b(d.intrinsic_step_enabled)
-      << ",\"out\":\"" << json_escape(d.intrinsic_out) << "\"},"
+      << ",\"out\":\"" << json_escape(d.intrinsic_out) << "\""
+      << ",\"model\":\"" << json_escape(d.intrinsic_model) << "\"},"
       << "\"extrinsic_calib\":{\"method\":\"" << json_escape(d.excal_method) << "\""
       << ",\"out\":\"" << json_escape(d.excal_out) << "\""
       << ",\"intrinsics\":\"" << json_escape(d.excal_intrinsics) << "\""

@@ -38,6 +38,12 @@ struct SubjectProfile {
 SubjectProfile make_default_subject_profile();
 
 SubjectProfile load_subject_profile(const std::string& path);
+// True iff `path` is an existing subject profile whose schema matches the active
+// --keypoint-format. The flow daemon / setup presence checks use this so a stale
+// or wrong-topology profile (e.g. a v1/COCO17 profile under halpe26) is treated
+// as "needs calibration" and routed to CalibSubject, not loaded into run (which
+// would fatal on the schema mismatch). Does not throw.
+bool subject_profile_compatible(const std::string& path);
 void write_subject_profile(const std::string& path, const SubjectProfile& profile);
 void validate_subject_profile(const SubjectProfile& profile);
 std::string default_subject_profile_path(const std::string& subjects_dir,

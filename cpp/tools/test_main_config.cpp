@@ -482,19 +482,23 @@ void test_validate_required_missing() {
 }
 
 void test_validate_enable_3d_needs_calib() {
+    // Calibration files are GENERATED outputs: --enable-3d no longer requires an
+    // explicit --calib. The run-side read resolves to extrinsic_calib.out
+    // (= calibrations/extrinsics/latest.yaml) and a missing one is produced by the
+    // calibration chain (daemon routes there), not rejected at validate
+    // (docs/design/pose-3d-calib-latest-resolution.md).
     MainOptions opts;
     opts.cam_paths[0] = "/tmp/a";
     opts.det_engine   = "/tmp/y";
     opts.pose_engine  = "/tmp/r";
-    opts.enable_3d    = true;  // calib still empty
+    opts.enable_3d    = true;  // calib empty → resolved, not required
     bool threw = false;
     try {
         validate_options(opts);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
         threw = true;
-        check_contains(e.what(), "--enable-3d requires --calib", "enable_3d msg");
     }
-    check(threw, "enable_3d without calib must throw");
+    check(!threw, "enable_3d without explicit calib must NOT throw (calib is generated)");
 }
 
 void test_validate_slimevr_requires_halpe26() {
