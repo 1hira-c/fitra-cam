@@ -75,6 +75,24 @@ SubjectProfile make_default_subject_profile() {
     return p;
 }
 
+bool subject_profile_compatible(const std::string& path) {
+    // Cheap schema peek for the flow daemon / setup presence checks. A profile
+    // recorded under a different keypoint topology cannot be migrated
+    // (validate_subject_profile throws on load), so it must NOT count as
+    // "present" — otherwise the daemon routes to run and crash-loops on the
+    // schema mismatch instead of routing to CalibSubject. Reads only the schema
+    // field; false on a missing/unreadable/malformed file or non-matching schema.
+    try {
+        cv::FileStorage fs{path, cv::FileStorage::READ};
+        if (!fs.isOpened()) return false;
+        return node_string(fs["schema"]) == subject_profile_schema(active_keypoint_format());
+    } catch (const std::exception&) {
+        // cv::FileStorage throws on a non-FileStorage file; a garbage file is
+        // not a usable profile → not present.
+        return false;
+    }
+}
+
 SubjectProfile load_subject_profile(const std::string& path) {
     cv::FileStorage fs{path, cv::FileStorage::READ};
     if (!fs.isOpened()) {

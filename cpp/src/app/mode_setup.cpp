@@ -8,6 +8,7 @@
 #include "app/daemon.hpp"          // initial_mode, profile_path
 #include "app/server_builder.hpp"
 #include "camera/setup_camera_manager.hpp"
+#include "lift/subject_profile.hpp" // subject_profile_compatible
 #include "config/setup_config_store.hpp"
 #include "pipeline/snapshot.hpp"
 #include "util/logging.hpp"
@@ -35,8 +36,10 @@ config::RunMode derive_next_mode(const config::MainOptions& d) {
     // An empty path means no subject id is configured yet (the Setup wizard never
     // sets one). On a rig that already has intrinsics + extrinsics that means
     // subject calibration has not run — treat the profile as absent so we route
-    // into CalibSubject rather than skipping it (#2).
-    const bool profile_exists = !pp.empty() && std::filesystem::exists(pp, ec) && !ec;
+    // into CalibSubject rather than skipping it (#2). Also treat an existing but
+    // schema-incompatible profile (wrong keypoint topology) as absent so it gets
+    // recalibrated instead of crashing run (subject_profile_compatible).
+    const bool profile_exists = !pp.empty() && lift::subject_profile_compatible(pp);
     return initial_mode(d, intrinsics_exists, extrinsics_exists, profile_exists);
 }
 

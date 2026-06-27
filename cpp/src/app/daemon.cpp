@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "app/flow.hpp"
+#include "lift/subject_profile.hpp"
 #include "pipeline/calibration_session.hpp"
 #include "util/logging.hpp"
 
@@ -210,10 +211,11 @@ int run_daemon(const config::MainOptions& opts,
         // Empty id = no profile stage configured; treat as present so auto
         // initial mode (and run argv synthesis) skips it.
         if (opts.subject_id.empty()) return true;
-        // error_code overload: a permission/encoding error must not throw
-        // out of a long-running daemon.
-        std::error_code ec;
-        return std::filesystem::exists(profile_path(opts), ec) && !ec;
+        // Schema-aware: a profile that exists but was recorded under a different
+        // keypoint topology (e.g. a v1/COCO17 profile while running halpe26)
+        // cannot be migrated, so treat it as absent and route to CalibSubject
+        // rather than letting run load it and crash-loop on the schema mismatch.
+        return lift::subject_profile_compatible(profile_path(opts));
     };
     std::error_code ec;
     const bool extrinsics_exists =

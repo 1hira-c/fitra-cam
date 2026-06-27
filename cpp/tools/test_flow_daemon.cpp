@@ -18,8 +18,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <opencv2/core.hpp>
+
 #include "app/daemon.hpp"
 #include "app/flow.hpp"
+#include "lift/keypoint_format.hpp"
 
 namespace {
 
@@ -282,11 +285,18 @@ void test_run_daemon_chain() {
     // precheck passes and the spawn chain under test actually runs.
     std::ofstream(stub.dir / "calib.yaml") << "x: 1\n";
     opts.calib = (stub.dir / "calib.yaml").string();
-    // Profile "exists": point subjects_dir at the stub dir and create it, so
-    // the run spawn carries --subject-id.
+    // Profile "exists" and is schema-compatible: write a real FileStorage
+    // profile carrying the active keypoint-format schema so
+    // subject_profile_compatible() accepts it (a bare/garbage file is now
+    // treated as "needs calibration", not "present").
     opts.subjects_dir = stub.dir.string();
     std::filesystem::create_directories(stub.dir / "subj");
-    std::ofstream(stub.dir / "subj" / "latest_profile.yaml") << "x: 1\n";
+    {
+        cv::FileStorage pf((stub.dir / "subj" / "latest_profile.yaml").string(),
+                           cv::FileStorage::WRITE);
+        pf << "schema" << fitra::lift::subject_profile_schema(
+                              fitra::lift::active_keypoint_format());
+    }
 
     std::atomic<bool> stop{false};
     int rc = run_daemon(opts, "/tmp/session.yaml", stub.script.c_str(), stop,

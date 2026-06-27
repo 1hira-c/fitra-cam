@@ -92,6 +92,20 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-27 — subject profile の presence 判定を schema-aware 化 (非互換は再校正へ) (バグ修正)
+flow daemon / setup の profile 存在判定が `std::filesystem::exists()` だけで、keypoint
+topology の不一致を見ていなかった。例: config が `halpe26` なのに `subject01` の既存
+プロファイルが `v1`(coco17 時代) だと、「ファイルがある＝present」と誤判定して run に進み、
+run の `validate_subject_profile` が schema 不一致で fatal → daemon が crash-loop して
+3 連敗で giving up していた (再校正にも飛ばない)。`lift::subject_profile_compatible(path)`
+を追加 (profile の `schema` だけ読み `subject_profile_schema(active_keypoint_format())` と
+照合、欠損/不正/不一致は false・throw しない) し、`daemon.cpp::profile_now()` と
+`mode_setup.cpp::derive_next_mode()` を `exists` から compatible 判定へ差し替え。非互換/古い
+プロファイルは「未校正」として **自動で CalibSubject へ routing** されるので、halpe26 に
+切り替えても subject を選び直さずに再校正で復帰できる。実機 (subject01 v1 + halpe26 config)
+で `initial mode: run`→`calib-subject` に変わり crash-loop が解消することを確認。ctest:
+`test_flow_daemon` の chain fixture を schema 付き実プロファイルへ更新。
+
 ### 2026-06-17 — intrinsics 解像度コンバータ (高解像度で校正→低解像度で実行)
 マーカー/ChArUco 検出は高解像度が要るが、ランタイムは低解像度で fps を稼ぎたい。triangulator は
 K をスケールしないので、校正(1280×960)のまま 640×480 で回すと K が2倍ズレて三角測量が崩れる。
