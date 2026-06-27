@@ -16,8 +16,11 @@ ThreeDSet make_threed(const config::MainOptions& opts,
     tri_opts.kp_conf_thresh = opts.kp_conf_thresh;
     tri_opts.max_reproj_px  = opts.max_reproj_px;
 
-    FITRA_LOG_INFO("loading calibration: {}", opts.calib);
-    auto calib = lift::load_calibration(opts.calib);
+    // Read resolves to the extrinsic write target (= latest) when three_d.calib
+    // is unset (pose-3d-calib-latest-resolution.md).
+    const std::string calib_path = config::effective_extrinsics_path(opts);
+    FITRA_LOG_INFO("loading calibration: {}", calib_path);
+    auto calib = lift::load_calibration(calib_path);
     t.triangulator = std::make_shared<lift::Triangulator>(calib, tri_opts);
     t.triangulator->require_camera_ids(expected_camera_ids(n_cams));
     t.bus3d = std::make_unique<pipeline::Skeleton3DBus>();

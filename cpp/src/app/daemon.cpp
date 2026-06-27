@@ -218,8 +218,13 @@ int run_daemon(const config::MainOptions& opts,
         return lift::subject_profile_compatible(profile_path(opts));
     };
     std::error_code ec;
+    // Calibration files are generated outputs: the run-side read resolves to the
+    // write target (= latest) when unset, so check existence on the RESOLVED path
+    // — a missing one routes to its calibration stage, not an error
+    // (docs/design/pose-3d-calib-latest-resolution.md).
+    const std::string extr = config::effective_extrinsics_path(opts);
     const bool extrinsics_exists =
-        !opts.calib.empty() && std::filesystem::exists(opts.calib, ec) && !ec;
+        !extr.empty() && std::filesystem::exists(extr, ec) && !ec;
     const bool intrinsics_exists =
         !opts.intrinsic_out.empty() &&
         std::filesystem::exists(opts.intrinsic_out, ec) && !ec;

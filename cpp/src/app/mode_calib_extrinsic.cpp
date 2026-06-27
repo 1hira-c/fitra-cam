@@ -45,8 +45,7 @@ std::vector<std::string> split_csv(const std::string& s) {
 // message on stderr when the configuration is unusable.
 std::unique_ptr<pipeline::ExtrinsicCalibSession>
 build_excal_session(const config::MainOptions& opts, std::size_t n_cams) {
-    const std::string intr_path = opts.excal_intrinsics.empty()
-                                  ? opts.calib : opts.excal_intrinsics;
+    const std::string intr_path = config::effective_intrinsics_path(opts, /*floor=*/false);
     FITRA_LOG_INFO("extrinsic-calib: loading intrinsics from {}", intr_path);
     pipeline::ExtrinsicCalibConfig ec;
     ec.intrinsics = lift::load_calibration(intr_path);

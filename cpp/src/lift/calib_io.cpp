@@ -1,6 +1,8 @@
 #include "lift/calib_io.hpp"
 
 #include <cmath>
+#include <ctime>
+#include <filesystem>
 #include <stdexcept>
 
 namespace fitra::lift {
@@ -158,6 +160,69 @@ void write_calibration(const std::string& path, const CalibrationSet& calib) {
         fs << "}";
     }
     fs.release();
+}
+
+namespace {
+// Filename that marks the "latest pointer" layout: calibrations/<kind>/latest.yaml.
+constexpr const char* kLatestName = "latest.yaml";
+
+std::string timestamp_compact() {
+    std::time_t t = std::time(nullptr);
+    std::tm lt{};
+    localtime_r(&t, &lt);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &lt);
+    return std::string{buf};
+}
+}  // namespace
+
+void write_calibration_versioned(const std::string& path, const CalibrationSet& calib) {
+    namespace fs = std::filesystem;
+    fs::path p{path};
+    if (p.filename() != kLatestName) {
+        write_calibration(path, calib);  // explicit path → in-place (unchanged behavior)
+        return;
+    }
+    fs::path dir = p.parent_path();
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    // Timestamped sibling artifact (history); disambiguate a same-second re-solve.
+    const std::string stem = timestamp_compact();
+    fs::path target = dir / (stem + ".yaml");
+    for (int n = 2; fs::exists(target) && n < 1000; ++n) {
+        target = dir / (stem + "-" + std::to_string(n) + ".yaml");
+    }
+    write_calibration(target.string(), calib);  // validates + writes the canonical artifact
+    // Atomically repoint latest.yaml at the new artifact via a RELATIVE symlink
+    // (relocatable). rename() replaces any existing latest.yaml atomically.
+    fs::path link = dir / kLatestName;
+    fs::path tmp = dir / (std::string(kLatestName) + ".tmp");
+    fs::remove(tmp, ec);
+    fs::create_symlink(target.filename(), tmp, ec);
+    if (ec) {
+        // Symlink unsupported on this FS → keep latest.yaml as a plain current copy.
+        fs::remove(tmp, ec);
+        write_calibration(link.string(), calib);
+        return;
+    }
+    fs::rename(tmp, link, ec);
+    if (ec) {
+        fs::remove(tmp, ec);
+        throw std::runtime_error("failed to update latest symlink: " + link.string());
+    }
+}
+
+bool clear_calib_latest(const std::string& path) {
+    // Remove ONLY the latest.yaml pointer (the timestamped <ts>.yaml history is
+    // kept). Used when entering setup manually — "reconfigure from scratch" — so
+    // the next calibration regenerates latest. No-op (returns false) for a
+    // non-latest path or an absent pointer.
+    namespace fs = std::filesystem;
+    fs::path p{path};
+    if (p.filename() != kLatestName) return false;
+    std::error_code ec;
+    if (!fs::is_symlink(p) && !fs::exists(p, ec)) return false;
+    return fs::remove(p, ec) && !ec;
 }
 
 void validate_calibration(const CalibrationSet& calib) {

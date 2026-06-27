@@ -92,6 +92,24 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-27 — 校正成果物を run-time latest 解決 + setup で latest クリア
+校正ファイル（intrinsics/extrinsics）は**生成物**なのに、`--enable-3d requires --calib PATH`
+が生成物のパスをユーザーに要求し、daemon に生 config を渡すと calib 空で即死していた。原則
+「生成物は **明示 > latest > 校正へ routing** で解決し、無いと作る（hard-error しない）」へ。
+**書き込み先**(excal_out/floor_out/intrinsic_out) の既定を `calibrations/<kind>/latest.yaml`
+にし `write_calibration_versioned` で `<ts>.yaml` + latest symlink を生成。**読み**は config に
+既定値を焼かず（`three_d.calib` 空のまま）、`config::effective_extrinsics_path`(calib ▸ excal_out)
+/ `effective_intrinsics_path`(explicit ▸ intrinsic_out が在れば ▸ extrinsics) で解決。daemon/setup
+の存在判定・threed_builder・extrinsic/floor の intrinsics 入力・precheck を解決経由に変え、
+`--enable-3d requires --calib` を撤廃（未校正→校正へ routing）。**手動 setup 開始で
+`lift::clear_calib_latest` が latest ポインタ symlink のみ削除**（timestamp 履歴は残す）＝
+「入ったら作り直す」。明示パス（既存 `extrinsics_1.yaml` 運用）は最優先で無変更。実機: 生 config
+（enable_3d+calib空）で `initial mode: calib-intrinsic` に routing し hard-error 解消を確認。
+ctest: `test_calib_io`(versioned write/clear=symlinkのみ) + `test_main_config`(enable_3d は calib
+非必須へ更新)。31/31 パス。前回没にした「latest を setup 既定値に焼く」案との差は design doc の
+「検討した案」参照。
+→ [design/pose-3d-calib-latest-resolution.md](../design/pose-3d-calib-latest-resolution.md)
+
 ### 2026-06-27 — subject profile の presence 判定を schema-aware 化 (非互換は再校正へ) (バグ修正)
 flow daemon / setup の profile 存在判定が `std::filesystem::exists()` だけで、keypoint
 topology の不一致を見ていなかった。例: config が `halpe26` なのに `subject01` の既存

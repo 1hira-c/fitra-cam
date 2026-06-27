@@ -76,6 +76,21 @@ void validate_calibration(const CalibrationSet& calib);
 // failure. Used by the extrinsic calibration session to persist results.
 void write_calibration(const std::string& path, const CalibrationSet& calib);
 
+// Versioned write for the "latest pointer" layout
+// (docs/design/pose-3d-calib-latest-resolution.md). When `path` is the
+// convention `calibrations/<kind>/latest.yaml`, the result is written to a
+// timestamped sibling `calibrations/<kind>/<YYYYMMDD_HHMMSS>.yaml` (history
+// accumulates, never clobbered) and `latest.yaml` is atomically repointed at it
+// via a relative symlink. For any other path (an explicit file) this is
+// identical to write_calibration (in-place). The trigger is purely the filename.
+void write_calibration_versioned(const std::string& path, const CalibrationSet& calib);
+
+// Remove ONLY the `latest.yaml` pointer for the versioned layout (the
+// timestamped history is kept). Used when entering setup manually so the next
+// calibration regenerates `latest`. Returns true iff a pointer was removed;
+// no-op for a non-`latest.yaml` path or an absent pointer. Does not throw.
+bool clear_calib_latest(const std::string& path);
+
 // Rescale an intrinsics block from its calibrated resolution to (new_w, new_h),
 // for the common "calibrate high (robust marker/charuco detection), run low
 // (latency/fps)" split. Valid ONLY for a same-FOV resize (uniform downscale,
