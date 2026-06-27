@@ -834,22 +834,6 @@ export function SetupPage() {
                   />
                   enable
                 </label>
-                <label>
-                  host
-                  <input
-                    type="text"
-                    value={draft.vmt.host}
-                    onChange={(e) => setVmt({ host: e.target.value })}
-                  />
-                </label>
-                <label>
-                  port
-                  <input
-                    type="number"
-                    value={draft.vmt.port}
-                    onChange={(e) => setVmt({ port: numOr(e.target.value, draft.vmt.port) })}
-                  />
-                </label>
                 <label className="inline">
                   <input
                     type="checkbox"
@@ -859,6 +843,59 @@ export function SetupPage() {
                   hmd_listen
                 </label>
               </div>
+              {/* 接続先: 自動検出（ランタイム）か手動固定IPか。自動 = discovery+host空、
+                  手動 = discovery無効+host指定。IPは設定時に焼き込まず実行時解決を維持。 */}
+              <div className="row">
+                <label className="inline">
+                  <input
+                    type="radio"
+                    name="vmt-mode"
+                    checked={draft.vmt.discovery && draft.vmt.host.trim() === ""}
+                    onChange={() => setVmt({ discovery: true, host: "" })}
+                  />
+                  自動検出（ランタイム）
+                </label>
+                <label className="inline">
+                  <input
+                    type="radio"
+                    name="vmt-mode"
+                    checked={!(draft.vmt.discovery && draft.vmt.host.trim() === "")}
+                    onChange={() => setVmt({ discovery: false })}
+                  />
+                  手動でIP指定
+                </label>
+              </div>
+              {draft.vmt.discovery && draft.vmt.host.trim() === "" ? (
+                <p className="muted">
+                  接続先（VMTマネージャ）は起動後、同一LAN上で自動検出されます。IP /
+                  ポートの入力は不要です。検出状況はビューア画面のヘッダで確認できます。
+                </p>
+              ) : (
+                <div className="row">
+                  <label>
+                    host
+                    <input
+                      type="text"
+                      value={draft.vmt.host}
+                      placeholder="例: 192.168.1.100"
+                      onChange={(e) => setVmt({ host: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    port
+                    <input
+                      type="number"
+                      value={draft.vmt.port}
+                      onChange={(e) => setVmt({ port: numOr(e.target.value, draft.vmt.port) })}
+                    />
+                  </label>
+                  {draft.vmt.host.trim() === "" && (
+                    <span className="muted">
+                      手動モードでは host が必要です（空欄のままだと自動検出になります）。
+                    </span>
+                  )}
+                </div>
+              )}
               <h3>SlimeVR</h3>
               <div className="row">
                 <label className="inline">

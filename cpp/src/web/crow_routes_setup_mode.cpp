@@ -106,6 +106,7 @@ void merge_config(MainOptions& d, const crow::json::rvalue& cfg) {
     if (cfg.has("vmt")) {
         const auto c = cfg["vmt"];
         jbool(c, "vmt_out", d.vmt_out);
+        jbool(c, "discovery", d.vmt_discovery);  // auto-discovery (host empty) vs manual fixed host
         jstr(c, "host", d.vmt_host);
         jint(c, "port", d.vmt_port);
         jbool(c, "hmd_listen_enabled", d.hmd_listen_enabled);
@@ -175,6 +176,7 @@ std::string draft_to_json(const MainOptions& d) {
       << "\"three_d\":{\"enable_3d\":" << b(d.enable_3d)
       << ",\"calib\":\"" << json_escape(d.calib) << "\"},"
       << "\"vmt\":{\"vmt_out\":" << b(d.vmt_out)
+      << ",\"discovery\":" << b(d.vmt_discovery)
       << ",\"host\":\"" << json_escape(d.vmt_host) << "\",\"port\":" << d.vmt_port
       << ",\"hmd_listen_enabled\":" << b(d.hmd_listen_enabled) << "},"
       << "\"slimevr\":{\"slimevr_out\":" << b(d.slimevr_out)
