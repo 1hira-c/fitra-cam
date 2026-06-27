@@ -92,6 +92,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-27 — run は非互換/欠損 subject profile を fatal にせず警告して継続 (バグ修正)
+subject profile は IK 精度のための**任意入力**なのに、`threed_builder` の `load_subject_profile`
+が schema 不一致（v1/COCO17 を halpe26 で読む等）で **fatal throw** → run がクラッシュしていた。
+profile-compat は daemon の通常チェーンを「非互換 → CalibSubject へ routing」にしたが、**crash-
+fallback to run**（例: CalibSubject が別件でクラッシュ → run へ fallback）や手動 run はその routing を
+通らず、run が v1 profile を読んで fatal → 3連敗 give-up のループになっていた。`threed_builder` の
+profile ロードを try/catch で囲み、失敗時は **警告して profile 無しで継続**（height prior + 既定 bone
+長で 3D は動く）。全経路（通常/fallback/手動）をカバー。
+
 ### 2026-06-27 — setup で intrinsic 校正の レンズモデル(pinhole/fisheye) を選択可能化 (バグ修正)
 setup ウィザードに intrinsic 校正の `model` 選択が無く、`/api/config` 往復も `intrinsic_calib`
 は `enabled`/`out` しか運ばなかったため、**model は常に既定 `pinhole` 固定**。ELP AR0234 等の
