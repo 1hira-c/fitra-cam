@@ -163,6 +163,28 @@ set_target_properties(fitra_excal_record PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
+# Synchronized N-camera (2 or 3) raw MP4 recorder for the spatial-filtering
+# harness. Config-driven (same session.yaml `run` uses) so recorded frames match
+# the live pose pipeline. Standalone: no TRT execution (link pulls fitra_infer
+# via fitra_camera, unused at runtime), no Crow.
+add_executable(fitra_record_3cam
+    record_3cam.cpp
+)
+
+target_link_libraries(fitra_record_3cam PRIVATE
+    fitra_camera      # V4l2Capture (link pulls fitra_infer; unused at runtime)
+    fitra_config      # load_main_config / MainOptions
+    opencv_videoio
+    opencv_imgcodecs
+    opencv_imgproc
+    opencv_core
+)
+
+set_target_properties(fitra_record_3cam PROPERTIES
+    OUTPUT_NAME "record_3cam"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
 # Recorded two-camera 2D -> 3D dump with reprojection overlays.
 add_executable(fitra_dump_keypoints_3d
     dump_keypoints_3d.cpp

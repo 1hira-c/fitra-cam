@@ -152,12 +152,21 @@ triangulate → [calib tap: 生角度] → 空間ステージ → 軽 Kalman →
     baseline に対する遅延 (frames → ms、サブフレーム放物線補間) を算出。静止クリップ誤用は
     motion sigma しきいで警告。
   - 合成クリップでスモーク済 (jitter ON/OFF −58%、lag 注入遅延 +4f を corr 1.0 で復元)。
-- **未 (実機 = M-infra 残)**: (1) **ライブ突き合わせスモークテスト** — このツールは長らく未使用
-  なので、まず録画クリップのオフライン結果を WebUI 3D ライブと突き合わせ、ゲートに使えるか判定
-  (壊れて修正コスト高ならライブテレメトリ + 目視へフォールバック)。(2) **静止 / 動作(腰曲げ)
-  クリップ録画** — 3 カメラ同期 MP4 (`cam0`/`cam1`/`cam2`、extrinsics の id・順序に一致)。
-  既存 2 カメラ recorder (`record_dual_rtmpose_overlay.py`) は 2 視点のみ。3 カメラ raw recorder
-  の要否は次の判断事項。(3) **初回ベースライン採取** → 受け入れ基準の数値確定。
+- **3 カメラ同期 raw recorder `tools/record_3cam`**: 静止 / 動作(腰曲げ)クリップの録画手段。
+  既存 2 カメラ Python recorder (`record_dual_rtmpose_overlay.py`) は 2 視点のみなので新規。
+  **config 駆動** (`--config session.yaml` = ライブ `run` と同一) で `camera_builder` と同じ
+  per-camera `V4l2Options` (解像度 / cap override / pixel format / 露出) を組み、録画フレームを
+  ライブ pose パイプラインと一致させる (= オフライン dump がライブを再現)。MJPEG/NVJPEG は
+  `cv::imdecode`、YUYV は `cvtColor`、downscaling は INTER_AREA で出力解像度へ (FrameSource と同形)。
+  **全カメラに fresh フレームが揃ったときだけ各 `raw_cam{i}.mp4` に 1 枚ずつ書く** index 同期
+  ペーシング (最遅カメラが律速・重複フレーム無し・等長クリップ → dump の index ペアリングに整合)。
+  ウォームアップで最遅 recv_fps を測って出力 fps を決め、`meta.json` + 次手 (dump コマンド) を案内。
+  TRT 非実行 (link で `fitra_infer` を引くが未使用)。
+- **未 (実機 = M-infra 残)**: (1) **ライブ突き合わせスモークテスト** — このツール群は長らく未使用
+  なので、まず `record_3cam` で録画 → `dump_keypoints_3d` のオフライン結果を WebUI 3D ライブと
+  突き合わせ、ゲートに使えるか判定 (壊れて修正コスト高ならライブテレメトリ + 目視へフォールバック)。
+  recorder 自体の初回実機実行がこのスモークテストを兼ねる。(2) **初回ベースライン採取**
+  (静止・腰曲げクリップ) → jitter/lag 指標の現状値を取り、受け入れ基準の数値を確定。
 
 ## 検証
 

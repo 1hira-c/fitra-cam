@@ -102,10 +102,13 @@ triangulator/Kalman/IK のコアは無改変。**(2)** 各フレーム JSONL に
 (per-joint dump 拡充、`joint_view_counts[]` は既出)。**(3)** 指標スクリプト
 `tools/analyze_3d_jitter_lag.py` (numpy のみ) — `jitter` (静止クリップの per-joint 位置 RMS、
 コア6関節 + ON/OFF 差分表) / `lag` (動作クリップの相互相関で candidate 遅延を frames→ms 算出)。
-合成クリップでスモーク済 (jitter −58% / lag 注入 +4f を corr 1.0 で復元)。ctest
-`test_triangulator`/`test_kalman_chain` 回帰なし。**残 (実機)**: ライブ突き合わせスモークテスト
-(ゲート採用可否判定) / 静止・腰曲げクリップ録画 (3カメラ raw recorder の要否は未確定) / 初回
-ベースライン採取 (受け入れ基準確定)。設計 =
+合成クリップでスモーク済 (jitter −58% / lag 注入 +4f を corr 1.0 で復元)。**(4)** 3カメラ同期 raw
+recorder `tools/record_3cam` — config 駆動 (ライブ `run` と同一 YAML) で `camera_builder` と同じ
+per-camera 設定でキャプチャし、全カメラ fresh で揃ったときだけ各 `raw_cam{i}.mp4` に書く index 同期
+(最遅カメラ律速・重複無し・等長 → dump の index ペアリングに整合)。ctest
+`test_triangulator`/`test_kalman_chain` 回帰なし。**残 (実機)**: `record_3cam` で録画 →
+`dump_keypoints_3d` のオフライン結果を WebUI ライブと突き合わせ (ゲート採用可否判定・recorder 初回
+実機がスモークを兼ねる) → 初回ベースライン採取 (受け入れ基準の数値確定)。設計 =
 [design/pose-3d-spatial-filtering.md](../design/pose-3d-spatial-filtering.md) 実装記録節。
 
 ### 2026-06-27 — calib-latest 解決の堅牢化（レビュー指摘対応・コードレビュー / bot 指摘） (バグ修正)
