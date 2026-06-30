@@ -92,6 +92,22 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-06-30 — 空間フィルタ track M-infra: 検証ハーネスのソフト側（3カメラ化 + jitter/lag 解析）
+issue #48 の空間ベース・フィルタ層 (コア剛体フィット主役) の検証基盤を着手。**コア剛体フィット
+(M-A 以降) を一度に一つずつ計測で切り分ける**ため、まずオフライン再生ハーネスのソフト側を用意:
+**(1)** `tools/dump_keypoints_3d` を 2 視点固定から **N カメラ (2 or 3) 化** — `--video` 本数で
+カメラ数を決め、calib を `expected_camera_ids(n)` で trim (`make_threed`/`threed_builder` と同じ
+正規化)、`--cam2-frame-offset` 追加、`VideoPair::videos` vector 化 + `pose_session` clips 上限撤廃。
+triangulator/Kalman/IK のコアは無改変。**(2)** 各フレーム JSONL に `joint_reproj_px[]` を追加
+(per-joint dump 拡充、`joint_view_counts[]` は既出)。**(3)** 指標スクリプト
+`tools/analyze_3d_jitter_lag.py` (numpy のみ) — `jitter` (静止クリップの per-joint 位置 RMS、
+コア6関節 + ON/OFF 差分表) / `lag` (動作クリップの相互相関で candidate 遅延を frames→ms 算出)。
+合成クリップでスモーク済 (jitter −58% / lag 注入 +4f を corr 1.0 で復元)。ctest
+`test_triangulator`/`test_kalman_chain` 回帰なし。**残 (実機)**: ライブ突き合わせスモークテスト
+(ゲート採用可否判定) / 静止・腰曲げクリップ録画 (3カメラ raw recorder の要否は未確定) / 初回
+ベースライン採取 (受け入れ基準確定)。設計 =
+[design/pose-3d-spatial-filtering.md](../design/pose-3d-spatial-filtering.md) 実装記録節。
+
 ### 2026-06-27 — calib-latest 解決の堅牢化（レビュー指摘対応・コードレビュー / bot 指摘） (バグ修正)
 latest 解決 PR に対する自動/手動レビューの指摘をまとめて対応。
 **(1) 明示 Run の missing calib クラッシュループ**: `--enable-3d` + extrinsics 未生成のとき、daemon の

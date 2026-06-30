@@ -1,8 +1,17 @@
-// dump_keypoints_3d — offline 2-camera 3D dump.
+// dump_keypoints_3d — offline N-camera 3D dump (2 or 3 views).
 //
 // Runs YOLOX + RTMPose on synchronized recorded videos, triangulates either
 // COCO17 (17 kpts, default) or Halpe26 (26 kpts) joints with a calibration
-// YAML, then optionally applies 3D Kalman + IK.
+// YAML, then optionally applies 3D Kalman + IK. The camera count is the number
+// of --video inputs (2 or 3); the calibration is trimmed to cam0..cam{n-1} in
+// order (same normalization as make_threed / threed_builder), so a 3-camera
+// extrinsics file is valid input for either a 2- or 3-view run.
+//
+// Used as the offline verification harness for the spatial-filtering track
+// (docs/design/pose-3d-spatial-filtering.md): per-joint 3D positions, view
+// counts and reprojection errors are emitted per frame so the companion
+// analyzer (tools/analyze_3d_jitter_lag.py) can score stationary jitter and
+// motion lag across stage on/off runs.
 
 #include <algorithm>
 #include <array>
@@ -73,6 +82,7 @@ struct Args {
     std::string quality_out;
     int max_frames = 0;
     int cam1_frame_offset = 0;
+    int cam2_frame_offset = 0;
     int bone_calib_frames = 150;
     double subject_height_m = 0.0;
     float det_score = 0.5f;
@@ -86,12 +96,13 @@ struct Args {
 
 void print_help() {
     std::puts(
-        "dump_keypoints_3d — offline two-camera 3D triangulation dump\n"
+        "dump_keypoints_3d — offline N-camera (2 or 3) 3D triangulation dump\n"
         "\n"
         "Required:\n"
-        "  --video PATH              input MP4, repeat twice in cam order\n"
+        "  --video PATH              input MP4, repeat 2 or 3 times in cam order\n"
         "                            (optional when --pose-session is provided)\n"
-        "  --calib PATH              calibration YAML with intrinsics/extrinsics (ids must be cam0,cam1)\n"
+        "  --calib PATH              calibration YAML with intrinsics/extrinsics\n"
+        "                            (trimmed to cam0..cam{n-1} for the chosen view count)\n"
         "  --det-engine PATH         YOLOX .engine\n"
         "  --pose-engine PATH        RTMPose .engine\n"
         "  --out PATH                output JSONL\n"
@@ -104,6 +115,7 @@ void print_help() {
         "  --quality-out PATH        write quality JSON\n"
         "  --max-frames N            stop after N synchronized frames\n"
         "  --cam1-frame-offset N     skip N frames on cam1 before pairing (negative skips cam0)\n"
+        "  --cam2-frame-offset N     skip N frames on cam2 before pairing (negative skips cam0)\n"
         "  --det-score F             YOLOX score threshold (default 0.5)\n"
         "  --kp-conf-thresh F        2D keypoint threshold for triangulation (default 0.3)\n"
         "  --max-reproj-px F         one-pass outlier threshold (default 6)\n"
@@ -140,6 +152,7 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--quality-out")  { args.quality_out = need("--quality-out"); }
         else if (a == "--max-frames")   { args.max_frames = std::atoi(need("--max-frames")); }
         else if (a == "--cam1-frame-offset") { args.cam1_frame_offset = std::atoi(need("--cam1-frame-offset")); }
+        else if (a == "--cam2-frame-offset") { args.cam2_frame_offset = std::atoi(need("--cam2-frame-offset")); }
         else if (a == "--det-score")    { args.det_score = std::stof(need("--det-score")); }
         else if (a == "--kp-conf-thresh") { args.kp_conf_thresh = std::stof(need("--kp-conf-thresh")); }
         else if (a == "--max-reproj-px") { args.max_reproj_px = std::stof(need("--max-reproj-px")); }
@@ -155,9 +168,15 @@ Args parse_args(int argc, char** argv) {
             std::exit(EXIT_FAILURE);
         }
     }
-    if (((args.pose_session.empty() && args.videos.size() != 2) ||
-         (!args.pose_session.empty() && !args.videos.empty() && args.videos.size() != 2)) ||
-        args.calib.empty() || args.det_engine.empty() ||
+    // The camera count is the number of --video inputs (2 or 3). When a
+    // pose-session drives the clips, --video may be omitted (0) and the count
+    // comes from the session's clip lists instead.
+    const std::size_t nv = args.videos.size();
+    const bool videos_count_ok = (nv == 2 || nv == 3);
+    const bool inputs_ok = args.pose_session.empty()
+                               ? videos_count_ok
+                               : (nv == 0 || videos_count_ok);
+    if (!inputs_ok || args.calib.empty() || args.det_engine.empty() ||
         args.pose_engine.empty() || args.out.empty()) {
         print_help();
         std::exit(EXIT_FAILURE);
@@ -177,6 +196,17 @@ std::string fmt(double v, int precision = 6) {
     char buf[48];
     std::snprintf(buf, sizeof(buf), "%.*g", precision, v);
     return buf;
+}
+
+// Runtime camera ids for an n-camera stage: cam0..cam{n-1}, in order. Mirrors
+// fitra::app::expected_camera_ids (not linked here — this tool depends only on
+// fitra_infer/fitra_lift) so a 3-camera extrinsics file trims to exactly the
+// chosen view count via select_calib_cameras / require_camera_ids.
+std::vector<std::string> expected_camera_ids(std::size_t count) {
+    std::vector<std::string> ids;
+    ids.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) ids.push_back("cam" + std::to_string(i));
+    return ids;
 }
 
 double median(std::vector<double> vals) {
@@ -227,7 +257,7 @@ double joint_distance(const fitra::infer::Joint3D& a,
 
 struct VideoPair {
     std::string pose = "video";
-    std::array<std::string, 2> videos{};
+    std::vector<std::string> videos{};  // one entry per camera, in cam order
 };
 
 struct PoseSession {
@@ -275,22 +305,35 @@ PoseSession load_pose_session(const std::string& path) {
         if (pair.pose.empty()) pair.pose = "pose";
         cv::FileNode clips = node["clips"];
         if (!clips.empty() && clips.isSeq()) {
-            int idx = 0;
-            for (auto cit = clips.begin(); cit != clips.end() && idx < 2; ++cit, ++idx) {
-                pair.videos[static_cast<std::size_t>(idx)] =
-                    resolve_session_path(base, static_cast<std::string>(*cit));
+            for (auto cit = clips.begin(); cit != clips.end(); ++cit) {
+                pair.videos.push_back(resolve_session_path(base, static_cast<std::string>(*cit)));
             }
         }
-        if (pair.videos[0].empty()) {
-            pair.videos[0] = resolve_session_path(base, "raw/" + pair.pose + "_cam0.mp4");
-        }
-        if (pair.videos[1].empty()) {
-            pair.videos[1] = resolve_session_path(base, "raw/" + pair.pose + "_cam1.mp4");
+        // No explicit clips: fall back to the 2-camera raw/<pose>_cam{0,1}.mp4
+        // naming convention (back-compat with the subject-calib analysis flow).
+        if (pair.videos.empty()) {
+            pair.videos.push_back(resolve_session_path(base, "raw/" + pair.pose + "_cam0.mp4"));
+            pair.videos.push_back(resolve_session_path(base, "raw/" + pair.pose + "_cam1.mp4"));
         }
         session.pairs.push_back(std::move(pair));
     }
     if (session.pairs.empty()) {
         throw std::runtime_error("pose_session has no usable poses");
+    }
+    // Every pose in a session must use the same camera count so a single
+    // Triangulator (built for cam0..cam{n-1}) can process all clips.
+    const std::size_t n_cams = session.pairs.front().videos.size();
+    for (const auto& pair : session.pairs) {
+        if (pair.videos.size() != n_cams) {
+            throw std::runtime_error(
+                "pose_session poses must all use the same camera count (pose '" +
+                pair.pose + "' has " + std::to_string(pair.videos.size()) +
+                ", expected " + std::to_string(n_cams) + ")");
+        }
+    }
+    if (n_cams != 2 && n_cams != 3) {
+        throw std::runtime_error(
+            "pose_session camera count must be 2 or 3, got " + std::to_string(n_cams));
     }
     return session;
 }
@@ -555,6 +598,11 @@ void write_json_line(std::ofstream& out,
         if (k) out << ",";
         out << tri.view_count[k];
     }
+    out << "],\"joint_reproj_px\":[";
+    for (std::size_t k = 0; k < emit_n; ++k) {
+        if (k) out << ",";
+        out << fmt(tri.reproj_error_px[k]);
+    }
     out << "]}}\n";
 }
 
@@ -575,28 +623,10 @@ int main(int argc, char** argv) {
             fitra::lift::set_active_keypoint_format(fmt);
         }
         auto calib = fitra::lift::load_calibration(args.calib);
-        // This analyzer is two-camera (cam0,cam1); a rig's extrinsics file may
-        // carry more cameras, or store them in a different order. Always select
-        // cam0,cam1 in order so a 3-camera extrinsics is valid input and the
-        // order matches require_camera_ids (mirrors make_threed;
-        // pose-3d-calib-latest-resolution.md).
-        calib = fitra::lift::select_calib_cameras(calib, {"cam0", "cam1"});
-        fitra::lift::Triangulator::Options tri_opts;
-        tri_opts.kp_conf_thresh = args.kp_conf_thresh;
-        tri_opts.max_reproj_px = args.max_reproj_px;
-        fitra::lift::Triangulator triangulator{calib, tri_opts};
-        triangulator.require_camera_ids({"cam0", "cam1"});
 
-        TrtLogger tlog;
-        std::unique_ptr<nvinfer1::IRuntime> runtime{nvinfer1::createInferRuntime(tlog)};
-        TRT_CHECK(runtime != nullptr);
-        auto yolox_engine = fitra::infer::TrtEngine::from_file(*runtime, args.det_engine, tlog);
-        auto rtmpose_engine = fitra::infer::TrtEngine::from_file(*runtime, args.pose_engine, tlog);
-        fitra::infer::Yolox::Options yolo_opts;
-        yolo_opts.score_thr = args.det_score;
-        fitra::infer::Yolox yolox{*yolox_engine, yolo_opts};
-        fitra::infer::RtmPose rtmpose{*rtmpose_engine};
-
+        // Resolve the jobs (and thus the camera count) before building the
+        // Triangulator: the count is the number of clips per pose-session entry,
+        // or the number of --video inputs in the standalone case.
         PoseSession pose_session;
         std::vector<VideoPair> jobs;
         if (!args.pose_session.empty()) {
@@ -608,10 +638,34 @@ int main(int argc, char** argv) {
         } else {
             VideoPair pair;
             pair.pose = "video";
-            pair.videos = {args.videos[0], args.videos[1]};
+            pair.videos = args.videos;  // already validated as size 2 or 3
             jobs.push_back(pair);
             pose_session.source_session = "";
         }
+        const std::size_t n_cams = jobs.front().videos.size();
+
+        // A rig's extrinsics file may carry more cameras than this run uses, or
+        // store them in a different order. Select cam0..cam{n-1} in order so a
+        // 3-camera extrinsics is valid input for a 2- or 3-view run and the order
+        // matches require_camera_ids (mirrors make_threed / threed_builder;
+        // pose-3d-calib-latest-resolution.md).
+        const std::vector<std::string> cam_ids = expected_camera_ids(n_cams);
+        calib = fitra::lift::select_calib_cameras(calib, cam_ids);
+        fitra::lift::Triangulator::Options tri_opts;
+        tri_opts.kp_conf_thresh = args.kp_conf_thresh;
+        tri_opts.max_reproj_px = args.max_reproj_px;
+        fitra::lift::Triangulator triangulator{calib, tri_opts};
+        triangulator.require_camera_ids(cam_ids);
+
+        TrtLogger tlog;
+        std::unique_ptr<nvinfer1::IRuntime> runtime{nvinfer1::createInferRuntime(tlog)};
+        TRT_CHECK(runtime != nullptr);
+        auto yolox_engine = fitra::infer::TrtEngine::from_file(*runtime, args.det_engine, tlog);
+        auto rtmpose_engine = fitra::infer::TrtEngine::from_file(*runtime, args.pose_engine, tlog);
+        fitra::infer::Yolox::Options yolo_opts;
+        yolo_opts.score_thr = args.det_score;
+        fitra::infer::Yolox yolox{*yolox_engine, yolo_opts};
+        fitra::infer::RtmPose rtmpose{*rtmpose_engine};
 
         std::filesystem::path outp{args.out};
         if (outp.has_parent_path()) std::filesystem::create_directories(outp.parent_path());
@@ -635,21 +689,36 @@ int main(int argc, char** argv) {
         int frames_with_3d = 0;
         auto start = std::chrono::steady_clock::now();
 
+        // Per-camera start skips for pairing. --cam{1,2}-frame-offset > 0 skips
+        // that camera; < 0 skips cam0 (the shared reference) by |N|. When both
+        // ask cam0 to skip, the larger wins (a single common skip, not summed).
+        std::vector<int> start_skip(n_cams, 0);
+        auto apply_offset = [&](std::size_t cam, int offset) {
+            if (offset > 0) {
+                if (cam < start_skip.size()) start_skip[cam] = offset;
+            } else if (offset < 0) {
+                start_skip[0] = std::max(start_skip[0], -offset);
+            }
+        };
+        apply_offset(1, args.cam1_frame_offset);
+        if (n_cams >= 3) {
+            apply_offset(2, args.cam2_frame_offset);
+        } else if (args.cam2_frame_offset != 0) {
+            FITRA_LOG_WARN("--cam2-frame-offset ignored for a {}-camera run", n_cams);
+        }
+
         for (const auto& job : jobs) {
             if (args.max_frames > 0 && processed >= args.max_frames) break;
             std::vector<cv::VideoCapture> caps;
-            caps.reserve(2);
+            caps.reserve(n_cams);
             for (const auto& path : job.videos) {
                 caps.emplace_back(path);
                 if (!caps.back().isOpened()) throw std::runtime_error("failed to open video: " + path);
             }
 
-            if (args.cam1_frame_offset > 0) {
+            for (std::size_t cam = 0; cam < n_cams; ++cam) {
                 cv::Mat tmp;
-                for (int i = 0; i < args.cam1_frame_offset; ++i) caps[1].read(tmp);
-            } else if (args.cam1_frame_offset < 0) {
-                cv::Mat tmp;
-                for (int i = 0; i < -args.cam1_frame_offset; ++i) caps[0].read(tmp);
+                for (int i = 0; i < start_skip[cam]; ++i) caps[cam].read(tmp);
             }
 
             double fps = caps[0].get(cv::CAP_PROP_FPS);
@@ -657,18 +726,18 @@ int main(int argc, char** argv) {
             int w = static_cast<int>(caps[0].get(cv::CAP_PROP_FRAME_WIDTH));
             int h = static_cast<int>(caps[0].get(cv::CAP_PROP_FRAME_HEIGHT));
 
-            std::vector<std::unique_ptr<cv::VideoWriter>> overlays(2);
+            std::vector<std::unique_ptr<cv::VideoWriter>> overlays(n_cams);
             if (!args.overlay_dir.empty()) {
                 std::filesystem::create_directories(args.overlay_dir);
-                for (int i = 0; i < 2; ++i) {
+                for (std::size_t i = 0; i < n_cams; ++i) {
                     std::string name = jobs.size() > 1
                         ? (job.pose + "_cam" + std::to_string(i) + "_reproj.mp4")
                         : ("cam" + std::to_string(i) + "_reproj.mp4");
                     std::filesystem::path path = std::filesystem::path(args.overlay_dir) / name;
-                    overlays[static_cast<std::size_t>(i)] = std::make_unique<cv::VideoWriter>(
+                    overlays[i] = std::make_unique<cv::VideoWriter>(
                         path.string(), cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
                         fps, cv::Size(w, h));
-                    if (!overlays[static_cast<std::size_t>(i)]->isOpened()) {
+                    if (!overlays[i]->isOpened()) {
                         throw std::runtime_error("failed to open overlay writer: " + path.string());
                     }
                 }
@@ -677,26 +746,24 @@ int main(int argc, char** argv) {
             fitra::lift::SkeletonKalman kalman;
             for (int frame_idx = 0;; ++frame_idx) {
                 if (args.max_frames > 0 && processed >= args.max_frames) break;
-                std::vector<cv::Mat> frames(2);
+                std::vector<cv::Mat> frames(n_cams);
                 bool ok = true;
-                for (int cam = 0; cam < 2; ++cam) {
-                    ok = caps[static_cast<std::size_t>(cam)].read(frames[static_cast<std::size_t>(cam)])
-                         && !frames[static_cast<std::size_t>(cam)].empty();
+                for (std::size_t cam = 0; cam < n_cams; ++cam) {
+                    ok = caps[cam].read(frames[cam]) && !frames[cam].empty();
                     if (!ok) break;
                 }
                 if (!ok) break;
 
-                std::vector<std::vector<fitra::infer::Person>> persons_by_cam(2);
+                std::vector<std::vector<fitra::infer::Person>> persons_by_cam(n_cams);
                 std::vector<fitra::lift::PerCameraObservation> observations;
-                for (int cam = 0; cam < 2; ++cam) {
-                    auto bboxes = keep_largest_if_needed(yolox.infer(frames[static_cast<std::size_t>(cam)]),
+                for (std::size_t cam = 0; cam < n_cams; ++cam) {
+                    auto bboxes = keep_largest_if_needed(yolox.infer(frames[cam]),
                                                          args.multi_person);
-                    persons_by_cam[static_cast<std::size_t>(cam)] = rtmpose.infer(
-                        frames[static_cast<std::size_t>(cam)], bboxes);
-                    if (!persons_by_cam[static_cast<std::size_t>(cam)].empty()) {
+                    persons_by_cam[cam] = rtmpose.infer(frames[cam], bboxes);
+                    if (!persons_by_cam[cam].empty()) {
                         observations.push_back(
                             fitra::lift::PerCameraObservation{
-                                cam, &persons_by_cam[static_cast<std::size_t>(cam)][0]});
+                                static_cast<int>(cam), &persons_by_cam[cam][0]});
                     }
                 }
 
@@ -720,12 +787,11 @@ int main(int argc, char** argv) {
                     if (ik.locked()) drift_values.push_back(drift_after);
                 }
 
-                for (int cam = 0; cam < 2; ++cam) {
-                    if (!overlays[static_cast<std::size_t>(cam)]) continue;
-                    draw_2d(frames[static_cast<std::size_t>(cam)],
-                            persons_by_cam[static_cast<std::size_t>(cam)]);
-                    draw_reprojection(frames[static_cast<std::size_t>(cam)], triangulator, cam, skel);
-                    overlays[static_cast<std::size_t>(cam)]->write(frames[static_cast<std::size_t>(cam)]);
+                for (std::size_t cam = 0; cam < n_cams; ++cam) {
+                    if (!overlays[cam]) continue;
+                    draw_2d(frames[cam], persons_by_cam[cam]);
+                    draw_reprojection(frames[cam], triangulator, static_cast<int>(cam), skel);
+                    overlays[cam]->write(frames[cam]);
                 }
 
                 processed += 1;
@@ -775,8 +841,13 @@ int main(int argc, char** argv) {
             sout << "  \"profile_quality_status\":\""
                  << json_escape(generated_profile.quality_status) << "\",\n";
         }
-        sout << "  \"videos\":[\"" << json_escape(jobs.front().videos[0]) << "\",\""
-             << json_escape(jobs.front().videos[1]) << "\"],\n";
+        sout << "  \"num_cameras\":" << n_cams << ",\n";
+        sout << "  \"videos\":[";
+        for (std::size_t i = 0; i < jobs.front().videos.size(); ++i) {
+            if (i) sout << ",";
+            sout << "\"" << json_escape(jobs.front().videos[i]) << "\"";
+        }
+        sout << "],\n";
         sout << "  \"calib\":\"" << args.calib << "\"\n";
         sout << "}\n";
 

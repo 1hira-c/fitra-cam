@@ -128,6 +128,37 @@ triangulate → [calib tap: 生角度] → 空間ステージ → 軽 Kalman →
 - **M-D** (保留): 床アンカ。最小ソフトクランプ、脚チェーン再解なし、既定 OFF。design-doc-first。
 - **M-E** (任意): ライブテレメトリ (per-joint reproj / 接地割合を WS3D stats に追加)。
 
+## 実装記録
+
+### M-infra (2026-06-30) — 検証ハーネスのソフト側
+
+オフライン再生ハーネスの**ソフト側**を実装 (録画 + ライブ突き合わせは実機作業として後述)。
+
+- **`tools/dump_keypoints_3d` を N カメラ (2 or 3) 化**: 2 視点固定 (`cam0`/`cam1` ハードコード)
+  だった解析ツールを、`--video` の本数 (2 or 3) でカメラ数を決める一般形へ。calib は
+  `expected_camera_ids(n)` (= `cam0..cam{n-1}`) で trim (`select_calib_cameras` /
+  `require_camera_ids`、`make_threed` / `threed_builder` と同じ正規化) するので、3 カメラ
+  extrinsics を 2 or 3 視点どちらでも食える。`VideoPair::videos` を `vector` 化、`pose_session`
+  の clips 上限 2 を撤廃 (全 pose で同一カメラ数を要求)、`caps`/`frames`/`overlays`/
+  `persons_by_cam` のループ・コンテナを `n_cams` 化。同期オフセットは `--cam2-frame-offset`
+  を追加 (既存 `--cam1-frame-offset` は不変、負値は共有参照 cam0 をスキップ、二重指定は max)。
+  triangulator/Kalman/IK のコアは無改変。
+- **per-joint ダンプ拡充**: 各フレームの `stats` に `joint_reproj_px[]` を追加
+  (`joint_view_counts[]` は既出)。解析側が per-joint の reproj / view_count を読める。
+- **指標スクリプト `tools/analyze_3d_jitter_lag.py`** (numpy のみ依存、ハーネスと co-locate):
+  - `jitter <file...>`: 静止クリップの per-joint 3D 位置 RMS (mm)。コア 6 関節
+    {18,5,6,19,11,12} を強調、複数ファイル渡しで ON/OFF 差分表。
+  - `lag <baseline> <candidate>`: 同一動作クリップの指定関節軌道を相互相関し、candidate の
+    baseline に対する遅延 (frames → ms、サブフレーム放物線補間) を算出。静止クリップ誤用は
+    motion sigma しきいで警告。
+  - 合成クリップでスモーク済 (jitter ON/OFF −58%、lag 注入遅延 +4f を corr 1.0 で復元)。
+- **未 (実機 = M-infra 残)**: (1) **ライブ突き合わせスモークテスト** — このツールは長らく未使用
+  なので、まず録画クリップのオフライン結果を WebUI 3D ライブと突き合わせ、ゲートに使えるか判定
+  (壊れて修正コスト高ならライブテレメトリ + 目視へフォールバック)。(2) **静止 / 動作(腰曲げ)
+  クリップ録画** — 3 カメラ同期 MP4 (`cam0`/`cam1`/`cam2`、extrinsics の id・順序に一致)。
+  既存 2 カメラ recorder (`record_dual_rtmpose_overlay.py`) は 2 視点のみ。3 カメラ raw recorder
+  の要否は次の判断事項。(3) **初回ベースライン採取** → 受け入れ基準の数値確定。
+
 ## 検証
 
 **主検証 = 決定的オフライン再生** (M-infra のハーネスが使える前提):
