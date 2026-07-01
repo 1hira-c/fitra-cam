@@ -84,6 +84,7 @@ struct Args {
     int cam1_frame_offset = 0;
     int cam2_frame_offset = 0;
     int bone_calib_frames = 150;
+    double fps_override = 0.0;
     double subject_height_m = 0.0;
     float det_score = 0.5f;
     float kp_conf_thresh = 0.3f;
@@ -116,6 +117,9 @@ void print_help() {
         "  --max-frames N            stop after N synchronized frames\n"
         "  --cam1-frame-offset N     skip N frames on cam1 before pairing (negative skips cam0)\n"
         "  --cam2-frame-offset N     skip N frames on cam2 before pairing (negative skips cam0)\n"
+        "  --fps F                   override clip fps for Kalman dt + overlays\n"
+        "                            (use the recorder meta.json fps_written; the MP4\n"
+        "                             header fps can be wrong for a record_3cam clip)\n"
         "  --det-score F             YOLOX score threshold (default 0.5)\n"
         "  --kp-conf-thresh F        2D keypoint threshold for triangulation (default 0.3)\n"
         "  --max-reproj-px F         one-pass outlier threshold (default 6)\n"
@@ -153,6 +157,7 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--max-frames")   { args.max_frames = std::atoi(need("--max-frames")); }
         else if (a == "--cam1-frame-offset") { args.cam1_frame_offset = std::atoi(need("--cam1-frame-offset")); }
         else if (a == "--cam2-frame-offset") { args.cam2_frame_offset = std::atoi(need("--cam2-frame-offset")); }
+        else if (a == "--fps")          { args.fps_override = std::stod(need("--fps")); }
         else if (a == "--det-score")    { args.det_score = std::stof(need("--det-score")); }
         else if (a == "--kp-conf-thresh") { args.kp_conf_thresh = std::stof(need("--kp-conf-thresh")); }
         else if (a == "--max-reproj-px") { args.max_reproj_px = std::stof(need("--max-reproj-px")); }
@@ -721,7 +726,12 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < start_skip[cam]; ++i) caps[cam].read(tmp);
             }
 
-            double fps = caps[0].get(cv::CAP_PROP_FPS);
+            // record_3cam clips carry a nominal header fps that can differ from
+            // the true per-frame interval (encode-bound sync rate). Prefer the
+            // explicit --fps (recorder meta.json fps_written) so the Kalman dt is
+            // real; else fall back to the MP4 header.
+            double fps = args.fps_override > 0.0 ? args.fps_override
+                                                 : caps[0].get(cv::CAP_PROP_FPS);
             if (fps <= 0.0) fps = 30.0;
             int w = static_cast<int>(caps[0].get(cv::CAP_PROP_FRAME_WIDTH));
             int h = static_cast<int>(caps[0].get(cv::CAP_PROP_FRAME_HEIGHT));
