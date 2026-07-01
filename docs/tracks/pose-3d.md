@@ -92,6 +92,20 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-01 — 空間フィルタ M-infra: 実機ベースライン確定 + dump に --fps 上書き
+実機 6 クリップ録画（`record_3cam`、静止3 + 動作3、1280×960×3cam）でハーネス全体
+（`record_3cam`→`dump_keypoints_3d` 3cam→`analyze_3d_jitter_lag`）が **end-to-end 動作**する
+ことを確認 = **M-infra スモークテスト合格（オフラインをゲート採用可）**。**最重要の観測**:
+現状 Kalman+IK は静止コアジッタをほとんど落とさない（delta ±0–7%、hip_center のみ −15〜−20%）
+= (b) ジッタは時間平滑に盲目という設計前提を実データが裏付け → **空間剛体フィットが本命**が正当化。
+静止 jitter ベースライン（コア6 median RMS）: 立位 6.4 / T字 9.2 / 中腰 12.2mm、**肩帯 {18,5,6} が
+最悪（17–19mm）・骨盤最良（~5–9mm）** → M-B の伸びしろ最大。lag は filtered が raw に ~66ms 遅延
+（8.5fps 録画で粗い）。**dump に `--fps` 上書きを追加**: `record_3cam` の MP4 ヘッダ fps が公称
+（~59 vs 実 8.6）になるため、`meta.json` の `fps_written` を渡して Kalman dt を実時間に矯正。
+**recorder 制約**: 1280×960×3cam で mp4v encode 律速 ~8.6fps・ヘッダ fps 不正確 → lag 精密化する
+M-C 前に per-camera encode スレッド化 + FrameSource HW デコードの recorder v2 が必要（静止 jitter は
+fps 非依存で M-A/M-B には影響なし）。暫定受け入れ基準・詳細は設計 doc 実装記録節。
+
 ### 2026-06-30 — 空間フィルタ track M-infra: 検証ハーネスのソフト側（3カメラ化 + jitter/lag 解析）
 issue #48 の空間ベース・フィルタ層 (コア剛体フィット主役) の検証基盤を着手。**コア剛体フィット
 (M-A 以降) を一度に一つずつ計測で切り分ける**ため、まずオフライン再生ハーネスのソフト側を用意:

@@ -168,6 +168,43 @@ triangulate → [calib tap: 生角度] → 空間ステージ → 軽 Kalman →
   recorder 自体の初回実機実行がこのスモークテストを兼ねる。(2) **初回ベースライン採取**
   (静止・腰曲げクリップ) → jitter/lag 指標の現状値を取り、受け入れ基準の数値を確定。
 
+### M-infra ベースライン (2026-07-01) — 実データで確定
+
+実機で 6 クリップ録画 (`record_3cam`、静止3: `still`/`still_t`/`still_crouch`、動作3:
+`forward_bend`/`bending_and_stretching`/`walk_around`、各 1280×960×3cam)。ハーネス全体
+(`record_3cam` → `dump_keypoints_3d` 3cam → `analyze_3d_jitter_lag`) が **実 3 カメラで
+end-to-end 動作**することを確認 = **M-infra スモークテスト合格 (オフラインをゲートに採用可)**。
+median reproj ~3.8px、26 関節 valid。
+
+**静止 jitter ベースライン (コア6関節 median 3D RMS, raw 三角測量)**:
+| clip | core median | 最悪関節 | pelvis {19,11,12} |
+|---|---|---|---|
+| still (立位) | 6.4mm | r_shoulder 9.0 | 4.4–6.3mm |
+| still_t (T字) | 9.2mm | l_shoulder **19.0** | 6.4–9.3mm |
+| still_crouch (中腰) | 12.2mm | 肩帯 17–19 | 7.1–7.2mm |
+
+**最重要の観測**: **現状の Kalman+IK は静止コアジッタをほとんど落とさない** (delta ±0–7%、
+hip_center のみ −15〜−20%)。= (b) ジッタ (各視点独立微動 → 3D 点が累積スキャッタ) は時間平滑に
+盲目、という設計の前提を実データが裏付けた。時間フィルタでは頭打ち → **空間 (剛体フィット) が
+本命**という方針が正当化された。**肩帯 {18,5,6} が最悪 (中腰・T字で 17–19mm)・骨盤 {19,11,12}
+は最良 (~5–9mm)** → M-B (肩帯剛体) の伸びしろが最大、M-A (骨盤剛体) は既に安定な骨盤をさらに固める。
+
+**lag** (forward_bend、filtered vs raw): hip_center/neck とも filtered が raw に対し **~66ms 遅延**
+(corr 0.99)。ただし後述のとおり 8.5fps 録画で 117ms/frame と粗く、サブフレーム補間頼み。
+
+**暫定受け入れ基準** (M-A 初回計測でさらに詰める):
+- **M-A/M-B**: 肩帯 {18,5,6} の静止 RMS を raw 比 **≥30% 低減** (T字/中腰クリップ、伸びしろ最大)、
+  骨盤 {19,11,12} を非悪化。コア6 median を有意に低減。
+- **M-C**: 時間フィルタ弱化後も lag 非悪化 (raw 比増加なし)。
+- 数値は絶対でなく **同一クリップの raw 比**で見る (ポーズで 6–12mm と変動するため)。
+
+**recorder の既知の制約 (要 follow-up)**: `record_3cam` は 1280×960×3cam で **~8.6fps** 律速
+(内訳: mp4v encode 30ms/frame + imdecode 23ms/frame をメインスレッド直列 = 3cam で ~158ms/set。
+**encode が支配的**)。かつ MP4 ヘッダ fps が公称 (~59) で真値と乖離。**暫定運用**: `dump --fps` /
+`analyze lag --fps` に `meta.json` の `fps_written` を渡す (Kalman dt を実時間に矯正)。静止 jitter は
+fps 非依存なので M-A/M-B のドライバ計測には影響なし。**lag を精密化する M-C 前に**、per-camera
+encode スレッド化 (+ FrameSource で HW nvjpeg デコード) で ~25–40fps へ引き上げる recorder v2 が要る。
+
 ## 検証
 
 **主検証 = 決定的オフライン再生** (M-infra のハーネスが使える前提):
