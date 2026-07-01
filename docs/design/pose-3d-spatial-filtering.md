@@ -232,6 +232,30 @@ encode スレッド化 (+ FrameSource で HW nvjpeg デコード) で ~25–40fp
 - **未 (M-A 残)**: ライブ `multi_pipeline` への同並べ替え + 剛体ステージ配線 (計測で確認済のため次段)。
   ライブは `SlimeTrackerBus`/`TrackerExtractor` との相互作用があるので別コミットで慎重に。
 
+### M-B (2026-07-01) — 肩帯剛体 + 脊椎 soft 連結（＋重要な負の所見）
+
+- **実装**: `apply_rigid_segment` を汎用化 (M-A 骨盤と共用) し肩帯 {neck 18, l_sh 5, r_sh 6} に適用。
+  `apply_spine_coupling` = neck の hip_center 距離を脊椎長 ±`--spine-tol` (既定 12%) にクランプ、
+  超えたら肩帯 {18,5,6} を剛体平行移動 (向き保持 = neck 基部ボールジョイント)。`--rigid-shoulders`
+  で有効、順序 骨盤→肩帯→脊椎連結→IK→Kalman。テンプレは profile の `bone_lengths_m[5]/[6]` +
+  `shoulder_width_m`、脊椎長 = `bone_lengths_m[18]`。
+- **計測 (baseline vs M-B, 静止, コア6)**: 肩帯は **立位 neck −6%/肩 −3〜5%・T字 ±1%・中腰 −2〜3%**
+  と**わずか**。骨盤は M-A どおり −10〜20%。Kalman OFF の純空間でも肩帯は **±0〜+5% (改善せず)**。
+- **重要な負の所見 = 剛体フィットの効きは segment の再投影誤差 (独立ノイズ量) に比例する**:
+  骨盤の per-joint reproj は 7–10px (視点間不一致大 = 独立ノイズ大 → 剛体平均で −10〜18% 取れる)。
+  肩帯は reproj 2–4px と**低い** (視点間で一致 = 形状破壊ノイズが少ない) → 剛体フィットで消せる成分が
+  そもそも少ない。肩帯の 10–19mm ジッタは**コヒーレントな剛体ポーズ動揺** (girdle 全体が揺れる) で、
+  剛体フィットは 6-DoF ポーズ動揺を保存するため消せない。→ **設計の当初前提「肩帯が最大の伸びしろ」は
+  実データで否定**。肩帯ジッタは空間(剛体)ではなく**時間フィルタ (M-C) か 2D 改善**の領分。
+  最悪は l_shoulder (RMS 19.5mm・間欠 2-view 85%・reproj 4.2px) の構造的誤差。
+- **脊椎 soft 連結は IK の hard enforce_lengths と冗長**: Halpe26 では neck の親 = hip_center なので
+  IK が hip→neck を毎フレーム脊椎長へ hard 固定 (soft ±12% より厳しい)。よって soft 連結は実質不活性
+  (IK OFF 時 / 大excursion のガードとして残す。害はない)。
+- **腰曲げは保持** (forward_bend: M-B の neck z-range 781mm ≥ raw 735mm)。むしろ raw は脊椎を
+  0.515m と短く三角測量するのを M-B が校正長 0.56m へ復元。**下流破壊なし** (骨盤不変・bend 保持)。
+- **結論**: M-B は無害だが静止ジッタへの寄与は小。**コアの残ジッタ (肩帯) は M-C (時間フィルタ調整) と
+  2D 側**へ引き継ぐ。剛体フィットは骨盤 (高 reproj) が主戦場という理解に更新。
+
 ## 検証
 
 **主検証 = 決定的オフライン再生** (M-infra のハーネスが使える前提):

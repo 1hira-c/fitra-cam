@@ -95,6 +95,8 @@ struct Args {
     bool no_kalman = false;
     bool no_ik = false;
     bool rigid_pelvis = false;
+    bool rigid_shoulders = false;
+    double spine_tol = 0.12;
     std::string keypoint_format_str = "coco17";
 };
 
@@ -137,6 +139,12 @@ void print_help() {
         "                            reorders to spatial-first tri->rigid->IK->Kalman and\n"
         "                            weighted-Kabsch fits {hip_center,l_hip,r_hip} to the\n"
         "                            subject template (needs --subject-profile). M-A.\n"
+        "  --rigid-shoulders         enable the shoulder-girdle rigid fit + spine soft\n"
+        "                            coupling (Halpe26 only): weighted-Kabsch fits\n"
+        "                            {neck,l_shoulder,r_shoulder}, then bounds neck's\n"
+        "                            distance from hip_center to the spine length +/-\n"
+        "                            --spine-tol (needs --subject-profile). M-B.\n"
+        "  --spine-tol F             spine soft-coupling tolerance fraction (default 0.12)\n"
         "  --keypoint-format FMT     pose topology: coco17 (default) or halpe26\n"
         "  --help                    show this help\n");
 }
@@ -177,6 +185,8 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--no-kalman")    { args.no_kalman = true; }
         else if (a == "--no-ik")        { args.no_ik = true; }
         else if (a == "--rigid-pelvis") { args.rigid_pelvis = true; }
+        else if (a == "--rigid-shoulders") { args.rigid_shoulders = true; }
+        else if (a == "--spine-tol")    { args.spine_tol = std::stod(need("--spine-tol")); }
         else if (a == "--keypoint-format") { args.keypoint_format_str = need("--keypoint-format"); }
         else {
             std::fprintf(stderr, "unknown arg: %s\n", argv[i]);
@@ -622,18 +632,19 @@ void write_json_line(std::ofstream& out,
     out << "]}}\n";
 }
 
-// Spatial pelvis rigid fit (M-A). Weighted-Kabsch fits the pelvis triangle
-// {hip_center=19, l_hip=11, r_hip=12} to the subject template so the three
-// joints' independent (b)-type jitter averages into one 6-DoF pose. valid-3
-// gate: if any pelvis joint is missing (or the template/fit is degenerate) the
+// Spatial rigid segment fit (M-A pelvis {19,11,12} / M-B shoulder girdle
+// {18,5,6}). Weighted-Kabsch fits the triangle to the subject template so the
+// three joints' independent (b)-type jitter averages into one 6-DoF pose.
+// valid-3 gate: if any joint is missing (or the template/fit is degenerate) the
 // frame is left untouched (stateless fallback to enforce_lengths + Kalman —
-// never worse than today). Halpe26 only (COCO17 has no hip_center). Weight
+// never worse than today). idx[0] is the apex (hip_center / neck), matching the
+// template's from_distances(d_apex_side1, d_apex_side2, d_side1_side2). Weight
 // w_j = score_j · view_count_j (modest boost for 3-view over 2-view).
-void apply_pelvis_rigid_fit(fitra::infer::Skeleton3D& skel,
-                            const fitra::lift::TriangulatedSkeleton& tri,
-                            const fitra::lift::RigidTemplate& templ) {
+void apply_rigid_segment(fitra::infer::Skeleton3D& skel,
+                         const fitra::lift::TriangulatedSkeleton& tri,
+                         const fitra::lift::RigidTemplate& templ,
+                         const std::array<std::size_t, 3>& idx) {
     if (!templ.valid) return;
-    constexpr std::array<std::size_t, 3> idx{19, 11, 12};
     for (std::size_t i : idx)
         if (i >= skel.joints.size() || !skel.joints[i].valid) return;
     std::array<cv::Vec3d, 3> measured, out;
@@ -652,6 +663,43 @@ void apply_pelvis_rigid_fit(fitra::infer::Skeleton3D& skel,
         j.y = static_cast<float>(out[k][1]);
         j.z = static_cast<float>(out[k][2]);
         j.valid = true;
+    }
+}
+
+// Spine soft coupling (M-B). The shoulder girdle keeps its own fitted
+// orientation (twist/lean is the girdle fit's job — neck base ball joint); only
+// neck's *distance* from hip_center is bounded to the spine length ±tol. When it
+// leaves the band, the whole girdle {neck,l_sh,r_sh} is rigidly translated so
+// neck lands on the band edge along the current spine axis — a deep waist bend
+// (which shortens the straight-line hip->neck chord) stays faithful within the
+// band, and a fit that ran away up/down the spine is reined in. Stateless.
+void apply_spine_coupling(fitra::infer::Skeleton3D& skel,
+                          std::size_t hip_idx, std::size_t neck_idx,
+                          const std::array<std::size_t, 3>& girdle_idx,
+                          double spine_len, double tol) {
+    if (spine_len <= 1.0e-6) return;
+    if (hip_idx >= skel.joints.size() || neck_idx >= skel.joints.size()) return;
+    const auto& hip = skel.joints[hip_idx];
+    const auto& neck = skel.joints[neck_idx];
+    if (!hip.valid || !neck.valid) return;
+    const cv::Vec3d h{hip.x, hip.y, hip.z};
+    const cv::Vec3d n{neck.x, neck.y, neck.z};
+    const cv::Vec3d axis = n - h;
+    const double d = cv::norm(axis);
+    if (d < 1.0e-9) return;
+    const double lo = spine_len * (1.0 - tol);
+    const double hi = spine_len * (1.0 + tol);
+    const double d_clamped = std::clamp(d, lo, hi);
+    if (std::abs(d_clamped - d) < 1.0e-9) return;  // inside the band: neck free
+    const cv::Vec3d n_new = h + axis * (d_clamped / d);
+    const cv::Vec3d shift = n_new - n;
+    for (std::size_t i : girdle_idx) {
+        if (i >= skel.joints.size()) continue;
+        auto& j = skel.joints[i];
+        if (!j.valid) continue;
+        j.x += static_cast<float>(shift[0]);
+        j.y += static_cast<float>(shift[1]);
+        j.z += static_cast<float>(shift[2]);
     }
 }
 
@@ -730,18 +778,23 @@ int main(int argc, char** argv) {
             have_profile = true;
         }
 
-        // Pelvis rigid template (Halpe26: hip_center/l_hip/r_hip). valid=false
-        // unless --rigid-pelvis + a usable profile triangle.
-        fitra::lift::RigidTemplate pelvis_template;
-        if (args.rigid_pelvis) {
+        // Spatial rigid segment templates (Halpe26 only). valid=false unless the
+        // matching flag is set and the profile triangle is usable.
+        fitra::lift::RigidTemplate pelvis_template;   // {hip_center,l_hip,r_hip}
+        fitra::lift::RigidTemplate girdle_template;   // {neck,l_shoulder,r_shoulder}
+        double spine_len = 0.0;                        // hip_center -> neck
+        const bool rigid_any = args.rigid_pelvis || args.rigid_shoulders;
+        if (rigid_any) {
             if (fitra::lift::active_keypoint_format() != fitra::lift::KeypointFormat::Halpe26) {
-                std::fprintf(stderr, "--rigid-pelvis requires --keypoint-format halpe26 (needs hip_center)\n");
+                std::fprintf(stderr, "--rigid-pelvis/--rigid-shoulders require --keypoint-format halpe26\n");
                 return EXIT_FAILURE;
             }
             if (!have_profile) {
-                std::fprintf(stderr, "--rigid-pelvis requires --subject-profile (template distances)\n");
+                std::fprintf(stderr, "--rigid-pelvis/--rigid-shoulders require --subject-profile (template distances)\n");
                 return EXIT_FAILURE;
             }
+        }
+        if (args.rigid_pelvis) {
             pelvis_template = fitra::lift::RigidTemplate::from_distances(
                 subject_profile.bone_lengths_m[11],   // hip_center -> l_hip
                 subject_profile.bone_lengths_m[12],   // hip_center -> r_hip
@@ -758,6 +811,30 @@ int main(int argc, char** argv) {
                            fmt(subject_profile.bone_lengths_m[11]),
                            fmt(subject_profile.bone_lengths_m[12]),
                            fmt(subject_profile.hip_width_m));
+        }
+        if (args.rigid_shoulders) {
+            girdle_template = fitra::lift::RigidTemplate::from_distances(
+                subject_profile.bone_lengths_m[5],    // neck -> l_shoulder
+                subject_profile.bone_lengths_m[6],    // neck -> r_shoulder
+                subject_profile.shoulder_width_m);     // l_shoulder <-> r_shoulder
+            spine_len = subject_profile.bone_lengths_m[18];  // hip_center -> neck
+            if (!girdle_template.valid) {
+                std::fprintf(stderr,
+                    "--rigid-shoulders: profile shoulder-girdle triangle degenerate "
+                    "(l_sh=%.4f r_sh=%.4f width=%.4f)\n",
+                    subject_profile.bone_lengths_m[5], subject_profile.bone_lengths_m[6],
+                    subject_profile.shoulder_width_m);
+                return EXIT_FAILURE;
+            }
+            if (spine_len <= 1.0e-6) {
+                std::fprintf(stderr, "--rigid-shoulders: profile spine length (bone[18]) missing\n");
+                return EXIT_FAILURE;
+            }
+            FITRA_LOG_INFO("rigid-shoulders: girdle d(nk,ls)={} d(nk,rs)={} sh_w={} spine={} tol=+/-{}%",
+                           fmt(subject_profile.bone_lengths_m[5]),
+                           fmt(subject_profile.bone_lengths_m[6]),
+                           fmt(subject_profile.shoulder_width_m),
+                           fmt(spine_len), fmt(args.spine_tol * 100.0));
         }
 
         fitra::lift::IkSolver::Options ik_opts;
@@ -868,12 +945,17 @@ int main(int argc, char** argv) {
                 auto skel = tri.skeleton;
                 double drift_before = 0.0;
                 double drift_after = 0.0;
-                if (args.rigid_pelvis) {
-                    // Spatial-first (design A): tri -> rigid fit -> IK -> Kalman.
-                    // The rigid fit runs on the raw triangulation; IK enforces the
-                    // limb lengths/hinges relative to the now-rigid pelvis; a light
-                    // Kalman takes only the residual.
-                    apply_pelvis_rigid_fit(skel, tri, pelvis_template);
+                if (rigid_any) {
+                    // Spatial-first (design A): tri -> rigid fit(s) -> IK -> Kalman.
+                    // Order: 1) pelvis, 2) shoulder girdle, 3) spine soft coupling
+                    // (neck bounded to the now-fitted hip_center). Then IK enforces
+                    // limb lengths/hinges; a light Kalman takes only the residual.
+                    if (args.rigid_pelvis)
+                        apply_rigid_segment(skel, tri, pelvis_template, {19, 11, 12});
+                    if (args.rigid_shoulders) {
+                        apply_rigid_segment(skel, tri, girdle_template, {18, 5, 6});
+                        apply_spine_coupling(skel, 19, 18, {18, 5, 6}, spine_len, args.spine_tol);
+                    }
                     drift_before = ik.bone_drift_pct(skel);
                     if (!args.no_ik) skel = ik.update(skel);
                     if (!args.no_kalman) skel = kalman.update(skel, 1.0 / fps);

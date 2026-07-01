@@ -92,6 +92,18 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-01 — 空間フィルタ M-B: 肩帯剛体 + 脊椎 soft 連結（＋剛体フィットの効きは reproj 比例の負の所見）
+M-B を実装（`apply_rigid_segment` 汎用化で肩帯 {18,5,6} に適用 + `apply_spine_coupling`：neck の
+hip_center 距離を脊椎長 ±`--spine-tol`(既定12%) にクランプ、超えたら肩帯を剛体平行移動＝neck 基部
+ボールジョイント。`--rigid-shoulders`）。**計測で当初前提が覆った**: 肩帯の静止ジッタ低減は立位 −3〜6% /
+T字 ±1% / 中腰 −2〜3% と**わずか**（純空間でも改善せず）。理由＝**剛体フィットの効きは segment の
+per-joint reproj（独立ノイズ量）に比例**する：骨盤 reproj 7–10px（独立ノイズ大→ −10〜18%）に対し肩帯は
+2–4px（視点一致＝形状破壊ノイズ少）で、肩帯の 10–19mm ジッタはコヒーレントな剛体ポーズ動揺（剛体フィットが
+保存する 6-DoF）ゆえ消せない。→ **肩帯ジッタは空間でなく M-C（時間フィルタ）/2D 改善の領分**。脊椎 soft 連結は
+Halpe26 で IK の hard enforce_lengths（neck 親=hip_center）と冗長で実質不活性（無害ガードとして残置）。
+**腰曲げ保持**（M-B neck z-range 781mm ≥ raw 735mm、raw の脊椎短縮 0.515m を校正長 0.56m へ復元）・下流破壊なし。
+ctest 回帰なし。設計 = [design/pose-3d-spatial-filtering.md](../design/pose-3d-spatial-filtering.md) 実装記録 M-B 節。
+
 ### 2026-07-01 — 空間フィルタ M-A: 骨盤剛体フィット（重み付き Kabsch / 空間-first / オフライン計測）
 issue #48 の主役ステージ（コア剛体フィット）の第一段。**`lift/rigid_fit`**（重み付き Kabsch =
 rotation+translation, no scale, 反射禁止・退化 reject。3 辺距離からテンプレ構築。M-B 肩帯でも再利用）
