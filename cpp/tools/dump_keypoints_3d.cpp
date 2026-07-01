@@ -632,76 +632,9 @@ void write_json_line(std::ofstream& out,
     out << "]}}\n";
 }
 
-// Spatial rigid segment fit (M-A pelvis {19,11,12} / M-B shoulder girdle
-// {18,5,6}). Weighted-Kabsch fits the triangle to the subject template so the
-// three joints' independent (b)-type jitter averages into one 6-DoF pose.
-// valid-3 gate: if any joint is missing (or the template/fit is degenerate) the
-// frame is left untouched (stateless fallback to enforce_lengths + Kalman —
-// never worse than today). idx[0] is the apex (hip_center / neck), matching the
-// template's from_distances(d_apex_side1, d_apex_side2, d_side1_side2). Weight
-// w_j = score_j · view_count_j (modest boost for 3-view over 2-view).
-void apply_rigid_segment(fitra::infer::Skeleton3D& skel,
-                         const fitra::lift::TriangulatedSkeleton& tri,
-                         const fitra::lift::RigidTemplate& templ,
-                         const std::array<std::size_t, 3>& idx) {
-    if (!templ.valid) return;
-    for (std::size_t i : idx)
-        if (i >= skel.joints.size() || !skel.joints[i].valid) return;
-    std::array<cv::Vec3d, 3> measured, out;
-    std::array<double, 3> w;
-    for (std::size_t k = 0; k < 3; ++k) {
-        const auto& j = skel.joints[idx[k]];
-        measured[k] = {j.x, j.y, j.z};
-        const double score = std::max(1.0e-3, static_cast<double>(j.score));
-        const int vc = std::max(1, tri.view_count[idx[k]]);
-        w[k] = score * static_cast<double>(vc);
-    }
-    if (!fit_rigid_triangle(templ, measured, w, out)) return;
-    for (std::size_t k = 0; k < 3; ++k) {
-        auto& j = skel.joints[idx[k]];
-        j.x = static_cast<float>(out[k][0]);
-        j.y = static_cast<float>(out[k][1]);
-        j.z = static_cast<float>(out[k][2]);
-        j.valid = true;
-    }
-}
-
-// Spine soft coupling (M-B). The shoulder girdle keeps its own fitted
-// orientation (twist/lean is the girdle fit's job — neck base ball joint); only
-// neck's *distance* from hip_center is bounded to the spine length ±tol. When it
-// leaves the band, the whole girdle {neck,l_sh,r_sh} is rigidly translated so
-// neck lands on the band edge along the current spine axis — a deep waist bend
-// (which shortens the straight-line hip->neck chord) stays faithful within the
-// band, and a fit that ran away up/down the spine is reined in. Stateless.
-void apply_spine_coupling(fitra::infer::Skeleton3D& skel,
-                          std::size_t hip_idx, std::size_t neck_idx,
-                          const std::array<std::size_t, 3>& girdle_idx,
-                          double spine_len, double tol) {
-    if (spine_len <= 1.0e-6) return;
-    if (hip_idx >= skel.joints.size() || neck_idx >= skel.joints.size()) return;
-    const auto& hip = skel.joints[hip_idx];
-    const auto& neck = skel.joints[neck_idx];
-    if (!hip.valid || !neck.valid) return;
-    const cv::Vec3d h{hip.x, hip.y, hip.z};
-    const cv::Vec3d n{neck.x, neck.y, neck.z};
-    const cv::Vec3d axis = n - h;
-    const double d = cv::norm(axis);
-    if (d < 1.0e-9) return;
-    const double lo = spine_len * (1.0 - tol);
-    const double hi = spine_len * (1.0 + tol);
-    const double d_clamped = std::clamp(d, lo, hi);
-    if (std::abs(d_clamped - d) < 1.0e-9) return;  // inside the band: neck free
-    const cv::Vec3d n_new = h + axis * (d_clamped / d);
-    const cv::Vec3d shift = n_new - n;
-    for (std::size_t i : girdle_idx) {
-        if (i >= skel.joints.size()) continue;
-        auto& j = skel.joints[i];
-        if (!j.valid) continue;
-        j.x += static_cast<float>(shift[0]);
-        j.y += static_cast<float>(shift[1]);
-        j.z += static_cast<float>(shift[2]);
-    }
-}
+// The spatial rigid-segment fit and spine soft coupling live in lift/rigid_fit
+// (fitra::lift::apply_segment_rigid_fit / apply_spine_coupling) so this offline
+// harness and the live pipeline denoise with identical code.
 
 }  // namespace
 
@@ -951,10 +884,10 @@ int main(int argc, char** argv) {
                     // (neck bounded to the now-fitted hip_center). Then IK enforces
                     // limb lengths/hinges; a light Kalman takes only the residual.
                     if (args.rigid_pelvis)
-                        apply_rigid_segment(skel, tri, pelvis_template, {19, 11, 12});
+                        fitra::lift::apply_segment_rigid_fit(skel, tri, pelvis_template, {19, 11, 12});
                     if (args.rigid_shoulders) {
-                        apply_rigid_segment(skel, tri, girdle_template, {18, 5, 6});
-                        apply_spine_coupling(skel, 19, 18, {18, 5, 6}, spine_len, args.spine_tol);
+                        fitra::lift::apply_segment_rigid_fit(skel, tri, girdle_template, {18, 5, 6});
+                        fitra::lift::apply_spine_coupling(skel, 19, 18, {18, 5, 6}, spine_len, args.spine_tol);
                     }
                     drift_before = ik.bone_drift_pct(skel);
                     if (!args.no_ik) skel = ik.update(skel);

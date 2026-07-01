@@ -92,6 +92,13 @@ struct MainOptions {
     // negated flags; the runtime predicate stays positive (kalman_3d / ik_3d).
     bool   kalman_3d = true;
     bool   ik_3d     = true;
+    // Spatial pelvis rigid fit (docs/design/pose-3d-spatial-filtering.md, M-A).
+    // When on AND a subject profile is loaded, the 3D path runs spatial-first
+    // (tri -> pelvis rigid fit -> IK -> Kalman) and weighted-Kabsch fits
+    // {hip_center,l_hip,r_hip} to the profile template — cuts pelvis stationary
+    // jitter ~10-20% with no lag. Default off; a no-op without a subject profile
+    // or under COCO17 (no hip_center). YAML key three_d.rigid_pelvis.
+    bool   rigid_pelvis_3d = false;
     // VR tracker extraction: react to each new 3D frame (event-driven) instead
     // of resampling at a fixed cadence. Cuts the extractor's contribution to
     // capture->VR-send latency. Feeds both SlimeVR and VMT. Default off.

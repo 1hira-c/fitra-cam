@@ -45,6 +45,23 @@ MultiCameraDriver::MultiCameraDriver(
     if ((threed_.triangulator || threed_.bus) && (!threed_.triangulator || !threed_.bus)) {
         throw std::invalid_argument("3D pipeline requires both triangulator and Skeleton3DBus");
     }
+    // Spatial pelvis rigid fit (M-A): build the static pelvis template from the
+    // subject profile's segment distances. Active only under Halpe26 with a
+    // loaded profile and a non-degenerate triangle; otherwise a no-op (the 3D
+    // path stays byte-identical to pre-M-A).
+    if (threed_.rigid_pelvis && threed_.has_subject_profile &&
+        lift::active_keypoint_format() == lift::KeypointFormat::Halpe26) {
+        const auto& p = threed_.subject_profile;
+        pelvis_template_ = lift::RigidTemplate::from_distances(
+            p.bone_lengths_m[11], p.bone_lengths_m[12], p.hip_width_m);
+        rigid_pelvis_active_ = pelvis_template_.valid;
+        FITRA_LOG_INFO("3D pelvis rigid fit {} (template valid={})",
+                       rigid_pelvis_active_ ? "ENABLED (spatial-first)" : "requested but degenerate template",
+                       pelvis_template_.valid);
+    } else if (threed_.rigid_pelvis) {
+        FITRA_LOG_WARN("3D pelvis rigid fit requested but inactive "
+                       "(needs Halpe26 + a loaded subject profile)");
+    }
     for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
         latest_snapshots_[i].id = static_cast<int>(i);
     }
@@ -432,13 +449,12 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
 
     auto tri = triangulator->triangulate(observations);
     infer::Skeleton3D skel = tri.skeleton;
-    if (threed_.kalman_enabled) {
-        double dt_s = 1.0 / 30.0;
-        if (has_last_3d_update_) {
-            dt_s = std::chrono::duration<double>(now - last_3d_update_).count();
-        }
-        skel = kalman_.update(skel, dt_s);
+
+    double dt_s = 1.0 / 30.0;
+    if (has_last_3d_update_) {
+        dt_s = std::chrono::duration<double>(now - last_3d_update_).count();
     }
+
     // Subject calibration classifies the pose from anatomical joint *angles* on
     // the measured (pre-IK) skeleton: feeding the post-IK skeleton would let a
     // hinge/length clamp manufacture elbow/knee flexion the subject is not
@@ -459,20 +475,39 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     }
     const bool tap_active = skel_tap_local && tri.valid_joints > 0;
     infer::Skeleton3D measured_skel;
-    if (tap_active) measured_skel = skel;
 
     double drift = 0.0;
-    if (threed_.ik_enabled) {
-        skel = ik_.update(skel);
-        drift = ik_.bone_drift_pct(skel);
-    } else if (ik_.locked()) {
-        drift = ik_.bone_drift_pct(skel);
-    }
-
-    // Calibration tap: measured (pre-IK) skeleton for angles + post-IK drift for
-    // the gate. Published stats below use the same post-IK drift.
-    if (tap_active) {
-        skel_tap_local(measured_skel, drift);
+    if (rigid_pelvis_active_) {
+        // Spatial-first (spatial-filtering M-A, design A): tri -> pelvis rigid
+        // fit -> IK -> Kalman. The rigid fit averages the pelvis joints'
+        // independent jitter (no lag); IK enforces limb lengths/hinges relative
+        // to the now-rigid pelvis; a light Kalman takes only the residual. Only
+        // reached when a subject profile is loaded (calib-subject has none, so
+        // its measured-angle tap semantics are untouched).
+        lift::apply_segment_rigid_fit(skel, tri, pelvis_template_, {19, 11, 12});
+        if (tap_active) measured_skel = skel;  // pre-IK
+        if (threed_.ik_enabled) {
+            skel = ik_.update(skel);
+            drift = ik_.bone_drift_pct(skel);
+        } else if (ik_.locked()) {
+            drift = ik_.bone_drift_pct(skel);
+        }
+        if (threed_.kalman_enabled) skel = kalman_.update(skel, dt_s);
+        if (tap_active) skel_tap_local(measured_skel, drift);
+    } else {
+        // Baseline (pre-M-A, design B): tri -> Kalman -> IK. Byte-identical to
+        // the historical path.
+        if (threed_.kalman_enabled) skel = kalman_.update(skel, dt_s);
+        if (tap_active) measured_skel = skel;  // pre-IK
+        if (threed_.ik_enabled) {
+            skel = ik_.update(skel);
+            drift = ik_.bone_drift_pct(skel);
+        } else if (ik_.locked()) {
+            drift = ik_.bone_drift_pct(skel);
+        }
+        // Calibration tap: measured (pre-IK) skeleton for angles + post-IK drift
+        // for the gate. Published stats below use the same post-IK drift.
+        if (tap_active) skel_tap_local(measured_skel, drift);
     }
 
     auto t1 = std::chrono::steady_clock::now();

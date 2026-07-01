@@ -229,8 +229,26 @@ encode スレッド化 (+ FrameSource で HW nvjpeg デコード) で ~25–40fp
     中腰は横ばい (骨盤が既に raw 近傍 ~7mm + 骨盤三角が浅く hip_center が軸から ~2.5cm しか外れず
     向き拘束が弱いため伸びしろ小)。**下流破壊なし** (肩帯・四肢は不変)。
   - M-A スコープ (骨盤のみ) は達成。**コア全体の本命 = 肩帯 {18,5,6} (14–16mm と最悪) は M-B**。
-- **未 (M-A 残)**: ライブ `multi_pipeline` への同並べ替え + 剛体ステージ配線 (計測で確認済のため次段)。
-  ライブは `SlimeTrackerBus`/`TrackerExtractor` との相互作用があるので別コミットで慎重に。
+- **測定の妥当性 (TRT 非決定性)**: パイプライン (TensorRT FP16 推論) は**非決定的** — 同一コマンド
+  2 回で 173/175 フレームが末尾桁レベルで相違する。ただし集計 jitter (per-joint stddev) の
+  **run-to-run ばらつきは ~0.02–0.05mm** に収まり、M-A 効果 ~0.6–1.1mm の **20–50 分の 1**。よって
+  **≥0.5mm 程度の効果は信頼できる** (byte 一致は測れないので stddev の run 間安定性で担保)。
+
+### M-A ライブ配線 (2026-07-01)
+
+計測で骨盤剛体フィットの効果を確認したのでライブ `multi_pipeline` に配線。**既定 OFF のフラグ**
+`three_d.rigid_pelvis` (CLI `--rigid-pelvis`) でゲートし、実機 WebUI 3D viewer で A/B 目視できる。
+
+- 共有化: `apply_segment_rigid_fit` / `apply_spine_coupling` を `lift/rigid_fit` へ移し、harness と
+  ライブが**同一コードでデノイズ** (オフライン計測がライブを忠実に再現)。
+- `MainOptions.rigid_pelvis_3d` (YAML `three_d.rigid_pelvis` / CLI `--rigid-pelvis`) →
+  `ThreeDConfig.rigid_pelvis` → `MultiCameraDriver`。ドライバは構築時に subject profile 距離から
+  骨盤テンプレを組み、**Halpe26 + profile ロード済 + 非退化**のときだけ `rigid_pelvis_active_`。
+- `maybe_update_3d`: active のとき**案A 空間-first** (`tri → 骨盤剛体 → IK → Kalman`) に分岐、
+  それ以外は従来 (`tri → Kalman → IK`) を**byte 不変**で維持。calib-subject は profile 不在ゆえ
+  active にならず、測定角 tap のセマンティクスは無変更。M-B 肩帯はライブ未配線 (効果小のため保留)。
+- 検証: full build + ctest 32/32 パス (`test_main_config` の新キー含む)。既定 OFF で本番挙動不変。
+  実機での rigid ON/OFF 目視 (静止プルプル・腰曲げ・追従) はユーザー作業。
 
 ### M-B (2026-07-01) — 肩帯剛体 + 脊椎 soft 連結（＋重要な負の所見）
 

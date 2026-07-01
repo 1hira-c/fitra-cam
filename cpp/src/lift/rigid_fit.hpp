@@ -19,6 +19,9 @@
 
 #include <opencv2/core.hpp>
 
+#include "infer/types.hpp"
+#include "lift/triangulator.hpp"
+
 namespace fitra::lift {
 
 // A rigid 3-point template: canonical positions carrying only the *shape* of a
@@ -53,5 +56,29 @@ bool fit_rigid_triangle(const RigidTemplate& templ,
                         const std::array<cv::Vec3d, 3>& measured,
                         const std::array<double, 3>& weights,
                         std::array<cv::Vec3d, 3>& out);
+
+// ----- Skeleton-level application (shared by the offline harness and the live
+// pipeline so both denoise identically) -------------------------------------
+
+// Apply a weighted rigid fit to a 3-joint skeleton segment (M-A pelvis
+// {hip_center,l_hip,r_hip} = {19,11,12} / M-B girdle {neck,l_sh,r_sh} =
+// {18,5,6}). idx[0] is the apex (matching the template's from_distances order).
+// valid-3 gate: no-op (returns false, skeleton untouched) unless the template is
+// valid AND all three joints are valid — a stateless fallback to
+// enforce_lengths + Kalman that is never worse than today. Weight
+// w_j = score_j · view_count_j (modest boost for 3-view over 2-view).
+bool apply_segment_rigid_fit(infer::Skeleton3D& skel,
+                             const TriangulatedSkeleton& tri,
+                             const RigidTemplate& templ,
+                             const std::array<int, 3>& idx);
+
+// Spine soft coupling (M-B): the girdle keeps its fitted orientation (neck base
+// ball joint); only neck's *distance* from hip_center is bounded to
+// spine_len·(1±tol). When it leaves the band the whole girdle (girdle_idx, incl.
+// neck) is rigidly translated so neck lands on the band edge along the current
+// spine axis. No-op inside the band / if inputs invalid. Stateless.
+void apply_spine_coupling(infer::Skeleton3D& skel, int hip_idx, int neck_idx,
+                          const std::array<int, 3>& girdle_idx,
+                          double spine_len, double tol);
 
 }  // namespace fitra::lift

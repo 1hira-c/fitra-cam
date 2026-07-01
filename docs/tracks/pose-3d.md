@@ -92,6 +92,18 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-01 — 空間フィルタ M-A ライブ配線（骨盤剛体を multi_pipeline へ・既定 OFF フラグ）
+オフラインで確認した骨盤剛体フィットをライブ `multi_pipeline` に配線。`apply_segment_rigid_fit` /
+`apply_spine_coupling` を `lift/rigid_fit` へ移し harness とライブで**同一コード**化（オフライン計測が
+ライブを忠実再現）。`three_d.rigid_pelvis`（CLI `--rigid-pelvis`、既定 OFF）で `MultiCameraDriver` を
+ゲート：**Halpe26 + subject profile ロード済 + 非退化テンプレ**のときだけ有効化し、`maybe_update_3d` を
+**案A 空間-first**（`tri→骨盤剛体→IK→Kalman`）へ分岐、それ以外は従来（`tri→Kalman→IK`）を **byte 不変**で
+維持（calib-subject は profile 不在ゆえ不活性＝測定角 tap 無変更）。M-B 肩帯は効果小のためライブ未配線。
+full build + ctest **32/32** パス（`test_main_config` の新キー含む）。**測定の妥当性**: パイプラインは
+TensorRT FP16 で非決定的（同一コマンド 2 回で 173/175 フレーム相違）だが集計 jitter の run 間ばらつきは
+~0.02–0.05mm と M-A 効果 0.6–1.1mm の 1/20–1/50 で、≥0.5mm 効果は信頼可。実機 A/B 目視はユーザー作業。
+設計 = [design/pose-3d-spatial-filtering.md](../design/pose-3d-spatial-filtering.md) 実装記録 M-A 節。
+
 ### 2026-07-01 — 空間フィルタ M-B: 肩帯剛体 + 脊椎 soft 連結（＋剛体フィットの効きは reproj 比例の負の所見）
 M-B を実装（`apply_rigid_segment` 汎用化で肩帯 {18,5,6} に適用 + `apply_spine_coupling`：neck の
 hip_center 距離を脊椎長 ±`--spine-tol`(既定12%) にクランプ、超えたら肩帯を剛体平行移動＝neck 基部

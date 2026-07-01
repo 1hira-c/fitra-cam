@@ -25,6 +25,7 @@
 #include "infer/rtmpose.hpp"
 #include "lift/ik.hpp"
 #include "lift/kalman.hpp"
+#include "lift/rigid_fit.hpp"
 #include "lift/triangulator.hpp"
 #include "pipeline/pose_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
@@ -39,6 +40,10 @@ public:
         double sync_window_ms = 15.0;
         bool kalman_enabled = true;
         bool ik_enabled = true;
+        // Spatial pelvis rigid fit (spatial-filtering M-A). Only takes effect
+        // when a subject profile is present (its distances form the pelvis
+        // template) and the topology is Halpe26; otherwise a no-op.
+        bool rigid_pelvis = false;
         int bone_calib_frames = 150;
         double subject_height_m = 0.0;
         bool has_subject_profile = false;
@@ -128,6 +133,12 @@ private:
     ThreeDConfig         threed_;
     lift::SkeletonKalman kalman_;
     lift::IkSolver       ik_;
+    // Spatial pelvis rigid-fit template + gate, built once in the constructor
+    // from threed_.subject_profile. rigid_pelvis_active_ is true only when the
+    // flag is set, a profile is loaded, and the pelvis template is non-degenerate
+    // — otherwise the 3D path is byte-identical to the pre-M-A behavior.
+    lift::RigidTemplate  pelvis_template_{};
+    bool                 rigid_pelvis_active_ = false;
     std::mutex           threed_mu_;
 
     // Tap callbacks. Loop reads these via a local snapshot to avoid holding

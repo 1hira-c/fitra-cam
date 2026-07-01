@@ -89,4 +89,62 @@ bool fit_rigid_triangle(const RigidTemplate& templ,
     return true;
 }
 
+bool apply_segment_rigid_fit(infer::Skeleton3D& skel,
+                             const TriangulatedSkeleton& tri,
+                             const RigidTemplate& templ,
+                             const std::array<int, 3>& idx) {
+    if (!templ.valid) return false;
+    const std::size_t n = skel.joints.size();
+    for (int i : idx)
+        if (i < 0 || static_cast<std::size_t>(i) >= n || !skel.joints[i].valid) return false;
+    std::array<cv::Vec3d, 3> measured, out;
+    std::array<double, 3> w;
+    for (int k = 0; k < 3; ++k) {
+        const auto& j = skel.joints[idx[k]];
+        measured[k] = {j.x, j.y, j.z};
+        const double score = std::max(1.0e-3, static_cast<double>(j.score));
+        const int vc = std::max(1, tri.view_count[idx[k]]);
+        w[k] = score * static_cast<double>(vc);
+    }
+    if (!fit_rigid_triangle(templ, measured, w, out)) return false;
+    for (int k = 0; k < 3; ++k) {
+        auto& j = skel.joints[idx[k]];
+        j.x = static_cast<float>(out[k][0]);
+        j.y = static_cast<float>(out[k][1]);
+        j.z = static_cast<float>(out[k][2]);
+        j.valid = true;
+    }
+    return true;
+}
+
+void apply_spine_coupling(infer::Skeleton3D& skel, int hip_idx, int neck_idx,
+                          const std::array<int, 3>& girdle_idx,
+                          double spine_len, double tol) {
+    if (spine_len <= 1.0e-6) return;
+    const int n = static_cast<int>(skel.joints.size());
+    if (hip_idx < 0 || hip_idx >= n || neck_idx < 0 || neck_idx >= n) return;
+    const auto& hip = skel.joints[hip_idx];
+    const auto& neck = skel.joints[neck_idx];
+    if (!hip.valid || !neck.valid) return;
+    const cv::Vec3d h{hip.x, hip.y, hip.z};
+    const cv::Vec3d nk{neck.x, neck.y, neck.z};
+    const cv::Vec3d axis = nk - h;
+    const double d = cv::norm(axis);
+    if (d < 1.0e-9) return;
+    const double lo = spine_len * (1.0 - tol);
+    const double hi = spine_len * (1.0 + tol);
+    const double d_clamped = std::clamp(d, lo, hi);
+    if (std::abs(d_clamped - d) < 1.0e-9) return;  // inside the band: neck free
+    const cv::Vec3d n_new = h + axis * (d_clamped / d);
+    const cv::Vec3d shift = n_new - nk;
+    for (int i : girdle_idx) {
+        if (i < 0 || i >= n) continue;
+        auto& j = skel.joints[i];
+        if (!j.valid) continue;
+        j.x += static_cast<float>(shift[0]);
+        j.y += static_cast<float>(shift[1]);
+        j.z += static_cast<float>(shift[2]);
+    }
+}
+
 }  // namespace fitra::lift
