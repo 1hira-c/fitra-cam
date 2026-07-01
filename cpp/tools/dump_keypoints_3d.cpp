@@ -46,6 +46,7 @@
 #include "lift/ik.hpp"
 #include "lift/kalman.hpp"
 #include "lift/keypoint_format.hpp"
+#include "lift/rigid_fit.hpp"
 #include "lift/skeleton_def.hpp"
 #include "lift/subject_profile.hpp"
 #include "lift/triangulator.hpp"
@@ -78,6 +79,7 @@ struct Args {
     std::string summary;
     std::string overlay_dir;
     std::string pose_session;
+    std::string subject_profile;      // input profile (IK lock + rigid template)
     std::string subject_profile_out;
     std::string quality_out;
     int max_frames = 0;
@@ -92,6 +94,7 @@ struct Args {
     bool multi_person = false;
     bool no_kalman = false;
     bool no_ik = false;
+    bool rigid_pelvis = false;
     std::string keypoint_format_str = "coco17";
 };
 
@@ -128,6 +131,12 @@ void print_help() {
         "  --multi-person            keep all bboxes, but MVP triangulates person 0 only\n"
         "  --no-kalman               disable 3D Kalman smoothing\n"
         "  --no-ik                   disable IK length/hinge projection\n"
+        "  --subject-profile PATH    load a subject profile YAML (locks IK bone lengths;\n"
+        "                            also supplies the rigid-fit segment template)\n"
+        "  --rigid-pelvis            enable the spatial pelvis rigid fit (Halpe26 only):\n"
+        "                            reorders to spatial-first tri->rigid->IK->Kalman and\n"
+        "                            weighted-Kabsch fits {hip_center,l_hip,r_hip} to the\n"
+        "                            subject template (needs --subject-profile). M-A.\n"
         "  --keypoint-format FMT     pose topology: coco17 (default) or halpe26\n"
         "  --help                    show this help\n");
 }
@@ -152,6 +161,7 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--summary")      { args.summary = need("--summary"); }
         else if (a == "--overlay-dir")  { args.overlay_dir = need("--overlay-dir"); }
         else if (a == "--pose-session") { args.pose_session = need("--pose-session"); }
+        else if (a == "--subject-profile") { args.subject_profile = need("--subject-profile"); }
         else if (a == "--subject-profile-out") { args.subject_profile_out = need("--subject-profile-out"); }
         else if (a == "--quality-out")  { args.quality_out = need("--quality-out"); }
         else if (a == "--max-frames")   { args.max_frames = std::atoi(need("--max-frames")); }
@@ -166,6 +176,7 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--multi-person") { args.multi_person = true; }
         else if (a == "--no-kalman")    { args.no_kalman = true; }
         else if (a == "--no-ik")        { args.no_ik = true; }
+        else if (a == "--rigid-pelvis") { args.rigid_pelvis = true; }
         else if (a == "--keypoint-format") { args.keypoint_format_str = need("--keypoint-format"); }
         else {
             std::fprintf(stderr, "unknown arg: %s\n", argv[i]);
@@ -611,6 +622,39 @@ void write_json_line(std::ofstream& out,
     out << "]}}\n";
 }
 
+// Spatial pelvis rigid fit (M-A). Weighted-Kabsch fits the pelvis triangle
+// {hip_center=19, l_hip=11, r_hip=12} to the subject template so the three
+// joints' independent (b)-type jitter averages into one 6-DoF pose. valid-3
+// gate: if any pelvis joint is missing (or the template/fit is degenerate) the
+// frame is left untouched (stateless fallback to enforce_lengths + Kalman —
+// never worse than today). Halpe26 only (COCO17 has no hip_center). Weight
+// w_j = score_j · view_count_j (modest boost for 3-view over 2-view).
+void apply_pelvis_rigid_fit(fitra::infer::Skeleton3D& skel,
+                            const fitra::lift::TriangulatedSkeleton& tri,
+                            const fitra::lift::RigidTemplate& templ) {
+    if (!templ.valid) return;
+    constexpr std::array<std::size_t, 3> idx{19, 11, 12};
+    for (std::size_t i : idx)
+        if (i >= skel.joints.size() || !skel.joints[i].valid) return;
+    std::array<cv::Vec3d, 3> measured, out;
+    std::array<double, 3> w;
+    for (std::size_t k = 0; k < 3; ++k) {
+        const auto& j = skel.joints[idx[k]];
+        measured[k] = {j.x, j.y, j.z};
+        const double score = std::max(1.0e-3, static_cast<double>(j.score));
+        const int vc = std::max(1, tri.view_count[idx[k]]);
+        w[k] = score * static_cast<double>(vc);
+    }
+    if (!fit_rigid_triangle(templ, measured, w, out)) return;
+    for (std::size_t k = 0; k < 3; ++k) {
+        auto& j = skel.joints[idx[k]];
+        j.x = static_cast<float>(out[k][0]);
+        j.y = static_cast<float>(out[k][1]);
+        j.z = static_cast<float>(out[k][2]);
+        j.valid = true;
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -677,9 +721,52 @@ int main(int argc, char** argv) {
         std::ofstream jout{args.out, std::ios::trunc};
         if (!jout.is_open()) throw std::runtime_error("failed to open output: " + args.out);
 
+        // Subject profile (input): locks IK bone lengths and supplies the
+        // rigid-fit template — same source the live pipeline uses.
+        fitra::lift::SubjectProfile subject_profile;
+        bool have_profile = false;
+        if (!args.subject_profile.empty()) {
+            subject_profile = fitra::lift::load_subject_profile(args.subject_profile);
+            have_profile = true;
+        }
+
+        // Pelvis rigid template (Halpe26: hip_center/l_hip/r_hip). valid=false
+        // unless --rigid-pelvis + a usable profile triangle.
+        fitra::lift::RigidTemplate pelvis_template;
+        if (args.rigid_pelvis) {
+            if (fitra::lift::active_keypoint_format() != fitra::lift::KeypointFormat::Halpe26) {
+                std::fprintf(stderr, "--rigid-pelvis requires --keypoint-format halpe26 (needs hip_center)\n");
+                return EXIT_FAILURE;
+            }
+            if (!have_profile) {
+                std::fprintf(stderr, "--rigid-pelvis requires --subject-profile (template distances)\n");
+                return EXIT_FAILURE;
+            }
+            pelvis_template = fitra::lift::RigidTemplate::from_distances(
+                subject_profile.bone_lengths_m[11],   // hip_center -> l_hip
+                subject_profile.bone_lengths_m[12],   // hip_center -> r_hip
+                subject_profile.hip_width_m);          // l_hip <-> r_hip
+            if (!pelvis_template.valid) {
+                std::fprintf(stderr,
+                    "--rigid-pelvis: profile pelvis triangle degenerate "
+                    "(l_hip=%.4f r_hip=%.4f width=%.4f)\n",
+                    subject_profile.bone_lengths_m[11], subject_profile.bone_lengths_m[12],
+                    subject_profile.hip_width_m);
+                return EXIT_FAILURE;
+            }
+            FITRA_LOG_INFO("rigid-pelvis: template d(hc,lh)={} d(hc,rh)={} hip_w={} (spatial-first)",
+                           fmt(subject_profile.bone_lengths_m[11]),
+                           fmt(subject_profile.bone_lengths_m[12]),
+                           fmt(subject_profile.hip_width_m));
+        }
+
         fitra::lift::IkSolver::Options ik_opts;
         ik_opts.bone_calib_frames = std::max(1, args.bone_calib_frames);
         ik_opts.subject_height_m = args.subject_height_m;
+        if (have_profile) {
+            ik_opts.has_subject_profile = true;
+            ik_opts.subject_profile = subject_profile;
+        }
         fitra::lift::IkSolver ik{ik_opts};
 
         ProfileAccumulator profile_acc;
@@ -779,15 +866,27 @@ int main(int argc, char** argv) {
 
                 auto tri = triangulator.triangulate(observations);
                 auto skel = tri.skeleton;
-                if (!args.no_kalman) {
-                    skel = kalman.update(skel, 1.0 / fps);
+                double drift_before = 0.0;
+                double drift_after = 0.0;
+                if (args.rigid_pelvis) {
+                    // Spatial-first (design A): tri -> rigid fit -> IK -> Kalman.
+                    // The rigid fit runs on the raw triangulation; IK enforces the
+                    // limb lengths/hinges relative to the now-rigid pelvis; a light
+                    // Kalman takes only the residual.
+                    apply_pelvis_rigid_fit(skel, tri, pelvis_template);
+                    drift_before = ik.bone_drift_pct(skel);
+                    if (!args.no_ik) skel = ik.update(skel);
+                    if (!args.no_kalman) skel = kalman.update(skel, 1.0 / fps);
+                    drift_after = ik.bone_drift_pct(skel);
+                    profile_acc.observe(job.pose, skel, tri);
+                } else {
+                    // Baseline (design B): tri -> Kalman -> IK (unchanged).
+                    if (!args.no_kalman) skel = kalman.update(skel, 1.0 / fps);
+                    profile_acc.observe(job.pose, skel, tri);
+                    drift_before = ik.bone_drift_pct(skel);
+                    if (!args.no_ik) skel = ik.update(skel);
+                    drift_after = ik.bone_drift_pct(skel);
                 }
-                profile_acc.observe(job.pose, skel, tri);
-                double drift_before = ik.bone_drift_pct(skel);
-                if (!args.no_ik) {
-                    skel = ik.update(skel);
-                }
-                double drift_after = ik.bone_drift_pct(skel);
 
                 write_json_line(jout, global_frame++, job.pose, skel, tri,
                                 drift_before, drift_after, ik.locked());

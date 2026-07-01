@@ -205,6 +205,33 @@ hip_center のみ −15〜−20%)。= (b) ジッタ (各視点独立微動 → 3
 fps 非依存なので M-A/M-B のドライバ計測には影響なし。**lag を精密化する M-C 前に**、per-camera
 encode スレッド化 (+ FrameSource で HW nvjpeg デコード) で ~25–40fps へ引き上げる recorder v2 が要る。
 
+### M-A (2026-07-01) — 骨盤剛体フィット
+
+- **`lift/rigid_fit.{hpp,cpp}`** (fitra_lift, 汎用・M-B 肩帯でも再利用): `RigidTemplate::from_distances`
+  が 3 辺距離から剛体テンプレ (canonical 3 点) を構築 (三角不等式 + 「apex の垂線高 < 5mm =
+  ほぼ共線 → 3D 向き不定」で退化 reject)。`fit_rigid_triangle` が**重み付き Kabsch** (rotation +
+  translation, no scale, det 符号で反射禁止) でテンプレを測定 3 点にフィットし、剛体化 (denoise)
+  した位置を返す。ステートレス・毎フレーム独立。ctest `test_rigid_fit` (形状保存・既知 R,t 復元・
+  denoise・重み・退化/ゼロ重み reject)。
+- **`dump_keypoints_3d` 配線**: `--subject-profile PATH` (IK ロック + 剛体テンプレ供給、ライブと同源)
+  と `--rigid-pelvis` を追加。ON で **案A 空間-first に並べ替え** (`tri → rigid_pelvis → IK →
+  Kalman`)、骨盤 {hip_center 19, l_hip 11, r_hip 12} を **valid-3 gate** + 重み `w=score·view_count`
+  でフィット。OFF は現状 (`tri → Kalman → IK`) をビット不変で維持。テンプレは profile の
+  `bone_lengths_m[11]/[12]` + `hip_width_m` から (身長 anthropometry は hip_center を股関節中点に
+  置き**共線退化**するため不可 = 実データ由来必須)。COCO17 は hip_center 不在で reject。
+- **計測 (baseline=Kalman+IK+profile vs M-A=rigid+IK+Kalman、同一クリップ、fps=meta.fps_written)**:
+  | clip | hip_center 19 | l_hip 11 | r_hip 12 | 肩帯 {18,5,6} |
+  |---|---|---|---|---|
+  | still (立位) | **−20.7%** | −11.9% | −15.0% | ±1%(不変) |
+  | still_t (T字) | −12.0% | −11.7% | −10.5% | ±1%(不変) |
+  | still_crouch (中腰) | −1.7% | +1.6% | +0.7% | ±1%(不変) |
+  - **骨盤剛体フィットは立位/T字で骨盤ジッタを −10〜−21% 低減**。肩帯は設計どおり不変 (M-B の担当)。
+    中腰は横ばい (骨盤が既に raw 近傍 ~7mm + 骨盤三角が浅く hip_center が軸から ~2.5cm しか外れず
+    向き拘束が弱いため伸びしろ小)。**下流破壊なし** (肩帯・四肢は不変)。
+  - M-A スコープ (骨盤のみ) は達成。**コア全体の本命 = 肩帯 {18,5,6} (14–16mm と最悪) は M-B**。
+- **未 (M-A 残)**: ライブ `multi_pipeline` への同並べ替え + 剛体ステージ配線 (計測で確認済のため次段)。
+  ライブは `SlimeTrackerBus`/`TrackerExtractor` との相互作用があるので別コミットで慎重に。
+
 ## 検証
 
 **主検証 = 決定的オフライン再生** (M-infra のハーネスが使える前提):

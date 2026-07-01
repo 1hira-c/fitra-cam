@@ -220,6 +220,22 @@ set_target_properties(fitra_test_geom_frames PROPERTIES
 
 add_test(NAME test_geom_frames COMMAND fitra_test_geom_frames)
 
+add_executable(fitra_test_rigid_fit
+    test_rigid_fit.cpp
+)
+
+target_link_libraries(fitra_test_rigid_fit PRIVATE
+    fitra_lift
+    opencv_calib3d
+)
+
+set_target_properties(fitra_test_rigid_fit PROPERTIES
+    OUTPUT_NAME "test_rigid_fit"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_rigid_fit COMMAND fitra_test_rigid_fit)
+
 add_executable(fitra_test_triangulator
     test_triangulator.cpp
 )

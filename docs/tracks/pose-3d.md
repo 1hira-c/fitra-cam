@@ -92,6 +92,19 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-01 — 空間フィルタ M-A: 骨盤剛体フィット（重み付き Kabsch / 空間-first / オフライン計測）
+issue #48 の主役ステージ（コア剛体フィット）の第一段。**`lift/rigid_fit`**（重み付き Kabsch =
+rotation+translation, no scale, 反射禁止・退化 reject。3 辺距離からテンプレ構築。M-B 肩帯でも再利用）
++ ctest `test_rigid_fit`。**`dump_keypoints_3d`** に `--subject-profile`（IK ロック + 剛体テンプレ、
+ライブ同源）と `--rigid-pelvis` を追加、ON で **案A 空間-first**（`tri→rigid_pelvis→IK→Kalman`）に
+並べ替え・骨盤 {19,11,12} を valid-3 gate + 重み `score·view_count` でフィット、OFF は現状ビット不変。
+テンプレは profile 距離必須（身長 anthropometry は hip_center=股関節中点で**共線退化**）。
+**計測**（baseline Kalman+IK+profile vs M-A、同一クリップ）: 骨盤ジッタを立位 −11〜−21% / T字 −10〜−12%
+低減、中腰は横ばい（骨盤が既に raw 近傍 + 三角が浅い）、肩帯は設計どおり不変（M-B 担当）、下流破壊なし。
+ctest `test_rigid_fit`/`test_triangulator`/`test_kalman_chain`/`test_pose_recognizer` パス。**残**:
+ライブ `multi_pipeline` への並べ替え + 剛体ステージ配線（`TrackerExtractor` 相互作用のため別コミット）。
+設計 = [design/pose-3d-spatial-filtering.md](../design/pose-3d-spatial-filtering.md) 実装記録 M-A 節。
+
 ### 2026-07-01 — 空間フィルタ M-infra: 実機ベースライン確定 + dump に --fps 上書き
 実機 6 クリップ録画（`record_3cam`、静止3 + 動作3、1280×960×3cam）でハーネス全体
 （`record_3cam`→`dump_keypoints_3d` 3cam→`analyze_3d_jitter_lag`）が **end-to-end 動作**する
