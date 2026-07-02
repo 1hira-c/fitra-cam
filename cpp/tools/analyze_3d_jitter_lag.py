@@ -146,9 +146,12 @@ def run_jitter(args: argparse.Namespace) -> int:
     if args.joints:
         joints = [int(x) for x in args.joints.split(",") if x.strip() != ""]
     else:
-        # Core joints first, then every other joint present in the topology.
+        # Core joints first, then every other joint present in ANY file's
+        # topology (use the max so a longer candidate file isn't truncated to
+        # the first file's joint count).
+        max_joints = max(f.n_joints for f in files)
         joints = list(CORE_JOINTS)
-        joints += [j for j in range(files[0].n_joints) if j not in CORE_JOINTS]
+        joints += [j for j in range(max_joints) if j not in CORE_JOINTS]
 
     # Per-file per-joint results.
     results = []
@@ -284,8 +287,11 @@ def _xcorr_lag(base: np.ndarray, cand: np.ndarray, max_lag: int) -> dict:
     lag is the candidate's delay (positive = cand later than base). A parabolic
     fit around the peak gives a sub-frame refinement.
     """
-    b = base - np.nanmean(base)
-    c = cand - np.nanmean(cand)
+    # No global de-mean needed: each lag's overlap is re-centered per-slice below
+    # (bb - bb.mean()), and .std() is shift-invariant, so subtracting the global
+    # mean here would be overwritten work.
+    b = base
+    c = cand
     n = len(b)
     lags = range(-max_lag, max_lag + 1)
     corrs = {}

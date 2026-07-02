@@ -9,8 +9,12 @@
 //   * cameras are built from the SAME session config the live `run` uses
 //     (--config session.yaml) via the same per-camera V4l2Options that
 //     app/camera_builder builds (resolution / capture-resolution override /
-//     pixel format / exposure). So the recorded frames are bit-identical to
-//     what the live pose pipeline sees — the offline dump reproduces live.
+//     pixel format / exposure). Geometry (resolution / crop / exposure) matches
+//     the live pose pipeline; the JPEG DECODE does not — this tool always uses
+//     CPU cv::imdecode, whereas a live `pixel_format: nvjpeg` camera decodes on
+//     the Jetson HW NVJPEG block, so decoded pixels can differ slightly. The
+//     offline dump therefore reproduces live *closely* (and is internally
+//     self-consistent, so its jitter numbers are valid), not bit-for-bit.
 //   * pacing is "write one frame to every camera only when ALL cameras have a
 //     fresh (un-written) latest frame", so the slowest camera gates the rate
 //     and no duplicate frames are emitted. This mirrors the live triangulation
@@ -216,13 +220,23 @@ int main(int argc, char** argv) {
     }
     if (g_stop.load()) { for (auto& c : caps) c->stop(); return EXIT_SUCCESS; }
 
+    // Every camera must deliver: the sync loop only writes a frame set when ALL
+    // cameras are fresh, so one stalled camera (e.g. failed to enumerate on the
+    // shared USB bus) would otherwise pass warmup here and then silently produce
+    // empty clips until the time limit. Gate per-camera, not on the live subset.
     double min_fps = 1e9;
+    bool all_live = true;
     for (std::size_t k = 0; k < n; ++k) {
         const double f = caps[k]->recv_fps();
-        if (f > 0.1) min_fps = std::min(min_fps, f);
+        if (f < 1.0) {
+            std::fprintf(stderr,
+                         "cam%zu (%s) is not delivering frames (recv_fps=%.2f); aborting\n",
+                         k, opts[k].device_path.c_str(), f);
+            all_live = false;
+        }
+        min_fps = std::min(min_fps, f);
     }
-    if (min_fps >= 1e9 || min_fps < 1.0) {
-        std::fprintf(stderr, "no camera is delivering frames (min recv_fps too low); aborting\n");
+    if (!all_live) {
         for (auto& c : caps) c->stop();
         return EXIT_FAILURE;
     }
@@ -351,14 +365,22 @@ int main(int argc, char** argv) {
                     duration > 0 ? written[k] / duration : 0.0, filenames[k].c_str());
 
     // Print a ready-to-run dump_keypoints_3d command (the next harness step).
+    // Bake in the true measured fps (frames actually written / duration), NOT
+    // the header out_fps: when the record loop is encode-bound they diverge, and
+    // dump uses --fps for the Kalman dt. written[] are equal (lockstep writes).
+    const double fps_written = (duration > 0.0 && written[0] > 0)
+                                   ? static_cast<double>(written[0]) / duration
+                                   : static_cast<double>(out_fps);
     std::printf("\nnext: analyze with dump_keypoints_3d, e.g.\n  dump_keypoints_3d");
     for (std::size_t k = 0; k < n; ++k)
         std::printf(" --video %s/%s", args.out.c_str(), filenames[k].c_str());
     std::printf(" \\\n    --calib <extrinsics.yaml> --det-engine <yolox.engine>"
                 " --pose-engine <rtmpose.engine> \\\n"
-                "    --keypoint-format %s --out %s/dump.jsonl\n",
-                cfg.keypoint_format.c_str(), args.out.c_str());
-    std::printf("(then: analyze_3d_jitter_lag.py jitter %s/dump.jsonl  [--fps %d])\n",
-                args.out.c_str(), out_fps);
+                "    --keypoint-format %s --fps %.2f --out %s/dump.jsonl\n",
+                cfg.keypoint_format.c_str(), fps_written, args.out.c_str());
+    // jitter is fps-independent (position std-dev) and takes no --fps; lag does.
+    std::printf("(then: analyze_3d_jitter_lag.py jitter %s/dump.jsonl        "
+                "# lag needs --fps %.2f)\n",
+                args.out.c_str(), fps_written);
     return EXIT_SUCCESS;
 }

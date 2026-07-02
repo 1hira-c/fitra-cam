@@ -830,13 +830,16 @@ int main(int argc, char** argv) {
             double fps = args.fps_override > 0.0 ? args.fps_override
                                                  : caps[0].get(cv::CAP_PROP_FPS);
             if (fps <= 0.0) fps = 30.0;
-            int w = static_cast<int>(caps[0].get(cv::CAP_PROP_FRAME_WIDTH));
-            int h = static_cast<int>(caps[0].get(cv::CAP_PROP_FRAME_HEIGHT));
 
             std::vector<std::unique_ptr<cv::VideoWriter>> overlays(n_cams);
             if (!args.overlay_dir.empty()) {
                 std::filesystem::create_directories(args.overlay_dir);
                 for (std::size_t i = 0; i < n_cams; ++i) {
+                    // Size each writer from its own camera: a rig may pair cameras
+                    // of different resolutions, and a writer sized to cam0 would
+                    // drop every frame from a differently-sized camera.
+                    int w = static_cast<int>(caps[i].get(cv::CAP_PROP_FRAME_WIDTH));
+                    int h = static_cast<int>(caps[i].get(cv::CAP_PROP_FRAME_HEIGHT));
                     std::string name = jobs.size() > 1
                         ? (job.pose + "_cam" + std::to_string(i) + "_reproj.mp4")
                         : ("cam" + std::to_string(i) + "_reproj.mp4");
@@ -878,24 +881,35 @@ int main(int argc, char** argv) {
                 auto skel = tri.skeleton;
                 double drift_before = 0.0;
                 double drift_after = 0.0;
+                // Run the enabled rigid stages; `applied` tracks whether any fit
+                // actually modified the skeleton this frame. Order: 1) pelvis,
+                // 2) shoulder girdle, 3) spine soft coupling (neck bounded to the
+                // now-fitted hip_center). Each stage is a no-op (returns false /
+                // self-guards) when its joints are missing/degenerate.
+                bool applied = false;
                 if (rigid_any) {
-                    // Spatial-first (design A): tri -> rigid fit(s) -> IK -> Kalman.
-                    // Order: 1) pelvis, 2) shoulder girdle, 3) spine soft coupling
-                    // (neck bounded to the now-fitted hip_center). Then IK enforces
-                    // limb lengths/hinges; a light Kalman takes only the residual.
                     if (args.rigid_pelvis)
-                        fitra::lift::apply_segment_rigid_fit(skel, tri, pelvis_template, {19, 11, 12});
+                        applied |= fitra::lift::apply_segment_rigid_fit(skel, tri, pelvis_template, {19, 11, 12});
                     if (args.rigid_shoulders) {
-                        fitra::lift::apply_segment_rigid_fit(skel, tri, girdle_template, {18, 5, 6});
+                        applied |= fitra::lift::apply_segment_rigid_fit(skel, tri, girdle_template, {18, 5, 6});
                         fitra::lift::apply_spine_coupling(skel, 19, 18, {18, 5, 6}, spine_len, args.spine_tol);
                     }
+                }
+                if (applied) {
+                    // Spatial-first (design A): tri -> rigid fit(s) -> IK -> Kalman.
                     drift_before = ik.bone_drift_pct(skel);
+                    // Observe the pre-IK skeleton (matches the baseline branch):
+                    // post-IK bone lengths are clamped to the *input* profile, so
+                    // observing them would make --subject-profile-out echo the
+                    // input profile instead of the measured geometry.
+                    profile_acc.observe(job.pose, skel, tri);
                     if (!args.no_ik) skel = ik.update(skel);
                     if (!args.no_kalman) skel = kalman.update(skel, 1.0 / fps);
                     drift_after = ik.bone_drift_pct(skel);
-                    profile_acc.observe(job.pose, skel, tri);
                 } else {
-                    // Baseline (design B): tri -> Kalman -> IK (unchanged).
+                    // Baseline (design B): tri -> Kalman -> IK. Also the fallback
+                    // when no rigid stage applied (flags off, or every enabled fit
+                    // failed this frame) so such frames match the no-rigid path.
                     if (!args.no_kalman) skel = kalman.update(skel, 1.0 / fps);
                     profile_acc.observe(job.pose, skel, tri);
                     drift_before = ik.bone_drift_pct(skel);

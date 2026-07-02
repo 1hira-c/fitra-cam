@@ -477,14 +477,22 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     infer::Skeleton3D measured_skel;
 
     double drift = 0.0;
-    if (rigid_pelvis_active_) {
+    // Spatial-first only when the pelvis rigid fit actually applied this frame.
+    // apply_segment_rigid_fit() returns false (leaving skel untouched) when the
+    // flag/profile gate is off OR a pelvis joint is missing this frame; in that
+    // case fall through to the proven baseline order (Kalman -> IK) so a
+    // fit-failure frame stays byte-identical to the pre-M-A path instead of
+    // degrading to a different ordering with no rigid benefit.
+    const bool fit_applied =
+        rigid_pelvis_active_ &&
+        lift::apply_segment_rigid_fit(skel, tri, pelvis_template_, {19, 11, 12});
+    if (fit_applied) {
         // Spatial-first (spatial-filtering M-A, design A): tri -> pelvis rigid
         // fit -> IK -> Kalman. The rigid fit averages the pelvis joints'
         // independent jitter (no lag); IK enforces limb lengths/hinges relative
         // to the now-rigid pelvis; a light Kalman takes only the residual. Only
         // reached when a subject profile is loaded (calib-subject has none, so
         // its measured-angle tap semantics are untouched).
-        lift::apply_segment_rigid_fit(skel, tri, pelvis_template_, {19, 11, 12});
         if (tap_active) measured_skel = skel;  // pre-IK
         if (threed_.ik_enabled) {
             skel = ik_.update(skel);
@@ -496,7 +504,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         if (tap_active) skel_tap_local(measured_skel, drift);
     } else {
         // Baseline (pre-M-A, design B): tri -> Kalman -> IK. Byte-identical to
-        // the historical path.
+        // the historical path (also the fit-failure fallback).
         if (threed_.kalman_enabled) skel = kalman_.update(skel, dt_s);
         if (tap_active) measured_skel = skel;  // pre-IK
         if (threed_.ik_enabled) {

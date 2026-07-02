@@ -155,9 +155,11 @@ triangulate → [calib tap: 生角度] → 空間ステージ → 軽 Kalman →
 - **3 カメラ同期 raw recorder `tools/record_3cam`**: 静止 / 動作(腰曲げ)クリップの録画手段。
   既存 2 カメラ Python recorder (`record_dual_rtmpose_overlay.py`) は 2 視点のみなので新規。
   **config 駆動** (`--config session.yaml` = ライブ `run` と同一) で `camera_builder` と同じ
-  per-camera `V4l2Options` (解像度 / cap override / pixel format / 露出) を組み、録画フレームを
-  ライブ pose パイプラインと一致させる (= オフライン dump がライブを再現)。MJPEG/NVJPEG は
-  `cv::imdecode`、YUYV は `cvtColor`、downscaling は INTER_AREA で出力解像度へ (FrameSource と同形)。
+  per-camera `V4l2Options` (解像度 / cap override / pixel format / 露出) を組む。**幾何 (解像度 /
+  crop / 露出) はライブと一致**するが、**デコードは非一致** — 本ツールは常に CPU `cv::imdecode`、
+  ライブの `pixel_format: nvjpeg` は HW NVJPEG デコードなので画素が僅かに異なりうる (dump は
+  ライブを *近似* 再現・内部整合で jitter 数値は有効、bit 一致ではない。dedup 共有化は残課題)。
+  YUYV は `cvtColor`、downscaling は INTER_AREA で出力解像度へ (FrameSource と同形)。
   **全カメラに fresh フレームが揃ったときだけ各 `raw_cam{i}.mp4` に 1 枚ずつ書く** index 同期
   ペーシング (最遅カメラが律速・重複フレーム無し・等長クリップ → dump の index ペアリングに整合)。
   ウォームアップで最遅 recv_fps を測って出力 fps を決め、`meta.json` + 次手 (dump コマンド) を案内。
