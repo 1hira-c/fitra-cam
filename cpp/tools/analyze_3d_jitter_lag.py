@@ -564,6 +564,75 @@ def _trackers_delta(base: dict, cand: dict, sel: list[int]) -> dict:
     return {"per_tracker": per}
 
 
+def _tracker_signal(data: "TrackersLoaded", tracker: int, axis: int) -> np.ndarray:
+    """One axis of a tracker's position trajectory, invalid frames interpolated."""
+    mask = data.valid[:, tracker]
+    x = data.pos[:, tracker, axis].astype(np.float64)
+    idx = np.arange(data.n_frames)
+    vi = idx[mask]
+    if vi.size == 0:
+        return np.full(data.n_frames, np.nan)
+    return np.interp(idx, vi, x[mask])
+
+
+def _best_tracker_axis(data: "TrackersLoaded", tracker: int) -> int:
+    mask = data.valid[:, tracker]
+    if mask.sum() < 2:
+        return 0
+    return int(np.argmax(data.pos[mask, tracker, :].var(axis=0)))
+
+
+def run_trackers_lag(args: argparse.Namespace) -> int:
+    """Temporal lag of a tracker's POSITION between two --dump-trackers runs.
+
+    Same cross-correlation as `lag`, but the signal is a tracker (post-smoothing)
+    trajectory rather than a skeleton joint — so it measures the lag the tracker
+    stage's smoothing (One Euro vs st) adds. Positive = candidate delayed vs
+    baseline. Use raw as the baseline (no smoothing = ground-truth timing) and
+    one_euro / st as candidates to compare how much lag each mode adds.
+    """
+    base = load_trackers_jsonl(args.baseline)
+    cand = load_trackers_jsonl(args.candidate)
+    t = args.tracker
+    if t < 0 or t >= min(base.n_trackers, cand.n_trackers):
+        raise SystemExit(f"tracker {t} out of range")
+    n = min(base.n_frames, cand.n_frames)
+    if base.n_frames != cand.n_frames:
+        print(f"warning: frame counts differ ({base.n_frames} vs {cand.n_frames}); "
+              f"using first {n}", file=sys.stderr)
+    axis = args.axis if args.axis >= 0 else _best_tracker_axis(base, t)
+    b_sig = _tracker_signal(base, t, axis)[:n]
+    c_sig = _tracker_signal(cand, t, axis)[:n]
+    if np.isnan(b_sig).all() or np.isnan(c_sig).all():
+        raise SystemExit(f"tracker {t} never valid in one of the inputs")
+    motion_mm = float(np.nanstd(b_sig) * 1000.0)
+    res = _xcorr_lag(b_sig, c_sig, args.max_lag_frames)
+    ms_per_frame = 1000.0 / args.fps
+    lag_ms = res["best_lag_subframe"] * ms_per_frame
+
+    print("== tracker lag (candidate vs baseline; positive = candidate delayed) ==")
+    print(f"baseline : {base.path}")
+    print(f"candidate: {cand.path}")
+    print(f"tracker  : {tracker_label(t)}  axis={'xyz'[axis]}  "
+          f"(baseline motion sigma={motion_mm:.1f} mm over {n} frames)")
+    if motion_mm < args.min_motion_mm:
+        print(f"WARNING: baseline motion sigma {motion_mm:.1f} mm < --min-motion-mm "
+              f"{args.min_motion_mm:.1f}; looks stationary — lag is meaningless.")
+    print(f"fps      : {args.fps}  ({ms_per_frame:.2f} ms/frame)")
+    print(f"best lag : {res['best_lag_frames']} frames "
+          f"(sub-frame {res['best_lag_subframe']:+.2f}) => {lag_ms:+.1f} ms")
+    print(f"peak corr: {res['peak_corr']:.4f}")
+
+    _maybe_write(args.out, {
+        "metric": "trackers_lag", "baseline": base.path, "candidate": cand.path,
+        "tracker": t, "tracker_name": TRACKER_NAMES.get(t, "?"), "axis": "xyz"[axis],
+        "fps": args.fps, "frames_compared": n, "baseline_motion_sigma_mm": motion_mm,
+        "best_lag_frames": res["best_lag_frames"], "best_lag_subframe": res["best_lag_subframe"],
+        "lag_ms": lag_ms, "peak_corr": res["peak_corr"],
+    })
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # lag
 # --------------------------------------------------------------------------- #
@@ -740,6 +809,22 @@ def build_parser() -> argparse.ArgumentParser:
                          "column (default 30; jitter columns are fps-independent)")
     pt.add_argument("--out", default="", help="write metrics JSON here")
     pt.set_defaults(func=run_trackers)
+
+    ptl = sub.add_parser("trackers-lag",
+                         help="temporal lag of a tracker position between two runs "
+                              "(e.g. raw vs st on a motion clip)")
+    ptl.add_argument("baseline", help="baseline --dump-trackers JSONL (e.g. raw)")
+    ptl.add_argument("candidate", help="candidate --dump-trackers JSONL (e.g. st / one_euro)")
+    ptl.add_argument("--tracker", type=int, default=9,
+                     help="tracker index 0..9 to track (default 9 r_foot)")
+    ptl.add_argument("--axis", type=int, default=-1,
+                     help="0=x 1=y 2=z; default = highest-variance axis in baseline")
+    ptl.add_argument("--fps", type=float, default=30.0, help="clip fps for ms conversion")
+    ptl.add_argument("--max-lag-frames", type=int, default=30, help="search +/- this many frames")
+    ptl.add_argument("--min-motion-mm", type=float, default=20.0,
+                     help="warn if baseline motion sigma is below this (default 20)")
+    ptl.add_argument("--out", default="", help="write metrics JSON here")
+    ptl.set_defaults(func=run_trackers_lag)
 
     pl = sub.add_parser("lag", help="temporal lag of candidate vs baseline (motion clip)")
     pl.add_argument("baseline", help="baseline JSONL (e.g. tri-only / weak smoothing)")

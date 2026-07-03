@@ -24,14 +24,19 @@ MultiCameraDriver::MultiCameraDriver(
       bus_{bus},
       threed_{threed},
       kalman_{[&]() {
-          // Default process noise = byte-identical when st_filter is off. When
-          // on, the spatiotemporal filter does the smoothing at the tracker
-          // stage, so weaken the chain Kalman toward measurement-tracking
-          // (predict/hold only) to avoid compounding lag. ×100 is an M-C3 seed
-          // (M-C4 tunes it via the harness). See docs/design/pose-3d-spatiotemporal-filter.md.
+          // Default process noise = byte-identical when st_filter is off.
+          // The M-C3 seed weakened the chain Kalman ×100 when st_filter was on
+          // (premise: IK/rigid take the structure, so the Kalman need only
+          // predict/hold). The M-C4 still-clip measurement FALSIFIED that at
+          // rest: ×100 injects orientation jitter the tracker filter can't
+          // absorb (rel angular velocity 2–3×, held-leg roll +300–1400%), while
+          // giving no position benefit (both hit the ~6 mm upstream floor). So
+          // the data-driven default is NO weakening (×1); the factor is kept as
+          // a named knob for the motion/lag sweep (M-C4-D). See
+          // docs/design/pose-3d-spatiotemporal-filter.md.
           lift::SkeletonKalman::Options kopts;
           if (threed_.st_filter) {
-              constexpr double kStWeaken = 100.0;
+              constexpr double kStWeaken = 1.0;  // M-C4: ×100 was harmful at rest
               kopts.q_pos        *= kStWeaken;
               kopts.q_vel        *= kStWeaken;
               kopts.q_pos_offset *= kStWeaken;

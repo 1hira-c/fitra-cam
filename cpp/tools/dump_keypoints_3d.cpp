@@ -110,7 +110,7 @@ struct Args {
     bool rigid_shoulders = false;
     bool dump_trackers = false;
     std::string tracker_smoothing = "raw";  // raw | one_euro | st
-    double st_kalman_weaken = 100.0;         // st mode: chain-Kalman process-noise scale
+    double st_kalman_weaken = 1.0;           // st mode: chain-Kalman process-noise scale (M-C4: ×100 harmful at rest)
     double spine_tol = 0.12;
     std::string keypoint_format_str = "coco17";
 };
@@ -173,8 +173,9 @@ void print_help() {
         "                            Kalman weakened x100, = the M-C3 live path). Run\n"
         "                            raw/one_euro/st on the same clip for the M-C4 A/B.\n"
         "  --st-kalman-weaken F      st mode: chain-Kalman process-noise scale (default\n"
-        "                            100 = the live M-C3 setting; 1 = no weakening, to\n"
-        "                            isolate the tracker filter from Kalman-noise effects).\n"
+        "                            1 = no weakening, the M-C4 data-driven setting; the\n"
+        "                            M-C3 seed ×100 was found to inject jitter at rest.\n"
+        "                            Sweep it (e.g. 10, 100) for the motion/lag study.\n"
         "  --keypoint-format FMT     pose topology: coco17 (default) or halpe26\n"
         "  --help                    show this help\n");
 }

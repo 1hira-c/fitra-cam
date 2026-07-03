@@ -92,6 +92,18 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-04 — 時空フィルタ M-C4 静止所見 + st Kalman 弱化を ×100→1（データ根拠）+ tracker-lag 指標
+recorder v2 の実 59fps `still` クリップ（900フレーム）で raw / one_euro / st を A/B した静止所見:
+- **推測 roll（腕・脚）は st が明確に勝つ**: l_upper_arm −12.6% / upper_leg −36〜−41% / lower_leg −25〜−36%（vs 現行 One-Euro）。
+  ユーザーの明示ゴール「腕・脚の曲がりから推測した roll の揺れを抑える」に効いた。
+- **位置ジッタは One-Euro と互角**（st が数%悪い程度）。chest/waist ~6.5mm・腕 ~6-8mm の**上流フロア**（三角測量+Kalman+IK）が
+  支配的で、tracker 段の時間フィルタ（One-Euro でも st でも）ではこれ以上落ちない（M-A/M-B「見える位置ジッタは上流」と一致）。
+- **M-C3 の ×100 Kalman 弱化は静止で有害**: rel 角速度 2〜3×・保持脚 roll +300〜1400%。弱化した Kalman が skeleton に角ジッタを
+  注入し位置フィルタで吸収しきれず roll/swing に乗る。「IK/剛体で構造を取るから Kalman を弱めてよい」前提を実データが部分否定。
+→ **st の Kalman 弱化既定を ×100 → 1（弱化なし）** に変更（`multi_pipeline` ThreeDConfig + harness）。名前付き定数/`--st-kalman-weaken F`
+（既定 1）で掃引可能に残す。analyzer に **`trackers-lag`**（tracker 位置軌跡の相互相関 lag = 平滑が足す遅延、raw を基準に one_euro/st 比較）を追加。
+full build + ctest **33/33**（弱化既定変更は st OFF で byte 不変）。**動作/lag（st が One-Euro より lag を足すか）は別途 motion クリップで計測中**。
+
 ### 2026-07-03 — 時空フィルタ M-C4 計測基盤: `dump_keypoints_3d --tracker-smoothing {raw,one_euro,st}`
 ハーネスに tracker 段の平滑を差し込み、録画クリップで **RAW / 現行 One-Euro / st_filter を決定的に A/B** できるように。
 `--tracker-smoothing`（`--dump-trackers` 必須）: `raw`=平滑なし（M-C1 OFF ベースライン）／`one_euro`=現行 shipping
