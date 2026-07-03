@@ -147,6 +147,9 @@ swing と剛体 roll (chest/waist/shin-anatomical, conf=1 pin) は無変更 (ス
   drag / recovery snap / twist scope / nullptr byte 一致を追加。full build + ctest **33/33** パス。
   **次**: M-C4 (ハーネスに st_filter 差し込み→6 群 param スイープ)、M-C5 (実機 A/B)。
 - **M-C4**: **パラメータ確定**。M-C1 ハーネスで 6 群のノブをスイープし、静止 jitter 低減 / lag 非悪化を満たす既定へ。
+  動作/lag は時間分解能依存なので **`record_3cam --format mjpeg`（recorder v2、verbatim MJPEG→AVI パススルー ~30fps・
+  2026-07-03 実装済）**で高 fps クリップを録ってから測る（8.6fps mp4 では高速 regime/lag が測れない）。ハーネスへ
+  st_filter を通した ON 側の tracker dump を差し込む作業もここ。
 - **M-C5**: **実機 A/B** (WebUI 3D + WS3D テレメトリ) で体感確定 (動き出し・snap/チャタリング無し・追従)。
   合格なら既定 ON 化を検討。
 - **将来**: (a) 案6 角度空間の検証結果次第で角度ドメインへ寄せる。(b) **スリム化** — st_filter を唯一の平滑にし

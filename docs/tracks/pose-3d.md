@@ -92,6 +92,18 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-03 — recorder v2: `record_3cam --format mjpeg`（verbatim MJPEG→AVI パススルー・M-C4 前段）
+時空フィルタの**動作/lag チューニング（M-C4）用に高 fps クリップ**が要る（8.6fps では高速 regime/lag が測れない）。
+`record_3cam` の mp4 モードは imdecode+mp4v encode 律速で ~8.6fps に張り付く。**`--format mjpeg` を追加**: カメラの
+MJPEG ペイロードを**デコード/再エンコードせず verbatim** で AVI（`raw_camK.avi`）へ mux（'00dc' チャンク + idx1）。
+CPU コストがほぼ無いので 3cam でも**カメラ実レート（~30fps）**が出て、二重圧縮劣化も無い。harness は `cv::VideoCapture`
+で**そのままネイティブ読み**（`%06d.jpg` パターン不要、mp4 と同じ `--video raw_camK.avi`）。**注意**: パススルーは
+**capture 解像度をそのまま**保存する（downscale しない）ので、downscaling カメラは警告を出し、harness に渡す
+calib は capture 解像度に合わせる必要がある。cv::VideoWriter の MJPG は BGR 再エンコード（imdecode 律速が残り劣化）
+なので不採用、生パケット mux を実装。AVI バイト構造 + streaming seekp backfill は**オフライン round-trip 検証済**
+（write→`cv::VideoCapture` がフレーム数/解像度/fps を正しく読み戻す）。full build パス。**残（要実機）**: これで
+30fps クリップを録り、`dump_keypoints_3d` へ st_filter 差し込み（M-C4）→ 6 群 param スイープ。
+
 ### 2026-07-03 — 時空フィルタ M-C3: `tracker_extract` へ配線 + chain Kalman 弱化（既定 OFF・byte 不変）
 M-C2 のコアを `TrackerExtractor::run_loop` に**第3の平滑モード**として配線（優先度 **st_filter > one_euro > 固定EMA**）。
 配線アプローチは grill で確定（位置パスの腰相対×hold・twist 注入・Kalman 弱化ゲート・config）。**位置** = 新

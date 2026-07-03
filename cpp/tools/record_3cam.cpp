@@ -1,10 +1,26 @@
-// record_3cam — synchronized N-camera (2 or 3) raw MP4 recorder.
+// record_3cam — synchronized N-camera (2 or 3) recorder (MP4 or MJPEG passthrough).
 //
-// Records the rig's cameras to one MP4 per camera (raw_cam0.mp4, raw_cam1.mp4,
-// [raw_cam2.mp4]) for the spatial-filtering verification harness
-// (docs/design/pose-3d-spatial-filtering.md, milestone M-infra). The clips feed
-// tools/dump_keypoints_3d, which pairs the cameras BY FRAME INDEX, so this tool
-// produces index-aligned, equal-length clips:
+// Records the rig's cameras — one MP4 per camera (raw_cam0.mp4, ...) or, with
+// --format mjpeg, a per-camera JPEG sequence (cam0/000001.jpg, ...) — for the
+// spatial-filtering / spatiotemporal-filter verification harness
+// (docs/design/pose-3d-spatial-filtering.md M-infra, pose-3d-spatiotemporal-filter.md
+// M-C4). The clips feed tools/dump_keypoints_3d, which pairs the cameras BY FRAME
+// INDEX, so this tool produces index-aligned, equal-length clips:
+//
+// FORMATS:
+//   * mp4 (default): decode each payload (cv::imdecode / cvtColor) + downscale to
+//     the output resolution, then mp4v-encode. Encode-bound — on 1280x960x3cam
+//     this caps at ~8.6 fps (imdecode ~23ms + mp4v encode ~30ms, ×3 serial), too
+//     coarse to resolve fast motion / lag (see the M-infra changelog).
+//   * mjpeg (recorder v2): write the camera's MJPEG payload VERBATIM — no decode,
+//     no re-encode — to cam{k}/NNNNNN.jpg. Costs almost no CPU, so 3-cam capture
+//     runs at the true camera rate (~30 fps), which is what the spatiotemporal
+//     filter's motion / lag tuning (M-C4) needs. dump_keypoints_3d reads each
+//     camera as an image sequence via a printf pattern (--video cam{k}/%06d.jpg);
+//     no harness change needed. RESOLUTION: passthrough stores the NATIVE capture
+//     resolution (verbatim), NOT a downscaled output res — the calibration fed to
+//     the harness must match the stored (capture) resolution. A downscaling camera
+//     (cap_* override) is flagged with a warning in this mode.
 //
 //   * cameras are built from the SAME session config the live `run` uses
 //     (--config session.yaml) via the same per-camera V4l2Options that
@@ -60,6 +76,7 @@ struct Args {
     std::string config;
     std::string out;
     std::string name;          // pose name; "" => raw_cam{i}.mp4
+    std::string format = "mp4"; // "mp4" | "mjpeg" (verbatim JPEG passthrough)
     double      seconds = 0.0;  // 0 = until Ctrl-C
     double      warmup_s = 1.5;  // fps measurement window before opening writers
 };
@@ -76,6 +93,8 @@ void usage(const char* argv0) {
         "  --config PATH    session YAML (same one `run` uses; cameras section)\n"
         "  --out DIR        output directory (created; must not already exist)\n"
         "  --name NAME      pose name -> raw_<NAME>_cam{i}.mp4 (default raw_cam{i}.mp4)\n"
+        "  --format FMT     mp4 (default) | mjpeg (verbatim JPEG passthrough, ~30fps,\n"
+        "                   cam{i}/NNNNNN.jpg; harness reads --video cam{i}/%%06d.jpg)\n"
         "  --seconds X      stop after X seconds (default: until Ctrl-C)\n"
         "  --warmup-s X     fps-measurement warmup before recording (default 1.5)\n",
         argv0);
@@ -92,6 +111,7 @@ bool parse_args(int argc, char** argv, Args& a) {
         if (k == "--config")        { if (!(v = need(i))) return false; a.config = v; }
         else if (k == "--out")      { if (!(v = need(i))) return false; a.out = v; }
         else if (k == "--name")     { if (!(v = need(i))) return false; a.name = v; }
+        else if (k == "--format")   { if (!(v = need(i))) return false; a.format = v; }
         else if (k == "--seconds")  { if (!(v = need(i))) return false; a.seconds = std::atof(v); }
         else if (k == "--warmup-s") { if (!(v = need(i))) return false; a.warmup_s = std::atof(v); }
         else if (k == "--help" || k == "-h") { usage(argv[0]); std::exit(EXIT_SUCCESS); }
@@ -99,6 +119,10 @@ bool parse_args(int argc, char** argv, Args& a) {
     }
     if (a.config.empty()) { std::fprintf(stderr, "--config is required\n"); return false; }
     if (a.out.empty())    { std::fprintf(stderr, "--out is required\n");    return false; }
+    if (a.format != "mp4" && a.format != "mjpeg") {
+        std::fprintf(stderr, "--format must be mp4 or mjpeg (got '%s')\n", a.format.c_str());
+        return false;
+    }
     return true;
 }
 
@@ -150,6 +174,110 @@ bool decode_to_bgr(const fitra::camera::Frame& raw,
     }
     return true;
 }
+
+// A quick JPEG sanity check for the passthrough path: a valid JFIF/EXIF frame
+// starts with the SOI marker 0xFFD8. Skips a short/corrupt V4L2 dequeue so the
+// harness never has to imdecode garbage (the mp4 path gets the same protection
+// from decode_to_bgr returning false).
+bool looks_like_jpeg(const std::vector<std::uint8_t>& data) {
+    return data.size() > 2 && data[0] == 0xFF && data[1] == 0xD8;
+}
+
+// Streaming verbatim MJPEG -> AVI muxer. Writes the camera's JPEG payloads into
+// '00dc' chunks of a standard MJPG AVI — NO decode, NO re-encode — so recording
+// costs almost no CPU and the stored frames are byte-identical to what the live
+// CPU decode path would imdecode. cv::VideoCapture reads the result natively
+// (harness: --video raw_camK.avi, no pattern). Sizes / frame count / fps are
+// back-filled in finalize(). The byte layout was validated by a round-trip
+// probe (write -> cv::VideoCapture reads back the exact frame count + dims).
+class AviMjpegWriter {
+public:
+    bool open(const std::string& path, int w, int h) {
+        f_.open(path, std::ios::binary | std::ios::trunc);
+        if (!f_.is_open()) return false;
+        w_ = w; h_ = h;
+        fourcc("RIFF"); riff_size_pos_ = f_.tellp(); u32(0); fourcc("AVI ");
+        // LIST hdrl — fixed size (avih + LIST strl(strh + strf)).
+        const std::uint32_t strl_bytes = 4 + (8 + 56) + (8 + 40);
+        const std::uint32_t hdrl_bytes = 4 + (8 + 56) + (8 + strl_bytes);
+        fourcc("LIST"); u32(hdrl_bytes); fourcc("hdrl");
+        fourcc("avih"); u32(56);
+        usec_avih_ = f_.tellp(); u32(33333);   // dwMicroSecPerFrame (patched)
+        u32(0); u32(0); u32(0x10);              // maxbytes, pad, flags=HASINDEX
+        total_avih_ = f_.tellp(); u32(0);       // dwTotalFrames (patched)
+        u32(0); u32(1); u32(0);                 // initial, streams=1, bufsize
+        u32(static_cast<std::uint32_t>(w_)); u32(static_cast<std::uint32_t>(h_));
+        u32(0); u32(0); u32(0); u32(0);         // reserved[4]
+        fourcc("LIST"); u32(strl_bytes); fourcc("strl");
+        fourcc("strh"); u32(56);
+        fourcc("vids"); fourcc("MJPG"); u32(0); u16(0); u16(0); u32(0);
+        scale_strh_ = f_.tellp(); u32(33333);   // dwScale = usec (patched)
+        u32(1000000);                           // dwRate -> rate/scale = fps
+        u32(0);
+        length_strh_ = f_.tellp(); u32(0);      // dwLength = frames (patched)
+        u32(0); u32(0xFFFFFFFF); u32(0);
+        u16(0); u16(0); u16(static_cast<std::uint16_t>(w_)); u16(static_cast<std::uint16_t>(h_));
+        fourcc("strf"); u32(40);
+        u32(40); u32(static_cast<std::uint32_t>(w_)); u32(static_cast<std::uint32_t>(h_));
+        u16(1); u16(24); fourcc("MJPG");
+        u32(static_cast<std::uint32_t>(w_ * h_ * 3));
+        u32(0); u32(0); u32(0); u32(0);
+        fourcc("LIST"); movi_size_pos_ = f_.tellp(); u32(0);
+        movi_start_ = f_.tellp();               // position of the 'movi' fourcc
+        fourcc("movi");
+        return f_.good();
+    }
+
+    void add(const std::uint8_t* data, std::size_t n) {
+        const std::streamoff chunk = f_.tellp();
+        fourcc("00dc"); u32(static_cast<std::uint32_t>(n));
+        f_.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(n));
+        if (n & 1) { char z = 0; f_.write(&z, 1); }  // pad chunks to even length
+        idx_.push_back({static_cast<std::uint32_t>(chunk - static_cast<std::streamoff>(movi_start_)),
+                        static_cast<std::uint32_t>(n)});
+        ++count_;
+    }
+
+    bool finalize(double fps) {
+        if (!f_.is_open()) return false;
+        const std::streamoff movi_end = f_.tellp();
+        fourcc("idx1"); u32(static_cast<std::uint32_t>(idx_.size() * 16));
+        for (const auto& e : idx_) { fourcc("00dc"); u32(0x10); u32(e.first); u32(e.second); }
+        const std::streamoff file_end = f_.tellp();
+        const std::uint32_t usec = static_cast<std::uint32_t>(1.0e6 / (fps > 0 ? fps : 30.0) + 0.5);
+        patch(riff_size_pos_, static_cast<std::uint32_t>(file_end - 8));
+        patch(usec_avih_,  usec);
+        patch(total_avih_, static_cast<std::uint32_t>(count_));
+        patch(scale_strh_, usec);
+        patch(length_strh_, static_cast<std::uint32_t>(count_));
+        patch(movi_size_pos_, static_cast<std::uint32_t>(movi_end - static_cast<std::streamoff>(movi_start_)));
+        f_.flush();
+        const bool ok = f_.good();
+        f_.close();
+        return ok;
+    }
+
+    std::uint64_t count() const { return count_; }
+
+private:
+    void u16(std::uint16_t v) { char b[2] = {char(v & 0xFF), char((v >> 8) & 0xFF)}; f_.write(b, 2); }
+    void u32(std::uint32_t v) {
+        char b[4] = {char(v & 0xFF), char((v >> 8) & 0xFF), char((v >> 16) & 0xFF), char((v >> 24) & 0xFF)};
+        f_.write(b, 4);
+    }
+    void fourcc(const char* s) { f_.write(s, 4); }
+    void patch(std::streampos pos, std::uint32_t v) {
+        const std::streampos cur = f_.tellp();
+        f_.seekp(pos); u32(v); f_.seekp(cur);
+    }
+
+    std::ofstream f_;
+    int w_ = 0, h_ = 0;
+    std::uint64_t count_ = 0;
+    std::streampos riff_size_pos_, usec_avih_, total_avih_, scale_strh_,
+                   length_strh_, movi_size_pos_, movi_start_;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> idx_;
+};
 
 }  // namespace
 
@@ -203,6 +331,29 @@ int main(int argc, char** argv) {
     // so the writers and downscale target use the real output dims.
     for (std::size_t k = 0; k < n; ++k) opts[k] = caps[k]->options();
 
+    const bool mjpeg = (args.format == "mjpeg");
+    if (mjpeg) {
+        for (std::size_t k = 0; k < n; ++k) {
+            if (opts[k].pixel_format == fitra::camera::PixFmt::Yuyv) {
+                std::fprintf(stderr,
+                    "--format mjpeg needs a JPEG payload, but cam%zu (%s) is YUYV; "
+                    "use --format mp4 or an mjpeg/nvjpeg pixel_format\n",
+                    k, opts[k].device_path.c_str());
+                for (auto& c : caps) c->stop();
+                return EXIT_FAILURE;
+            }
+            if (opts[k].downscaling()) {
+                std::fprintf(stderr,
+                    "WARNING: cam%zu downscales (%dx%d capture -> %dx%d output); "
+                    "mjpeg passthrough stores the CAPTURE resolution %dx%d verbatim "
+                    "-- feed the harness a calibration at THAT resolution.\n",
+                    k, opts[k].capture_w(), opts[k].capture_h(),
+                    opts[k].width, opts[k].height,
+                    opts[k].capture_w(), opts[k].capture_h());
+            }
+        }
+    }
+
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
 
@@ -251,32 +402,55 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    // --- Open one MP4 writer per camera at the measured output fps. --------
-    std::vector<cv::VideoWriter> writers(n);
+    // --- Set up outputs: one MP4 writer per camera (mp4, decode+re-encode), or
+    // one verbatim MJPEG AVI per camera (mjpeg passthrough). `filenames[k]` is
+    // the per-camera output file used for meta / the harness command. ----------
+    std::vector<cv::VideoWriter> writers;   // mp4 only
+    std::vector<AviMjpegWriter>  avi(n);     // mjpeg only (default-constructed no-ops otherwise)
     std::vector<std::string> filenames(n);
-    for (std::size_t k = 0; k < n; ++k) {
-        filenames[k] = args.name.empty()
-                           ? ("raw_cam" + std::to_string(k) + ".mp4")
-                           : ("raw_" + args.name + "_cam" + std::to_string(k) + ".mp4");
-        const fs::path p = out_dir / filenames[k];
-        writers[k].open(p.string(), cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
-                        static_cast<double>(out_fps),
-                        cv::Size(opts[k].width, opts[k].height));
-        if (!writers[k].isOpened()) {
-            std::fprintf(stderr, "cannot open writer %s\n", p.string().c_str());
-            for (auto& c : caps) c->stop();
-            return EXIT_FAILURE;
+    // Stored (per-frame) resolution: the output dims for mp4 (decoded+downscaled),
+    // the verbatim capture dims for mjpeg passthrough.
+    const int store_w = mjpeg ? opts[0].capture_w() : opts[0].width;
+    const int store_h = mjpeg ? opts[0].capture_h() : opts[0].height;
+    if (mjpeg) {
+        for (std::size_t k = 0; k < n; ++k) {
+            filenames[k] = args.name.empty()
+                               ? ("raw_cam" + std::to_string(k) + ".avi")
+                               : ("raw_" + args.name + "_cam" + std::to_string(k) + ".avi");
+            const fs::path p = out_dir / filenames[k];
+            if (!avi[k].open(p.string(), opts[k].capture_w(), opts[k].capture_h())) {
+                std::fprintf(stderr, "cannot open AVI writer %s\n", p.string().c_str());
+                for (auto& c : caps) c->stop();
+                return EXIT_FAILURE;
+            }
+        }
+    } else {
+        writers.resize(n);
+        for (std::size_t k = 0; k < n; ++k) {
+            filenames[k] = args.name.empty()
+                               ? ("raw_cam" + std::to_string(k) + ".mp4")
+                               : ("raw_" + args.name + "_cam" + std::to_string(k) + ".mp4");
+            const fs::path p = out_dir / filenames[k];
+            writers[k].open(p.string(), cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+                            static_cast<double>(out_fps),
+                            cv::Size(opts[k].width, opts[k].height));
+            if (!writers[k].isOpened()) {
+                std::fprintf(stderr, "cannot open writer %s\n", p.string().c_str());
+                for (auto& c : caps) c->stop();
+                return EXIT_FAILURE;
+            }
         }
     }
 
-    std::printf("recording %zu camera(s) @ %dx%d, out_fps=%d -> %s  (Ctrl-C to stop%s)\n",
-                n, opts[0].width, opts[0].height, out_fps, args.out.c_str(),
+    std::printf("recording %zu camera(s) @ %dx%d (%s), out_fps=%d -> %s  (Ctrl-C to stop%s)\n",
+                n, store_w, store_h, args.format.c_str(), out_fps, args.out.c_str(),
                 args.seconds > 0 ? "" : ", no time limit");
 
     // --- Synchronized record loop. Write a frame to every camera only once
     // ALL have a fresh (un-written) latest frame, so clips stay index-aligned
     // and the slowest camera paces the rate without emitting duplicates. -----
-    std::vector<cv::Mat> latest_bgr(n);
+    std::vector<cv::Mat> latest_bgr(n);                    // mp4 path
+    std::vector<std::vector<std::uint8_t>> latest_raw(n);  // mjpeg passthrough path
     std::vector<bool> fresh(n, false);
     std::vector<std::uint64_t> written(n, 0);
     const auto rec_start = clock::now();
@@ -288,9 +462,16 @@ int main(int argc, char** argv) {
         for (std::size_t k = 0; k < n; ++k) {
             fitra::camera::Frame fr;
             if (!caps[k]->try_pop_latest(fr)) continue;
-            cv::Mat bgr;
-            if (!decode_to_bgr(fr, opts[k], bgr)) continue;  // skip corrupt frame
-            latest_bgr[k] = std::move(bgr);
+            if (mjpeg) {
+                // Verbatim: keep the raw JPEG payload, no decode. Skip a
+                // short/corrupt dequeue so the AVI never holds garbage.
+                if (!looks_like_jpeg(fr.data)) continue;
+                latest_raw[k] = fr.data;  // copy (fr is reused next iteration)
+            } else {
+                cv::Mat bgr;
+                if (!decode_to_bgr(fr, opts[k], bgr)) continue;  // skip corrupt frame
+                latest_bgr[k] = std::move(bgr);
+            }
             fresh[k] = true;
         }
 
@@ -300,7 +481,8 @@ int main(int argc, char** argv) {
         const auto now = clock::now();
         if (all_fresh) {
             for (std::size_t k = 0; k < n; ++k) {
-                writers[k].write(latest_bgr[k]);
+                if (mjpeg) avi[k].add(latest_raw[k].data(), latest_raw[k].size());
+                else       writers[k].write(latest_bgr[k]);
                 ++written[k];
                 fresh[k] = false;
             }
@@ -333,20 +515,33 @@ int main(int argc, char** argv) {
     }
     std::printf("\n");
 
-    for (auto& w : writers) w.release();
     for (auto& c : caps) c->stop();
-
+    // Measure duration at loop exit (before the potentially-slow mp4 flush) so
+    // the reported fps is the true capture rate. mjpeg passthrough is not
+    // encode-bound, so this ≈ the camera rate.
     const double duration = std::chrono::duration<double>(clock::now() - rec_start).count();
+    const double fps_written = (duration > 0.0 && written[0] > 0)
+                                   ? static_cast<double>(written[0]) / duration
+                                   : static_cast<double>(out_fps);
+    if (mjpeg) {
+        for (std::size_t k = 0; k < n; ++k) {
+            if (!avi[k].finalize(fps_written))
+                std::fprintf(stderr, "WARNING: failed to finalize %s\n", filenames[k].c_str());
+        }
+    } else {
+        for (auto& w : writers) w.release();
+    }
 
     // meta.json — settings + measured per-camera fps, mirroring excal_record.
     std::FILE* meta = std::fopen((out_dir / "meta.json").c_str(), "w");
     if (meta) {
         std::fprintf(meta,
                      "{\n  \"version\": 1,\n  \"tool\": \"record_3cam\",\n"
+                     "  \"format\": \"%s\",\n"
                      "  \"config\": \"%s\",\n  \"width\": %d,\n  \"height\": %d,\n"
                      "  \"out_fps\": %d,\n  \"duration_s\": %.3f,\n"
                      "  \"num_cameras\": %zu,\n  \"cameras\": [\n",
-                     args.config.c_str(), opts[0].width, opts[0].height, out_fps,
+                     args.format.c_str(), args.config.c_str(), store_w, store_h, out_fps,
                      duration, n);
         for (std::size_t k = 0; k < n; ++k) {
             std::fprintf(meta,
@@ -365,12 +560,10 @@ int main(int argc, char** argv) {
                     duration > 0 ? written[k] / duration : 0.0, filenames[k].c_str());
 
     // Print a ready-to-run dump_keypoints_3d command (the next harness step).
-    // Bake in the true measured fps (frames actually written / duration), NOT
-    // the header out_fps: when the record loop is encode-bound they diverge, and
-    // dump uses --fps for the Kalman dt. written[] are equal (lockstep writes).
-    const double fps_written = (duration > 0.0 && written[0] > 0)
-                                   ? static_cast<double>(written[0]) / duration
-                                   : static_cast<double>(out_fps);
+    // fps_written (frames / duration) is the true rate baked into --fps for the
+    // Kalman dt; for mp4 it can diverge from the header out_fps when the record
+    // loop is encode-bound. For the .avi passthrough clips cv::VideoCapture reads
+    // them natively (no %06d pattern) exactly like the mp4 clips.
     std::printf("\nnext: analyze with dump_keypoints_3d, e.g.\n  dump_keypoints_3d");
     for (std::size_t k = 0; k < n; ++k)
         std::printf(" --video %s/%s", args.out.c_str(), filenames[k].c_str());
