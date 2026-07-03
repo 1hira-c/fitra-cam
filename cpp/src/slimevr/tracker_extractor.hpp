@@ -25,6 +25,7 @@
 
 #include "pipeline/snapshot.hpp"
 #include "slimevr/slime_tracker_bus.hpp"
+#include "slimevr/st_filter.hpp"
 #include "slimevr/tracker_extract.hpp"
 
 namespace fitra::slimevr {
@@ -57,6 +58,14 @@ struct TrackerExtractorOptions {
     // regression); set beta = 0 in the params for a fixed-cutoff (still
     // speed-independent) low-pass without leaving the One Euro path.
     bool          one_euro      = true;
+    // Spatiotemporal filter (M-C3): regime-adaptive position + inferred-roll
+    // twist smoothing at the tracker stage. Priority st_filter > one_euro >
+    // fixed EMA — when true, the position path uses the distance×velocity regime
+    // (slimevr/st_filter) instead of One Euro / the fixed EMA, and the arm/leg
+    // inferred-roll twist is regime-driven; swing / rigid-roll pins are
+    // unchanged. Default off; on it also weakens the chain Kalman upstream (see
+    // MultiCameraDriver::ThreeDConfig::st_filter). docs/design/pose-3d-spatiotemporal-filter.md.
+    bool          st_filter     = false;
     // Defaults mirror MainConfig's hardware-tuned values (M3); main.cpp always
     // overwrites these from the config/CLI, so they only matter for callers that
     // construct TrackerExtractorOptions directly. Position is per-axis (m/s);
@@ -143,6 +152,15 @@ private:
     // Hip cache + per-tracker initialization flags + frame dt for the
     // position smoother. See PosSmoothingContext docstring.
     PosSmoothingContext pos_ctx_{};
+
+    // Spatiotemporal filter (opts_.st_filter). Per-group config (code defaults,
+    // tuned in M-C4) + the regime position state (waist-relative held/last_raw)
+    // and the inferred-roll twist state (previous raw quat for v_roll). All
+    // reset by reset_smoothing() on idle resume, same as the One Euro / EMA
+    // history. Unused when st_filter is off.
+    StFilterConfig st_cfg_ = default_st_config();
+    StPosState     st_pos_state_{};
+    StTwistState   st_twist_state_{};
 
     // Per-tracker rolling stats state.
     //

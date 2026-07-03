@@ -173,4 +173,90 @@ float st_twist_alpha(float d_roll, float v_roll, float roll_confidence,
     return std::clamp(alpha * roll_confidence * gate, 0.0f, 1.0f);
 }
 
+void apply_pos_st_filter(std::array<SlimeTracker, kTrackerCount>& curr,
+                         StPosState& st, const StFilterConfig& cfg,
+                         float dt_s, float nominal_dt_s) {
+    constexpr std::size_t kWaist = static_cast<std::size_t>(TrackerRole::Waist);
+
+    // --- 1. Waist in world (the limb-relative reference) --------------------
+    const bool had_ref = st.waist_seen;
+    {
+        SlimeTracker& c = curr[kWaist];
+        const StPosParams& p = st_pos_params(cfg, TrackerRole::Waist);
+        if (c.valid) {
+            if (!st.steady[kWaist]) {
+                st.held[kWaist]     = c.pos;   // snap on first / post-dropout
+                st.last_raw[kWaist] = c.pos;
+                st.steady[kWaist]   = true;
+            } else {
+                st.held[kWaist] = st_pos_step(st.held[kWaist], c.pos,
+                                              st.last_raw[kWaist], dt_s, nominal_dt_s, p);
+                st.last_raw[kWaist] = c.pos;
+            }
+            st.waist_seen = true;
+        } else {
+            st.steady[kWaist] = false;  // hold; recovery re-snaps
+        }
+        c.pos = st.held[kWaist];  // world (held when invalid; publisher skips invalid)
+    }
+
+    const bool have_ref = st.waist_seen;
+    // The frame the reference first appears the limb frame origin jumps (~world
+    // → waist-relative), so force a re-snap so the shift isn't read as motion.
+    const bool ref_appeared = have_ref && !had_ref;
+    const cv::Vec3f ref = have_ref ? st.held[kWaist] : cv::Vec3f{0.0f, 0.0f, 0.0f};
+
+    // --- 2. Limbs in the waist-relative frame -------------------------------
+    for (std::size_t i = 0; i < kTrackerCount; ++i) {
+        if (i == kWaist) continue;
+        SlimeTracker& c = curr[i];
+        const StPosParams& p = st_pos_params(cfg, static_cast<TrackerRole>(i));
+        if (ref_appeared) st.steady[i] = false;
+
+        if (c.valid) {
+            const cv::Vec3f rel_target = c.pos - ref;
+            if (!st.steady[i]) {
+                st.held[i]     = rel_target;   // snap into the relative frame
+                st.last_raw[i] = rel_target;
+                st.steady[i]   = true;
+            } else {
+                st.held[i] = st_pos_step(st.held[i], rel_target,
+                                         st.last_raw[i], dt_s, nominal_dt_s, p);
+                st.last_raw[i] = rel_target;
+            }
+        } else {
+            st.steady[i] = false;  // hold the relative offset (drags with the waist)
+        }
+        c.pos = st.held[i] + ref;  // back to world
+    }
+}
+
+void fill_st_twist_overrides(const std::array<SlimeTracker, kTrackerCount>& curr,
+                             const std::array<cv::Vec4f, kTrackerCount>& prev_quat,
+                             StTwistState& st, const StFilterConfig& cfg,
+                             float dt_s, float nominal_dt_s,
+                             std::array<float, kTrackerCount>& out_override) {
+    for (std::size_t i = 0; i < kTrackerCount; ++i) {
+        out_override[i] = -1.0f;  // sentinel: keep apply_quat_smoothing's own ta
+        const TrackerRole role = static_cast<TrackerRole>(i);
+        if (!st_has_roll(cfg, role)) continue;
+        if (!curr[i].valid) { st.steady[i] = false; continue; }
+
+        const cv::Vec4f raw = curr[i].quat_wxyz;
+        if (!st.steady[i]) {
+            // First / post-dropout: let the existing path snap; seed v_roll state.
+            st.last_raw_quat[i] = raw;
+            st.steady[i]        = true;
+            continue;
+        }
+        const StRegime& r    = st_roll_params(cfg, role);
+        const float d_roll   = st_twist_angle(prev_quat[i], raw);              // held→target
+        const float v_roll   = st_twist_angle(st.last_raw_quat[i], raw)
+                               / std::max(1.0e-3f, dt_s);                       // raw consecutive
+        out_override[i] = st_twist_alpha(d_roll, v_roll, curr[i].roll_confidence,
+                                         dt_s, nominal_dt_s, r);
+        st.last_raw_quat[i] = raw;
+    }
+}
+
 }  // namespace fitra::slimevr

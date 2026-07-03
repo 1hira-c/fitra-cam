@@ -92,6 +92,22 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-03 — 時空フィルタ M-C3: `tracker_extract` へ配線 + chain Kalman 弱化（既定 OFF・byte 不変）
+M-C2 のコアを `TrackerExtractor::run_loop` に**第3の平滑モード**として配線（優先度 **st_filter > one_euro > 固定EMA**）。
+配線アプローチは grill で確定（位置パスの腰相対×hold・twist 注入・Kalman 弱化ゲート・config）。**位置** = 新
+`apply_pos_st_filter`：waist を world で先行フィルタ→四肢を waist 相対で `st_pos_step`。**腰相対フレームが
+hip-relative hold を内包**する設計（invalid 四肢は相対 offset を hold＝waist について自動で引きずる、別 hip-hold 不要）、
+復帰・基準初出現は snap。**推測 roll** = `fill_st_twist_overrides` が has_roll 群（upper_arm/upper_leg/縮退 shin）のみ
+twist_alpha を regime 計算し、`apply_quat_smoothing` に足した optional `twist_alpha_override`（null＝既存 byte 不変）経由で
+注入。swing・parent-yaw transport・chest/waist/foot の pin は完全不変。**chain Kalman 弱化**: `ThreeDConfig.st_filter` ON で
+`SkeletonKalman` の process noise（q_pos/q_vel/offset）を **×100 seed** して測定追従化（二重平滑の lag を避ける、M-C4 調整）。
+フラグ `three_d.st_filter` / `--st-filter`（既定 OFF）を `output_builder`(tracker) と `threed_builder`(Kalman) の両方へ配線。
+**既定 OFF で byte 不変**（override=nullptr で `apply_quat_smoothing` 完全一致・Kalman default・config 非emit）。
+ctest `test_st_filter` を拡張（全身並進 **no-lag**／静止抑制／invalid-hold drag／recovery snap／twist scope／nullptr 一致）、
+full build + ctest **33/33** パス。**残（要実機）**: M-C4 = ハーネス(`dump_keypoints_3d`)へ st_filter を差し込み 6 群 param を
+スイープ→コード既定更新、M-C5 = 実機 A/B（WebUI 3D / WS3D）。設計 =
+[design/pose-3d-spatiotemporal-filter.md](../design/pose-3d-spatiotemporal-filter.md) M-C3。
+
 ### 2026-07-03 — 時空フィルタ M-C2: regime フィルタ core（`slimevr/st_filter`）+ ctest
 時空フィルタのコア math を `slimevr/st_filter.{hpp,cpp}`（fitra_slimevr）に新規実装。**純粋・自己完結・単体テスト済**の
 regime プリミティブで、まだ配線しない（M-C3）。内容: `StRegime` / `StPosParams` / 部位別 **6 群**（waist/chest/upper_arm/

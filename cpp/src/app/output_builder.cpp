@@ -24,6 +24,10 @@ std::unique_ptr<slimevr::TrackerExtractor> make_tracker_extractor(
     // quat_smooth/pos_smooth above are ignored. Feeds both outputs +
     // WebUI (single producer).
     tex_opts.one_euro        = opts.vr_one_euro;
+    // Spatiotemporal filter (M-C3). Priority st_filter > one_euro > EMA in the
+    // extractor. Also weakens the chain Kalman upstream (threed_builder →
+    // ThreeDConfig::st_filter). Default off = byte-identical.
+    tex_opts.st_filter       = opts.st_filter_3d;
     tex_opts.pos_one_euro    = {static_cast<float>(opts.vr_pos_mincutoff),
                                 static_cast<float>(opts.vr_pos_beta),
                                 static_cast<float>(opts.vr_pos_dcutoff)};

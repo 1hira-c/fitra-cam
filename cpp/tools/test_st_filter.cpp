@@ -28,12 +28,20 @@ namespace {
 
 constexpr float kEps = 1.0e-4f;
 
+using fitra::slimevr::SlimeTracker;
+using fitra::slimevr::StFilterConfig;
 using fitra::slimevr::StGroup;
 using fitra::slimevr::StPosParams;
+using fitra::slimevr::StPosState;
 using fitra::slimevr::StRegime;
+using fitra::slimevr::StTwistState;
 using fitra::slimevr::TrackerRole;
+using fitra::slimevr::apply_pos_st_filter;
+using fitra::slimevr::apply_quat_smoothing;
 using fitra::slimevr::default_st_config;
+using fitra::slimevr::fill_st_twist_overrides;
 using fitra::slimevr::kStGroupCount;
+using fitra::slimevr::kTrackerCount;
 using fitra::slimevr::st_alpha_d;
 using fitra::slimevr::st_group_for;
 using fitra::slimevr::st_has_roll;
@@ -57,6 +65,13 @@ void check_close(float got, float want, const std::string& label, float eps = kE
 
 float vnorm(const cv::Vec3f& v) {
     return std::sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+}
+
+void check_vec3(const cv::Vec3f& got, const cv::Vec3f& want, const std::string& label,
+                float eps = kEps) {
+    for (int i = 0; i < 3; ++i) {
+        check_close(got[i], want[i], label + "[" + std::to_string(i) + "]", eps);
+    }
 }
 
 // Test regime: 1 cm deadband, 3 cm ramp end; rest 0.2, normal 0.6; vel gate 4→8.
@@ -211,6 +226,213 @@ void test_default_config() {
           "waist should not be faster than the arm");
 }
 
+// --------------------------------------------------------------------------- #
+// M-C3 wiring: apply_pos_st_filter / fill_st_twist_overrides / byte-identity
+// --------------------------------------------------------------------------- #
+
+constexpr std::size_t kWaistIdx = static_cast<std::size_t>(TrackerRole::Waist);
+constexpr std::size_t kArmIdx   = static_cast<std::size_t>(TrackerRole::LeftUpperArm);
+
+// A tracker array with everything invalid; caller sets the few it needs.
+std::array<SlimeTracker, kTrackerCount> blank_trackers() {
+    std::array<SlimeTracker, kTrackerCount> t{};
+    for (std::size_t i = 0; i < kTrackerCount; ++i) {
+        t[i].role  = static_cast<TrackerRole>(i);
+        t[i].valid = false;
+        t[i].quat_wxyz = cv::Vec4f{1, 0, 0, 0};
+        t[i].roll_confidence = 1.0f;
+        t[i].swing_confidence = 1.0f;
+    }
+    return t;
+}
+
+void set_pos(std::array<SlimeTracker, kTrackerCount>& t, std::size_t i,
+             const cv::Vec3f& p) {
+    t[i].pos = p;
+    t[i].valid = true;
+}
+
+void test_st_pos_whole_body_translation_no_limb_lag() {
+    // A rigid waist+arm translated fast: the arm's absolute position must track
+    // its true position (the translation is absorbed by the waist reference),
+    // while the waist itself carries the single filter's lag. This is the
+    // waist-relative payoff — the limb does NOT inherit the translation lag.
+    const StFilterConfig cfg = default_st_config();
+    StPosState st{};
+    const float dt = 1.0f / 60.0f;
+    const cv::Vec3f arm_off{0.2f, 0.0f, 0.4f};
+    const float dv = 0.03f;  // m/frame ≈ 1.8 m/s (trusted, normal regime)
+
+    cv::Vec3f waist_true{0.0f, 0.0f, 1.0f};
+    cv::Vec3f arm_out, waist_out, arm_true;
+    for (int k = 0; k <= 20; ++k) {
+        auto t = blank_trackers();
+        waist_true = cv::Vec3f{dv * static_cast<float>(k), 0.0f, 1.0f};
+        arm_true   = waist_true + arm_off;
+        set_pos(t, kWaistIdx, waist_true);
+        set_pos(t, kArmIdx,   arm_true);
+        apply_pos_st_filter(t, st, cfg, dt, dt);
+        waist_out = t[kWaistIdx].pos;
+        arm_out   = t[kArmIdx].pos;
+    }
+    const float arm_err   = vnorm(arm_out - arm_true);
+    const float waist_err = vnorm(waist_out - waist_true);
+    check(arm_err < 0.005f, "translation: arm should not lag (abs err < 5mm)");
+    check(arm_err < waist_err, "translation: arm should track better than the waist");
+    check(waist_err > 0.015f, "translation: the waist should carry the filter lag");
+}
+
+void test_st_pos_static_jitter_suppressed() {
+    // Stationary waist; arm jitters ±5 mm (inside the deadband). The relative
+    // frame + strong rest filter should crush the output swing.
+    const StFilterConfig cfg = default_st_config();
+    StPosState st{};
+    const float dt = 1.0f / 60.0f;
+    const cv::Vec3f waist{0.0f, 0.0f, 1.0f};
+    const cv::Vec3f arm0{0.2f, 0.0f, 1.4f};
+    const float amp = 0.005f;  // < upper_arm d_core (0.012)
+
+    float lo = 1e9f, hi = -1e9f;
+    for (int k = 0; k <= 80; ++k) {
+        auto t = blank_trackers();
+        set_pos(t, kWaistIdx, waist);
+        const float j = (k % 2 == 0) ? amp : -amp;  // deterministic square jitter
+        set_pos(t, kArmIdx, arm0 + cv::Vec3f{j, 0.0f, 0.0f});
+        apply_pos_st_filter(t, st, cfg, dt, dt);
+        if (k >= 20) {  // after warmup
+            lo = std::min(lo, t[kArmIdx].pos[0]);
+            hi = std::max(hi, t[kArmIdx].pos[0]);
+        }
+    }
+    // Input swing is 2·amp = 10 mm; the deadband filter should cut it well below.
+    check((hi - lo) < 0.003f, "static jitter not suppressed (output swing >= 3mm)");
+}
+
+void test_st_pos_invalid_limb_drags_with_waist() {
+    // Seed waist+arm, then move the waist while the arm goes invalid: the arm
+    // must ride the waist (relative offset held), not freeze in world.
+    const StFilterConfig cfg = default_st_config();
+    StPosState st{};
+    const float dt = 1.0f / 60.0f;
+    const cv::Vec3f arm_off{0.2f, 0.0f, 0.4f};
+
+    // Frame 0: snap both at rest.
+    {
+        auto t = blank_trackers();
+        set_pos(t, kWaistIdx, {0.0f, 0.0f, 1.0f});
+        set_pos(t, kArmIdx,   cv::Vec3f{0.0f, 0.0f, 1.0f} + arm_off);
+        apply_pos_st_filter(t, st, cfg, dt, dt);
+    }
+    // Frames 1..6: waist moves to +X, arm INVALID (held).
+    cv::Vec3f arm_out, waist_out;
+    for (int k = 1; k <= 6; ++k) {
+        auto t = blank_trackers();
+        set_pos(t, kWaistIdx, {0.1f, 0.0f, 1.0f});
+        // arm left invalid
+        apply_pos_st_filter(t, st, cfg, dt, dt);
+        waist_out = t[kWaistIdx].pos;
+        arm_out   = t[kArmIdx].pos;
+    }
+    // The held relative offset is preserved: arm rides the waist exactly.
+    check_close((arm_out - waist_out)[0], arm_off[0], "invalid arm x offset held");
+    check_close((arm_out - waist_out)[2], arm_off[2], "invalid arm z offset held");
+    // And it actually moved with the waist (not frozen at the world seed 0.2).
+    check(arm_out[0] > 0.2f + 0.02f, "invalid arm did not drag with the waist");
+}
+
+void test_st_pos_recovery_snaps() {
+    // After a dropout, a returning limb at a far-away position must SNAP to the
+    // measurement (not be rejected as an outlier or lag-capped toward it).
+    const StFilterConfig cfg = default_st_config();
+    StPosState st{};
+    const float dt = 1.0f / 60.0f;
+
+    {   // seed
+        auto t = blank_trackers();
+        set_pos(t, kWaistIdx, {0.0f, 0.0f, 1.0f});
+        set_pos(t, kArmIdx,   {0.2f, 0.0f, 1.4f});
+        apply_pos_st_filter(t, st, cfg, dt, dt);
+    }
+    {   // arm dropout
+        auto t = blank_trackers();
+        set_pos(t, kWaistIdx, {0.0f, 0.0f, 1.0f});
+        apply_pos_st_filter(t, st, cfg, dt, dt);
+    }
+    {   // arm returns far away → snap
+        auto t = blank_trackers();
+        set_pos(t, kWaistIdx, {0.0f, 0.0f, 1.0f});
+        set_pos(t, kArmIdx,   {0.7f, 0.0f, 1.4f});  // 0.5 m jump
+        apply_pos_st_filter(t, st, cfg, dt, dt);
+        check_vec3(t[kArmIdx].pos, {0.7f, 0.0f, 1.4f}, "recovery did not snap", 1.0e-4f);
+    }
+}
+
+void test_st_twist_overrides_scope() {
+    const StFilterConfig cfg = default_st_config();
+    StTwistState st{};
+    const float dt = 1.0f / 60.0f;
+    std::array<cv::Vec4f, kTrackerCount> prev_quat{};
+    for (auto& q : prev_quat) q = cv::Vec4f{1, 0, 0, 0};
+
+    auto curr = blank_trackers();
+    curr[kArmIdx].valid = true;                              // has_roll
+    curr[kArmIdx].quat_wxyz = q_ztwist(0.3f);
+    curr[kArmIdx].roll_confidence = 1.0f;
+    const std::size_t chest = static_cast<std::size_t>(TrackerRole::Chest);
+    curr[chest].valid = true;                                // NOT has_roll
+    curr[chest].quat_wxyz = q_ztwist(0.3f);
+
+    std::array<float, kTrackerCount> ov{};
+    // First call: has_roll bone is not yet steady → sentinel (existing path snaps).
+    fill_st_twist_overrides(curr, prev_quat, st, cfg, dt, dt, ov);
+    check(ov[kArmIdx] < 0.0f, "first-frame has_roll should be sentinel");
+    check(ov[chest] < 0.0f,   "non-has_roll must always be sentinel");
+
+    // Second call: now steady → regime-driven weight in [0, 1].
+    fill_st_twist_overrides(curr, prev_quat, st, cfg, dt, dt, ov);
+    check(ov[kArmIdx] >= 0.0f && ov[kArmIdx] <= 1.0f, "steady has_roll should be a regime weight");
+    check(ov[chest] < 0.0f, "non-has_roll still sentinel");
+
+    // Invalid has_roll bone → sentinel + steady reset.
+    curr[kArmIdx].valid = false;
+    fill_st_twist_overrides(curr, prev_quat, st, cfg, dt, dt, ov);
+    check(ov[kArmIdx] < 0.0f, "invalid has_roll should be sentinel");
+}
+
+void test_quat_override_nullptr_byte_identical() {
+    // apply_quat_smoothing with a null override (default) must be bit-identical
+    // to the pre-M-C3 call, and to passing an all-sentinel override. This pins
+    // the st_filter OFF path.
+    const float dt = 1.0f / 60.0f;
+    auto make = []() {
+        auto t = blank_trackers();
+        for (std::size_t i = 0; i < kTrackerCount; ++i) {
+            t[i].valid = true;
+            t[i].quat_wxyz = q_ztwist(0.2f + 0.03f * static_cast<float>(i));
+            t[i].roll_confidence  = 0.5f;   // exercise the split (sa != ta) branch
+            t[i].swing_confidence = 1.0f;
+        }
+        return t;
+    };
+    std::array<cv::Vec4f, kTrackerCount> pa{}, pb{};
+    for (auto& q : pa) q = cv::Vec4f{1, 0, 0, 0};
+    pb = pa;
+
+    auto ta = make();
+    auto tb = make();
+    apply_quat_smoothing(ta, pa, 0.5f, dt, dt);            // no override arg (default null)
+    std::array<float, kTrackerCount> sentinel;
+    sentinel.fill(-1.0f);
+    apply_quat_smoothing(tb, pb, 0.5f, dt, dt, &sentinel); // explicit all-sentinel
+
+    for (std::size_t i = 0; i < kTrackerCount; ++i) {
+        for (int c = 0; c < 4; ++c) {
+            check_close(ta[i].quat_wxyz[c], tb[i].quat_wxyz[c],
+                        "override sentinel != nullptr at tracker " + std::to_string(i));
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -224,6 +446,12 @@ int main() {
         test_twist_angle();
         test_twist_alpha();
         test_default_config();
+        test_st_pos_whole_body_translation_no_limb_lag();
+        test_st_pos_static_jitter_suppressed();
+        test_st_pos_invalid_limb_drags_with_waist();
+        test_st_pos_recovery_snaps();
+        test_st_twist_overrides_scope();
+        test_quat_override_nullptr_byte_identical();
         std::puts("test_st_filter ok");
         return 0;
     } catch (const std::exception& e) {

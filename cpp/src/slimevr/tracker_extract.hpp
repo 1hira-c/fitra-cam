@@ -222,10 +222,17 @@ struct QuatSmoothingContext {
 // behavior is unchanged. Invalid trackers keep prev unchanged (curr is replaced
 // by prev so the publisher can still see a stable quat). Updates `prev_quat` in
 // place with the smoothed values.
+// `twist_alpha_override` (optional): when non-null, entry [i] >= 0 replaces the
+// per-tracker TWIST weight (ta) for tracker i — the swing weight and everything
+// else are unchanged. Entry < 0 (or a null pointer) keeps the built-in ta
+// (alpha_rate·roll_confidence). Used by the spatiotemporal filter (M-C3) to
+// drive the inferred-roll twist by its regime for the arm/leg groups only;
+// null (the default) is byte-identical to the pre-M-C3 behavior.
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           float base_alpha,
-                          float dt_s = 0.0f, float nominal_dt_s = 0.0f);
+                          float dt_s = 0.0f, float nominal_dt_s = 0.0f,
+                          const std::array<float, kTrackerCount>* twist_alpha_override = nullptr);
 
 // One Euro overload: identical swing/twist + parent-yaw-transport machinery as
 // the fixed-alpha form, but the per-step base weight is the speed-adaptive
@@ -238,7 +245,8 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           QuatSmoothingContext& ctx,
                           const OneEuroParams& params,
-                          float dt_s, float nominal_dt_s);
+                          float dt_s, float nominal_dt_s,
+                          const std::array<float, kTrackerCount>* twist_alpha_override = nullptr);
 
 // Inter-frame state for the position smoothing path. Pass-by-ref so the
 // extractor can hold one of these per loop; default-constructed value is

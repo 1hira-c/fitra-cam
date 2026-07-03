@@ -661,7 +661,8 @@ namespace {
 void apply_quat_smoothing_impl(std::array<SlimeTracker, kTrackerCount>& curr,
                                std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                                const std::array<float, kTrackerCount>& alpha,
-                               float dt_s, float nominal_dt_s) {
+                               float dt_s, float nominal_dt_s,
+                               const std::array<float, kTrackerCount>* twist_override) {
     // ---- Pelvis-yaw transport for held-roll bones -------------------------
     // An extended limb's roll is unobservable (roll_confidence → 0), so it is
     // held frame-to-frame. For a near-vertical limb (standing, legs/arms down)
@@ -713,7 +714,12 @@ void apply_quat_smoothing_impl(std::array<SlimeTracker, kTrackerCount>& curr,
         // confidence.
         const float alpha_rate = alpha[i];
         const float sa = std::clamp(alpha_rate * curr[i].swing_confidence, 0.0f, 1.0f);
-        const float ta = std::clamp(alpha_rate * curr[i].roll_confidence,  0.0f, 1.0f);
+        // Twist weight: a non-negative override entry (spatiotemporal filter,
+        // has_roll bones) replaces the built-in alpha_rate·roll_confidence; the
+        // sentinel (< 0) / null pointer keeps the built-in value byte-identical.
+        const float ta = (twist_override && (*twist_override)[i] >= 0.0f)
+                             ? std::clamp((*twist_override)[i], 0.0f, 1.0f)
+                             : std::clamp(alpha_rate * curr[i].roll_confidence, 0.0f, 1.0f);
         cv::Vec4f p = quat_normalize(prev_quat[i]);
         const cv::Vec4f q = quat_normalize(curr[i].quat_wxyz);
 
@@ -778,19 +784,21 @@ void apply_quat_smoothing_impl(std::array<SlimeTracker, kTrackerCount>& curr,
 
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
-                          float base_alpha, float dt_s, float nominal_dt_s) {
+                          float base_alpha, float dt_s, float nominal_dt_s,
+                          const std::array<float, kTrackerCount>* twist_override) {
     // Fixed-alpha path: one rate-adjusted weight shared by every tracker.
     const float alpha_rate = rate_adjust_alpha(base_alpha, dt_s, nominal_dt_s);
     std::array<float, kTrackerCount> alpha;
     alpha.fill(alpha_rate);
-    apply_quat_smoothing_impl(curr, prev_quat, alpha, dt_s, nominal_dt_s);
+    apply_quat_smoothing_impl(curr, prev_quat, alpha, dt_s, nominal_dt_s, twist_override);
 }
 
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           QuatSmoothingContext& ctx,
                           const OneEuroParams& params,
-                          float dt_s, float nominal_dt_s) {
+                          float dt_s, float nominal_dt_s,
+                          const std::array<float, kTrackerCount>* twist_override) {
     const float te = std::max(1.0e-3f, (dt_s > 0.0f) ? dt_s : nominal_dt_s);
     const float a_d = one_euro_alpha(params.dcutoff, te);
     std::array<float, kTrackerCount> alpha{};  // 0 for held/first-frame trackers
@@ -816,7 +824,7 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
         const float cutoff = params.mincutoff + params.beta * std::abs(ctx.ang_vel_hat[i]);
         alpha[i] = one_euro_alpha(cutoff, te);
     }
-    apply_quat_smoothing_impl(curr, prev_quat, alpha, dt_s, nominal_dt_s);
+    apply_quat_smoothing_impl(curr, prev_quat, alpha, dt_s, nominal_dt_s, twist_override);
 }
 
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,

@@ -23,7 +23,22 @@ MultiCameraDriver::MultiCameraDriver(
       rtmpose_{rtmpose},
       bus_{bus},
       threed_{threed},
-      kalman_{},
+      kalman_{[&]() {
+          // Default process noise = byte-identical when st_filter is off. When
+          // on, the spatiotemporal filter does the smoothing at the tracker
+          // stage, so weaken the chain Kalman toward measurement-tracking
+          // (predict/hold only) to avoid compounding lag. ×100 is an M-C3 seed
+          // (M-C4 tunes it via the harness). See docs/design/pose-3d-spatiotemporal-filter.md.
+          lift::SkeletonKalman::Options kopts;
+          if (threed_.st_filter) {
+              constexpr double kStWeaken = 100.0;
+              kopts.q_pos        *= kStWeaken;
+              kopts.q_vel        *= kStWeaken;
+              kopts.q_pos_offset *= kStWeaken;
+              kopts.q_vel_offset *= kStWeaken;
+          }
+          return lift::SkeletonKalman{kopts};
+      }()},
       ik_{[&]() {
           lift::IkSolver::Options opts;
           opts.bone_calib_frames = std::max(1, threed_.bone_calib_frames);

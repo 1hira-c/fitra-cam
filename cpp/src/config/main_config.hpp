@@ -99,6 +99,14 @@ struct MainOptions {
     // jitter ~10-20% with no lag. Default off; a no-op without a subject profile
     // or under COCO17 (no hip_center). YAML key three_d.rigid_pelvis.
     bool   rigid_pelvis_3d = false;
+    // Spatiotemporal filter (docs/design/pose-3d-spatiotemporal-filter.md, M-C3).
+    // When on, the tracker stage uses the distance×velocity regime filter for
+    // position (waist-relative) and inferred-roll twist instead of One Euro / the
+    // fixed EMA, and the chain Kalman is weakened toward measurement-tracking so
+    // the two don't compound lag. Default off = byte-identical. Feeds both the
+    // tracker extractor (TrackerExtractorOptions::st_filter) and the 3D pipeline
+    // (ThreeDConfig::st_filter). YAML key three_d.st_filter, CLI --st-filter.
+    bool   st_filter_3d = false;
     // VR tracker extraction: react to each new 3D frame (event-driven) instead
     // of resampling at a fixed cadence. Cuts the extractor's contribution to
     // capture->VR-send latency. Feeds both SlimeVR and VMT. Default off.

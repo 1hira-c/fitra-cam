@@ -44,6 +44,12 @@ public:
         // when a subject profile is present (its distances form the pelvis
         // template) and the topology is Halpe26; otherwise a no-op.
         bool rigid_pelvis = false;
+        // Spatiotemporal filter (spatiotemporal-filter M-C3). When true the chain
+        // Kalman is weakened toward measurement-tracking (predict/hold only) so
+        // it does not compound lag with the tracker-stage regime filter, which
+        // now owns the smoothing. No effect on the tracker stage itself (that is
+        // gated by TrackerExtractorOptions::st_filter). Default off = byte-identical.
+        bool st_filter = false;
         int bone_calib_frames = 150;
         double subject_height_m = 0.0;
         bool has_subject_profile = false;

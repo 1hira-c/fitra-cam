@@ -147,4 +147,52 @@ float st_twist_angle(const cv::Vec4f& prev_wxyz, const cv::Vec4f& curr_wxyz);
 float st_twist_alpha(float d_roll, float v_roll, float roll_confidence,
                      float dt_s, float nominal_dt_s, const StRegime& r);
 
+// ---- stateful passes (M-C3 wiring) ---------------------------------------- #
+
+// Inter-frame state for apply_pos_st_filter. `held` / `last_raw` are per-tracker
+// in the tracker's WORKING frame — world for the waist, waist-relative for the
+// limbs (chest/arms/legs/feet). `steady[i]` is false until the tracker has been
+// tracked for ≥1 consecutive frame; a first-ever or post-dropout valid frame
+// snaps (no regime) so hold-drift isn't misread as fast motion. `waist_seen`
+// gates the waist-relative frame: until the waist has been valid once, limbs
+// filter in world (reference = origin). Default-constructed is the fresh state;
+// TrackerExtractor::reset_smoothing() re-default-constructs it on idle resume.
+struct StPosState {
+    std::array<cv::Vec3f, kTrackerCount> held{};      // working-frame output history
+    std::array<cv::Vec3f, kTrackerCount> last_raw{};  // working-frame previous raw
+    std::array<bool,      kTrackerCount> steady{};     // tracked ≥1 frame → regime
+    bool waist_seen = false;                           // waist valid at least once
+};
+
+// Inter-frame state for fill_st_twist_overrides: the previous RAW orientation
+// per tracker (for v_roll) and a `steady` flag (first/post-dropout → snap).
+struct StTwistState {
+    std::array<cv::Vec4f, kTrackerCount> last_raw_quat{};  // previous raw orientation
+    std::array<bool,      kTrackerCount> steady{};
+};
+
+// Position pass for the whole tracker array (st_filter mode). Filters the WAIST
+// in world first, then each limb in the waist-relative frame, writing the
+// smoothed WORLD position back to curr[i].pos. Invalid trackers hold their
+// working-frame position — for a limb that means "held relative offset + current
+// waist", so it drags with the torso (subsumes the hip-relative hold). A tracker
+// returning from invalid, or the frame the waist reference first appears, snaps
+// its anchor. Owns no hip context; the waist-relative framing replaces it.
+void apply_pos_st_filter(std::array<SlimeTracker, kTrackerCount>& curr,
+                         StPosState& st, const StFilterConfig& cfg,
+                         float dt_s, float nominal_dt_s);
+
+// Fill a per-tracker twist_alpha override for apply_quat_smoothing. For each
+// has_roll tracker that is valid and steady, computes the regime twist weight
+// from d_roll (held→raw) / v_roll (raw consecutive / dt). All other slots
+// (non-has_roll, invalid, first/post-dropout) get the sentinel -1 so
+// apply_quat_smoothing keeps its existing twist alpha there. `prev_quat` is the
+// held (pre-update) orientation; `curr` carries this frame's RAW orientations
+// (call BEFORE apply_quat_smoothing mutates prev_quat / curr).
+void fill_st_twist_overrides(const std::array<SlimeTracker, kTrackerCount>& curr,
+                             const std::array<cv::Vec4f, kTrackerCount>& prev_quat,
+                             StTwistState& st, const StFilterConfig& cfg,
+                             float dt_s, float nominal_dt_s,
+                             std::array<float, kTrackerCount>& out_override);
+
 }  // namespace fitra::slimevr
