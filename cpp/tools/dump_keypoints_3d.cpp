@@ -60,6 +60,7 @@
 #include "lift/skeleton_def.hpp"
 #include "lift/subject_profile.hpp"
 #include "lift/triangulator.hpp"
+#include "slimevr/st_filter.hpp"
 #include "slimevr/tracker_extract.hpp"
 #include "util/cuda_check.hpp"
 #include "util/logging.hpp"
@@ -108,6 +109,8 @@ struct Args {
     bool rigid_pelvis = false;
     bool rigid_shoulders = false;
     bool dump_trackers = false;
+    std::string tracker_smoothing = "raw";  // raw | one_euro | st
+    double st_kalman_weaken = 100.0;         // st mode: chain-Kalman process-noise scale
     double spine_tol = 0.12;
     std::string keypoint_format_str = "coco17";
 };
@@ -163,6 +166,15 @@ void print_help() {
         "                            valid + roll_confidence. This is the spatiotemporal\n"
         "                            filter's tracker harness OFF baseline (M-C1); score\n"
         "                            it with analyze_3d_jitter_lag.py trackers.\n"
+        "  --tracker-smoothing MODE  smoothing applied to the dumped trackers (needs\n"
+        "                            --dump-trackers): raw (default, no smoothing =\n"
+        "                            M-C1 OFF baseline) | one_euro (current shipping\n"
+        "                            One Euro) | st (spatiotemporal filter + chain\n"
+        "                            Kalman weakened x100, = the M-C3 live path). Run\n"
+        "                            raw/one_euro/st on the same clip for the M-C4 A/B.\n"
+        "  --st-kalman-weaken F      st mode: chain-Kalman process-noise scale (default\n"
+        "                            100 = the live M-C3 setting; 1 = no weakening, to\n"
+        "                            isolate the tracker filter from Kalman-noise effects).\n"
         "  --keypoint-format FMT     pose topology: coco17 (default) or halpe26\n"
         "  --help                    show this help\n");
 }
@@ -205,6 +217,8 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--rigid-pelvis") { args.rigid_pelvis = true; }
         else if (a == "--rigid-shoulders") { args.rigid_shoulders = true; }
         else if (a == "--dump-trackers") { args.dump_trackers = true; }
+        else if (a == "--tracker-smoothing") { args.tracker_smoothing = need("--tracker-smoothing"); }
+        else if (a == "--st-kalman-weaken") { args.st_kalman_weaken = std::stod(need("--st-kalman-weaken")); }
         else if (a == "--spine-tol")    { args.spine_tol = std::stod(need("--spine-tol")); }
         else if (a == "--keypoint-format") { args.keypoint_format_str = need("--keypoint-format"); }
         else {
@@ -772,6 +786,25 @@ int main(int argc, char** argv) {
                                  "(extract_trackers needs neck/hip_center/toe joints)\n");
             return EXIT_FAILURE;
         }
+        const bool tm_one_euro = args.tracker_smoothing == "one_euro";
+        const bool tm_st       = args.tracker_smoothing == "st";
+        if (args.tracker_smoothing != "raw" && !tm_one_euro && !tm_st) {
+            std::fprintf(stderr, "--tracker-smoothing must be raw|one_euro|st (got %s)\n",
+                         args.tracker_smoothing.c_str());
+            return EXIT_FAILURE;
+        }
+        if ((tm_one_euro || tm_st) && !args.dump_trackers) {
+            std::fprintf(stderr, "--tracker-smoothing %s requires --dump-trackers\n",
+                         args.tracker_smoothing.c_str());
+            return EXIT_FAILURE;
+        }
+        // Tracker-stage smoothing config (mirrors TrackerExtractorOptions defaults
+        // + MainConfig One Euro params). One Euro drives the swing base for both
+        // one_euro and st; st adds the regime twist override + pos filter.
+        const auto& st_cfg = fitra::slimevr::default_st_config();
+        const fitra::slimevr::OneEuroParams pos_euro{1.0f, 4.0f, 1.0f};
+        const fitra::slimevr::OneEuroParams quat_euro{1.5f, 1.5f, 1.0f};
+        constexpr float kNominalDt = 1.0f / 60.0f;  // live extract_rate_hz
         if (args.rigid_pelvis) {
             pelvis_template = fitra::lift::RigidTemplate::from_distances(
                 subject_profile.bone_lengths_m[11],   // hip_center -> l_hip
@@ -898,11 +931,28 @@ int main(int argc, char** argv) {
                 }
             }
 
-            fitra::lift::SkeletonKalman kalman;
+            // st mode weakens the chain Kalman (x100, mirroring
+            // ThreeDConfig::st_filter) so it doesn't compound lag with the
+            // tracker-stage regime filter; raw / one_euro use the default.
+            fitra::lift::SkeletonKalman::Options kopts;
+            if (tm_st && args.st_kalman_weaken != 1.0) {
+                const double w = args.st_kalman_weaken;
+                kopts.q_pos *= w; kopts.q_vel *= w;
+                kopts.q_pos_offset *= w; kopts.q_vel_offset *= w;
+            }
+            fitra::lift::SkeletonKalman kalman{kopts};
             // Per-job foot-anchor state for extract_trackers' FK fallback,
             // mirroring TrackerExtractor::extract_ctx_. Declared inside the job
             // loop so it resets between poses (matches `kalman`).
             fitra::slimevr::ExtractContext tracker_ctx;
+            // Per-job tracker-smoothing state (reset between poses like `kalman`).
+            std::array<cv::Vec4f, fitra::slimevr::kTrackerCount> tk_prev_quat;
+            tk_prev_quat.fill(cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f});
+            std::array<cv::Vec3f, fitra::slimevr::kTrackerCount> tk_prev_pos{};
+            fitra::slimevr::QuatSmoothingContext tk_quat_ctx{};
+            fitra::slimevr::PosSmoothingContext tk_pos_ctx{};
+            fitra::slimevr::StPosState  tk_st_pos{};
+            fitra::slimevr::StTwistState tk_st_twist{};
             for (int frame_idx = 0;; ++frame_idx) {
                 if (args.max_frames > 0 && processed >= args.max_frames) break;
                 std::vector<cv::Mat> frames(n_cams);
@@ -979,6 +1029,30 @@ int main(int argc, char** argv) {
                     trackers = fitra::slimevr::extract_trackers(
                         skel, &tracker_ctx, fitra::slimevr::FootPosMode::Ankle,
                         0.65f, 0.15f);
+                    // Optional tracker-stage smoothing (one_euro / st), replaying
+                    // the live TrackerExtractor per 3D frame at the clip cadence.
+                    if (tm_one_euro || tm_st) {
+                        const float dtf = static_cast<float>(1.0 / fps);
+                        // Hip context for the position hold (skel[19]=hip_center).
+                        const auto& hc = skel.joints[19];
+                        tk_pos_ctx.hip_valid = hc.valid;
+                        if (hc.valid) tk_pos_ctx.current_hip_pos = cv::Vec3f{hc.x, hc.y, hc.z};
+                        tk_pos_ctx.dt_s = dtf;
+                        if (tm_st) {
+                            std::array<float, fitra::slimevr::kTrackerCount> tw;
+                            fitra::slimevr::fill_st_twist_overrides(
+                                trackers, tk_prev_quat, tk_st_twist, st_cfg, dtf, kNominalDt, tw);
+                            fitra::slimevr::apply_quat_smoothing(
+                                trackers, tk_prev_quat, tk_quat_ctx, quat_euro, dtf, kNominalDt, &tw);
+                            fitra::slimevr::apply_pos_st_filter(
+                                trackers, tk_st_pos, st_cfg, dtf, kNominalDt);
+                        } else {  // one_euro
+                            fitra::slimevr::apply_quat_smoothing(
+                                trackers, tk_prev_quat, tk_quat_ctx, quat_euro, dtf, kNominalDt);
+                            fitra::slimevr::apply_pos_smoothing(
+                                trackers, tk_prev_pos, tk_pos_ctx, pos_euro, kNominalDt);
+                        }
+                    }
                 }
                 write_json_line(jout, global_frame++, job.pose, skel, tri,
                                 drift_before, drift_after, ik.locked(),

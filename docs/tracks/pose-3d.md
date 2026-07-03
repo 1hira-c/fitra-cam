@@ -92,6 +92,16 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-03 — 時空フィルタ M-C4 計測基盤: `dump_keypoints_3d --tracker-smoothing {raw,one_euro,st}`
+ハーネスに tracker 段の平滑を差し込み、録画クリップで **RAW / 現行 One-Euro / st_filter を決定的に A/B** できるように。
+`--tracker-smoothing`（`--dump-trackers` 必須）: `raw`=平滑なし（M-C1 OFF ベースライン）／`one_euro`=現行 shipping
+（One-Euro pos+quat、default Kalman）／`st`=時空フィルタ（`apply_pos_st_filter` + regime twist override + swing は
+One-Euro base、chain Kalman を弱化）。live `TrackerExtractor` の該当経路を 3D フレーム毎に clip cadence で再現
+（One-Euro params は MainConfig 既定 pos{1,4,1}/quat{1.5,1.5,1}、nominal=1/60）。**`--st-kalman-weaken F`**（既定 100
+＝M-C3 live 設定、1＝弱化なし）で Kalman 弱化倍率を掃引可能に（M-C4 の正当なノブ）。recorder v2 の 58.8fps×3cam
+クリップ 6 本（still/still_t/still_ski/forward_bend/bending_and_stretching/walk_around）で end-to-end 動作確認
+（reproj 中央値 3.8px）。full build パス。**次**: still で raw/one_euro/st を比較し 6 群 param + 弱化倍率を M-C4 で確定。
+
 ### 2026-07-03 — recorder v2: `record_3cam --format mjpeg`（verbatim MJPEG→AVI パススルー・M-C4 前段）
 時空フィルタの**動作/lag チューニング（M-C4）用に高 fps クリップ**が要る（8.6fps では高速 regime/lag が測れない）。
 `record_3cam` の mp4 モードは imdecode+mp4v encode 律速で ~8.6fps に張り付く。**`--format mjpeg` を追加**: カメラの
