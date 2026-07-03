@@ -123,8 +123,10 @@ triangulate → [calib tap: 生角度] → 空間ステージ → 軽 Kalman →
 - **M-A**: 骨盤剛体フィットのみ。重み付き Kabsch、valid-3 フォールバック、**空間-first へ並べ替え**。
   **Kalman の強さは据え置き** (変更は一度に一つ)。コアジッタ低減を計測。
 - **M-B**: 肩帯剛体 + 脊椎 soft 連結。
-- **M-C**: 時間フィルタを弱める (M4) + 四肢適応 R。軽 Kalman 化 + One-Euro 再調整。
-  lag 低減・jitter 非悪化を計測。
+- **M-C** (**再定義済 → 別 doc**): 当初「時間フィルタを弱める + 四肢適応 R」は M-B の負の所見で**撤回**
+  (見える肩帯・四肢ジッタは空間で取れず時間フィルタが唯一の抑え手 → 一律弱化は最悪部位を悪化)。新 M-C は
+  時間フィルタを弱めるのでなく **regime 適応の「時空フィルタ」に置き換える** →
+  [pose-3d-spatiotemporal-filter.md](pose-3d-spatiotemporal-filter.md) に分離。
 - **M-D** (保留): 床アンカ。最小ソフトクランプ、脚チェーン再解なし、既定 OFF。design-doc-first。
 - **M-E** (任意): ライブテレメトリ (per-joint reproj / 接地割合を WS3D stats に追加)。
 

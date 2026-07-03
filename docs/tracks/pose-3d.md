@@ -92,6 +92,19 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-03 — 時空フィルタ設計 doc（M-C 再定義・grill 経由）
+M-B の負の所見（見える肩帯・四肢ジッタは空間剛体で取れず＝時間フィルタが唯一の抑え手）を受け、当初 M-C
+「時間フィルタを弱める」を**撤回**し、**regime 適応の「時空フィルタ」に置き換える**設計へ。grill（設計レビュー）で
+ツリーを踏破し、[design/pose-3d-spatiotemporal-filter.md](../design/pose-3d-spatiotemporal-filter.md) に落とした。
+要点: **tracker 段**（One-Euro 置換）で **d=出力-目標距離（追従強度・凍結・ラグキャップ）× v=生速度（部位別外れ値棄却）の
+2 軸 regime**、**soft デッドバンド＋強フィルタ再センタリング**（完全凍結でなく小 α、恒久オフセット無し）、
+ラグキャップ（target の cap 以内）、四肢は**腰相対フレームで平滑**、推測 roll は twist_alpha に同 regime、
+chain Kalman は残すが**弱化**（予測/hold 専任）。既定 OFF `three_d.st_filter`（byte 不変）。検証は**オフライン
+tracker 計測ハーネス**（`dump_keypoints_3d` を tracker 段へ拡張＋per-bone 相対角速度 dump）＋ctest＋実機 A/B。
+検討した代替（角度空間＝相対角速度一発／ハード凍結／keypoint 段／Kalman 撤去／One-Euro 再調整）の却下理由は
+doc 参照。角度空間は葉位置増幅の懸念で保留＝ハーネスで並行検証し良ければ将来寄せる。最終的に One-Euro を撤去して
+スリム化する end-state も明記。**実装は未着手**（M-C1 ハーネスから）。
+
 ### 2026-07-01 — 空間フィルタ M-A ライブ配線（骨盤剛体を multi_pipeline へ・既定 OFF フラグ）
 オフラインで確認した骨盤剛体フィットをライブ `multi_pipeline` に配線。`apply_segment_rigid_fit` /
 `apply_spine_coupling` を `lift/rigid_fit` へ移し harness とライブで**同一コード**化（オフライン計測が
