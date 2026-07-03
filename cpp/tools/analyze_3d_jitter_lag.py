@@ -17,6 +17,12 @@ one per subcommand:
             strong temporal smoothing), estimated by cross-correlating one
             joint's trajectory. Positive lag = candidate is delayed.
 
+  trackers— per-SlimeVR-tracker metrics from a ``--dump-trackers`` JSONL:
+            position jitter (mm), inferred-roll (twist) jitter (deg) and
+            per-bone relative-to-parent angular velocity (deg/s). The
+            spatiotemporal-filter harness (M-C1): run OFF vs ON on the same clip
+            for a per-tracker delta table.
+
 Dependencies: numpy + stdlib only (NumPy 1.x on the Jetson venv is fine).
 
 Examples
@@ -29,6 +35,9 @@ Examples
 
   # Lag of a filtered run vs the raw triangulation on a motion clip
   analyze_3d_jitter_lag.py lag bend_no_kalman.jsonl bend_kalman.jsonl --joint 19
+
+  # Per-tracker jitter of a --dump-trackers run (OFF baseline)
+  analyze_3d_jitter_lag.py trackers still_trackers.jsonl --fps 8.6
 """
 
 from __future__ import annotations
@@ -251,6 +260,311 @@ def _jitter_delta(base: dict, cand: dict, joints: list[int]) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# trackers  (spatiotemporal-filter harness, M-C1)
+# --------------------------------------------------------------------------- #
+#
+# Scores the RAW SlimeVR 10-tracker trajectories emitted by
+# `dump_keypoints_3d --dump-trackers`: per-tracker position jitter (the VMT /
+# WebUI signal the filter attacks), inferred-roll jitter (the twist the filter
+# also targets on arms/legs), and per-bone relative-to-parent angular velocity
+# (the angle-domain / 案6 hypothesis data). This is the OFF baseline the
+# spatiotemporal filter (docs/design/pose-3d-spatiotemporal-filter.md) is
+# measured against; re-run ON once the filter is wired to get an A/B delta.
+
+N_TRACKERS = 10
+
+# TrackerRole order == array index (see slimevr::TrackerRole).
+TRACKER_NAMES = {
+    0: "l_upper_arm", 1: "r_upper_arm", 2: "chest", 3: "waist",
+    4: "l_upper_leg", 5: "r_upper_leg", 6: "l_lower_leg", 7: "r_lower_leg",
+    8: "l_foot", 9: "r_foot",
+}
+
+# Kinematic parent for the relative-angular-velocity metric (-1 = world root).
+# Matches the apply_quat_smoothing transport tree: arms ride the chest, legs
+# ride the waist, distals chain up their own limb.
+TRACKER_PARENT = {
+    0: 2, 1: 2,      # upper arms -> chest
+    2: 3,            # chest      -> waist
+    3: -1,           # waist      -> world root
+    4: 3, 5: 3,      # upper legs -> waist
+    6: 4, 7: 5,      # lower legs -> upper legs
+    8: 6, 9: 7,      # feet       -> lower legs
+}
+
+
+def tracker_label(idx: int) -> str:
+    return f"{idx}:{TRACKER_NAMES.get(idx, '?')}"
+
+
+@dataclass
+class TrackersLoaded:
+    path: str
+    n_frames: int
+    n_trackers: int
+    # pos[frame, tracker, 0:3] = xyz (m); quat[frame, tracker, 0:4] = wxyz;
+    # valid[frame, tracker] = bool; roll_conf[frame, tracker] = [0,1].
+    pos: np.ndarray
+    quat: np.ndarray
+    valid: np.ndarray
+    roll_conf: np.ndarray
+
+
+def load_trackers_jsonl(path: str) -> TrackersLoaded:
+    """Load the per-frame ``trackers`` array from a dump_keypoints_3d JSONL.
+
+    Each tracker entry is [role, px,py,pz, qw,qx,qy,qz, valid, roll_conf].
+    Lines without a ``trackers`` field (e.g. a dump made without
+    --dump-trackers) leave that frame's trackers all-invalid; if NO line has
+    the field the file is rejected.
+    """
+    rows = []
+    n_trk = 0
+    any_trackers = False
+    with open(path, "r", encoding="utf-8") as fh:
+        for line_no, line in enumerate(fh, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"{path}:{line_no}: bad JSON: {exc}") from exc
+            trk = rec.get("trackers")
+            if trk is None:
+                trk = []
+            else:
+                any_trackers = True
+            n_trk = max(n_trk, len(trk))
+            rows.append(trk)
+    if not rows:
+        raise SystemExit(f"{path}: no frames")
+    if not any_trackers:
+        raise SystemExit(
+            f"{path}: no 'trackers' field on any line — re-run "
+            f"dump_keypoints_3d with --dump-trackers")
+
+    n_frames = len(rows)
+    n_trk = max(n_trk, 1)
+    pos = np.zeros((n_frames, n_trk, 3), dtype=np.float64)
+    quat = np.tile(np.array([1.0, 0.0, 0.0, 0.0]), (n_frames, n_trk, 1))
+    valid = np.zeros((n_frames, n_trk), dtype=bool)
+    roll_conf = np.zeros((n_frames, n_trk), dtype=np.float64)
+    for fi, trk in enumerate(rows):
+        for entry in trk:
+            # [role, px,py,pz, qw,qx,qy,qz, valid, roll_conf]
+            ti = int(entry[0])
+            if ti < 0 or ti >= n_trk:
+                continue
+            pos[fi, ti, :] = entry[1:4]
+            quat[fi, ti, :] = entry[4:8]
+            valid[fi, ti] = bool(entry[8]) if len(entry) > 8 else False
+            roll_conf[fi, ti] = float(entry[9]) if len(entry) > 9 else 0.0
+    return TrackersLoaded(path, n_frames, n_trk, pos, quat, valid, roll_conf)
+
+
+# ---- quaternion helpers (wxyz) -------------------------------------------- #
+
+def _q_norm(q: np.ndarray) -> np.ndarray:
+    n = float(np.linalg.norm(q))
+    return q / n if n > 1e-12 else np.array([1.0, 0.0, 0.0, 0.0])
+
+
+def _q_conj(q: np.ndarray) -> np.ndarray:
+    return np.array([q[0], -q[1], -q[2], -q[3]])
+
+
+def _q_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return np.array([
+        aw * bw - ax * bx - ay * by - az * bz,
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+    ])
+
+
+def _geo_angle(a: np.ndarray, b: np.ndarray) -> float:
+    """Geodesic angle (rad, [0, pi]) between two orientation quaternions."""
+    d = abs(float(np.dot(_q_norm(a), _q_norm(b))))
+    return 2.0 * float(np.arccos(min(1.0, max(0.0, d))))
+
+
+def _mean_quat(qs: np.ndarray) -> np.ndarray:
+    """Sign-aligned normalized average — a robust reference orientation."""
+    q0 = _q_norm(qs[0])
+    acc = np.zeros(4)
+    for q in qs:
+        qn = _q_norm(q)
+        acc += qn if np.dot(qn, q0) >= 0.0 else -qn
+    return _q_norm(acc)
+
+
+def _rms_deg(rads: list[float]) -> float:
+    if not rads:
+        return 0.0
+    return float(np.degrees(np.sqrt(np.mean(np.square(rads)))))
+
+
+def tracker_metrics(data: TrackersLoaded, t: int, min_frames: int,
+                    fps: float) -> dict | None:
+    """Per-tracker jitter metrics over frames where the tracker is valid.
+
+    * pos_rms_mm  : 3D position scatter (sqrt of summed per-axis variance).
+    * ori_rms_deg : full orientation scatter about the mean orientation.
+    * roll_rms_deg: twist (roll about the bone forward) scatter about the mean.
+    * rel_dps     : relative-to-parent angular velocity RMS (deg/s), the
+                    angle-domain (案6) signal. rel-step RMS (deg) x fps.
+    None if the tracker never reaches min_frames valid samples.
+    """
+    if t >= data.n_trackers:
+        return None
+    mask = data.valid[:, t]
+    n = int(mask.sum())
+    if n < min_frames:
+        return None
+
+    pts = data.pos[mask, t, :]                    # (n, 3) meters
+    std_axis = pts.std(axis=0) * 1000.0           # mm
+    pos_rms_mm = float(np.sqrt((std_axis ** 2).sum()))
+
+    qs = data.quat[mask, t, :]                    # (n, 4) wxyz
+    ref = _mean_quat(qs)
+    ref_conj = _q_conj(ref)
+    ori_angs, roll_angs = [], []
+    for q in qs:
+        qn = _q_norm(q)
+        ori_angs.append(_geo_angle(ref, qn))
+        d = _q_mul(ref_conj, qn)                  # ref^-1 * q
+        if d[0] < 0.0:
+            d = -d                                # canonical w >= 0
+        roll_angs.append(2.0 * float(np.arctan2(d[3], d[0])))  # twist about +Z
+    ori_rms_deg = _rms_deg(ori_angs)
+    roll_rms_deg = _rms_deg(roll_angs)
+
+    # Relative-to-parent per-frame angular step, over frames where both this
+    # tracker and its parent are valid (root: parent always "valid").
+    parent = TRACKER_PARENT.get(t, -1)
+    pvalid = (np.ones(data.n_frames, dtype=bool) if parent < 0
+              else data.valid[:, parent])
+    rel_steps = []
+    prev_rel = None
+    prev_ok = False
+    for fi in range(data.n_frames):
+        ok = bool(mask[fi] and pvalid[fi])
+        if not ok:
+            prev_ok = False
+            continue
+        qc = _q_norm(data.quat[fi, t, :])
+        rel = qc if parent < 0 else _q_mul(_q_conj(data.quat[fi, parent, :]), qc)
+        if prev_ok:
+            rel_steps.append(_geo_angle(prev_rel, rel))
+        prev_rel = rel
+        prev_ok = True
+    rel_step_rms_deg = _rms_deg(rel_steps)
+    rel_dps = rel_step_rms_deg * fps
+
+    return {
+        "tracker": t,
+        "name": TRACKER_NAMES.get(t, "?"),
+        "parent": parent,
+        "valid_frames": n,
+        "pos_rms_mm": pos_rms_mm,
+        "ori_rms_deg": ori_rms_deg,
+        "roll_rms_deg": roll_rms_deg,
+        "rel_step_rms_deg": rel_step_rms_deg,
+        "rel_dps": rel_dps,
+        "roll_conf_mean": float(data.roll_conf[mask, t].mean()),
+    }
+
+
+def run_trackers(args: argparse.Namespace) -> int:
+    files = [load_trackers_jsonl(p) for p in args.files]
+    if args.trackers:
+        sel = [int(x) for x in args.trackers.split(",") if x.strip() != ""]
+    else:
+        sel = list(range(N_TRACKERS))
+
+    results = []
+    for data in files:
+        per = {}
+        for t in sel:
+            m = tracker_metrics(data, t, args.min_frames, args.fps)
+            if m is not None:
+                per[t] = m
+        results.append({
+            "path": data.path,
+            "frames": data.n_frames,
+            "fps": args.fps,
+            "per_tracker": per,
+        })
+
+    _print_trackers_table(results, sel)
+
+    out = {"metric": "trackers", "min_frames": args.min_frames,
+           "fps": args.fps, "files": results}
+    if len(results) == 2:
+        out["delta"] = _trackers_delta(results[0], results[1], sel)
+    _maybe_write(args.out, out)
+    return 0
+
+
+def _print_trackers_table(results: list[dict], sel: list[int]) -> None:
+    print("== trackers (RAW, no temporal smoothing; lower is better) ==")
+    for i, r in enumerate(results):
+        print(f"[{i}] {r['path']}  ({r['frames']} frames, {r['fps']:g} fps)")
+    print()
+    cols = ("pos_rms_mm", "ori_rms_deg", "roll_rms_deg", "rel_dps")
+    for r in results:
+        idx = results.index(r)
+        print(f"-- [{idx}] {r['path']} --")
+        header = f"{'tracker':<16}" + "".join(f"{c:>13}" for c in cols) + f"{'roll_cf':>9}"
+        print(header)
+        print("-" * len(header))
+        for t in sel:
+            m = r["per_tracker"].get(t)
+            if m is None:
+                continue
+            print(f"{tracker_label(t):<16}"
+                  f"{m['pos_rms_mm']:>13.2f}{m['ori_rms_deg']:>13.2f}"
+                  f"{m['roll_rms_deg']:>13.2f}{m['rel_dps']:>13.1f}"
+                  f"{m['roll_conf_mean']:>9.2f}")
+        print()
+    print("pos_rms_mm  = 3D position scatter (VMT/WebUI signal)")
+    print("roll_rms_deg= inferred-roll (twist) scatter  |  rel_dps = "
+          "relative-to-parent angular velocity (deg/s, 案6)")
+
+
+def _trackers_delta(base: dict, cand: dict, sel: list[int]) -> dict:
+    """[1] relative to [0]: negative pct = candidate less jitter."""
+    per = {}
+    print("== delta [1] vs [0] (negative = [1] less jitter) ==")
+    print(f"{'tracker':<16}{'pos_rms_mm':>24}{'roll_rms_deg':>24}")
+    for t in sel:
+        b = base["per_tracker"].get(t)
+        c = cand["per_tracker"].get(t)
+        if b is None or c is None:
+            continue
+
+        def _cell(key):
+            bv, cv = b[key], c[key]
+            pct = (100.0 * (cv - bv) / bv) if bv > 1e-9 else None
+            pcs = "n/a" if pct is None else f"{pct:+.1f}%"
+            return f"{bv:>7.2f}->{cv:>7.2f} ({pcs})", pct
+
+        pos_s, pos_pct = _cell("pos_rms_mm")
+        roll_s, roll_pct = _cell("roll_rms_deg")
+        per[t] = {"tracker": t, "name": TRACKER_NAMES.get(t, "?"),
+                  "pos_rms_mm": {"base": b["pos_rms_mm"], "cand": c["pos_rms_mm"],
+                                 "delta_pct": pos_pct},
+                  "roll_rms_deg": {"base": b["roll_rms_deg"], "cand": c["roll_rms_deg"],
+                                   "delta_pct": roll_pct}}
+        print(f"{tracker_label(t):<16}{pos_s:>24}{roll_s:>24}")
+    return {"per_tracker": per}
+
+
+# --------------------------------------------------------------------------- #
 # lag
 # --------------------------------------------------------------------------- #
 
@@ -411,6 +725,21 @@ def build_parser() -> argparse.ArgumentParser:
                     help="min valid frames for a joint to be scored (default 10)")
     pj.add_argument("--out", default="", help="write metrics JSON here")
     pj.set_defaults(func=run_jitter)
+
+    pt = sub.add_parser("trackers",
+                        help="per-tracker pos/roll jitter + relative angular "
+                             "velocity (spatiotemporal-filter harness)")
+    pt.add_argument("files", nargs="+",
+                    help="dump_keypoints_3d --dump-trackers JSONL (1+; 2 => delta)")
+    pt.add_argument("--trackers", default="",
+                    help="comma-separated tracker indices 0..9 (default all)")
+    pt.add_argument("--min-frames", type=int, default=10,
+                    help="min valid frames for a tracker to be scored (default 10)")
+    pt.add_argument("--fps", type=float, default=30.0,
+                    help="clip fps for the relative-angular-velocity deg/s "
+                         "column (default 30; jitter columns are fps-independent)")
+    pt.add_argument("--out", default="", help="write metrics JSON here")
+    pt.set_defaults(func=run_trackers)
 
     pl = sub.add_parser("lag", help="temporal lag of candidate vs baseline (motion clip)")
     pl.add_argument("baseline", help="baseline JSONL (e.g. tri-only / weak smoothing)")

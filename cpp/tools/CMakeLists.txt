@@ -193,6 +193,7 @@ add_executable(fitra_dump_keypoints_3d
 target_link_libraries(fitra_dump_keypoints_3d PRIVATE
     fitra_infer
     fitra_lift
+    fitra_slimevr     # extract_trackers for --dump-trackers (M-C1 harness)
     opencv_videoio
     opencv_imgproc
     opencv_core

@@ -120,9 +120,13 @@ swing と剛体 roll (chest/waist/shin-anatomical, conf=1 pin) は無変更 (ス
 
 ## Milestone
 
-- **M-C1**: **オフライン tracker 計測ハーネス**。`dump_keypoints_3d` を拡張し `extract_trackers` + 時空フィルタを走らせ、
-  **per-tracker 軌跡 (pos + 推測 roll) + per-bone 相対角速度**を dump。analyzer を tracker 対応に。→ 録画クリップで
-  決定的 ON/OFF の jitter/lag と、案6 (角度空間) 仮説の検証データを得る。
+- **M-C1** ✅ 済 (2026-07-03): **オフライン tracker 計測ハーネス**。`dump_keypoints_3d --dump-trackers` (Halpe26 限定)
+  が最終 skeleton から `extract_trackers` を走らせ、JSONL 各行に **`trackers` 配列** (per-tracker の pos + 姿勢 quat +
+  valid + roll_confidence) を追記。production 配置デフォルト (foot=Ankle / spine frac 0.65,0.15) + job ごと `ExtractContext`
+  (FK fallback) でライブ幾何に一致。`analyze_3d_jitter_lag.py trackers` が per-tracker の **pos ジッタ(mm) / 推測 roll(twist)
+  ジッタ(deg) / 全姿勢スキャッタ(deg) / 親相対角速度(deg/s)** を出し、2 ファイルで ON/OFF delta 表。親ツリーは
+  transport (腕→chest / 脚→waist / distal は自肢遡上) に一致。→ **今回は RAW = 決定的 OFF ベースライン**を取得。時空フィルタ
+  自体を通した ON 側は **M-C2/M-C3 後にハーネスへ差し込んで**取得 (案6 の角度空間検証データは相対角速度列で既に出る)。
 - **M-C2**: **時空フィルタ core** (`StFilter`, 位置 + twist、2 軸 regime、部位別 `StFilterParams`) を新規実装 + ctest
   (凍結コア再センタリング・ランプ連続・ラグキャップ上限・外れ値保持・dt 補正)。まだ配線しない。
 - **M-C3**: **`tracker_extract` へ配線** (`--st-filter` 既定 OFF、位置=One-Euro 置換 / twist=デッドバンド)、

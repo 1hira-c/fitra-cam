@@ -12,6 +12,16 @@
 // counts and reprojection errors are emitted per frame so the companion
 // analyzer (tools/analyze_3d_jitter_lag.py) can score stationary jitter and
 // motion lag across stage on/off runs.
+//
+// With --dump-trackers (Halpe26 only) it additionally runs the SlimeVR 10-tracker
+// extraction (slimevr::extract_trackers) on the final skeleton and emits a
+// per-frame "trackers" array (pos + orientation quat + valid + roll_confidence).
+// This is the spatiotemporal-filter track's tracker harness (M-C1,
+// docs/design/pose-3d-spatiotemporal-filter.md): it captures the RAW (no
+// temporal smoothing) tracker trajectories so the analyzer's `trackers`
+// subcommand can score per-tracker position / roll jitter and per-bone
+// relative angular velocity — the deterministic OFF baseline the spatiotemporal
+// filter is measured against, plus the data for the angle-domain (案6) test.
 
 #include <algorithm>
 #include <array>
@@ -50,6 +60,7 @@
 #include "lift/skeleton_def.hpp"
 #include "lift/subject_profile.hpp"
 #include "lift/triangulator.hpp"
+#include "slimevr/tracker_extract.hpp"
 #include "util/cuda_check.hpp"
 #include "util/logging.hpp"
 
@@ -96,6 +107,7 @@ struct Args {
     bool no_ik = false;
     bool rigid_pelvis = false;
     bool rigid_shoulders = false;
+    bool dump_trackers = false;
     double spine_tol = 0.12;
     std::string keypoint_format_str = "coco17";
 };
@@ -145,6 +157,12 @@ void print_help() {
         "                            distance from hip_center to the spine length +/-\n"
         "                            --spine-tol (needs --subject-profile). M-B.\n"
         "  --spine-tol F             spine soft-coupling tolerance fraction (default 0.12)\n"
+        "  --dump-trackers           also emit the SlimeVR 10-tracker extraction per\n"
+        "                            frame (Halpe26 only): a \"trackers\" array of RAW\n"
+        "                            (no temporal smoothing) pos + orientation quat +\n"
+        "                            valid + roll_confidence. This is the spatiotemporal\n"
+        "                            filter's tracker harness OFF baseline (M-C1); score\n"
+        "                            it with analyze_3d_jitter_lag.py trackers.\n"
         "  --keypoint-format FMT     pose topology: coco17 (default) or halpe26\n"
         "  --help                    show this help\n");
 }
@@ -186,6 +204,7 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--no-ik")        { args.no_ik = true; }
         else if (a == "--rigid-pelvis") { args.rigid_pelvis = true; }
         else if (a == "--rigid-shoulders") { args.rigid_shoulders = true; }
+        else if (a == "--dump-trackers") { args.dump_trackers = true; }
         else if (a == "--spine-tol")    { args.spine_tol = std::stod(need("--spine-tol")); }
         else if (a == "--keypoint-format") { args.keypoint_format_str = need("--keypoint-format"); }
         else {
@@ -599,7 +618,9 @@ void write_json_line(std::ofstream& out,
                      const fitra::lift::TriangulatedSkeleton& tri,
                      double bone_drift_before,
                      double bone_drift_after,
-                     bool ik_locked) {
+                     bool ik_locked,
+                     const std::array<fitra::slimevr::SlimeTracker,
+                                       fitra::slimevr::kTrackerCount>* trackers) {
     out << "{\"frame\":" << frame
         << ",\"kp_format\":\""
         << fitra::lift::keypoint_format_name(fitra::lift::active_keypoint_format())
@@ -629,7 +650,25 @@ void write_json_line(std::ofstream& out,
         if (k) out << ",";
         out << fmt(tri.reproj_error_px[k]);
     }
-    out << "]}}\n";
+    out << "]}";  // close "stats"
+    if (trackers != nullptr) {
+        // RAW SlimeVR trackers (no temporal smoothing): one entry per role in
+        // TrackerRole order, [role, px,py,pz, qw,qx,qy,qz, valid, roll_conf].
+        // The analyzer's `trackers` subcommand consumes this.
+        out << ",\"trackers\":[";
+        for (std::size_t t = 0; t < fitra::slimevr::kTrackerCount; ++t) {
+            if (t) out << ",";
+            const auto& tr = (*trackers)[t];
+            out << "[" << static_cast<int>(tr.role)
+                << "," << fmt(tr.pos[0]) << "," << fmt(tr.pos[1]) << "," << fmt(tr.pos[2])
+                << "," << fmt(tr.quat_wxyz[0]) << "," << fmt(tr.quat_wxyz[1])
+                << "," << fmt(tr.quat_wxyz[2]) << "," << fmt(tr.quat_wxyz[3])
+                << "," << (tr.valid ? "true" : "false")
+                << "," << fmt(tr.roll_confidence) << "]";
+        }
+        out << "]";
+    }
+    out << "}\n";  // close record
 }
 
 // The spatial rigid-segment fit and spine soft coupling live in lift/rigid_fit
@@ -726,6 +765,12 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "--rigid-pelvis/--rigid-shoulders require --subject-profile (template distances)\n");
                 return EXIT_FAILURE;
             }
+        }
+        if (args.dump_trackers &&
+            fitra::lift::active_keypoint_format() != fitra::lift::KeypointFormat::Halpe26) {
+            std::fprintf(stderr, "--dump-trackers requires --keypoint-format halpe26 "
+                                 "(extract_trackers needs neck/hip_center/toe joints)\n");
+            return EXIT_FAILURE;
         }
         if (args.rigid_pelvis) {
             pelvis_template = fitra::lift::RigidTemplate::from_distances(
@@ -854,6 +899,10 @@ int main(int argc, char** argv) {
             }
 
             fitra::lift::SkeletonKalman kalman;
+            // Per-job foot-anchor state for extract_trackers' FK fallback,
+            // mirroring TrackerExtractor::extract_ctx_. Declared inside the job
+            // loop so it resets between poses (matches `kalman`).
+            fitra::slimevr::ExtractContext tracker_ctx;
             for (int frame_idx = 0;; ++frame_idx) {
                 if (args.max_frames > 0 && processed >= args.max_frames) break;
                 std::vector<cv::Mat> frames(n_cams);
@@ -917,8 +966,23 @@ int main(int argc, char** argv) {
                     drift_after = ik.bone_drift_pct(skel);
                 }
 
+                // Tracker harness (M-C1): RAW SlimeVR trackers from the final
+                // skeleton, no temporal smoothing (that lives downstream in
+                // TrackerExtractor). Product placement defaults (foot=Ankle,
+                // chest/waist spine fracs 0.65/0.15) so the geometry matches the
+                // live pipeline. Emitted on every frame (all-invalid on a
+                // dropout) so the trackers array stays frame-aligned with
+                // persons_3d.
+                std::array<fitra::slimevr::SlimeTracker,
+                           fitra::slimevr::kTrackerCount> trackers{};
+                if (args.dump_trackers) {
+                    trackers = fitra::slimevr::extract_trackers(
+                        skel, &tracker_ctx, fitra::slimevr::FootPosMode::Ankle,
+                        0.65f, 0.15f);
+                }
                 write_json_line(jout, global_frame++, job.pose, skel, tri,
-                                drift_before, drift_after, ik.locked());
+                                drift_before, drift_after, ik.locked(),
+                                args.dump_trackers ? &trackers : nullptr);
                 if (tri.valid_joints > 0) {
                     frames_with_3d += 1;
                     med_reproj_values.push_back(tri.median_reproj_px);

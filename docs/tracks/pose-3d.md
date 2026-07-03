@@ -92,6 +92,19 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-03 — 時空フィルタ M-C1: オフライン tracker 計測ハーネス
+時空フィルタの検証基盤（[design/pose-3d-spatiotemporal-filter.md](../design/pose-3d-spatiotemporal-filter.md) M-C1）。
+**`dump_keypoints_3d --dump-trackers`**（Halpe26 限定）で最終 skeleton から `slimevr::extract_trackers` を走らせ、
+JSONL 各行に `trackers` 配列（per-tracker の pos + 姿勢 quat + valid + roll_confidence）を追記。**RAW（時間平滑なし）**
+＝時空フィルタが叩く前の **決定的 OFF ベースライン**。production 配置デフォルト（foot=Ankle / spine frac 0.65,0.15）で
+ライブ幾何に一致させ、FK fallback 用 `ExtractContext` を job ごとに保持（`TrackerExtractor` と同型）。
+**`analyze_3d_jitter_lag.py trackers`** サブコマンドを追加：per-tracker の **pos ジッタ(mm)** / **推測 roll(twist)
+ジッタ(deg)** / 全姿勢スキャッタ(deg) / **親相対角速度(deg/s)**（角度空間＝案6 の検証データ）を出し、2 ファイルで
+ON/OFF delta 表。tracker 親ツリーは apply_quat_smoothing の transport（腕→chest / 脚→waist / distal は自肢を遡上）に一致。
+`fitra_dump_keypoints_3d` に `fitra_slimevr` をリンク（transitive で `fitra_pipeline` も。static link で無害）。
+full build パス、analyzer は合成クリップでスモーク合格（純 twist 入力で ori≡roll を確認）。ctest 回帰なし
+（ライブ経路・ライブラリ未変更）。**次**: M-C2 = `StFilter` core（2 軸 regime + 部位別 param）+ ctest。
+
 ### 2026-07-03 — 時空フィルタ設計 doc（M-C 再定義・grill 経由）
 M-B の負の所見（見える肩帯・四肢ジッタは空間剛体で取れず＝時間フィルタが唯一の抑え手）を受け、当初 M-C
 「時間フィルタを弱める」を**撤回**し、**regime 適応の「時空フィルタ」に置き換える**設計へ。grill（設計レビュー）で
