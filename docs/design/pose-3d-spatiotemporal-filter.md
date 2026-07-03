@@ -127,8 +127,14 @@ swing と剛体 roll (chest/waist/shin-anatomical, conf=1 pin) は無変更 (ス
   ジッタ(deg) / 全姿勢スキャッタ(deg) / 親相対角速度(deg/s)** を出し、2 ファイルで ON/OFF delta 表。親ツリーは
   transport (腕→chest / 脚→waist / distal は自肢遡上) に一致。→ **今回は RAW = 決定的 OFF ベースライン**を取得。時空フィルタ
   自体を通した ON 側は **M-C2/M-C3 後にハーネスへ差し込んで**取得 (案6 の角度空間検証データは相対角速度列で既に出る)。
-- **M-C2**: **時空フィルタ core** (`StFilter`, 位置 + twist、2 軸 regime、部位別 `StFilterParams`) を新規実装 + ctest
-  (凍結コア再センタリング・ランプ連続・ラグキャップ上限・外れ値保持・dt 補正)。まだ配線しない。
+- **M-C2** ✅ 済 (2026-07-03): **時空フィルタ core** を `slimevr/st_filter.{hpp,cpp}` に新規実装 (fitra_slimevr)。
+  純粋・自己完結・単体テスト済の regime プリミティブ: `StRegime`/`StPosParams`/部位別 6 群 `StFilterConfig` +
+  seeded `default_st_config()`、スカラ core `st_alpha_d` (デッドバンド→ramp→normal) / `st_vel_gate` (外れ値) /
+  `st_rate_adjust_alpha`、位置ステップ `st_pos_step` (2 軸 regime + ラグキャップ)、twist の
+  `st_twist_angle` (+Z 回りの符号付き twist) / `st_twist_alpha` (`alpha_d(d_roll)·roll_confidence·gate(v_roll)`)。
+  ctest `test_st_filter`: 凍結コア再センタリング (完全凍結でない・恒久オフセット無し)・ランプ連続/単調・ラグキャップ上限・
+  外れ値保持・dt 補正の fps 非依存・twist 符号/swing 除去・default config 健全性。**まだ配線しない** (M-C3)。
+  full build + ctest **33/33** パス。
 - **M-C3**: **`tracker_extract` へ配線** (`--st-filter` 既定 OFF、位置=One-Euro 置換 / twist=デッドバンド)、
   **chain Kalman 弱化** (process noise↑)。既定 OFF で byte 不変を ctest で固定。
 - **M-C4**: **パラメータ確定**。M-C1 ハーネスで 6 群のノブをスイープし、静止 jitter 低減 / lag 非悪化を満たす既定へ。

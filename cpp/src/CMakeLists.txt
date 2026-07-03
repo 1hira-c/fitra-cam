@@ -158,6 +158,7 @@ add_library(fitra_slimevr STATIC
     slimevr/firmware_protocol.cpp
     slimevr/native_publisher.cpp
     slimevr/slime_tracker_bus.cpp
+    slimevr/st_filter.cpp
     slimevr/tracker_extract.cpp
     slimevr/tracker_extractor.cpp
 )

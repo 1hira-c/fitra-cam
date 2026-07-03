@@ -92,6 +92,21 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-03 — 時空フィルタ M-C2: regime フィルタ core（`slimevr/st_filter`）+ ctest
+時空フィルタのコア math を `slimevr/st_filter.{hpp,cpp}`（fitra_slimevr）に新規実装。**純粋・自己完結・単体テスト済**の
+regime プリミティブで、まだ配線しない（M-C3）。内容: `StRegime` / `StPosParams` / 部位別 **6 群**（waist/chest/upper_arm/
+upper_leg/lower_leg/foot、L/R 対称）`StFilterConfig` + seeded `default_st_config()`（M-infra ベースライン + ~3cm
+「細動捨て」目標から焼いた初期値、M-C4 でハーネス sweep）。スカラ core = `st_alpha_d`（デッドバンド→smoothstep ramp→
+normal、距離ドメインで fps 非依存）/ `st_vel_gate`（外れ値 1→0）/ `st_rate_adjust_alpha`（tracker_extract と同式）。
+位置ステップ `st_pos_step`（**d=出力-目標 × v=生速度の 2 軸 regime** + ラグキャップ：信頼時のみ target の cap 以内へ）。
+twist は `st_twist_angle`（+Z 回りの符号付き twist＝swing/twist 分解）/ `st_twist_alpha`
+（`alpha_d(d_roll)·roll_confidence·gate(v_roll)`）。roll は**推測 roll の群のみ**（upper_arm/upper_leg/縮退 shin）を
+regime 駆動、chest/waist/foot は has_roll=false で M-C3 の pinned 経路に残す。**デッドバンドは完全凍結でなく強フィルタ
+再センタリング**（小 α・恒久オフセット無し）を ctest で固定。ctest `test_st_filter`（9 ケース：ramp 連続/単調・gate・
+再センタリング・ラグキャップ上限・外れ値保持・dt 補正の fps 非依存・twist 符号/swing 除去・config 健全性）。
+full build + ctest **33/33** パス。**次**: M-C3 = `tracker_extract` へ配線（`--st-filter` 既定 OFF・byte 不変）+
+chain Kalman 弱化。設計 = [design/pose-3d-spatiotemporal-filter.md](../design/pose-3d-spatiotemporal-filter.md) M-C2。
+
 ### 2026-07-03 — 時空フィルタ M-C1: オフライン tracker 計測ハーネス
 時空フィルタの検証基盤（[design/pose-3d-spatiotemporal-filter.md](../design/pose-3d-spatiotemporal-filter.md) M-C1）。
 **`dump_keypoints_3d --dump-trackers`**（Halpe26 限定）で最終 skeleton から `slimevr::extract_trackers` を走らせ、

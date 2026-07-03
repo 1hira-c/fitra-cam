@@ -659,6 +659,22 @@ set_target_properties(fitra_test_continuous_aligner PROPERTIES
 
 add_test(NAME test_continuous_aligner COMMAND fitra_test_continuous_aligner)
 
+# Spatiotemporal filter core (M-C2): regime primitives in slimevr/st_filter.
+add_executable(fitra_test_st_filter
+    test_st_filter.cpp
+)
+
+target_link_libraries(fitra_test_st_filter PRIVATE
+    fitra_slimevr
+)
+
+set_target_properties(fitra_test_st_filter PROPERTIES
+    OUTPUT_NAME "test_st_filter"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_st_filter COMMAND fitra_test_st_filter)
+
 # Position EMA in TrackerExtractor. Lives in fitra_slimevr because the
 # helper is part of tracker_extract.{hpp,cpp}.
 add_executable(fitra_test_tracker_extract_pos
