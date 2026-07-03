@@ -92,10 +92,29 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-04 — 時空フィルタ M-C4 動作計測 + 敵対的検証（多エージェント workflow・結論確定）
+実 59fps クリップ（still/walk_around/forward_bend、各900フレーム、raw/one_euro/st）で A/B し、8エージェント workflow
+（`mc4-motion-study`: measure→analyze→4レンズ敵対的 verify→synthesize）で結論を検証。**検証済の確定結論**:
+- **lag: st は one_euro に追加 lag ゼロ、むしろ速い**（walk_around 全4 tracker が信頼域 sigma>500mm・corr>0.999 で
+  st lag は正 causal かつ one_euro 未満: l_upper_arm −19.8ms / l_lower_leg −9.9ms / feet −3.6〜−4.9ms）。→ roll 改善は **lag コストゼロ**。
+- **roll 勝ちの帰属を訂正（major finding）**: 前エントリの**脚の派手な数字（upper_leg −36〜−41% / lower_leg −25〜−36%）は
+  metric artifact**。脚は roll_conf=0 で **twist regime は INACTIVE**、roll_rms の動きは `2*atan2(d.z,d.w)` 投影に
+  swing/parent-yaw wander が漏れたもの（roll delta が ori delta に 1:1）。**真の roll-regime 効果は arm/feet 限定・控えめ**
+  （l_upper_arm −12.6% vs one_euro、完全 confident な r_upper_arm(conf=1.0) は 0%）。可視プルプル proxy は roll_rms でなく
+  **rel_dps（角速度）**を採るべき（脚で乖離、rel_dps は st legs=calm 5dps vs raw 12–42=slow drift, not shimmer）。
+- **position**: pos_rms は wash **かつ推論ノイズ内**（raw/one_euro/st は別々推論 run で skeleton diff max 78mm=FP16 非決定性が
+  想定より桁違い大）。ただし **position path は削るな** — 脚/足の swing 安定は position regime 由来。「position は low-value」は誤り、
+  「pos_rms は ~6mm 上流フロア律速だが filtering は leg/foot orientation を駆動」が正。
+- **×100 Kalman 弱化は棄却確定**、weaken=1 で全 rest+lag metric が one_euro 以上。
+→ **結論: roll regime を weaken=1・default-OFF で ship、×100 破棄、最終 ON は M-C5 実機 A/B で判定**（motion 証拠が薄い＝
+kick clip 追加要）。候補: held-twist(roll_conf≈0) pass-through（ただし rel_dps 上は非可視＝要否未確定）、arm alpha_rest 調整、
+A/B は同一 skeleton を cache して replay（noise floor 付与）。設計 doc M-C4 節に詳細。**コード変更なし（計測 + doc のみ）**。
+
 ### 2026-07-04 — 時空フィルタ M-C4 静止所見 + st Kalman 弱化を ×100→1（データ根拠）+ tracker-lag 指標
 recorder v2 の実 59fps `still` クリップ（900フレーム）で raw / one_euro / st を A/B した静止所見:
-- **推測 roll（腕・脚）は st が明確に勝つ**: l_upper_arm −12.6% / upper_leg −36〜−41% / lower_leg −25〜−36%（vs 現行 One-Euro）。
-  ユーザーの明示ゴール「腕・脚の曲がりから推測した roll の揺れを抑える」に効いた。
+- **推測 roll（腕・脚）で st が One-Euro より低い roll_rms**: l_upper_arm −12.6% / upper_leg −36〜−41% / lower_leg −25〜−36%。
+  **【翌エントリで訂正】脚の数字は metric artifact**（脚は roll_conf=0 で twist regime INACTIVE、roll_rms は swing wander の漏れ）。
+  真の roll-regime 効果は **arm 側 −12.6% に限定**。ユーザーゴール「腕・脚の曲がりからの推測 roll を抑える」への genuine な効きは arm/feet。
 - **位置ジッタは One-Euro と互角**（st が数%悪い程度）。chest/waist ~6.5mm・腕 ~6-8mm の**上流フロア**（三角測量+Kalman+IK）が
   支配的で、tracker 段の時間フィルタ（One-Euro でも st でも）ではこれ以上落ちない（M-A/M-B「見える位置ジッタは上流」と一致）。
 - **M-C3 の ×100 Kalman 弱化は静止で有害**: rel 角速度 2〜3×・保持脚 roll +300〜1400%。弱化した Kalman が skeleton に角ジッタを

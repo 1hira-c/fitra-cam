@@ -146,27 +146,53 @@ swing と剛体 roll (chest/waist/shin-anatomical, conf=1 pin) は無変更 (ス
   Kalman default・config 非emit) を ctest で固定。ctest `test_st_filter` に全身並進 no-lag / 静止抑制 / invalid-hold
   drag / recovery snap / twist scope / nullptr byte 一致を追加。full build + ctest **33/33** パス。
   **次**: M-C4 (ハーネスに st_filter 差し込み→6 群 param スイープ)、M-C5 (実機 A/B)。
-- **M-C4**: **パラメータ確定**。M-C1 ハーネスで 6 群のノブをスイープし、静止 jitter 低減 / lag 非悪化を満たす既定へ。
-  動作/lag は時間分解能依存なので **`record_3cam --format mjpeg`（recorder v2、verbatim MJPEG→AVI パススルー ~30fps・
-  2026-07-03 実装済）**で高 fps クリップを録ってから測る（8.6fps mp4 では高速 regime/lag が測れない）。ハーネスへ
-  st_filter を通した ON 側の tracker dump を差し込む作業もここ。
-- **M-C5**: **実機 A/B** (WebUI 3D + WS3D テレメトリ) で体感確定 (動き出し・snap/チャタリング無し・追従)。
-  合格なら既定 ON 化を検討。
+- **M-C4** ✅ 計測済 (2026-07-04、実 59fps クリップ + 敵対的検証): ハーネスに tracker 段平滑を差し込み
+  (`--tracker-smoothing {raw,one_euro,st}` + `--st-kalman-weaken F`) 、still/walk_around/forward_bend で
+  raw/one_euro/st を A/B。**検証済の結論** (workflow `mc4-motion-study`、8 agent):
+  - **lag: st は one_euro に追加 lag ゼロ、むしろ速い** (walk_around 全4 tracker が信頼域 sigma>500mm・corr>0.999 で
+    st の lag は正 causal かつ one_euro 未満: l_upper_arm −19.8ms / l_lower_leg −9.9ms / feet −3.6〜−4.9ms)。→ roll 改善は **lag コストゼロ**。
+  - **roll: 真の regime 効果は arm/feet 限定・控えめ** (l_upper_arm −12.6% vs one_euro / −34% vs raw)。**脚の派手な数字
+    (upper_leg −36〜−41%, lower_leg −25〜−36%) は metric artifact** — 脚は roll_conf=0 で **twist regime は INACTIVE**、
+    roll_rms の動きは `2*atan2(d.z,d.w)` 投影に swing/parent-yaw wander が漏れたもの (roll delta が ori delta に 1:1 追随)。
+    完全 confident な r_upper_arm(conf=1.0) は 0%。**可視プルプルの proxy は roll_rms でなく rel_dps** (角速度) を採るべき
+    — 脚で乖離し rel_dps は st legs=calm (5dps vs raw 12–42=slow drift, not shimmer)。
+  - **position: pos_rms は wash かつ推論ノイズ内** (raw/one_euro/st は別々の推論 run で skeleton は byte 不一致・
+    diff max 78mm=FP16 非決定性は想定より桁違いに大。当初「~0.02–0.05mm」は過小評価)。ただし **position path を削るな** —
+    脚/足の swing を安定させる orientation 効果は position regime 由来。「position は low-value」は誤り、正しくは
+    「pos_rms は ~6mm 上流フロア律速だが filtering は leg/foot orientation を駆動」。
+  - **×100 Kalman 弱化は棄却確定** (rest で rel_dps 2–3×・held-leg roll +300–1400% vs raw)。**weaken=1** に既定変更済
+    (skeleton が raw と一致)。**st は rest+lag の全 metric で one_euro 以上**。→ **roll regime を weaken=1・default-OFF で ship、
+    最終 ON は M-C5 実機で判定**。
+- **M-C5**: **実機 A/B** (WebUI 3D + WS3D テレメトリ) で体感確定 (動き出し・snap/チャタリング無し・追従)。**motion 証拠が薄い
+  (2 clip・forward_bend は実質 1 本の信頼 mover) ので kick clip を追加**して速い twist を含める。合格なら既定 ON 化を検討。
 - **将来**: (a) 案6 角度空間の検証結果次第で角度ドメインへ寄せる。(b) **スリム化** — st_filter を唯一の平滑にし
   One-Euro / 固定 EMA と `vr_one_euro`/`vr_pos_*` 系を撤去 (ユーザー意向: 最終的に既存を壊してスリム化)。
 
 ## 検証
 
 - **ctest**: `StFilter` core を合成信号で固定 (M-C2)。既定 OFF での byte 不変 (M-C3)。
-- **主検証 = 決定的オフライン再生** (M-C1 ハーネス): 静止クリップ → 肩帯・四肢の per-tracker 位置 RMS を ON/OFF 比較、
-  動作クリップ → step/相互相関で lag を ON/OFF 比較。受け入れ: **肩帯・四肢の静止ジッタを有意に低減 かつ lag 非悪化**
-  (数値目標は M-C1 のベースライン取得後に確定。TensorRT FP16 非決定性 ~0.02–0.05mm は無視できる)。
+- **主検証 = 決定的オフライン再生** (M-C1 ハーネス): 静止クリップ → per-tracker 位置 RMS を比較、
+  動作クリップ → `trackers-lag` (tracker 位置軌跡の相互相関) で lag を比較。
+  **⚠ 交絡注意 (M-C4 で判明)**: raw/one_euro/st を別々の dump run で取ると **skeleton が byte 不一致** (別々に
+  YOLOX+RTMPose 推論するため。実測 diff max 78mm、FP16 非決定性は当初想定 ~0.02–0.05mm より桁違いに大)。
+  sub-mm の位置 delta は run 間ノイズ内なので過信禁物。**将来の A/B は 2D 検出/triangulated skeleton を 1 回
+  cache し同一信号で filter variant を replay** して noise floor を与えるべき。lag は高 motion tracker
+  (sigma>~200mm・peak_corr>0.999) のみ信頼。**可視ジッタ proxy は roll_rms でなく rel_dps** (roll_rms は held DOF で
+  swing wander を twist に誤帰属する)。
 - **実機**: WebUI 3D viewer で静止プルプル低減 / 歩行・腰曲げ・キックの追従と忠実さ / snap・チャタリング無しを目視。
 
 ## 残課題
 
+- **M-C5 実機 A/B (最終 ON の gate)** — motion 証拠が薄い (2 clip)。**kick clip 追加**で速い twist を含める。
+- **held-twist (roll_conf≈0) pass-through — 候補 (要否は M-C5 待ち)**: 脚等の held 軸に st/one_euro とも spurious twist を
+  注入 (roll_rms +300–800% vs raw)。ただし M-C4 検証では **rel_dps 上 st legs=calm で可視プルプルではない** =
+  roll_rms metric の過大評価の可能性が高く、「解くべき問題があるか」自体が未確定。実機 M-C5 で脚 roll が気になるなら実装。
+- **A/B インフラ**: 2D 検出/triangulated skeleton を 1 回 cache → 同一信号で filter variant を replay (sub-mm position
+  delta に noise floor)。現状は別々推論で skeleton diff max 78mm、位置 delta が交絡。
+- **arm twist の alpha_rest チューニング** — genuine な roll 効きどころ (arm/feet)。
 - **案6 角度空間の一発化**: M-C1 の相対角速度 dump で仮説を検証。葉位置の増幅を測って角度 vs 位置ドメインを判断。
-- **スリム化**: st_filter 確定後に One-Euro/固定 EMA と関連 config を撤去 (end-state)。
+- **スリム化**: st_filter 確定後に One-Euro/固定 EMA と関連 config を撤去 (end-state)。**注意**: position path は
+  「pos_rms は floor-limited だが leg/foot orientation を駆動」なので rotation-only 化で安易に削らない。
 - **部位別 param の YAML 露出**: 実機で効くと分かったノブのみ後で露出 (当面コード既定)。
 - **hold/FK・valid 遷移**との相互作用の実機確認 (dropout 頻発シーンで誤「高速」判定が出ないか)。
 - **SlimeVR 主出力**に切り替える場合は角度空間がネイティブ → 案6 と統合検討。
