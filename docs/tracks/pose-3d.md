@@ -92,6 +92,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-04 — 時空フィルタ M-C5 実機 A/B ✅ favorable（体感 gate 好転）
+WebUI 3D viewer で st ON vs OFF(one_euro) を体感比較（`--st-filter` の有無で 2 ラン、weaken=1 で Kalman 同一＝純 A/B）。
+**結果: st ≥ OFF・新規 dealbreaker なし**。A(腕 roll 静止)/C(chatter)/D(onset)/E(kick 足)は「大体 OK」。**B(閾値越え snap)は
+st も OFF もどちらも出る** ＝ st 固有でなく **roll_confidence ゲート(肘 sin 8.6°/17.5°)に内在する既存アーティファクト**
+（OFF=One-Euro も同じゲート）、**st の方が体感まし**（緩和）。→ offline で足りなかった体感 gate が好転し **default-ON が正当化可能**
+（ただし upside は arm twist 限定で narrow）。**残**: (1) default-ON 化 or arm 限定 scope 縮小（legs は rel_dps を足すだけで gain ゼロ）の
+判断、(2) >200mm 大振幅 clip で lag を registered bar 正式判定、(3) 閾値 snap の緩和（gate ヒステリシス / roll 再取得 slew-limit、
+st 固有でなく両モード改善）。**コード変更なし（実機所見の記録）**。詳細は [design doc M-C5 節](../design/pose-3d-spatiotemporal-filter.md)。
+
 ### 2026-07-04 — 時空フィルタ M-C5 offline（kick/dash 高速動作 + 敵対的検証）: ship 確定・default-ON は実機 gate
 kick（膝が曲がり脚 roll が観測可能に）/ dash（高速全身）を実 59fps で raw/one_euro/st 計測し、8エージェント workflow
 （`mc4-fast-motion-study`）で fast-motion の 2 疑問を検証:

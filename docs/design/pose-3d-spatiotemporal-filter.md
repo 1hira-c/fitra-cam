@@ -173,9 +173,13 @@ swing と剛体 roll (chest/waist/shin-anatomical, conf=1 pin) は無変更 (ス
     (kick leg roll_rms ~65deg は swing-leakage、twist の証拠にしない。)
   - **default-ON は offline だけでは不可** — st は mode-switch filter(roll_conf flicker で twist DOF lock/unlock)、whole-clip metric は
     threshold-snap/chatter/動き出し onset を原理的に見られない。→ **実機 A/B が唯一の gate**。
-  - **残 (実機 M-C5)**: WebUI 3D + WS3D で **arm-twist 動作**の st vs one_euro 体感 (snap/chatter/動き出し)、roll_conf time-series の chatter 検査、
-    **>200mm 大振幅 clip** で lag を registered bar で正式判定。合格なら既定 ON 化を検討。**候補: regime を arm 限定に scope 縮小**
-    (legs は rel_dps を足すだけで roll gain ゼロ・snap risk surface を無駄に広げる)。
+  - **実機 A/B ✅ favorable (2026-07-04)**: WebUI 3D viewer で st ON vs OFF(one_euro) を体感比較。**st ≥ OFF・新規 dealbreaker なし**。
+    A(腕 roll 静止)・C(chatter)・D(onset)・E(kick 足) は「大体 OK」。**B(閾値越え snap): st も OFF もどちらも出る** ＝ これは st 固有でなく
+    **roll_confidence ゲート(肘 sin 8.6°/17.5°)に内在する既存アーティファクト**(OFF=One-Euro も同じゲートを使う)、**st の方が体感まし**(緩和)。
+    → offline で足りなかった体感 gate が好転。**default-ON が正当化可能**(ただし upside は arm twist 限定で narrow)。
+  - **残**: **>200mm 大振幅 clip で lag を registered bar 正式判定**(offline directional-only の穴埋め)。判断: **default-ON 化 or
+    arm 限定 scope 縮小**(legs は rel_dps を足すだけで roll gain ゼロ・snap surface を広げる)。閾値 snap は別途 **gate ヒステリシス/
+    roll 再取得の slew-limit** で両モード改善可(st 固有でない)。
 - **将来**: (a) 案6 角度空間の検証結果次第で角度ドメインへ寄せる。(b) **スリム化** — st_filter を唯一の平滑にし
   One-Euro / 固定 EMA と `vr_one_euro`/`vr_pos_*` 系を撤去 (ユーザー意向: 最終的に既存を壊してスリム化)。
 
@@ -194,7 +198,11 @@ swing と剛体 roll (chest/waist/shin-anatomical, conf=1 pin) は無変更 (ス
 
 ## 残課題
 
-- **M-C5 実機 A/B (最終 ON の gate)** — motion 証拠が薄い (2 clip)。**kick clip 追加**で速い twist を含める。
+- **default-ON 化の判断 (M-C5 実機 favorable 済)** — st ≥ OFF・新規 dealbreaker なし。default-ON か arm 限定 scope 縮小か。
+  残: >200mm 大振幅 clip で lag を registered bar 正式判定。
+- **閾値越え snap の緩和 (st 固有でない・両モード改善)** — 肘が roll_conf 閾値(sin 8.6°/17.5°)を跨ぐと twist が lock/unlock して
+  snap（実機で st/OFF どちらも確認、st の方がまし）。**gate ヒステリシス** or **roll 再取得時の slew-limit**（conf 0→>0 で前 roll から
+  新観測 roll へ緩やかに寄せる）で One-Euro/st 両方が改善する。roll_confidence ゲート(`extract_trackers`/`apply_quat_smoothing`)側の課題。
 - **held-twist (roll_conf≈0) pass-through — 候補 (要否は M-C5 待ち)**: 脚等の held 軸に st/one_euro とも spurious twist を
   注入 (roll_rms +300–800% vs raw)。ただし M-C4 検証では **rel_dps 上 st legs=calm で可視プルプルではない** =
   roll_rms metric の過大評価の可能性が高く、「解くべき問題があるか」自体が未確定。実機 M-C5 で脚 roll が気になるなら実装。
