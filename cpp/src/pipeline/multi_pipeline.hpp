@@ -45,11 +45,13 @@ public:
         // when a subject profile is present (its distances form the pelvis
         // template) and the topology is Halpe26; otherwise a no-op.
         bool rigid_pelvis = false;
-        // Spatiotemporal filter (spatiotemporal-filter M-C3). When true the chain
-        // Kalman is weakened toward measurement-tracking (predict/hold only) so
-        // it does not compound lag with the tracker-stage regime filter, which
-        // now owns the smoothing. No effect on the tracker stage itself (that is
-        // gated by TrackerExtractorOptions::st_filter). Default off = byte-identical.
+        // Spatiotemporal filter (spatiotemporal-filter M-C3). Reserved knob: the
+        // M-C3 seed weakened the chain Kalman ×100 here, but M-C4 falsified that
+        // (harmful at rest) and the factor is now 1 — this flag is currently a
+        // functional no-op on the 3D chain (kept as the wiring point for the
+        // M-C4-D motion/lag sweep). No effect on the tracker stage itself (that
+        // is gated by TrackerExtractorOptions::st_filter, product default ON
+        // since M-C5 via MainOptions::st_filter_3d).
         bool st_filter = false;
         // Floor-contact grounding (spatial-filtering M-D). When true the LAST 3D
         // stage clamps below-floor foot sole points to the floor (Z=0) and snaps

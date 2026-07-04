@@ -150,15 +150,19 @@ cv::Vec3f st_pos_step(const cv::Vec3f& held,
 
     cv::Vec3f out = held + alpha * to_target;
 
-    // Spatial lag cap: while the measurement is trusted (gate > 0), never let
-    // the output trail the raw target by more than lag_cap along the held→target
-    // ray. A rejected measurement (gate ~0) is a suspected glitch, so it does
-    // NOT get pulled toward — the cap would defeat the outlier hold.
-    if (gate > 1.0e-3f) {
+    // Spatial lag cap: while the measurement is trusted, never let the output
+    // trail the raw target by more than lag_cap along the held→target ray. The
+    // cap's authority is proportional to the velocity gate: full pull at
+    // gate = 1, no pull at gate = 0 (a rejected measurement is a suspected
+    // glitch — a hard cap there would defeat the outlier hold, and a binary
+    // threshold would snap a near-v_reject partial rejection the full cap
+    // distance toward the glitch).
+    {
         const cv::Vec3f behind = target - out;
         if (vnorm(behind) > p.lag_cap_m && d > 1.0e-9f) {
             const cv::Vec3f dir = to_target * (1.0f / d);  // unit(target − held)
-            out = target - p.lag_cap_m * dir;
+            const cv::Vec3f capped = target - p.lag_cap_m * dir;
+            out += gate * (capped - out);
         }
     }
     return out;
@@ -187,11 +191,20 @@ void apply_pos_st_filter(std::array<SlimeTracker, kTrackerCount>& curr,
 
     // --- 1. Waist in world (the limb-relative reference) --------------------
     const bool had_ref = st.waist_seen;
+    cv::Vec3f ref_jump{0.0f, 0.0f, 0.0f};
+    bool ref_jumped = false;
     {
         SlimeTracker& c = curr[kWaist];
         const StPosParams& p = st_pos_params(cfg, TrackerRole::Waist);
         if (c.valid) {
             if (!st.steady[kWaist]) {
+                // Recovery from a dropout (not the first-ever frame) moves the
+                // limbs' reference origin by the snap displacement; remember it
+                // so the steady limbs can be shifted below.
+                if (had_ref) {
+                    ref_jump   = c.pos - st.held[kWaist];
+                    ref_jumped = true;
+                }
                 st.held[kWaist]     = c.pos;   // snap on first / post-dropout
                 st.last_raw[kWaist] = c.pos;
                 st.steady[kWaist]   = true;
@@ -212,6 +225,20 @@ void apply_pos_st_filter(std::array<SlimeTracker, kTrackerCount>& curr,
     // → waist-relative), so force a re-snap so the shift isn't read as motion.
     const bool ref_appeared = have_ref && !had_ref;
     const cv::Vec3f ref = have_ref ? st.held[kWaist] : cv::Vec3f{0.0f, 0.0f, 0.0f};
+
+    // Waist recovery-from-dropout: the reference origin jumps by the waist's
+    // snap displacement, which is the WAIST's motion, not the limbs'. Shift the
+    // steady limbs' relative state by the same amount so their world outputs
+    // (held_rel + ref) stay continuous — otherwise every steady tracker would
+    // teleport by the waist's dropout displacement on the recovery frame (and
+    // the velocity gate would then misread the frame-shift as limb motion).
+    if (ref_jumped) {
+        for (std::size_t i = 0; i < kTrackerCount; ++i) {
+            if (i == kWaist || !st.steady[i]) continue;
+            st.held[i]     -= ref_jump;
+            st.last_raw[i] -= ref_jump;
+        }
+    }
 
     // --- 2. Limbs in the waist-relative frame -------------------------------
     for (std::size_t i = 0; i < kTrackerCount; ++i) {

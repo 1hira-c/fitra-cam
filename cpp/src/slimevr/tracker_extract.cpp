@@ -352,14 +352,39 @@ cv::Vec3f fallback_up_for(const cv::Vec3f& fwd) {
 // `up_meas` must be the RAW up hint (up_primary) — the pick_up_multistage return
 // collapses to the zero sentinel below kRollSinLow and loses the sinθ signal.
 // enabled==false or ctx==nullptr returns `confidence` untouched (byte-identical).
+// A latch held across a LONG occlusion must re-acquire on resume — the limb may
+// have straightened while unseen, and resuming mid-band trust is exactly what
+// the hysteresis exists to prevent. Short flickers keep the latch (a 1-frame KP
+// dropout must not force a full re-acquire). Ticks are extract calls (3D frames
+// offline, extractor ticks live), so this is ~0.5-1 s of continuous dropout.
+constexpr std::uint32_t kRollLatchDropTicks = 30;
+
+// Called on frames where the bone has NO roll measurement (missing endpoint /
+// missing up-hint keypoint): the latch is left untouched for short streaks and
+// cleared (forcing re-acquire) once the dropout persists.
+void note_roll_dropout(ExtractContext* ctx, bool enabled, std::size_t idx) {
+    if (!enabled || ctx == nullptr) return;
+    auto& ticks = ctx->roll_invalid_ticks[idx];
+    if (ticks < kRollLatchDropTicks) ++ticks;
+    if (ticks >= kRollLatchDropTicks) ctx->roll_locked[idx] = false;
+}
+
 float apply_roll_hysteresis(ExtractContext* ctx, bool enabled, std::size_t idx,
                             const cv::Vec3f& fwd, const cv::Vec3f& up_meas,
                             float confidence) {
     if (!enabled || ctx == nullptr) return confidence;
     const float un = norm(up_meas), fn = norm(fwd);
-    const float sinth = (un > 1.0e-6f && fn > 1.0e-6f)
-                            ? norm(cross(up_meas, fwd)) / (un * fn)
-                            : 0.0f;
+    if (un <= 1.0e-6f || fn <= 1.0e-6f) {
+        // No roll measurement this frame: a zero up_meas is the invalid-KP
+        // sentinel (missing wrist/ankle), NOT "limb measured straight" — do not
+        // release the latch on it (a 1-frame flicker would otherwise freeze a
+        // mid-band roll until the limb re-bends past acquire). Roll is held for
+        // the frame; a long streak forces re-acquire via note_roll_dropout.
+        note_roll_dropout(ctx, enabled, idx);
+        return 0.0f;
+    }
+    ctx->roll_invalid_ticks[idx] = 0;
+    const float sinth = norm(cross(up_meas, fwd)) / (un * fn);
     bool& locked = ctx->roll_locked[idx];
     if (!locked && sinth >= kRollAcquireSin) locked = true;
     if (locked && sinth < kRollReleaseSin)   locked = false;
@@ -447,7 +472,10 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
     // is unobservable from 3D KP alone in that configuration.
     auto upper_arm = [&](TrackerRole role, std::size_t shoulder, std::size_t elbow,
                           std::size_t wrist, std::size_t out_idx) {
-        if (!joints_valid(skel, {shoulder, elbow})) return;
+        if (!joints_valid(skel, {shoulder, elbow})) {
+            note_roll_dropout(ctx, roll_hysteresis, out_idx);
+            return;
+        }
         cv::Vec3f sp = to_vec3f(skel.joints[shoulder]);
         cv::Vec3f ep = to_vec3f(skel.joints[elbow]);
         cv::Vec3f pos = (sp + ep) * 0.5f;
@@ -522,7 +550,10 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
     // shallow bends when primary's sin θ briefly dips below kRollSinLow.
     auto upper_leg = [&](TrackerRole role, std::size_t hip, std::size_t knee,
                          std::size_t ankle, std::size_t out_idx) {
-        if (!joints_valid(skel, {hip, knee})) return;
+        if (!joints_valid(skel, {hip, knee})) {
+            note_roll_dropout(ctx, roll_hysteresis, out_idx);
+            return;
+        }
         cv::Vec3f hp = to_vec3f(skel.joints[hip]);
         cv::Vec3f kp = to_vec3f(skel.joints[knee]);
         cv::Vec3f pos = (hp + kp) * 0.5f;
@@ -772,6 +803,16 @@ void apply_quat_smoothing_impl(std::array<SlimeTracker, kTrackerCount>& curr,
         // (carry = 1, the prior is all we have); as the roll becomes observable
         // (ta → sa) carry → 0 and the twist slerp toward q takes over, so a limb
         // twisting relative to its parent is not forced to follow it.
+        //
+        // CAVEAT (st filter, M-C3+): with a twist_override active, ta is the
+        // regime alpha, NOT alpha_rate·roll_confidence — so carry no longer
+        // equals 1 − roll_confidence. At rest a fully-confident arm roll gets
+        // carry ≈ 0.26 (regime alpha_rest 0.10 vs One Euro sa ≈ 0.136), i.e.
+        // ~26% parent-yaw coupling where the pre-st invariant guaranteed 0.
+        // Bounded (transport_t = carry·alpha_rate ≤ measured rate, cannot
+        // overshoot in steady state) but an undocumented deviation from the
+        // design doc's "swing・transport・pin は不変" claim — revisit if arm
+        // counter-rotation against torso yaw ever reads as coupled.
         const bool is_arm = (i == static_cast<std::size_t>(TrackerRole::LeftUpperArm) ||
                              i == static_cast<std::size_t>(TrackerRole::RightUpperArm));
         const bool  have_ref  = is_arm ? (have_chest_delta || have_waist_delta)

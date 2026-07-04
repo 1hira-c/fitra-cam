@@ -209,7 +209,8 @@ void TrackerExtractor::run_loop() {
         if (opts_.st_filter) {
             // Spatiotemporal filter (priority st_filter > one_euro > EMA).
             // Position = distance×velocity regime in the waist-relative frame;
-            // inferred-roll twist = regime-driven for the arm/leg groups only.
+            // inferred-roll twist = regime-driven for the ARM group only
+            // (legs kept out per M-C4/M-C5 — see st_filter make_default_config).
             // The twist override is computed from the RAW orientations (and the
             // held prev_quat_) BEFORE apply_quat_smoothing mutates them; swing
             // still rides the One Euro / fixed base so it is unchanged.

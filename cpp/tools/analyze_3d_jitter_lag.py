@@ -134,7 +134,9 @@ def joint_jitter_mm(data: Loaded, joint: int, min_frames: int) -> dict | None:
         return None
     mask = data.valid[:, joint]
     n = int(mask.sum())
-    if n < min_frames:
+    # max(1, ...): --min-frames <= 0 must not let an empty slice through
+    # (std of an empty array is NaN and it would leak into the JSON output).
+    if n < max(1, min_frames):
         return None
     pts = data.positions[mask, joint, :]  # (n, 3) meters
     std_axis = pts.std(axis=0) * 1000.0  # mm
@@ -422,7 +424,9 @@ def tracker_metrics(data: TrackersLoaded, t: int, min_frames: int,
         return None
     mask = data.valid[:, t]
     n = int(mask.sum())
-    if n < min_frames:
+    # max(1, ...): --min-frames <= 0 must not let a never-valid tracker through
+    # (_mean_quat indexes qs[0] and would raise IndexError on an empty array).
+    if n < max(1, min_frames):
         return None
 
     pts = data.pos[mask, t, :]                    # (n, 3) meters

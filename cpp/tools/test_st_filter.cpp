@@ -141,6 +141,33 @@ void test_lag_cap() {
     check_close(out[0], 0.40f, "lag_cap.position");
 }
 
+void test_lag_cap_partial_gate() {
+    // v inside (v_high, v_reject): the measurement is only partially trusted, so
+    // the cap's pull must scale with the gate instead of snapping the full cap
+    // distance toward a suspected glitch (and the output must stay continuous
+    // as v crosses v_reject into the full hold).
+    const StPosParams p{test_regime(), 0.10f};  // v_high 4, v_reject 8
+    const cv::Vec3f held{0.0f, 0.0f, 0.0f};
+    const cv::Vec3f target{0.5f, 0.0f, 0.0f};
+    const float dt = 1.0f / 60.0f;
+
+    // v = 6 m/s → gate = 0.5. EMA: alpha_normal·gate = 0.3 → 0.15; cap point is
+    // 0.40; half-authority pull lands at 0.15 + 0.5·(0.40 − 0.15) = 0.275.
+    {
+        const cv::Vec3f last_raw{0.5f - 6.0f * dt, 0.0f, 0.0f};
+        cv::Vec3f out = st_pos_step(held, target, last_raw, dt, dt, p);
+        check_close(out[0], 0.275f, "partial gate: cap authority not proportional");
+        check(out[0] < 0.40f - kEps, "partial gate: cap snapped the full distance");
+    }
+    // v = 7.9 m/s (just under v_reject) → gate ≈ 0.002: output must be ≈ the
+    // hold (continuous with the v ≥ v_reject rejection), not a 0.4 m snap.
+    {
+        const cv::Vec3f last_raw{0.5f - 7.9f * dt, 0.0f, 0.0f};
+        cv::Vec3f out = st_pos_step(held, target, last_raw, dt, dt, p);
+        check(out[0] < 0.01f, "near-reject: output not continuous with the hold");
+    }
+}
+
 void test_outlier_hold() {
     // A 1 m jump between consecutive raw frames = 60 m/s ≫ v_reject → gate 0 →
     // the output holds (no movement, and the cap does not drag it toward).
@@ -370,6 +397,37 @@ void test_st_pos_recovery_snaps() {
     }
 }
 
+void test_st_pos_waist_recovery_limb_continuity() {
+    // The waist drops out and recovers DISPLACED: the reference origin jump is
+    // the waist's motion, not the limbs' — a steady limb whose own measurement
+    // never moved must keep a continuous world output (no teleport by the
+    // waist's dropout displacement, no velocity-gate hold of the frame shift).
+    const StFilterConfig cfg = default_st_config();
+    StPosState st{};
+    const float dt = 1.0f / 60.0f;
+    const cv::Vec3f arm_world{0.2f, 0.0f, 1.4f};
+
+    {   // seed both
+        auto t = blank_trackers();
+        set_pos(t, kWaistIdx, {0.0f, 0.0f, 1.0f});
+        set_pos(t, kArmIdx,   arm_world);
+        apply_pos_st_filter(t, st, cfg, dt, dt);
+    }
+    for (int k = 0; k < 5; ++k) {  // waist dropout; arm still measured, static
+        auto t = blank_trackers();
+        set_pos(t, kArmIdx, arm_world);
+        apply_pos_st_filter(t, st, cfg, dt, dt);
+    }
+    {   // waist recovers 0.5 m away; the arm's own measurement is unchanged
+        auto t = blank_trackers();
+        set_pos(t, kWaistIdx, {0.5f, 0.0f, 1.0f});
+        set_pos(t, kArmIdx,   arm_world);
+        apply_pos_st_filter(t, st, cfg, dt, dt);
+        check_vec3(t[kWaistIdx].pos, {0.5f, 0.0f, 1.0f}, "waist recovery snap");
+        check_vec3(t[kArmIdx].pos, arm_world, "steady limb teleported on waist recovery", 1.0e-3f);
+    }
+}
+
 void test_st_twist_overrides_scope() {
     const StFilterConfig cfg = default_st_config();
     StTwistState st{};
@@ -444,6 +502,7 @@ int main() {
         test_vel_gate_shape();
         test_deadband_recenters();
         test_lag_cap();
+        test_lag_cap_partial_gate();
         test_outlier_hold();
         test_rate_adjust_independence();
         test_twist_angle();
@@ -453,6 +512,7 @@ int main() {
         test_st_pos_static_jitter_suppressed();
         test_st_pos_invalid_limb_drags_with_waist();
         test_st_pos_recovery_snaps();
+        test_st_pos_waist_recovery_limb_continuity();
         test_st_twist_overrides_scope();
         test_quat_override_nullptr_byte_identical();
         std::puts("test_st_filter ok");

@@ -58,13 +58,16 @@ struct TrackerExtractorOptions {
     // regression); set beta = 0 in the params for a fixed-cutoff (still
     // speed-independent) low-pass without leaving the One Euro path.
     bool          one_euro      = true;
-    // Spatiotemporal filter (M-C3): regime-adaptive position + inferred-roll
-    // twist smoothing at the tracker stage. Priority st_filter > one_euro >
-    // fixed EMA — when true, the position path uses the distance×velocity regime
-    // (slimevr/st_filter) instead of One Euro / the fixed EMA, and the arm/leg
-    // inferred-roll twist is regime-driven; swing / rigid-roll pins are
-    // unchanged. Default off; on it also weakens the chain Kalman upstream (see
-    // MultiCameraDriver::ThreeDConfig::st_filter). docs/design/pose-3d-spatiotemporal-filter.md.
+    // Spatiotemporal filter (M-C3, ship M-C5): regime-adaptive position +
+    // inferred-roll twist smoothing at the tracker stage. Priority st_filter >
+    // one_euro > fixed EMA — when true, the position path uses the
+    // distance×velocity regime (slimevr/st_filter) instead of One Euro / the
+    // fixed EMA, and the ARM inferred-roll twist is regime-driven (legs kept
+    // out per M-C4/M-C5); swing / rigid-roll pins are unchanged. Struct default
+    // off, but the PRODUCT default is ON via MainOptions::st_filter_3d (M-C5) —
+    // output_builder always overwrites this field. The chain Kalman is NOT
+    // weakened (M-C4: ×100 was harmful; weaken factor is 1).
+    // docs/design/pose-3d-spatiotemporal-filter.md.
     bool          st_filter     = false;
     // #2 roll gate-raise hysteresis for the ARM / THIGH inferred-roll bones: hold
     // the last-confident roll while the limb straightens through the noisy

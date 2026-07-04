@@ -139,7 +139,10 @@ swing と剛体 roll (chest/waist/shin-anatomical, conf=1 pin) は無変更 (ス
   (優先度 st_filter > one_euro > 固定EMA) を追加。位置は `apply_pos_st_filter` (waist を world 先行フィルタ→四肢を
   waist 相対で `st_pos_step`、**腰相対が hip-relative hold を内包**＝invalid 四肢は相対 offset hold で waist に追従、
   復帰は snap)。推測 roll は `fill_st_twist_overrides` が has_roll 群のみ twist_alpha を regime 計算し、
-  `apply_quat_smoothing` の新 optional `twist_alpha_override` 経由で注入 (swing・transport・pin は不変)。
+  `apply_quat_smoothing` の新 optional `twist_alpha_override` 経由で注入 (swing・pin は不変。**transport は厳密には
+  不変でない**: carry = 1 − ta/sa が override 後の ta から再計算されるため、roll_conf=1 でも静止時 carry ≈ 0.26 の
+  親 yaw 結合が残る — transport_t = carry·alpha_rate で有界・定常オーバーシュートなし。コードの carry コメント
+  CAVEAT 参照、腕の対トルソ逆回転が結合して見えたら再訪)。
   **chain Kalman 弱化**: `ThreeDConfig.st_filter` ON で `SkeletonKalman` の q_pos/q_vel/offset を ×100 (seed) して
   測定追従化 (M-C4 調整)。フラグ `three_d.st_filter` / `--st-filter` (既定 OFF) を `output_builder`(tracker) と
   `threed_builder`(Kalman) の両方へ配線。**既定 OFF で byte 不変** (override=nullptr で apply_quat_smoothing 完全一致・

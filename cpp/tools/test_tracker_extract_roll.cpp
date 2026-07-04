@@ -13,6 +13,8 @@
 //   3. thigh hysteresis (same, tracker idx 4)
 //   4. fully-degenerate / first-frame: no lock, valid + finite quat, no NaN
 //   5. reset (ExtractContext{}) clears the latch
+//   6. dropout lifecycle: a missing measurement (wrist KP / shoulder+elbow) is
+//      latch-neutral for short gaps and clears the latch after a long occlusion
 
 #include <array>
 #include <cmath>
@@ -152,6 +154,46 @@ void test_reset_clears_latch() {
     check(roll_conf(arm_pose(0.35f), &ctx, true, kLArm) == 0.0f, "reset cleared the latch");
 }
 
+void test_occlusion_latch_lifecycle() {
+    // A missing measurement is NOT "limb measured straight": a zero up vector
+    // (dropped wrist KP) or missing shoulder/elbow must not release the latch
+    // on a short flicker (that would freeze a mid-band roll until re-acquire),
+    // while a LONG occlusion must clear it (the limb may have straightened
+    // while unseen — resume needs a fresh acquire).
+    Skeleton3D dropout; dropout.kp_count = 26;  // shoulder/elbow invalid
+
+    // (a) 1-frame wrist dropout: roll held for the frame, latch kept.
+    {
+        ExtractContext ctx{};
+        check(roll_conf(arm_pose(0.60f), &ctx, true, kLArm) > 0.0f, "lock (0.60)");
+        Skeleton3D no_wrist = arm_pose(0.35f);
+        no_wrist.joints[9].valid = false;   // sin θ unobservable this frame
+        check(roll_conf(no_wrist, &ctx, true, kLArm) == 0.0f,
+              "missing wrist holds roll for the frame");
+        check(roll_conf(arm_pose(0.35f), &ctx, true, kLArm) > 0.0f,
+              "latch survives a 1-frame wrist flicker (mid-band resumes)");
+    }
+    // (b) short shoulder/elbow occlusion: latch kept.
+    {
+        ExtractContext ctx{};
+        check(roll_conf(arm_pose(0.60f), &ctx, true, kLArm) > 0.0f, "lock (0.60)");
+        for (int k = 0; k < 3; ++k)
+            extract_trackers(dropout, &ctx, FootPosMode::Midpoint, 0.5f, 0.0f, true);
+        check(roll_conf(arm_pose(0.35f), &ctx, true, kLArm) > 0.0f,
+              "latch survives a short occlusion");
+    }
+    // (c) long occlusion: latch cleared, mid-band resume must re-acquire.
+    {
+        ExtractContext ctx{};
+        check(roll_conf(arm_pose(0.60f), &ctx, true, kLArm) > 0.0f, "lock (0.60)");
+        for (int k = 0; k < 40; ++k)
+            extract_trackers(dropout, &ctx, FootPosMode::Midpoint, 0.5f, 0.0f, true);
+        check(roll_conf(arm_pose(0.35f), &ctx, true, kLArm) == 0.0f,
+              "long occlusion forces re-acquire (mid-band held)");
+        check(roll_conf(arm_pose(0.60f), &ctx, true, kLArm) > 0.0f, "re-acquire at 0.60");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -162,6 +204,7 @@ int main() {
         test_thigh_hysteresis_sequence();
         test_degenerate_no_nan();
         test_reset_clears_latch();
+        test_occlusion_latch_lifecycle();
         std::puts("test_tracker_extract_roll ok");
         return 0;
     } catch (const std::exception& e) {

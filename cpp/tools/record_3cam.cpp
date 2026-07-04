@@ -45,6 +45,7 @@
 #include <atomic>
 #include <chrono>
 #include <cinttypes>
+#include <cmath>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
@@ -225,7 +226,20 @@ public:
         fourcc("LIST"); movi_size_pos_ = f_.tellp(); u32(0);
         movi_start_ = f_.tellp();               // position of the 'movi' fourcc
         fourcc("movi");
+        bytes_ = static_cast<std::uint64_t>(f_.tellp());
         return f_.good();
+    }
+
+    // AVI 1.0 stores every offset/size as u32 and this muxer writes no OpenDML
+    // (AVIX/indx) continuation, so 4 GiB is a hard format ceiling — past it the
+    // idx1 offsets and RIFF/movi sizes would wrap silently and the file would
+    // finalize "successfully" as an unreadable AVI. The record loop checks this
+    // BEFORE writing a frame set so all cameras stop on the same frame boundary.
+    bool would_overflow(std::size_t n) const {
+        const std::uint64_t projected =
+            bytes_ + 8 + n + (n & 1)                 // this chunk (+pad)
+            + 8 + (idx_.size() + 1) * 16;            // idx1 written at finalize
+        return projected > kAviBytesLimit;
     }
 
     void add(const std::uint8_t* data, std::size_t n) {
@@ -233,6 +247,7 @@ public:
         fourcc("00dc"); u32(static_cast<std::uint32_t>(n));
         f_.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(n));
         if (n & 1) { char z = 0; f_.write(&z, 1); }  // pad chunks to even length
+        bytes_ += 8 + n + (n & 1);
         idx_.push_back({static_cast<std::uint32_t>(chunk - static_cast<std::streamoff>(movi_start_)),
                         static_cast<std::uint32_t>(n)});
         ++count_;
@@ -271,9 +286,13 @@ private:
         f_.seekp(pos); u32(v); f_.seekp(cur);
     }
 
+    // Just under 4 GiB, with margin for the headers/idx1 bookkeeping.
+    static constexpr std::uint64_t kAviBytesLimit = 0xFFFF0000ull;
+
     std::ofstream f_;
     int w_ = 0, h_ = 0;
     std::uint64_t count_ = 0;
+    std::uint64_t bytes_ = 0;  // bytes written so far (header + movi chunks)
     std::streampos riff_size_pos_, usec_avih_, total_avih_, scale_strh_,
                    length_strh_, movi_size_pos_, movi_start_;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> idx_;
@@ -408,10 +427,6 @@ int main(int argc, char** argv) {
     std::vector<cv::VideoWriter> writers;   // mp4 only
     std::vector<AviMjpegWriter>  avi(n);     // mjpeg only (default-constructed no-ops otherwise)
     std::vector<std::string> filenames(n);
-    // Stored (per-frame) resolution: the output dims for mp4 (decoded+downscaled),
-    // the verbatim capture dims for mjpeg passthrough.
-    const int store_w = mjpeg ? opts[0].capture_w() : opts[0].width;
-    const int store_h = mjpeg ? opts[0].capture_h() : opts[0].height;
     if (mjpeg) {
         for (std::size_t k = 0; k < n; ++k) {
             filenames[k] = args.name.empty()
@@ -442,8 +457,18 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::printf("recording %zu camera(s) @ %dx%d (%s), out_fps=%d -> %s  (Ctrl-C to stop%s)\n",
-                n, store_w, store_h, args.format.c_str(), out_fps, args.out.c_str(),
+    // Per-camera stored dims: the rig pairs cameras with different capture
+    // resolutions (per-camera cap_* overrides), so a single WxH would lie.
+    auto stored_w = [&](std::size_t k) { return mjpeg ? opts[k].capture_w() : opts[k].width; };
+    auto stored_h = [&](std::size_t k) { return mjpeg ? opts[k].capture_h() : opts[k].height; };
+    std::string dims;
+    for (std::size_t k = 0; k < n; ++k) {
+        char b[32];
+        std::snprintf(b, sizeof(b), "%s%dx%d", k ? ", " : "", stored_w(k), stored_h(k));
+        dims += b;
+    }
+    std::printf("recording %zu camera(s) @ %s (%s), out_fps=%d -> %s  (Ctrl-C to stop%s)\n",
+                n, dims.c_str(), args.format.c_str(), out_fps, args.out.c_str(),
                 args.seconds > 0 ? "" : ", no time limit");
 
     // --- Synchronized record loop. Write a frame to every camera only once
@@ -466,7 +491,7 @@ int main(int argc, char** argv) {
                 // Verbatim: keep the raw JPEG payload, no decode. Skip a
                 // short/corrupt dequeue so the AVI never holds garbage.
                 if (!looks_like_jpeg(fr.data)) continue;
-                latest_raw[k] = fr.data;  // copy (fr is reused next iteration)
+                latest_raw[k] = std::move(fr.data);  // fr is a per-iteration local
             } else {
                 cv::Mat bgr;
                 if (!decode_to_bgr(fr, opts[k], bgr)) continue;  // skip corrupt frame
@@ -480,6 +505,19 @@ int main(int argc, char** argv) {
 
         const auto now = clock::now();
         if (all_fresh) {
+            if (mjpeg) {
+                // Stop cleanly (all cameras on the same frame boundary) before
+                // any writer would cross the AVI 1.0 4 GiB ceiling — past it the
+                // u32 offsets/sizes wrap and the file silently corrupts.
+                bool overflow = false;
+                for (std::size_t k = 0; k < n; ++k)
+                    overflow = overflow || avi[k].would_overflow(latest_raw[k].size());
+                if (overflow) {
+                    std::printf("\nAVI 1.0 4 GiB limit reached — stopping; files are "
+                                "finalized valid up to this frame\n");
+                    break;
+                }
+            }
             for (std::size_t k = 0; k < n; ++k) {
                 if (mjpeg) avi[k].add(latest_raw[k].data(), latest_raw[k].size());
                 else       writers[k].write(latest_bgr[k]);
@@ -530,24 +568,40 @@ int main(int argc, char** argv) {
         }
     } else {
         for (auto& w : writers) w.release();
+        // The mp4 header fps was fixed at open() from the warmup delivery rate;
+        // cv::VideoWriter cannot patch it afterwards (the AVI path can, and
+        // does, via finalize). Make the divergence loud instead of a code
+        // comment: playback timing and any header-trusting consumer are wrong
+        // by this ratio — meta.json fps_written / --fps below are authoritative.
+        if (std::abs(fps_written - out_fps) > 0.1 * out_fps) {
+            std::printf("WARNING: mp4 header fps (%d) diverges from the written rate "
+                        "(%.2f fps, encode-bound loop) — use meta.json fps_written "
+                        "(the --fps in the command below) for analysis\n",
+                        out_fps, fps_written);
+        }
     }
 
     // meta.json — settings + measured per-camera fps, mirroring excal_record.
+    // Resolution lives PER CAMERA: the rig pairs cameras of different capture
+    // dims (per-camera cap_* overrides), so a single top-level WxH would
+    // misdescribe every camera but cam0.
     std::FILE* meta = std::fopen((out_dir / "meta.json").c_str(), "w");
     if (meta) {
         std::fprintf(meta,
                      "{\n  \"version\": 1,\n  \"tool\": \"record_3cam\",\n"
                      "  \"format\": \"%s\",\n"
-                     "  \"config\": \"%s\",\n  \"width\": %d,\n  \"height\": %d,\n"
+                     "  \"config\": \"%s\",\n"
                      "  \"out_fps\": %d,\n  \"duration_s\": %.3f,\n"
                      "  \"num_cameras\": %zu,\n  \"cameras\": [\n",
-                     args.format.c_str(), args.config.c_str(), store_w, store_h, out_fps,
+                     args.format.c_str(), args.config.c_str(), out_fps,
                      duration, n);
         for (std::size_t k = 0; k < n; ++k) {
             std::fprintf(meta,
-                         "    {\"file\": \"%s\", \"device\": \"%s\", \"frames\": %" PRIu64
+                         "    {\"file\": \"%s\", \"device\": \"%s\", \"width\": %d, "
+                         "\"height\": %d, \"frames\": %" PRIu64
                          ", \"fps_written\": %.2f}%s\n",
-                         filenames[k].c_str(), opts[k].device_path.c_str(), written[k],
+                         filenames[k].c_str(), opts[k].device_path.c_str(),
+                         stored_w(k), stored_h(k), written[k],
                          duration > 0 ? written[k] / duration : 0.0,
                          k + 1 < n ? "," : "");
         }

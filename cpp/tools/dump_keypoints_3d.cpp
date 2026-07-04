@@ -185,10 +185,11 @@ void print_help() {
         "                            dumped trackers' orientation (needs --dump-trackers).\n"
         "  --tracker-smoothing MODE  smoothing applied to the dumped trackers (needs\n"
         "                            --dump-trackers): raw (default, no smoothing =\n"
-        "                            M-C1 OFF baseline) | one_euro (current shipping\n"
-        "                            One Euro) | st (spatiotemporal filter + chain\n"
-        "                            Kalman weakened x100, = the M-C3 live path). Run\n"
-        "                            raw/one_euro/st on the same clip for the M-C4 A/B.\n"
+        "                            M-C1 OFF baseline) | one_euro (One Euro only,\n"
+        "                            the pre-M-C5 shipping path) | st (spatiotemporal\n"
+        "                            filter, chain Kalman untouched = the shipped M-C5\n"
+        "                            live path; sweep --st-kalman-weaken to deviate).\n"
+        "                            Run raw/one_euro/st on the same clip for the A/B.\n"
         "  --st-kalman-weaken F      st mode: chain-Kalman process-noise scale (default\n"
         "                            1 = no weakening, the M-C4 data-driven setting; the\n"
         "                            M-C3 seed ×100 was found to inject jitter at rest.\n"
@@ -897,23 +898,24 @@ int main(int argc, char** argv) {
         int frames_with_3d = 0;
         auto start = std::chrono::steady_clock::now();
 
-        // Per-camera start skips for pairing. --cam{1,2}-frame-offset > 0 skips
-        // that camera; < 0 skips cam0 (the shared reference) by |N|. When both
-        // ask cam0 to skip, the larger wins (a single common skip, not summed).
+        // Per-camera start skips for pairing. --cam{K}-frame-offset > 0 skips
+        // camK; < 0 skips cam0 (the shared reference) by |N|. Each offset
+        // asserts the pairwise invariant start_skip[K] − start_skip[0] ==
+        // offset_K, so a common cam0 skip (base) must be compensated on EVERY
+        // other camera — including ones whose own offset is 0 (they must follow
+        // cam0's skip to stay aligned with it).
         std::vector<int> start_skip(n_cams, 0);
-        auto apply_offset = [&](std::size_t cam, int offset) {
-            if (offset > 0) {
-                if (cam < start_skip.size()) start_skip[cam] = offset;
-            } else if (offset < 0) {
-                start_skip[0] = std::max(start_skip[0], -offset);
-            }
-        };
-        apply_offset(1, args.cam1_frame_offset);
+        const int off1 = args.cam1_frame_offset;
+        int off2 = 0;
         if (n_cams >= 3) {
-            apply_offset(2, args.cam2_frame_offset);
+            off2 = args.cam2_frame_offset;
         } else if (args.cam2_frame_offset != 0) {
             FITRA_LOG_WARN("--cam2-frame-offset ignored for a {}-camera run", n_cams);
         }
+        const int base = std::max({0, -off1, -off2});
+        start_skip[0] = base;
+        start_skip[1] = base + off1;  // ≥ 0 by construction of base
+        if (n_cams >= 3) start_skip[2] = base + off2;
 
         for (const auto& job : jobs) {
             if (args.max_frames > 0 && processed >= args.max_frames) break;
@@ -959,9 +961,10 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // st mode weakens the chain Kalman (x100, mirroring
-            // ThreeDConfig::st_filter) so it doesn't compound lag with the
-            // tracker-stage regime filter; raw / one_euro use the default.
+            // st mode: the chain Kalman is untouched by default (weaken = 1,
+            // the M-C4 data-driven setting mirrored by the live pipeline's
+            // kStWeaken; the M-C3 seed ×100 injected jitter at rest). A
+            // non-1 --st-kalman-weaken scales the process noise for sweeps.
             fitra::lift::SkeletonKalman::Options kopts;
             if (tm_st && args.st_kalman_weaken != 1.0) {
                 const double w = args.st_kalman_weaken;
@@ -1026,11 +1029,14 @@ int main(int argc, char** argv) {
                 if (applied) {
                     // Spatial-first (design A): tri -> rigid fit(s) -> IK -> Kalman.
                     drift_before = ik.bone_drift_pct(skel);
-                    // Observe the pre-IK skeleton (matches the baseline branch):
-                    // post-IK bone lengths are clamped to the *input* profile, so
-                    // observing them would make --subject-profile-out echo the
-                    // input profile instead of the measured geometry.
-                    profile_acc.observe(job.pose, skel, tri);
+                    // Observe the PRE-FIT triangulation, not `skel`: the rigid
+                    // fit above has already forced the pelvis/girdle joints onto
+                    // the *input* profile's template distances (a rigid transform
+                    // preserves them exactly), so observing the fitted skeleton
+                    // would make --subject-profile-out echo the input profile
+                    // instead of the measured geometry — the same echo the
+                    // pre-IK placement exists to avoid.
+                    profile_acc.observe(job.pose, tri.skeleton, tri);
                     if (!args.no_ik) skel = ik.update(skel);
                     if (!args.no_kalman) skel = kalman.update(skel, 1.0 / fps);
                     drift_after = ik.bone_drift_pct(skel);
@@ -1159,7 +1165,7 @@ int main(int argc, char** argv) {
             sout << "\"" << json_escape(jobs.front().videos[i]) << "\"";
         }
         sout << "],\n";
-        sout << "  \"calib\":\"" << args.calib << "\"\n";
+        sout << "  \"calib\":\"" << json_escape(args.calib) << "\"\n";
         sout << "}\n";
 
         FITRA_LOG_INFO("done: {} frames, {} with 3D, median reproj={} px -> {}",

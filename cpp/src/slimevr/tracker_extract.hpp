@@ -128,6 +128,12 @@ struct ExtractContext {
     // Reset to false by reset_smoothing()'s `ExtractContext{}`, same lifecycle as
     // foot_anchors. See docs/design/pose-3d-spatiotemporal-filter.md (roll snap).
     std::array<bool, kTrackerCount> roll_locked{};
+    // Consecutive extract calls in which the bone had NO roll measurement
+    // (missing endpoint joints or a missing up-hint keypoint). Short streaks
+    // hold the latch; once the streak exceeds kRollLatchDropTicks the latch is
+    // cleared so a limb that moved while unseen must re-acquire (sinθ ≥ acquire)
+    // before its roll is trusted again. Reset to 0 by any measured frame.
+    std::array<std::uint32_t, kTrackerCount> roll_invalid_ticks{};
 };
 
 // Extract 10 trackers from a Halpe26 3D skeleton. A missing forward hint
@@ -240,8 +246,10 @@ struct QuatSmoothingContext {
 // per-tracker TWIST weight (ta) for tracker i — the swing weight and everything
 // else are unchanged. Entry < 0 (or a null pointer) keeps the built-in ta
 // (alpha_rate·roll_confidence). Used by the spatiotemporal filter (M-C3) to
-// drive the inferred-roll twist by its regime for the arm/leg groups only;
-// null (the default) is byte-identical to the pre-M-C3 behavior.
+// drive the inferred-roll twist by its regime — ARM inferred-roll only since
+// M-C4/M-C5 (legs kept out: no measured twist benefit; see
+// st_filter.cpp make_default_config); null (the default) is byte-identical to
+// the pre-M-C3 behavior.
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           float base_alpha,

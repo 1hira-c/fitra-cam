@@ -511,9 +511,14 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     // Spatial-first only when the pelvis rigid fit actually applied this frame.
     // apply_segment_rigid_fit() returns false (leaving skel untouched) when the
     // flag/profile gate is off OR a pelvis joint is missing this frame; in that
-    // case fall through to the proven baseline order (Kalman -> IK) so a
-    // fit-failure frame stays byte-identical to the pre-M-A path instead of
-    // degrading to a different ordering with no rigid benefit.
+    // case fall through to the proven baseline order (Kalman -> IK) with no
+    // rigid benefit. NOTE: a fit-failure frame is byte-identical to the pre-M-A
+    // path only in its STATELESS stages — the shared Kalman carries state
+    // trained on the other branch's input regime (post-IK vs raw tri), so
+    // marginal pelvis visibility toggling the branch per frame feeds the one
+    // filter an alternating measurement stream (step inputs at each
+    // transition). Known trade-off while rigid_pelvis is default OFF; revisit
+    // (single order on failure, or a Kalman soft-reinit) before default-ON.
     const bool fit_applied =
         rigid_pelvis_active_ &&
         lift::apply_segment_rigid_fit(skel, tri, pelvis_template_, {19, 11, 12});
@@ -532,7 +537,13 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
             drift = ik_.bone_drift_pct(skel);
         }
         if (threed_.kalman_enabled) skel = kalman_.update(skel, dt_s);
-        if (tap_active) skel_tap_local(measured_skel, drift);
+        if (tap_active) skel_tap_local(measured_skel, drift);  // post-IK drift for the gate
+        // Published stat: re-measure on the skeleton actually published (the
+        // trailing Kalman can re-stretch the IK-clamped bones). Matches the
+        // baseline branch (IK last → drift describes the final skeleton) and
+        // the offline harness's drift_after, keeping live vs offline A/B
+        // comparable. The tap above keeps the lenient post-IK value.
+        if (threed_.ik_enabled || ik_.locked()) drift = ik_.bone_drift_pct(skel);
     } else {
         // Baseline (pre-M-A, design B): tri -> Kalman -> IK. Byte-identical to
         // the historical path (also the fit-failure fallback).
