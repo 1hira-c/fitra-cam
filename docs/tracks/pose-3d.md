@@ -92,6 +92,14 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-05 — 着座 occlusion は stateless triangulator ではなく measurement gate へ分離
+`outputs/records/chair_occluded/` で、椅子に体が隠れた時に高 score hallucinated keypoint が 3D lift へ混ざり、
+右半身が揺れる現象を診断。これは frame-edge / bbox truncation ではなく **画面内 occlusion**。score は正常 view と同程度で、
+`max_reproj_px` tightening も効かない。試作した stateless pair-consensus は reproj を改善する一方で pair 切替/2-view ノイズにより
+visible jitter を悪化、high-reproj invalidation は valid rate を崩すため不採用。結論: triangulator 単体の stateless 対策ではなく、
+Kalman prediction / last-good skeleton / IK 制約を使う **prediction-aware measurement gating** として別 issue 化する。
+メモ = [research/pose-3d-chair-occlusion-measurement-gating.md](../research/pose-3d-chair-occlusion-measurement-gating.md)。
+
 ### 2026-07-04 — 伸展 roll snap 対策: arm/thigh roll gate-raise hysteresis（既定 OFF）
 実機で肘/膝の伸展時に twist snap を確認（st/OFF 両方）。設計 workflow の敵対的検証で **当初の「canonical-slew(last_good up 再供給)」
 案を棄却** — 閾値跨ぎ snap は既に smoothstep で masking 済（ta→0 で恣意 roll は捨てられる）、**真の snap 源は中間帯(sinθ 0.15–0.30、
