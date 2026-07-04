@@ -109,6 +109,12 @@ struct MainOptions {
     // DEFAULT ON (M-C5): offline lag-free + real-hardware A/B >= One Euro with no
     // new dealbreaker; benefit is arm-twist. --no-st-filter falls back to One Euro.
     bool   st_filter_3d = true;
+    // #2 roll gate-raise hysteresis (arm/thigh inferred-roll): hold the last
+    // confident roll while a limb straightens through the noisy near-degenerate
+    // band instead of following the amplified mid-band roll noise (fixes the
+    // extension roll snap). Tracker stage only; default off. YAML three_d.roll_hysteresis,
+    // CLI --roll-hysteresis. See docs/design/pose-3d-spatiotemporal-filter.md.
+    bool   roll_hysteresis_3d = false;
     // Floor-contact grounding (docs/design/pose-3d-floor-grounding.md, M-D). When
     // on, the last 3D stage clamps below-floor foot sole points to the floor and
     // snaps near-floor low-speed (stance) points onto it — fixes heel-sink /

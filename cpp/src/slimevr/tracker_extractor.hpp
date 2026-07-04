@@ -66,6 +66,11 @@ struct TrackerExtractorOptions {
     // unchanged. Default off; on it also weakens the chain Kalman upstream (see
     // MultiCameraDriver::ThreeDConfig::st_filter). docs/design/pose-3d-spatiotemporal-filter.md.
     bool          st_filter     = false;
+    // #2 roll gate-raise hysteresis for the ARM / THIGH inferred-roll bones: hold
+    // the last-confident roll while the limb straightens through the noisy
+    // near-degenerate band instead of following the amplified mid-band roll noise
+    // (the "extension roll snap"). swing / rigid-roll bones unchanged. Default off.
+    bool          roll_hysteresis = false;
     // Defaults mirror MainConfig's hardware-tuned values (M3); main.cpp always
     // overwrites these from the config/CLI, so they only matter for callers that
     // construct TrackerExtractorOptions directly. Position is per-axis (m/s);

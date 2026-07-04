@@ -60,6 +60,17 @@ constexpr std::size_t kLBigToe   = 20, kRBigToe   = 21;
 constexpr float kRollSinLow  = 0.15f;  // sin 8.6°: degenerate gate
 constexpr float kRollSinHigh = 0.30f;  // sin 17.5°: full-confidence ceiling
 
+// Roll hysteresis (opt-in via extract_trackers' roll_hysteresis; arm/thigh
+// inferred-roll only). The measured roll azimuth noise near the degenerate cone
+// is amplified ∝ 1/sin θ (≈3–7× in the 0.15–0.30 band), so following it there
+// and then freezing at sin θ<0.15 pins a random roll each extension = the "roll
+// snap". Raise the effective trust gate above kRollSinHigh with an
+// acquire/release hysteresis: only lock (follow) roll once clearly bent, and
+// hold the last-confident roll (confidence→0, carried by swing + parent-yaw
+// transport) while straightening through the noisy band.
+constexpr float kRollAcquireSin = 0.42f;  // sin 24.8°: lock = trust roll
+constexpr float kRollReleaseSin = 0.26f;  // sin 15.1°: unlock = freeze/hold
+
 // Smoothing throttle for foot trackers. The foot is treated as a rigid
 // extension of the shin (up = tibia axis; see foot_tracker below) because
 // the heel KP is too noisy in our 2D→3D pipeline. Even after dropping heel
@@ -99,6 +110,7 @@ constexpr float kPelvisYawGateHigh_rps = 16.0f;
 // so a future tweak that inverts a bound fails to compile rather than silently
 // turning the gate into a step / NaN at runtime.
 static_assert(kRollSinLow         < kRollSinHigh,         "roll sin gate: low < high");
+static_assert(kRollReleaseSin     < kRollAcquireSin,     "roll hysteresis: release < acquire");
 static_assert(kPosVelGateLow_mps  < kPosVelGateHigh_mps,  "pos vel gate: low < high");
 static_assert(kPelvisYawGateLow_rps < kPelvisYawGateHigh_rps, "pelvis yaw gate: low < high");
 
@@ -331,6 +343,29 @@ cv::Vec3f fallback_up_for(const cv::Vec3f& fwd) {
     return cv::Vec3f{0, 1, 0};
 }
 
+// Roll gate-raise hysteresis for the arm / thigh inferred-roll bones (#2). Per
+// bone (indexed by out_idx) latch: acquire (start trusting roll) at
+// sinθ ≥ kRollAcquireSin, release (freeze/hold roll) at sinθ < kRollReleaseSin.
+// While locked, confidence is smoothstep over [release, acquire]; while unlocked
+// it is 0 (roll held — build_tracker still emits the bone direction, and
+// apply_quat_smoothing carries the held roll via swing + parent-yaw transport).
+// `up_meas` must be the RAW up hint (up_primary) — the pick_up_multistage return
+// collapses to the zero sentinel below kRollSinLow and loses the sinθ signal.
+// enabled==false or ctx==nullptr returns `confidence` untouched (byte-identical).
+float apply_roll_hysteresis(ExtractContext* ctx, bool enabled, std::size_t idx,
+                            const cv::Vec3f& fwd, const cv::Vec3f& up_meas,
+                            float confidence) {
+    if (!enabled || ctx == nullptr) return confidence;
+    const float un = norm(up_meas), fn = norm(fwd);
+    const float sinth = (un > 1.0e-6f && fn > 1.0e-6f)
+                            ? norm(cross(up_meas, fwd)) / (un * fn)
+                            : 0.0f;
+    bool& locked = ctx->roll_locked[idx];
+    if (!locked && sinth >= kRollAcquireSin) locked = true;
+    if (locked && sinth < kRollReleaseSin)   locked = false;
+    return locked ? smoothstep01(sinth, kRollReleaseSin, kRollAcquireSin) : 0.0f;
+}
+
 // Try to build a SlimeTracker for one role from a position joint, a forward
 // hint and an up hint. Updates `out` in place.
 //   * forward degenerate (no bone direction)      → valid=false (publisher skips)
@@ -380,7 +415,8 @@ bool build_tracker(TrackerRole role,
 std::array<SlimeTracker, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
                  FootPosMode foot_pos_mode,
-                 float chest_height_frac, float waist_height_frac) {
+                 float chest_height_frac, float waist_height_frac,
+                 bool roll_hysteresis) {
     if (lift::active_keypoint_format() != lift::KeypointFormat::Halpe26) {
         throw std::runtime_error(
             "extract_trackers requires --keypoint-format=halpe26");
@@ -427,6 +463,7 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
         // degeneracy test collapses; tertiary is the zero sentinel.
         cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_primary, up_tertiary,
                                            confidence, which);
+        confidence = apply_roll_hysteresis(ctx, roll_hysteresis, out_idx, fwd, up_primary, confidence);
         build_tracker(role, pos, fwd, up, out[out_idx], confidence);
     };
     upper_arm(TrackerRole::LeftUpperArm,  kLShoulder, kLElbow, kLWrist, 0);
@@ -503,6 +540,7 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
         // ending in world Z.
         cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_primary, up_tertiary,
                                            confidence, which);
+        confidence = apply_roll_hysteresis(ctx, roll_hysteresis, out_idx, fwd, up_primary, confidence);
         build_tracker(role, pos, fwd, up, out[out_idx], confidence);
     };
     upper_leg(TrackerRole::LeftUpperLeg,  kLHip, kLKnee, kLAnkle, 4);

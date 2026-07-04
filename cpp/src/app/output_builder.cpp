@@ -28,6 +28,7 @@ std::unique_ptr<slimevr::TrackerExtractor> make_tracker_extractor(
     // extractor. Also weakens the chain Kalman upstream (threed_builder →
     // ThreeDConfig::st_filter). Default off = byte-identical.
     tex_opts.st_filter       = opts.st_filter_3d;
+    tex_opts.roll_hysteresis = opts.roll_hysteresis_3d;
     tex_opts.pos_one_euro    = {static_cast<float>(opts.vr_pos_mincutoff),
                                 static_cast<float>(opts.vr_pos_beta),
                                 static_cast<float>(opts.vr_pos_dcutoff)};

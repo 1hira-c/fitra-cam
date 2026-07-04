@@ -122,6 +122,12 @@ struct FootAnchor {
 struct ExtractContext {
     // [0] = left foot, [1] = right foot.
     std::array<FootAnchor, 2> foot_anchors{};
+    // Per-inferred-roll-bone hysteresis latch for the roll gate-raise (#2, opt-in
+    // via extract_trackers' roll_hysteresis param). Indexed directly by the arm /
+    // thigh tracker out_idx (0/1 arms, 4/5 thighs; other slots unused/harmless).
+    // Reset to false by reset_smoothing()'s `ExtractContext{}`, same lifecycle as
+    // foot_anchors. See docs/design/pose-3d-spatiotemporal-filter.md (roll snap).
+    std::array<bool, kTrackerCount> roll_locked{};
 };
 
 // Extract 10 trackers from a Halpe26 3D skeleton. A missing forward hint
@@ -151,12 +157,20 @@ struct ExtractContext {
 // (chest = spine midpoint 0.5, waist = hip_center 0.0) to preserve golden
 // tests; the runtime product defaults (TrackerExtractorOptions) sit higher so
 // the trackers land nearer the sternum / belt line for VRChat FBT.
+// `roll_hysteresis` (opt-in, default off) raises the effective roll trust gate
+// for the ARM / THIGH inferred-roll bones via an acquire/release hysteresis on
+// sin θ(up, forward): roll is only followed once the limb is clearly bent
+// (acquire) and is HELD (frozen, tracked by swing + parent-yaw transport) once
+// it straightens past release — killing the noisy mid-band roll following near
+// the degenerate cone. Needs `ctx` non-null (per-bone latch). Off / null ctx is
+// byte-identical to the legacy path. See docs/design/pose-3d-spatiotemporal-filter.md.
 std::array<SlimeTracker, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel,
                  ExtractContext* ctx = nullptr,
                  FootPosMode foot_pos_mode = FootPosMode::Midpoint,
                  float chest_height_frac = 0.5f,
-                 float waist_height_frac = 0.0f);
+                 float waist_height_frac = 0.0f,
+                 bool roll_hysteresis = false);
 
 // ---- One Euro filter (speed-adaptive low-pass) ----------------------------
 //

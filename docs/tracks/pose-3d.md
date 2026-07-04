@@ -92,6 +92,19 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-04 — 伸展 roll snap 対策: arm/thigh roll gate-raise hysteresis（既定 OFF）
+実機で肘/膝の伸展時に twist snap を確認（st/OFF 両方）。設計 workflow の敵対的検証で **当初の「canonical-slew(last_good up 再供給)」
+案を棄却** — 閾値跨ぎ snap は既に smoothstep で masking 済（ta→0 で恣意 roll は捨てられる）、**真の snap 源は中間帯(sinθ 0.15–0.30、
+肘 8.6–17.5°)の測定 roll ノイズ追随**（roll azimuth ノイズ ∝ 1/sinθ で 3–7× 増幅）。ユーザー意図「last_good 保持」は既存機構
+（swing parallel-transport + parent-yaw transport）が既に供給済。→ **採用: acquire/release hysteresis**（`kRollAcquireSin=0.42`/
+`kRollReleaseSin=0.26`、arm/thigh の inferred-roll 限定）で実効 trust gate を引き上げ、clearly-bent 時のみ roll を lock、伸展で
+ノイズ帯を追わず last-confident roll を held（conf→0、swing+transport が連続に運ぶ）。`extract_trackers(...,roll_hysteresis)` +
+`ExtractContext.roll_locked`（reset で clear）、flag `three_d.roll_hysteresis`（既定 OFF・`--roll-hysteresis`）、`output_builder` 配線、
+`dump_keypoints_3d --roll-hysteresis` で offline A/B。ctest `test_tracker_extract_roll`（byte 不変/arm・thigh hysteresis 列/NaN/reset）、
+full build + ctest **35/35**。**経路非対称**（恩恵 arm=st+One-Euro+EMA / leg=One-Euro+EMA、st has_roll は arm-only）は doc 明記。
+**残**: acquire/release=0.42/0.26 は seed → 実クリップ A/B で tuning + 実機体感。将来案（未採用）: 腕コントローラー twist を roll source。
+設計 = [design/pose-3d-spatiotemporal-filter.md](../design/pose-3d-spatiotemporal-filter.md) 残課題節。
+
 ### 2026-07-04 — 床接地グラウンディング (M-D floor anchor) 実装（既定 OFF）
 実機で足の床貫通(heel-sink)を確認(録画実測: still `r_big_toe` median −8.2mm・99.8%床下、walk stance で toe/heel −30〜−62mm)。
 heel-sink は 2D 持病で 2D/時間フィルタでは直らず、**lift 段の接地拘束**が唯一の手当。**最大の発見: 床平面は plumbing 不要** —

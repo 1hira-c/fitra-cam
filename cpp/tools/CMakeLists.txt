@@ -541,6 +541,22 @@ set_target_properties(fitra_test_tracker_extract PROPERTIES
 
 add_test(NAME test_tracker_extract COMMAND fitra_test_tracker_extract)
 
+# Arm/thigh roll gate-raise hysteresis (#2, roll extension snap).
+add_executable(fitra_test_tracker_extract_roll
+    test_tracker_extract_roll.cpp
+)
+
+target_link_libraries(fitra_test_tracker_extract_roll PRIVATE
+    fitra_slimevr
+)
+
+set_target_properties(fitra_test_tracker_extract_roll PROPERTIES
+    OUTPUT_NAME "test_tracker_extract_roll"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_tracker_extract_roll COMMAND fitra_test_tracker_extract_roll)
+
 # VMT OSC 1.0 wire-format byte-level golden test, including
 # the `/VMT/Room/Driver` packet shape.
 add_executable(fitra_test_vmt_osc_writer

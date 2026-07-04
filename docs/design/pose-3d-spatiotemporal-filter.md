@@ -201,11 +201,16 @@ swing と剛体 roll (chest/waist/shin-anatomical, conf=1 pin) は無変更 (ス
 ## 残課題
 
 - ✅ **arm 限定 scope + default-ON 済 (2026-07-04)**。残: >200mm 大振幅 clip で lag を registered bar 正式判定。
-- **伸展時の roll 供給源 (閾値 snap の根本対策・st 固有でない・両モード改善)** — 肘/膝が roll_conf 閾値(sin 8.6°/17.5°)を跨いで
-  伸展すると twist が lock/unlock して snap（実機で st/OFF 両方、st の方がまし）。ユーザー案: hold/arbitrary snap でなく
-  **(a) 伸展したら "しっかり真っ直ぐ" へ snap**、**(b) roll を最終観測 or 足先(toe)/ハンドコントローラーの twist から供給**
-  （特に腕はコントローラーが実 twist を持つので KP hold より確実な source）。roll_confidence ゲート
-  (`extract_trackers`/`apply_quat_smoothing`)側の作り替え。SlimeVR rotation-only 化とも相性良。
+- ✅ **伸展 roll snap → roll gate-raise hysteresis 実装済 (2026-07-04、既定 OFF)**。設計 workflow の敵対的検証で**当初の
+  「canonical-slew(last_good up 再供給)」案は棄却**: 閾値跨ぎ snap は既に smoothstep で masking 済(ta→0 で恣意 roll は捨てられる)、
+  真の snap 源は**中間帯(sinθ 0.15–0.30)の測定 roll ノイズ追随**(roll azimuth ノイズ ∝ 1/sinθ で 3–7× 増幅)。ユーザーの「last_good
+  保持」は既存機構(swing parallel-transport + parent-yaw transport)が既に供給済。→ **採用: acquire/release hysteresis で実効 trust
+  gate を引き上げ**(`kRollAcquireSin=0.42`/`kRollReleaseSin=0.26`、arm/thigh の inferred-roll 限定)。lock は clearly-bent 時のみ、
+  伸展でノイズ帯を追わず last-confident roll を held(conf→0)。`extract_trackers(...,roll_hysteresis)` + `ExtractContext.roll_locked`、
+  flag `three_d.roll_hysteresis`(既定 OFF・`--roll-hysteresis`)、`dump_keypoints_3d --roll-hysteresis` で offline A/B。ctest
+  `test_tracker_extract_roll`(byte 不変/arm・thigh hysteresis 列/NaN/reset)、**35/35**。**経路非対称**: 恩恵は arm=st+One-Euro+EMA /
+  leg=One-Euro+EMA(st has_roll は arm-only)。**残**: `acquire/release=0.42/0.26` は seed、伸展 snap を訴えた本人の動作クリップで
+  raw 比 roll_rms/rel_dps を A/B して tuning + 実機体感。**将来案(未採用)**: 腕はコントローラー twist を roll source に(plumbing 重・実機必須)。
 - **held-twist (roll_conf≈0) pass-through — 候補 (要否は M-C5 待ち)**: 脚等の held 軸に st/one_euro とも spurious twist を
   注入 (roll_rms +300–800% vs raw)。ただし M-C4 検証では **rel_dps 上 st legs=calm で可視プルプルではない** =
   roll_rms metric の過大評価の可能性が高く、「解くべき問題があるか」自体が未確定。実機 M-C5 で脚 roll が気になるなら実装。

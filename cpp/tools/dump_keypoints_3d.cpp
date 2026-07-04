@@ -114,6 +114,7 @@ struct Args {
     double floor_snap_band_m = 0.03;
     double floor_stance_vel_mps = 0.15;
     bool dump_trackers = false;
+    bool roll_hysteresis = false;
     std::string tracker_smoothing = "raw";  // raw | one_euro | st
     double st_kalman_weaken = 1.0;           // st mode: chain-Kalman process-noise scale (M-C4: ×100 harmful at rest)
     double spine_tol = 0.12;
@@ -178,6 +179,10 @@ void print_help() {
         "                            valid + roll_confidence. This is the spatiotemporal\n"
         "                            filter's tracker harness OFF baseline (M-C1); score\n"
         "                            it with analyze_3d_jitter_lag.py trackers.\n"
+        "  --roll-hysteresis         arm/thigh roll gate-raise hysteresis (#2): hold the\n"
+        "                            last confident roll through the noisy extension band\n"
+        "                            instead of following mid-band roll noise. Affects the\n"
+        "                            dumped trackers' orientation (needs --dump-trackers).\n"
         "  --tracker-smoothing MODE  smoothing applied to the dumped trackers (needs\n"
         "                            --dump-trackers): raw (default, no smoothing =\n"
         "                            M-C1 OFF baseline) | one_euro (current shipping\n"
@@ -234,6 +239,7 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--floor-snap-band-m") { args.floor_snap_band_m = std::stod(need("--floor-snap-band-m")); }
         else if (a == "--floor-stance-vel-mps") { args.floor_stance_vel_mps = std::stod(need("--floor-stance-vel-mps")); }
         else if (a == "--dump-trackers") { args.dump_trackers = true; }
+        else if (a == "--roll-hysteresis") { args.roll_hysteresis = true; }
         else if (a == "--tracker-smoothing") { args.tracker_smoothing = need("--tracker-smoothing"); }
         else if (a == "--st-kalman-weaken") { args.st_kalman_weaken = std::stod(need("--st-kalman-weaken")); }
         else if (a == "--spine-tol")    { args.spine_tol = std::stod(need("--spine-tol")); }
@@ -1057,7 +1063,7 @@ int main(int argc, char** argv) {
                 if (args.dump_trackers) {
                     trackers = fitra::slimevr::extract_trackers(
                         skel, &tracker_ctx, fitra::slimevr::FootPosMode::Ankle,
-                        0.65f, 0.15f);
+                        0.65f, 0.15f, args.roll_hysteresis);
                     // Optional tracker-stage smoothing (one_euro / st), replaying
                     // the live TrackerExtractor per 3D frame at the clip cadence.
                     if (tm_one_euro || tm_st) {
