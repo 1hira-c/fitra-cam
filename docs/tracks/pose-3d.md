@@ -92,6 +92,19 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-04 — 床接地グラウンディング (M-D floor anchor) 実装（既定 OFF）
+実機で足の床貫通(heel-sink)を確認(録画実測: still `r_big_toe` median −8.2mm・99.8%床下、walk stance で toe/heel −30〜−62mm)。
+heel-sink は 2D 持病で 2D/時間フィルタでは直らず、**lift 段の接地拘束**が唯一の手当。**最大の発見: 床平面は plumbing 不要** —
+triangulator の world は floor AprilTag 契約で **fitra Z-up・床=Z=0**、`joint.z` がそのまま床距離。新規 pure
+`lift/floor_grounding.{hpp,cpp}` の `apply_floor_grounding` が Halpe26 の sole 点(toe/heel {20-25})に **(1)床下 clamp
+(常時・無条件正)+ (2)stance snap(band 内 & 低速を Z のみ床へ)** を適用(ankle は脚関節で非対象、COCO17 は no-op)。
+`multi_pipeline` の **Kalman+IK の後(最終 3D 段)**に配置＝output-only で state 非帰還・後段で再沈下せず。
+`three_d.floor_grounding`(既定 **OFF**=byte 不変)+ floor_z_m/stance_vel/snap_band、CLI `--floor-grounding`、idle resume で
+state reset。`dump_keypoints_3d --floor-grounding` で offline A/B 可。**検証**: ctest `test_floor_grounding`(9 ケース、
+ankle 非接地含む)、full build + ctest **34/34**。実機 `still` で `r_big_toe` −8.2mm/99.8%床下 → **0mm/0%床下**、heels 20-29 → 0
+(stance snap)、ankle 不変＝**床貫通ゼロ化を確認**。設計 = [design/pose-3d-floor-grounding.md](../design/pose-3d-floor-grounding.md)。
+**残**: XY stance freeze(slip 込み)、snap_band/stance_vel 実機チューニング、歩行接地の体感、既定 ON 判断。
+
 ### 2026-07-04 — 時空フィルタ ship確定: arm 限定 roll scope + default-ON
 M-C5 実機 favorable を受け、時空フィルタを**製品既定 ON** に。
 - **arm 限定 scope**: `default_st_config()` の has_roll を **upper_arm のみ**に縮小（upper_leg/lower_leg を twist regime から除外）。

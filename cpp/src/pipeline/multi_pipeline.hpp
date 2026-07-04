@@ -23,6 +23,7 @@
 
 #include "camera/frame_source.hpp"
 #include "infer/rtmpose.hpp"
+#include "lift/floor_grounding.hpp"
 #include "lift/ik.hpp"
 #include "lift/kalman.hpp"
 #include "lift/rigid_fit.hpp"
@@ -50,6 +51,14 @@ public:
         // now owns the smoothing. No effect on the tracker stage itself (that is
         // gated by TrackerExtractorOptions::st_filter). Default off = byte-identical.
         bool st_filter = false;
+        // Floor-contact grounding (spatial-filtering M-D). When true the LAST 3D
+        // stage clamps below-floor foot sole points to the floor (Z=0) and snaps
+        // near-floor low-speed (stance) points onto it, fixing heel-sink /
+        // penetration. Halpe26 only (needs toe/heel). Default off = byte-identical.
+        bool floor_grounding = false;
+        double floor_z_m = 0.0;
+        double floor_stance_vel_mps = 0.15;
+        double floor_snap_band_m = 0.03;
         int bone_calib_frames = 150;
         double subject_height_m = 0.0;
         bool has_subject_profile = false;
@@ -145,6 +154,11 @@ private:
     // — otherwise the 3D path is byte-identical to the pre-M-A behavior.
     lift::RigidTemplate  pelvis_template_{};
     bool                 rigid_pelvis_active_ = false;
+    // Floor-contact grounding (M-D). opts built once from threed_; state holds
+    // the per-foot-point prev anchor for the stance-speed estimate. Only touched
+    // when threed_.floor_grounding is set.
+    lift::FloorGroundingOptions floor_opts_{};
+    lift::FloorGroundingState   floor_state_{};
     std::mutex           threed_mu_;
 
     // Tap callbacks. Loop reads these via a local snapshot to avoid holding

@@ -136,6 +136,7 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
         "enable_3d", "calib", "kp_conf_thresh", "max_reproj_px",
         "sync_window_ms", "bone_calib_frames", "no_3d_kalman", "no_3d_ik",
         "rigid_pelvis", "st_filter",
+        "floor_grounding", "floor_z_m", "floor_stance_vel_mps", "floor_snap_band_m",
         "vr_extract_event_driven",
         "vr_one_euro", "vr_pos_mincutoff", "vr_pos_beta", "vr_pos_dcutoff",
         "vr_quat_mincutoff", "vr_quat_beta", "vr_quat_dcutoff",
@@ -162,6 +163,12 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
     if (section["st_filter"]) {
         out.st_filter_3d = parse_scalar<bool>(section["st_filter"], "three_d.st_filter");
     }
+    if (section["floor_grounding"]) {
+        out.floor_grounding_3d = parse_scalar<bool>(section["floor_grounding"], "three_d.floor_grounding");
+    }
+    if (section["floor_z_m"])            out.floor_z_m            = parse_scalar<double>(section["floor_z_m"],            "three_d.floor_z_m");
+    if (section["floor_stance_vel_mps"]) out.floor_stance_vel_mps = parse_scalar<double>(section["floor_stance_vel_mps"], "three_d.floor_stance_vel_mps");
+    if (section["floor_snap_band_m"])    out.floor_snap_band_m    = parse_scalar<double>(section["floor_snap_band_m"],    "three_d.floor_snap_band_m");
     if (section["vr_extract_event_driven"]) {
         out.vr_extract_event_driven = parse_scalar<bool>(
             section["vr_extract_event_driven"], "three_d.vr_extract_event_driven");
@@ -520,6 +527,10 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.ik_3d     != d.ik_3d)     e << YAML::Key << "no_3d_ik"     << YAML::Value << !o.ik_3d;
     if (o.rigid_pelvis_3d != d.rigid_pelvis_3d) e << YAML::Key << "rigid_pelvis" << YAML::Value << o.rigid_pelvis_3d;
     if (o.st_filter_3d != d.st_filter_3d) e << YAML::Key << "st_filter" << YAML::Value << o.st_filter_3d;
+    if (o.floor_grounding_3d != d.floor_grounding_3d) e << YAML::Key << "floor_grounding" << YAML::Value << o.floor_grounding_3d;
+    if (o.floor_z_m != d.floor_z_m) e << YAML::Key << "floor_z_m" << YAML::Value << o.floor_z_m;
+    if (o.floor_stance_vel_mps != d.floor_stance_vel_mps) e << YAML::Key << "floor_stance_vel_mps" << YAML::Value << o.floor_stance_vel_mps;
+    if (o.floor_snap_band_m != d.floor_snap_band_m) e << YAML::Key << "floor_snap_band_m" << YAML::Value << o.floor_snap_band_m;
     if (o.vr_extract_event_driven != d.vr_extract_event_driven) e << YAML::Key << "vr_extract_event_driven" << YAML::Value << o.vr_extract_event_driven;
     if (o.vr_one_euro       != d.vr_one_euro)       e << YAML::Key << "vr_one_euro"       << YAML::Value << o.vr_one_euro;
     if (o.vr_pos_mincutoff  != d.vr_pos_mincutoff)  e << YAML::Key << "vr_pos_mincutoff"  << YAML::Value << o.vr_pos_mincutoff;
@@ -766,6 +777,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--rigid-pelvis")      { out.rigid_pelvis_3d = true; }
         else if (a == "--st-filter")         { out.st_filter_3d = true; }
         else if (a == "--no-st-filter")      { out.st_filter_3d = false; }
+        else if (a == "--floor-grounding")   { out.floor_grounding_3d = true; }
         else if (a == "--vr-extract-event-driven") { out.vr_extract_event_driven = true; }
         else if (a == "--foot-tracker-pos")  { out.vr_foot_pos_mode = need(i, "--foot-tracker-pos"); }
         else if (a == "--chest-height-frac") { out.vr_chest_height_frac = std::stod(need(i, "--chest-height-frac")); }

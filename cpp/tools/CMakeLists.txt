@@ -237,6 +237,21 @@ set_target_properties(fitra_test_rigid_fit PROPERTIES
 
 add_test(NAME test_rigid_fit COMMAND fitra_test_rigid_fit)
 
+add_executable(fitra_test_floor_grounding
+    test_floor_grounding.cpp
+)
+
+target_link_libraries(fitra_test_floor_grounding PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_floor_grounding PROPERTIES
+    OUTPUT_NAME "test_floor_grounding"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_floor_grounding COMMAND fitra_test_floor_grounding)
+
 add_executable(fitra_test_triangulator
     test_triangulator.cpp
 )

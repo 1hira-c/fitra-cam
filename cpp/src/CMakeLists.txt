@@ -14,6 +14,7 @@ add_library(fitra_lift STATIC
     lift/kalman.cpp
     lift/ik.cpp
     lift/rigid_fit.cpp
+    lift/floor_grounding.cpp
     lift/subject_profile.cpp
     lift/pose_recognizer.cpp
     lift/keypoint_format.cpp

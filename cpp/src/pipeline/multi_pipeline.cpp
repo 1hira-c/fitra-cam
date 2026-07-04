@@ -82,6 +82,17 @@ MultiCameraDriver::MultiCameraDriver(
         FITRA_LOG_WARN("3D pelvis rigid fit requested but inactive "
                        "(needs Halpe26 + a loaded subject profile)");
     }
+    // Floor-contact grounding (M-D): opts from config; active only under Halpe26
+    // (needs toe/heel sole points — a no-op on COCO17 regardless of the flag).
+    floor_opts_.floor_z_m      = threed_.floor_z_m;
+    floor_opts_.stance_vel_mps = threed_.floor_stance_vel_mps;
+    floor_opts_.snap_band_m    = threed_.floor_snap_band_m;
+    if (threed_.floor_grounding) {
+        const bool halpe = lift::active_keypoint_format() == lift::KeypointFormat::Halpe26;
+        FITRA_LOG_INFO("3D floor grounding {} (floor_z={}m band={}m stance<{}m/s)",
+                       halpe ? "ENABLED" : "requested but inactive (needs Halpe26 toe/heel)",
+                       threed_.floor_z_m, threed_.floor_snap_band_m, threed_.floor_stance_vel_mps);
+    }
     for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
         latest_snapshots_[i].id = static_cast<int>(i);
     }
@@ -538,6 +549,14 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         if (tap_active) skel_tap_local(measured_skel, drift);
     }
 
+    // Floor-contact grounding (M-D): LAST 3D stage, after Kalman + IK, so no
+    // downstream smoother can re-sink the foot and the post-IK sole adjustment
+    // is output-only (not fed back into Kalman/IK state). No-op on COCO17 / when
+    // the flag is off (byte-identical). Uses the same dt_s as the Kalman.
+    if (threed_.floor_grounding) {
+        lift::apply_floor_grounding(skel, floor_state_, dt_s, floor_opts_);
+    }
+
     auto t1 = std::chrono::steady_clock::now();
 
     ++tri_processed_;
@@ -613,6 +632,7 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         // lock / bone lengths (subject calibration) are preserved. Runs on the
         // loop thread, the only writer of kalman_ / has_last_3d_update_.
         kalman_.reset();
+        floor_state_.reset();  // drop stale stance anchors so speed re-anchors post-idle
         has_last_3d_update_ = false;
     }
 }

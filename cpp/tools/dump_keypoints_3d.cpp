@@ -55,6 +55,7 @@
 #include "lift/calib_io.hpp"
 #include "lift/ik.hpp"
 #include "lift/kalman.hpp"
+#include "lift/floor_grounding.hpp"
 #include "lift/keypoint_format.hpp"
 #include "lift/rigid_fit.hpp"
 #include "lift/skeleton_def.hpp"
@@ -108,6 +109,10 @@ struct Args {
     bool no_ik = false;
     bool rigid_pelvis = false;
     bool rigid_shoulders = false;
+    bool floor_grounding = false;
+    double floor_z_m = 0.0;
+    double floor_snap_band_m = 0.03;
+    double floor_stance_vel_mps = 0.15;
     bool dump_trackers = false;
     std::string tracker_smoothing = "raw";  // raw | one_euro | st
     double st_kalman_weaken = 1.0;           // st mode: chain-Kalman process-noise scale (M-C4: ×100 harmful at rest)
@@ -160,6 +165,13 @@ void print_help() {
         "                            distance from hip_center to the spine length +/-\n"
         "                            --spine-tol (needs --subject-profile). M-B.\n"
         "  --spine-tol F             spine soft-coupling tolerance fraction (default 0.12)\n"
+        "  --floor-grounding         ground foot sole points to the floor (Halpe26 only,\n"
+        "                            M-D): clamp below-floor toe/heel to Z=floor and snap\n"
+        "                            near-floor low-speed (stance) points onto it. Runs\n"
+        "                            after Kalman+IK. Fixes heel-sink/penetration.\n"
+        "  --floor-z-m F             floor plane Z in world m (default 0)\n"
+        "  --floor-snap-band-m F     stance snap zone height above floor (default 0.03)\n"
+        "  --floor-stance-vel-mps F  max foot speed to be 'planted' (default 0.15)\n"
         "  --dump-trackers           also emit the SlimeVR 10-tracker extraction per\n"
         "                            frame (Halpe26 only): a \"trackers\" array of RAW\n"
         "                            (no temporal smoothing) pos + orientation quat +\n"
@@ -217,6 +229,10 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--no-ik")        { args.no_ik = true; }
         else if (a == "--rigid-pelvis") { args.rigid_pelvis = true; }
         else if (a == "--rigid-shoulders") { args.rigid_shoulders = true; }
+        else if (a == "--floor-grounding") { args.floor_grounding = true; }
+        else if (a == "--floor-z-m")    { args.floor_z_m = std::stod(need("--floor-z-m")); }
+        else if (a == "--floor-snap-band-m") { args.floor_snap_band_m = std::stod(need("--floor-snap-band-m")); }
+        else if (a == "--floor-stance-vel-mps") { args.floor_stance_vel_mps = std::stod(need("--floor-stance-vel-mps")); }
         else if (a == "--dump-trackers") { args.dump_trackers = true; }
         else if (a == "--tracker-smoothing") { args.tracker_smoothing = need("--tracker-smoothing"); }
         else if (a == "--st-kalman-weaken") { args.st_kalman_weaken = std::stod(need("--st-kalman-weaken")); }
@@ -806,6 +822,11 @@ int main(int argc, char** argv) {
         const fitra::slimevr::OneEuroParams pos_euro{1.0f, 4.0f, 1.0f};
         const fitra::slimevr::OneEuroParams quat_euro{1.5f, 1.5f, 1.0f};
         constexpr float kNominalDt = 1.0f / 60.0f;  // live extract_rate_hz
+        // Floor-contact grounding (M-D) — last 3D stage, after Kalman+IK.
+        fitra::lift::FloorGroundingOptions fg_opts;
+        fg_opts.floor_z_m      = args.floor_z_m;
+        fg_opts.stance_vel_mps = args.floor_stance_vel_mps;
+        fg_opts.snap_band_m    = args.floor_snap_band_m;
         if (args.rigid_pelvis) {
             pelvis_template = fitra::lift::RigidTemplate::from_distances(
                 subject_profile.bone_lengths_m[11],   // hip_center -> l_hip
@@ -946,6 +967,7 @@ int main(int argc, char** argv) {
             // mirroring TrackerExtractor::extract_ctx_. Declared inside the job
             // loop so it resets between poses (matches `kalman`).
             fitra::slimevr::ExtractContext tracker_ctx;
+            fitra::lift::FloorGroundingState fg_state;  // per-job (resets between poses)
             // Per-job tracker-smoothing state (reset between poses like `kalman`).
             std::array<cv::Vec4f, fitra::slimevr::kTrackerCount> tk_prev_quat;
             tk_prev_quat.fill(cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f});
@@ -1015,6 +1037,12 @@ int main(int argc, char** argv) {
                     drift_before = ik.bone_drift_pct(skel);
                     if (!args.no_ik) skel = ik.update(skel);
                     drift_after = ik.bone_drift_pct(skel);
+                }
+
+                // Floor-contact grounding (M-D): last 3D stage (after Kalman+IK),
+                // mirrors multi_pipeline. No-op on COCO17 / when off.
+                if (args.floor_grounding) {
+                    fitra::lift::apply_floor_grounding(skel, fg_state, 1.0 / fps, fg_opts);
                 }
 
                 // Tracker harness (M-C1): RAW SlimeVR trackers from the final

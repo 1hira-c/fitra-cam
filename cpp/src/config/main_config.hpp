@@ -109,6 +109,15 @@ struct MainOptions {
     // DEFAULT ON (M-C5): offline lag-free + real-hardware A/B >= One Euro with no
     // new dealbreaker; benefit is arm-twist. --no-st-filter falls back to One Euro.
     bool   st_filter_3d = true;
+    // Floor-contact grounding (docs/design/pose-3d-floor-grounding.md, M-D). When
+    // on, the last 3D stage clamps below-floor foot sole points to the floor and
+    // snaps near-floor low-speed (stance) points onto it — fixes heel-sink /
+    // penetration. Halpe26 only (needs toe/heel). Default off = byte-identical.
+    // YAML three_d.floor_grounding, CLI --floor-grounding.
+    bool   floor_grounding_3d = false;
+    double floor_z_m = 0.0;              // world floor plane (fitra Z-up, floor = Z = 0)
+    double floor_stance_vel_mps = 0.15;  // below this foot speed a near-floor point is planted
+    double floor_snap_band_m = 0.03;     // snap zone height above the floor
     // VR tracker extraction: react to each new 3D frame (event-driven) instead
     // of resampling at a fixed cadence. Cuts the extractor's contribution to
     // capture->VR-send latency. Feeds both SlimeVR and VMT. Default off.
