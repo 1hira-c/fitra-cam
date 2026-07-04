@@ -92,6 +92,23 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-04 — 時空フィルタ M-C5 offline（kick/dash 高速動作 + 敵対的検証）: ship 確定・default-ON は実機 gate
+kick（膝が曲がり脚 roll が観測可能に）/ dash（高速全身）を実 59fps で raw/one_euro/st 計測し、8エージェント workflow
+（`mc4-fast-motion-study`）で fast-motion の 2 疑問を検証:
+- **fast lag: st は one_euro に lag を足さない**（全12 moving tracker で st≤one_euro、integer-frame +2→+1 で robust。
+  One-Euro が強い low-pass ゆえ st が速いのは物理的に期待通り）。**例外: kicking foot は spatial lag_cap(150mm)係合で
+  burst-window ~14ms の bounded lag**（whole-clip xcorr が隠す。worst-case trail 150mm < one_euro 238mm）。
+  **offline lag は directional-only**（reliability gate σ>200mm & corr>0.999 を全 tracker 未達、per-axis 83-217mm）。
+- **kick で脚 roll は genuinely observable（roll_conf 0.95-0.99）= twist regime ACTIVE。それでも st は脚 roll を改善しない**
+  （rel_dps が st で悪化、roll_rms tied）→ **twist regime が legs を助けないことは active ケースでも確定、roll win は arm 限定**
+  （dash upper-arm roll_rms 20.2→17.8/24.7→19.9）。kick leg roll_rms ~65deg は per-frame roll range ~300deg の swing-leakage で twist ではない。
+- reproj は 3 mode 差 <0.01px（filter は upstream fit を壊さず。fast は reproj 高め: kick 6.3 / dash 7.4px）。
+**確定: st roll regime を weaken=1・default-OFF で ship（lag-free・arm/feet twist に modest な実利・低リスク opt-in）。
+default-ON は offline データだけでは不可**（st は mode-switch filter で roll_conf flicker、whole-clip metric は
+threshold-snap/chatter/動き出し onset を原理的に見られない）→ **実機 M-C5 A/B が唯一の gate**。候補: regime を arm 限定に
+scope 縮小（legs は rel_dps を足すだけで gain ゼロ）。**コード変更なし（計測+doc+memory）**。詳細は
+[design doc M-C5 節](../design/pose-3d-spatiotemporal-filter.md) + memory `project-spatiotemporal-filter-mc4`。
+
 ### 2026-07-04 — 時空フィルタ M-C4 動作計測 + 敵対的検証（多エージェント workflow・結論確定）
 実 59fps クリップ（still/walk_around/forward_bend、各900フレーム、raw/one_euro/st）で A/B し、8エージェント workflow
 （`mc4-motion-study`: measure→analyze→4レンズ敵対的 verify→synthesize）で結論を検証。**検証済の確定結論**:

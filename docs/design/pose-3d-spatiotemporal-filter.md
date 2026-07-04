@@ -163,8 +163,19 @@ swing と剛体 roll (chest/waist/shin-anatomical, conf=1 pin) は無変更 (ス
   - **×100 Kalman 弱化は棄却確定** (rest で rel_dps 2–3×・held-leg roll +300–1400% vs raw)。**weaken=1** に既定変更済
     (skeleton が raw と一致)。**st は rest+lag の全 metric で one_euro 以上**。→ **roll regime を weaken=1・default-OFF で ship、
     最終 ON は M-C5 実機で判定**。
-- **M-C5**: **実機 A/B** (WebUI 3D + WS3D テレメトリ) で体感確定 (動き出し・snap/チャタリング無し・追従)。**motion 証拠が薄い
-  (2 clip・forward_bend は実質 1 本の信頼 mover) ので kick clip を追加**して速い twist を含める。合格なら既定 ON 化を検討。
+- **M-C5** (offline 部分 ✅ 2026-07-04 kick/dash + 敵対的検証 / 実機部分は残): **fast-motion offline 判定**:
+  - **fast lag: st は one_euro に lag を足さない** (全12 moving tracker で st≤one_euro、integer-frame +2→+1 で robust。One-Euro が
+    強い low-pass ゆえ st が速いのは物理的に期待通り)。**例外: kicking foot は spatial lag_cap(150mm)係合で burst-window ~14ms の
+    bounded lag** (whole-clip xcorr が隠す。st worst-case trail 150mm < one_euro 238mm)。velocity-gate freeze は人体速度で不発。
+    **ただし offline lag は directional-only** — reliability gate(σ>200mm & corr>0.999)を kick/dash 全 tracker で未達(per-axis 83-217mm)。
+  - **kick で脚 roll は genuinely observable (roll_conf 0.95-0.99)＝twist regime ACTIVE。それでも st は脚 roll を改善しない**
+    (rel_dps が st で悪化、roll_rms tied)。→ **twist regime が legs を助けないことは active ケースでも確定、roll win は arm 限定**。
+    (kick leg roll_rms ~65deg は swing-leakage、twist の証拠にしない。)
+  - **default-ON は offline だけでは不可** — st は mode-switch filter(roll_conf flicker で twist DOF lock/unlock)、whole-clip metric は
+    threshold-snap/chatter/動き出し onset を原理的に見られない。→ **実機 A/B が唯一の gate**。
+  - **残 (実機 M-C5)**: WebUI 3D + WS3D で **arm-twist 動作**の st vs one_euro 体感 (snap/chatter/動き出し)、roll_conf time-series の chatter 検査、
+    **>200mm 大振幅 clip** で lag を registered bar で正式判定。合格なら既定 ON 化を検討。**候補: regime を arm 限定に scope 縮小**
+    (legs は rel_dps を足すだけで roll gain ゼロ・snap risk surface を無駄に広げる)。
 - **将来**: (a) 案6 角度空間の検証結果次第で角度ドメインへ寄せる。(b) **スリム化** — st_filter を唯一の平滑にし
   One-Euro / 固定 EMA と `vr_one_euro`/`vr_pos_*` 系を撤去 (ユーザー意向: 最終的に既存を壊してスリム化)。
 
