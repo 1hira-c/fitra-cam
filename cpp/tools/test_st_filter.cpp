@@ -201,9 +201,12 @@ void test_default_config() {
     check(st_group_for(TrackerRole::RightUpperLeg) == StGroup::UpperLeg, "grp.leg");
     check(st_group_for(TrackerRole::Waist)         == StGroup::Waist,    "grp.waist");
     check(st_group_for(TrackerRole::LeftFoot)      == StGroup::Foot,     "grp.foot");
-    // Roll is inferred (regime-driven) only for the limb groups.
-    check(st_has_roll(cfg, TrackerRole::LeftUpperArm), "roll.arm on");
-    check(st_has_roll(cfg, TrackerRole::RightUpperLeg), "roll.leg on");
+    // Roll regime is ARM-ONLY (M-C4/M-C5: legs get no twist benefit).
+    check(st_has_roll(cfg, TrackerRole::LeftUpperArm),  "roll.arm on");
+    check(st_has_roll(cfg, TrackerRole::RightUpperArm), "roll.arm on");
+    check(!st_has_roll(cfg, TrackerRole::LeftUpperLeg),  "roll.upper_leg off (arm-only)");
+    check(!st_has_roll(cfg, TrackerRole::RightUpperLeg), "roll.upper_leg off (arm-only)");
+    check(!st_has_roll(cfg, TrackerRole::LeftLowerLeg),  "roll.lower_leg off (arm-only)");
     check(!st_has_roll(cfg, TrackerRole::Chest), "roll.chest off");
     check(!st_has_roll(cfg, TrackerRole::Waist), "roll.waist off");
     check(!st_has_roll(cfg, TrackerRole::RightFoot), "roll.foot off");

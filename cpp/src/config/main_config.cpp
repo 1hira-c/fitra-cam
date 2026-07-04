@@ -765,6 +765,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--no-3d-ik")          { out.ik_3d = false; }
         else if (a == "--rigid-pelvis")      { out.rigid_pelvis_3d = true; }
         else if (a == "--st-filter")         { out.st_filter_3d = true; }
+        else if (a == "--no-st-filter")      { out.st_filter_3d = false; }
         else if (a == "--vr-extract-event-driven") { out.vr_extract_event_driven = true; }
         else if (a == "--foot-tracker-pos")  { out.vr_foot_pos_mode = need(i, "--foot-tracker-pos"); }
         else if (a == "--chest-height-frac") { out.vr_chest_height_frac = std::stod(need(i, "--chest-height-frac")); }

@@ -92,6 +92,18 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-04 — 時空フィルタ ship確定: arm 限定 roll scope + default-ON
+M-C5 実機 favorable を受け、時空フィルタを**製品既定 ON** に。
+- **arm 限定 scope**: `default_st_config()` の has_roll を **upper_arm のみ**に縮小（upper_leg/lower_leg を twist regime から除外）。
+  M-C4 で脚は genuinely-active(kick roll_conf 0.95-0.99)でも twist 改善ゼロ＋rel_dps を足すだけと判明したため、脚を外して
+  snap risk surface を無駄に広げない。**position regime は legs/feet にも残す**（それらの orientation 安定は position 由来）。
+- **default-ON**: `three_d.st_filter` 既定を false→**true**（MainOptions）。`--no-st-filter` で One-Euro へ戻せるよう negation flag 追加。
+  Kalman weaken は 1（no-op、M-C4 で ×100 棄却済）なので default-ON でも Kalman 挙動は不変。COCO17 では tracker 段が
+  走らないので無害。
+- ctest `test_st_filter` の has_roll 期待を arm-only に更新。full build + ctest **33/33**。
+**残**: (1) >200mm 大振幅 clip で lag を registered bar 正式判定、(2) 閾値 snap の根本対策＝**伸展で真っ直ぐ snap + roll を
+最終観測/足先/コントローラー twist から供給**（ユーザー案、st 固有でなく両モード改善、memory `project-roll-source-on-extension`）。
+
 ### 2026-07-04 — 時空フィルタ M-C5 実機 A/B ✅ favorable（体感 gate 好転）
 WebUI 3D viewer で st ON vs OFF(one_euro) を体感比較（`--st-filter` の有無で 2 ラン、weaken=1 で Kalman 同一＝純 A/B）。
 **結果: st ≥ OFF・新規 dealbreaker なし**。A(腕 roll 静止)/C(chatter)/D(onset)/E(kick 足)は「大体 OK」。**B(閾値越え snap)は

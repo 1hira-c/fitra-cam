@@ -177,9 +177,11 @@ swing と剛体 roll (chest/waist/shin-anatomical, conf=1 pin) は無変更 (ス
     A(腕 roll 静止)・C(chatter)・D(onset)・E(kick 足) は「大体 OK」。**B(閾値越え snap): st も OFF もどちらも出る** ＝ これは st 固有でなく
     **roll_confidence ゲート(肘 sin 8.6°/17.5°)に内在する既存アーティファクト**(OFF=One-Euro も同じゲートを使う)、**st の方が体感まし**(緩和)。
     → offline で足りなかった体感 gate が好転。**default-ON が正当化可能**(ただし upside は arm twist 限定で narrow)。
-  - **残**: **>200mm 大振幅 clip で lag を registered bar 正式判定**(offline directional-only の穴埋め)。判断: **default-ON 化 or
-    arm 限定 scope 縮小**(legs は rel_dps を足すだけで roll gain ゼロ・snap surface を広げる)。閾値 snap は別途 **gate ヒステリシス/
-    roll 再取得の slew-limit** で両モード改善可(st 固有でない)。
+  - **✅ ship 確定 (2026-07-04): arm 限定 scope + default-ON**。has_roll を **upper_arm のみ**に縮小(legs は twist regime から除外＝
+    rel_dps を足すだけで roll gain ゼロ、position regime は legs/feet にも残す)。`three_d.st_filter` を**既定 ON**(`--no-st-filter` で
+    One-Euro へ戻す)。Kalman weaken=1(no-op)。full build + ctest 33/33。
+  - **残**: >200mm 大振幅 clip で lag を registered bar 正式判定(offline directional-only の穴埋め)。閾値 snap は
+    「伸展で真っ直ぐ snap + roll を最終観測/足先/コントローラー twist から供給」(下記 残課題)で根本対策。
 - **将来**: (a) 案6 角度空間の検証結果次第で角度ドメインへ寄せる。(b) **スリム化** — st_filter を唯一の平滑にし
   One-Euro / 固定 EMA と `vr_one_euro`/`vr_pos_*` 系を撤去 (ユーザー意向: 最終的に既存を壊してスリム化)。
 
@@ -198,11 +200,12 @@ swing と剛体 roll (chest/waist/shin-anatomical, conf=1 pin) は無変更 (ス
 
 ## 残課題
 
-- **default-ON 化の判断 (M-C5 実機 favorable 済)** — st ≥ OFF・新規 dealbreaker なし。default-ON か arm 限定 scope 縮小か。
-  残: >200mm 大振幅 clip で lag を registered bar 正式判定。
-- **閾値越え snap の緩和 (st 固有でない・両モード改善)** — 肘が roll_conf 閾値(sin 8.6°/17.5°)を跨ぐと twist が lock/unlock して
-  snap（実機で st/OFF どちらも確認、st の方がまし）。**gate ヒステリシス** or **roll 再取得時の slew-limit**（conf 0→>0 で前 roll から
-  新観測 roll へ緩やかに寄せる）で One-Euro/st 両方が改善する。roll_confidence ゲート(`extract_trackers`/`apply_quat_smoothing`)側の課題。
+- ✅ **arm 限定 scope + default-ON 済 (2026-07-04)**。残: >200mm 大振幅 clip で lag を registered bar 正式判定。
+- **伸展時の roll 供給源 (閾値 snap の根本対策・st 固有でない・両モード改善)** — 肘/膝が roll_conf 閾値(sin 8.6°/17.5°)を跨いで
+  伸展すると twist が lock/unlock して snap（実機で st/OFF 両方、st の方がまし）。ユーザー案: hold/arbitrary snap でなく
+  **(a) 伸展したら "しっかり真っ直ぐ" へ snap**、**(b) roll を最終観測 or 足先(toe)/ハンドコントローラーの twist から供給**
+  （特に腕はコントローラーが実 twist を持つので KP hold より確実な source）。roll_confidence ゲート
+  (`extract_trackers`/`apply_quat_smoothing`)側の作り替え。SlimeVR rotation-only 化とも相性良。
 - **held-twist (roll_conf≈0) pass-through — 候補 (要否は M-C5 待ち)**: 脚等の held 軸に st/one_euro とも spurious twist を
   注入 (roll_rms +300–800% vs raw)。ただし M-C4 検証では **rel_dps 上 st legs=calm で可視プルプルではない** =
   roll_rms metric の過大評価の可能性が高く、「解くべき問題があるか」自体が未確定。実機 M-C5 で脚 roll が気になるなら実装。

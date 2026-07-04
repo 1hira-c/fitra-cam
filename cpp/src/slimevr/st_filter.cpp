@@ -58,15 +58,22 @@ StFilterConfig make_default_config() {
     const StRegime roll_seed{0.052f, 0.175f, 0.10f, 0.50f, 4.0f, 12.0f};
     for (auto& r : cfg.roll) r = roll_seed;
 
-    // Roll is regime-driven only where it is *inferred* from a limb bend (the
-    // design's scope): upper arm / thigh (elbow / knee hinge) and the shin when
-    // its up-hint degenerates. Chest / waist / foot roll stays pinned in M-C3.
+    // Roll regime scope: ARM ONLY (M-C4/M-C5). The M-C4 kick clip (leg roll
+    // genuinely observable, roll_conf 0.95-0.99) + adversarial verification
+    // showed the twist regime gives NO benefit on legs (rel_dps unchanged/worse
+    // vs One Euro) — the earlier leg roll_rms "wins" were a swing-leakage metric
+    // artifact. The genuine, real-hardware-confirmed benefit is arm twist only
+    // (l_upper_arm roll_rms -12.6% vs One Euro). Legs kept OUT of the twist
+    // regime so they don't add rel_dps / widen the threshold-snap surface for
+    // zero gain; the POSITION regime still applies to legs/feet (it drives their
+    // orientation stability via steadier swing). Chest / waist / foot roll stays
+    // pinned. See docs/design/pose-3d-spatiotemporal-filter.md M-C4/M-C5.
     auto& hr = cfg.has_roll;
     hr[static_cast<std::size_t>(StGroup::Waist)]    = false;
     hr[static_cast<std::size_t>(StGroup::Chest)]    = false;
     hr[static_cast<std::size_t>(StGroup::UpperArm)] = true;
-    hr[static_cast<std::size_t>(StGroup::UpperLeg)] = true;
-    hr[static_cast<std::size_t>(StGroup::LowerLeg)] = true;
+    hr[static_cast<std::size_t>(StGroup::UpperLeg)] = false;  // M-C4: no leg-twist benefit
+    hr[static_cast<std::size_t>(StGroup::LowerLeg)] = false;  // M-C4: no leg-twist benefit
     hr[static_cast<std::size_t>(StGroup::Foot)]     = false;
 
     return cfg;
