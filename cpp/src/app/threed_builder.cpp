@@ -96,6 +96,12 @@ std::unique_ptr<pipeline::MultiCameraDriver> make_driver(
     cfg.sync_window_ms      = opts.sync_window_ms;
     cfg.kalman_enabled      = opts.kalman_3d;
     cfg.ik_enabled          = opts.ik_3d;
+    cfg.rigid_pelvis        = opts.rigid_pelvis_3d;
+    cfg.st_filter           = opts.st_filter_3d;
+    cfg.floor_grounding     = opts.floor_grounding_3d;
+    cfg.floor_z_m           = opts.floor_z_m;
+    cfg.floor_stance_vel_mps = opts.floor_stance_vel_mps;
+    cfg.floor_snap_band_m   = opts.floor_snap_band_m;
     cfg.bone_calib_frames   = opts.bone_calib_frames;
     cfg.subject_height_m    = threed->subject_height_m;
     cfg.has_subject_profile = threed->has_subject_profile;

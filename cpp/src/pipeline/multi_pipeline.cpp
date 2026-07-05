@@ -23,7 +23,27 @@ MultiCameraDriver::MultiCameraDriver(
       rtmpose_{rtmpose},
       bus_{bus},
       threed_{threed},
-      kalman_{},
+      kalman_{[&]() {
+          // Default process noise = byte-identical when st_filter is off.
+          // The M-C3 seed weakened the chain Kalman ×100 when st_filter was on
+          // (premise: IK/rigid take the structure, so the Kalman need only
+          // predict/hold). The M-C4 still-clip measurement FALSIFIED that at
+          // rest: ×100 injects orientation jitter the tracker filter can't
+          // absorb (rel angular velocity 2–3×, held-leg roll +300–1400%), while
+          // giving no position benefit (both hit the ~6 mm upstream floor). So
+          // the data-driven default is NO weakening (×1); the factor is kept as
+          // a named knob for the motion/lag sweep (M-C4-D). See
+          // docs/design/pose-3d-spatiotemporal-filter.md.
+          lift::SkeletonKalman::Options kopts;
+          if (threed_.st_filter) {
+              constexpr double kStWeaken = 1.0;  // M-C4: ×100 was harmful at rest
+              kopts.q_pos        *= kStWeaken;
+              kopts.q_vel        *= kStWeaken;
+              kopts.q_pos_offset *= kStWeaken;
+              kopts.q_vel_offset *= kStWeaken;
+          }
+          return lift::SkeletonKalman{kopts};
+      }()},
       ik_{[&]() {
           lift::IkSolver::Options opts;
           opts.bone_calib_frames = std::max(1, threed_.bone_calib_frames);
@@ -44,6 +64,34 @@ MultiCameraDriver::MultiCameraDriver(
     }
     if ((threed_.triangulator || threed_.bus) && (!threed_.triangulator || !threed_.bus)) {
         throw std::invalid_argument("3D pipeline requires both triangulator and Skeleton3DBus");
+    }
+    // Spatial pelvis rigid fit (M-A): build the static pelvis template from the
+    // subject profile's segment distances. Active only under Halpe26 with a
+    // loaded profile and a non-degenerate triangle; otherwise a no-op (the 3D
+    // path stays byte-identical to pre-M-A).
+    if (threed_.rigid_pelvis && threed_.has_subject_profile &&
+        lift::active_keypoint_format() == lift::KeypointFormat::Halpe26) {
+        const auto& p = threed_.subject_profile;
+        pelvis_template_ = lift::RigidTemplate::from_distances(
+            p.bone_lengths_m[11], p.bone_lengths_m[12], p.hip_width_m);
+        rigid_pelvis_active_ = pelvis_template_.valid;
+        FITRA_LOG_INFO("3D pelvis rigid fit {} (template valid={})",
+                       rigid_pelvis_active_ ? "ENABLED (spatial-first)" : "requested but degenerate template",
+                       pelvis_template_.valid);
+    } else if (threed_.rigid_pelvis) {
+        FITRA_LOG_WARN("3D pelvis rigid fit requested but inactive "
+                       "(needs Halpe26 + a loaded subject profile)");
+    }
+    // Floor-contact grounding (M-D): opts from config; active only under Halpe26
+    // (needs toe/heel sole points — a no-op on COCO17 regardless of the flag).
+    floor_opts_.floor_z_m      = threed_.floor_z_m;
+    floor_opts_.stance_vel_mps = threed_.floor_stance_vel_mps;
+    floor_opts_.snap_band_m    = threed_.floor_snap_band_m;
+    if (threed_.floor_grounding) {
+        const bool halpe = lift::active_keypoint_format() == lift::KeypointFormat::Halpe26;
+        FITRA_LOG_INFO("3D floor grounding {} (floor_z={}m band={}m stance<{}m/s)",
+                       halpe ? "ENABLED" : "requested but inactive (needs Halpe26 toe/heel)",
+                       threed_.floor_z_m, threed_.floor_snap_band_m, threed_.floor_stance_vel_mps);
     }
     for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
         latest_snapshots_[i].id = static_cast<int>(i);
@@ -432,13 +480,12 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
 
     auto tri = triangulator->triangulate(observations);
     infer::Skeleton3D skel = tri.skeleton;
-    if (threed_.kalman_enabled) {
-        double dt_s = 1.0 / 30.0;
-        if (has_last_3d_update_) {
-            dt_s = std::chrono::duration<double>(now - last_3d_update_).count();
-        }
-        skel = kalman_.update(skel, dt_s);
+
+    double dt_s = 1.0 / 30.0;
+    if (has_last_3d_update_) {
+        dt_s = std::chrono::duration<double>(now - last_3d_update_).count();
     }
+
     // Subject calibration classifies the pose from anatomical joint *angles* on
     // the measured (pre-IK) skeleton: feeding the post-IK skeleton would let a
     // hinge/length clamp manufacture elbow/knee flexion the subject is not
@@ -459,20 +506,66 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     }
     const bool tap_active = skel_tap_local && tri.valid_joints > 0;
     infer::Skeleton3D measured_skel;
-    if (tap_active) measured_skel = skel;
 
     double drift = 0.0;
-    if (threed_.ik_enabled) {
-        skel = ik_.update(skel);
-        drift = ik_.bone_drift_pct(skel);
-    } else if (ik_.locked()) {
-        drift = ik_.bone_drift_pct(skel);
+    // Spatial-first only when the pelvis rigid fit actually applied this frame.
+    // apply_segment_rigid_fit() returns false (leaving skel untouched) when the
+    // flag/profile gate is off OR a pelvis joint is missing this frame; in that
+    // case fall through to the proven baseline order (Kalman -> IK) with no
+    // rigid benefit. NOTE: a fit-failure frame is byte-identical to the pre-M-A
+    // path only in its STATELESS stages — the shared Kalman carries state
+    // trained on the other branch's input regime (post-IK vs raw tri), so
+    // marginal pelvis visibility toggling the branch per frame feeds the one
+    // filter an alternating measurement stream (step inputs at each
+    // transition). Known trade-off while rigid_pelvis is default OFF; revisit
+    // (single order on failure, or a Kalman soft-reinit) before default-ON.
+    const bool fit_applied =
+        rigid_pelvis_active_ &&
+        lift::apply_segment_rigid_fit(skel, tri, pelvis_template_, {19, 11, 12});
+    if (fit_applied) {
+        // Spatial-first (spatial-filtering M-A, design A): tri -> pelvis rigid
+        // fit -> IK -> Kalman. The rigid fit averages the pelvis joints'
+        // independent jitter (no lag); IK enforces limb lengths/hinges relative
+        // to the now-rigid pelvis; a light Kalman takes only the residual. Only
+        // reached when a subject profile is loaded (calib-subject has none, so
+        // its measured-angle tap semantics are untouched).
+        if (tap_active) measured_skel = skel;  // pre-IK
+        if (threed_.ik_enabled) {
+            skel = ik_.update(skel);
+            drift = ik_.bone_drift_pct(skel);
+        } else if (ik_.locked()) {
+            drift = ik_.bone_drift_pct(skel);
+        }
+        if (threed_.kalman_enabled) skel = kalman_.update(skel, dt_s);
+        if (tap_active) skel_tap_local(measured_skel, drift);  // post-IK drift for the gate
+        // Published stat: re-measure on the skeleton actually published (the
+        // trailing Kalman can re-stretch the IK-clamped bones). Matches the
+        // baseline branch (IK last → drift describes the final skeleton) and
+        // the offline harness's drift_after, keeping live vs offline A/B
+        // comparable. The tap above keeps the lenient post-IK value.
+        if (threed_.ik_enabled || ik_.locked()) drift = ik_.bone_drift_pct(skel);
+    } else {
+        // Baseline (pre-M-A, design B): tri -> Kalman -> IK. Byte-identical to
+        // the historical path (also the fit-failure fallback).
+        if (threed_.kalman_enabled) skel = kalman_.update(skel, dt_s);
+        if (tap_active) measured_skel = skel;  // pre-IK
+        if (threed_.ik_enabled) {
+            skel = ik_.update(skel);
+            drift = ik_.bone_drift_pct(skel);
+        } else if (ik_.locked()) {
+            drift = ik_.bone_drift_pct(skel);
+        }
+        // Calibration tap: measured (pre-IK) skeleton for angles + post-IK drift
+        // for the gate. Published stats below use the same post-IK drift.
+        if (tap_active) skel_tap_local(measured_skel, drift);
     }
 
-    // Calibration tap: measured (pre-IK) skeleton for angles + post-IK drift for
-    // the gate. Published stats below use the same post-IK drift.
-    if (tap_active) {
-        skel_tap_local(measured_skel, drift);
+    // Floor-contact grounding (M-D): LAST 3D stage, after Kalman + IK, so no
+    // downstream smoother can re-sink the foot and the post-IK sole adjustment
+    // is output-only (not fed back into Kalman/IK state). No-op on COCO17 / when
+    // the flag is off (byte-identical). Uses the same dt_s as the Kalman.
+    if (threed_.floor_grounding) {
+        lift::apply_floor_grounding(skel, floor_state_, dt_s, floor_opts_);
     }
 
     auto t1 = std::chrono::steady_clock::now();
@@ -550,6 +643,7 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         // lock / bone lengths (subject calibration) are preserved. Runs on the
         // loop thread, the only writer of kalman_ / has_last_3d_update_.
         kalman_.reset();
+        floor_state_.reset();  // drop stale stance anchors so speed re-anchors post-idle
         has_last_3d_update_ = false;
     }
 }

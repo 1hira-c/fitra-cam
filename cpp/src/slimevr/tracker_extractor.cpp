@@ -92,6 +92,8 @@ void TrackerExtractor::reset_smoothing() {
     quat_ctx_    = QuatSmoothingContext{};
     pos_ctx_     = PosSmoothingContext{};
     extract_ctx_ = ExtractContext{};
+    st_pos_state_   = StPosState{};
+    st_twist_state_ = StTwistState{};
 }
 
 void TrackerExtractor::run_loop() {
@@ -176,7 +178,8 @@ void TrackerExtractor::run_loop() {
         if (sk != nullptr && halpe) {
             raw_trackers = extract_trackers(*sk, &extract_ctx_, opts_.foot_pos_mode,
                                             opts_.chest_height_frac,
-                                            opts_.waist_height_frac);
+                                            opts_.waist_height_frac,
+                                            opts_.roll_hysteresis);
             // Halpe26 idx 19 = hip_center. This is the anatomical pelvis anchor
             // for the hip-relative position hold; the waist tracker is built
             // from the same joint (offset up the spine by waist_height_frac), so
@@ -203,7 +206,29 @@ void TrackerExtractor::run_loop() {
         // event-driven mode passes the measured interval so high-fps frames get
         // proportionally gentler per-step smoothing instead of over-damping.
         auto trackers = raw_trackers;
-        if (opts_.one_euro) {
+        if (opts_.st_filter) {
+            // Spatiotemporal filter (priority st_filter > one_euro > EMA).
+            // Position = distance×velocity regime in the waist-relative frame;
+            // inferred-roll twist = regime-driven for the ARM group only
+            // (legs kept out per M-C4/M-C5 — see st_filter make_default_config).
+            // The twist override is computed from the RAW orientations (and the
+            // held prev_quat_) BEFORE apply_quat_smoothing mutates them; swing
+            // still rides the One Euro / fixed base so it is unchanged.
+            std::array<float, kTrackerCount> twist_override;
+            fill_st_twist_overrides(trackers, prev_quat_, st_twist_state_, st_cfg_,
+                                    dt_s, nominal_dt_s, twist_override);
+            if (opts_.one_euro) {
+                apply_quat_smoothing(trackers, prev_quat_, quat_ctx_,
+                                     opts_.quat_one_euro, dt_s, nominal_dt_s, &twist_override);
+            } else {
+                apply_quat_smoothing(trackers, prev_quat_, opts_.quat_smooth,
+                                     dt_s, nominal_dt_s, &twist_override);
+            }
+            const cv::Vec3f* waist_fallback =
+                pos_ctx_.hip_valid ? &pos_ctx_.current_hip_pos : nullptr;
+            apply_pos_st_filter(trackers, st_pos_state_, st_cfg_, dt_s, nominal_dt_s,
+                                waist_fallback);
+        } else if (opts_.one_euro) {
             // Speed-adaptive: low cutoff (smooth) at rest, high cutoff
             // (responsive) in motion. quat_smooth/pos_smooth are ignored.
             apply_quat_smoothing(trackers, prev_quat_, quat_ctx_,

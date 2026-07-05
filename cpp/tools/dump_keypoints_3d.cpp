@@ -1,8 +1,27 @@
-// dump_keypoints_3d — offline 2-camera 3D dump.
+// dump_keypoints_3d — offline N-camera 3D dump (2 or 3 views).
 //
 // Runs YOLOX + RTMPose on synchronized recorded videos, triangulates either
 // COCO17 (17 kpts, default) or Halpe26 (26 kpts) joints with a calibration
-// YAML, then optionally applies 3D Kalman + IK.
+// YAML, then optionally applies 3D Kalman + IK. The camera count is the number
+// of --video inputs (2 or 3); the calibration is trimmed to cam0..cam{n-1} in
+// order (same normalization as make_threed / threed_builder), so a 3-camera
+// extrinsics file is valid input for either a 2- or 3-view run.
+//
+// Used as the offline verification harness for the spatial-filtering track
+// (docs/design/pose-3d-spatial-filtering.md): per-joint 3D positions, view
+// counts and reprojection errors are emitted per frame so the companion
+// analyzer (tools/analyze_3d_jitter_lag.py) can score stationary jitter and
+// motion lag across stage on/off runs.
+//
+// With --dump-trackers (Halpe26 only) it additionally runs the SlimeVR 10-tracker
+// extraction (slimevr::extract_trackers) on the final skeleton and emits a
+// per-frame "trackers" array (pos + orientation quat + valid + roll_confidence).
+// This is the spatiotemporal-filter track's tracker harness (M-C1,
+// docs/design/pose-3d-spatiotemporal-filter.md): it captures the RAW (no
+// temporal smoothing) tracker trajectories so the analyzer's `trackers`
+// subcommand can score per-tracker position / roll jitter and per-bone
+// relative angular velocity — the deterministic OFF baseline the spatiotemporal
+// filter is measured against, plus the data for the angle-domain (案6) test.
 
 #include <algorithm>
 #include <array>
@@ -36,10 +55,14 @@
 #include "lift/calib_io.hpp"
 #include "lift/ik.hpp"
 #include "lift/kalman.hpp"
+#include "lift/floor_grounding.hpp"
 #include "lift/keypoint_format.hpp"
+#include "lift/rigid_fit.hpp"
 #include "lift/skeleton_def.hpp"
 #include "lift/subject_profile.hpp"
 #include "lift/triangulator.hpp"
+#include "slimevr/st_filter.hpp"
+#include "slimevr/tracker_extract.hpp"
 #include "util/cuda_check.hpp"
 #include "util/logging.hpp"
 
@@ -69,11 +92,14 @@ struct Args {
     std::string summary;
     std::string overlay_dir;
     std::string pose_session;
+    std::string subject_profile;      // input profile (IK lock + rigid template)
     std::string subject_profile_out;
     std::string quality_out;
     int max_frames = 0;
     int cam1_frame_offset = 0;
+    int cam2_frame_offset = 0;
     int bone_calib_frames = 150;
+    double fps_override = 0.0;
     double subject_height_m = 0.0;
     float det_score = 0.5f;
     float kp_conf_thresh = 0.3f;
@@ -81,17 +107,29 @@ struct Args {
     bool multi_person = false;
     bool no_kalman = false;
     bool no_ik = false;
+    bool rigid_pelvis = false;
+    bool rigid_shoulders = false;
+    bool floor_grounding = false;
+    double floor_z_m = 0.0;
+    double floor_snap_band_m = 0.03;
+    double floor_stance_vel_mps = 0.15;
+    bool dump_trackers = false;
+    bool roll_hysteresis = false;
+    std::string tracker_smoothing = "raw";  // raw | one_euro | st
+    double st_kalman_weaken = 1.0;           // st mode: chain-Kalman process-noise scale (M-C4: ×100 harmful at rest)
+    double spine_tol = 0.12;
     std::string keypoint_format_str = "coco17";
 };
 
 void print_help() {
     std::puts(
-        "dump_keypoints_3d — offline two-camera 3D triangulation dump\n"
+        "dump_keypoints_3d — offline N-camera (2 or 3) 3D triangulation dump\n"
         "\n"
         "Required:\n"
-        "  --video PATH              input MP4, repeat twice in cam order\n"
+        "  --video PATH              input MP4, repeat 2 or 3 times in cam order\n"
         "                            (optional when --pose-session is provided)\n"
-        "  --calib PATH              calibration YAML with intrinsics/extrinsics (ids must be cam0,cam1)\n"
+        "  --calib PATH              calibration YAML with intrinsics/extrinsics\n"
+        "                            (trimmed to cam0..cam{n-1} for the chosen view count)\n"
         "  --det-engine PATH         YOLOX .engine\n"
         "  --pose-engine PATH        RTMPose .engine\n"
         "  --out PATH                output JSONL\n"
@@ -104,6 +142,10 @@ void print_help() {
         "  --quality-out PATH        write quality JSON\n"
         "  --max-frames N            stop after N synchronized frames\n"
         "  --cam1-frame-offset N     skip N frames on cam1 before pairing (negative skips cam0)\n"
+        "  --cam2-frame-offset N     skip N frames on cam2 before pairing (negative skips cam0)\n"
+        "  --fps F                   override clip fps for Kalman dt + overlays\n"
+        "                            (use the recorder meta.json fps_written; the MP4\n"
+        "                             header fps can be wrong for a record_3cam clip)\n"
         "  --det-score F             YOLOX score threshold (default 0.5)\n"
         "  --kp-conf-thresh F        2D keypoint threshold for triangulation (default 0.3)\n"
         "  --max-reproj-px F         one-pass outlier threshold (default 6)\n"
@@ -112,6 +154,46 @@ void print_help() {
         "  --multi-person            keep all bboxes, but MVP triangulates person 0 only\n"
         "  --no-kalman               disable 3D Kalman smoothing\n"
         "  --no-ik                   disable IK length/hinge projection\n"
+        "  --subject-profile PATH    load a subject profile YAML (locks IK bone lengths;\n"
+        "                            also supplies the rigid-fit segment template)\n"
+        "  --rigid-pelvis            enable the spatial pelvis rigid fit (Halpe26 only):\n"
+        "                            reorders to spatial-first tri->rigid->IK->Kalman and\n"
+        "                            weighted-Kabsch fits {hip_center,l_hip,r_hip} to the\n"
+        "                            subject template (needs --subject-profile). M-A.\n"
+        "  --rigid-shoulders         enable the shoulder-girdle rigid fit + spine soft\n"
+        "                            coupling (Halpe26 only): weighted-Kabsch fits\n"
+        "                            {neck,l_shoulder,r_shoulder}, then bounds neck's\n"
+        "                            distance from hip_center to the spine length +/-\n"
+        "                            --spine-tol (needs --subject-profile). M-B.\n"
+        "  --spine-tol F             spine soft-coupling tolerance fraction (default 0.12)\n"
+        "  --floor-grounding         ground foot sole points to the floor (Halpe26 only,\n"
+        "                            M-D): clamp below-floor toe/heel to Z=floor and snap\n"
+        "                            near-floor low-speed (stance) points onto it. Runs\n"
+        "                            after Kalman+IK. Fixes heel-sink/penetration.\n"
+        "  --floor-z-m F             floor plane Z in world m (default 0)\n"
+        "  --floor-snap-band-m F     stance snap zone height above floor (default 0.03)\n"
+        "  --floor-stance-vel-mps F  max foot speed to be 'planted' (default 0.15)\n"
+        "  --dump-trackers           also emit the SlimeVR 10-tracker extraction per\n"
+        "                            frame (Halpe26 only): a \"trackers\" array of RAW\n"
+        "                            (no temporal smoothing) pos + orientation quat +\n"
+        "                            valid + roll_confidence. This is the spatiotemporal\n"
+        "                            filter's tracker harness OFF baseline (M-C1); score\n"
+        "                            it with analyze_3d_jitter_lag.py trackers.\n"
+        "  --roll-hysteresis         arm/thigh roll gate-raise hysteresis (#2): hold the\n"
+        "                            last confident roll through the noisy extension band\n"
+        "                            instead of following mid-band roll noise. Affects the\n"
+        "                            dumped trackers' orientation (needs --dump-trackers).\n"
+        "  --tracker-smoothing MODE  smoothing applied to the dumped trackers (needs\n"
+        "                            --dump-trackers): raw (default, no smoothing =\n"
+        "                            M-C1 OFF baseline) | one_euro (One Euro only,\n"
+        "                            the pre-M-C5 shipping path) | st (spatiotemporal\n"
+        "                            filter, chain Kalman untouched = the shipped M-C5\n"
+        "                            live path; sweep --st-kalman-weaken to deviate).\n"
+        "                            Run raw/one_euro/st on the same clip for the A/B.\n"
+        "  --st-kalman-weaken F      st mode: chain-Kalman process-noise scale (default\n"
+        "                            1 = no weakening, the M-C4 data-driven setting; the\n"
+        "                            M-C3 seed ×100 was found to inject jitter at rest.\n"
+        "                            Sweep it (e.g. 10, 100) for the motion/lag study.\n"
         "  --keypoint-format FMT     pose topology: coco17 (default) or halpe26\n"
         "  --help                    show this help\n");
 }
@@ -136,10 +218,13 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--summary")      { args.summary = need("--summary"); }
         else if (a == "--overlay-dir")  { args.overlay_dir = need("--overlay-dir"); }
         else if (a == "--pose-session") { args.pose_session = need("--pose-session"); }
+        else if (a == "--subject-profile") { args.subject_profile = need("--subject-profile"); }
         else if (a == "--subject-profile-out") { args.subject_profile_out = need("--subject-profile-out"); }
         else if (a == "--quality-out")  { args.quality_out = need("--quality-out"); }
         else if (a == "--max-frames")   { args.max_frames = std::atoi(need("--max-frames")); }
         else if (a == "--cam1-frame-offset") { args.cam1_frame_offset = std::atoi(need("--cam1-frame-offset")); }
+        else if (a == "--cam2-frame-offset") { args.cam2_frame_offset = std::atoi(need("--cam2-frame-offset")); }
+        else if (a == "--fps")          { args.fps_override = std::stod(need("--fps")); }
         else if (a == "--det-score")    { args.det_score = std::stof(need("--det-score")); }
         else if (a == "--kp-conf-thresh") { args.kp_conf_thresh = std::stof(need("--kp-conf-thresh")); }
         else if (a == "--max-reproj-px") { args.max_reproj_px = std::stof(need("--max-reproj-px")); }
@@ -148,6 +233,17 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--multi-person") { args.multi_person = true; }
         else if (a == "--no-kalman")    { args.no_kalman = true; }
         else if (a == "--no-ik")        { args.no_ik = true; }
+        else if (a == "--rigid-pelvis") { args.rigid_pelvis = true; }
+        else if (a == "--rigid-shoulders") { args.rigid_shoulders = true; }
+        else if (a == "--floor-grounding") { args.floor_grounding = true; }
+        else if (a == "--floor-z-m")    { args.floor_z_m = std::stod(need("--floor-z-m")); }
+        else if (a == "--floor-snap-band-m") { args.floor_snap_band_m = std::stod(need("--floor-snap-band-m")); }
+        else if (a == "--floor-stance-vel-mps") { args.floor_stance_vel_mps = std::stod(need("--floor-stance-vel-mps")); }
+        else if (a == "--dump-trackers") { args.dump_trackers = true; }
+        else if (a == "--roll-hysteresis") { args.roll_hysteresis = true; }
+        else if (a == "--tracker-smoothing") { args.tracker_smoothing = need("--tracker-smoothing"); }
+        else if (a == "--st-kalman-weaken") { args.st_kalman_weaken = std::stod(need("--st-kalman-weaken")); }
+        else if (a == "--spine-tol")    { args.spine_tol = std::stod(need("--spine-tol")); }
         else if (a == "--keypoint-format") { args.keypoint_format_str = need("--keypoint-format"); }
         else {
             std::fprintf(stderr, "unknown arg: %s\n", argv[i]);
@@ -155,9 +251,15 @@ Args parse_args(int argc, char** argv) {
             std::exit(EXIT_FAILURE);
         }
     }
-    if (((args.pose_session.empty() && args.videos.size() != 2) ||
-         (!args.pose_session.empty() && !args.videos.empty() && args.videos.size() != 2)) ||
-        args.calib.empty() || args.det_engine.empty() ||
+    // The camera count is the number of --video inputs (2 or 3). When a
+    // pose-session drives the clips, --video may be omitted (0) and the count
+    // comes from the session's clip lists instead.
+    const std::size_t nv = args.videos.size();
+    const bool videos_count_ok = (nv == 2 || nv == 3);
+    const bool inputs_ok = args.pose_session.empty()
+                               ? videos_count_ok
+                               : (nv == 0 || videos_count_ok);
+    if (!inputs_ok || args.calib.empty() || args.det_engine.empty() ||
         args.pose_engine.empty() || args.out.empty()) {
         print_help();
         std::exit(EXIT_FAILURE);
@@ -177,6 +279,17 @@ std::string fmt(double v, int precision = 6) {
     char buf[48];
     std::snprintf(buf, sizeof(buf), "%.*g", precision, v);
     return buf;
+}
+
+// Runtime camera ids for an n-camera stage: cam0..cam{n-1}, in order. Mirrors
+// fitra::app::expected_camera_ids (not linked here — this tool depends only on
+// fitra_infer/fitra_lift) so a 3-camera extrinsics file trims to exactly the
+// chosen view count via select_calib_cameras / require_camera_ids.
+std::vector<std::string> expected_camera_ids(std::size_t count) {
+    std::vector<std::string> ids;
+    ids.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) ids.push_back("cam" + std::to_string(i));
+    return ids;
 }
 
 double median(std::vector<double> vals) {
@@ -227,7 +340,7 @@ double joint_distance(const fitra::infer::Joint3D& a,
 
 struct VideoPair {
     std::string pose = "video";
-    std::array<std::string, 2> videos{};
+    std::vector<std::string> videos{};  // one entry per camera, in cam order
 };
 
 struct PoseSession {
@@ -275,22 +388,35 @@ PoseSession load_pose_session(const std::string& path) {
         if (pair.pose.empty()) pair.pose = "pose";
         cv::FileNode clips = node["clips"];
         if (!clips.empty() && clips.isSeq()) {
-            int idx = 0;
-            for (auto cit = clips.begin(); cit != clips.end() && idx < 2; ++cit, ++idx) {
-                pair.videos[static_cast<std::size_t>(idx)] =
-                    resolve_session_path(base, static_cast<std::string>(*cit));
+            for (auto cit = clips.begin(); cit != clips.end(); ++cit) {
+                pair.videos.push_back(resolve_session_path(base, static_cast<std::string>(*cit)));
             }
         }
-        if (pair.videos[0].empty()) {
-            pair.videos[0] = resolve_session_path(base, "raw/" + pair.pose + "_cam0.mp4");
-        }
-        if (pair.videos[1].empty()) {
-            pair.videos[1] = resolve_session_path(base, "raw/" + pair.pose + "_cam1.mp4");
+        // No explicit clips: fall back to the 2-camera raw/<pose>_cam{0,1}.mp4
+        // naming convention (back-compat with the subject-calib analysis flow).
+        if (pair.videos.empty()) {
+            pair.videos.push_back(resolve_session_path(base, "raw/" + pair.pose + "_cam0.mp4"));
+            pair.videos.push_back(resolve_session_path(base, "raw/" + pair.pose + "_cam1.mp4"));
         }
         session.pairs.push_back(std::move(pair));
     }
     if (session.pairs.empty()) {
         throw std::runtime_error("pose_session has no usable poses");
+    }
+    // Every pose in a session must use the same camera count so a single
+    // Triangulator (built for cam0..cam{n-1}) can process all clips.
+    const std::size_t n_cams = session.pairs.front().videos.size();
+    for (const auto& pair : session.pairs) {
+        if (pair.videos.size() != n_cams) {
+            throw std::runtime_error(
+                "pose_session poses must all use the same camera count (pose '" +
+                pair.pose + "' has " + std::to_string(pair.videos.size()) +
+                ", expected " + std::to_string(n_cams) + ")");
+        }
+    }
+    if (n_cams != 2 && n_cams != 3) {
+        throw std::runtime_error(
+            "pose_session camera count must be 2 or 3, got " + std::to_string(n_cams));
     }
     return session;
 }
@@ -530,7 +656,9 @@ void write_json_line(std::ofstream& out,
                      const fitra::lift::TriangulatedSkeleton& tri,
                      double bone_drift_before,
                      double bone_drift_after,
-                     bool ik_locked) {
+                     bool ik_locked,
+                     const std::array<fitra::slimevr::SlimeTracker,
+                                       fitra::slimevr::kTrackerCount>* trackers) {
     out << "{\"frame\":" << frame
         << ",\"kp_format\":\""
         << fitra::lift::keypoint_format_name(fitra::lift::active_keypoint_format())
@@ -555,8 +683,35 @@ void write_json_line(std::ofstream& out,
         if (k) out << ",";
         out << tri.view_count[k];
     }
-    out << "]}}\n";
+    out << "],\"joint_reproj_px\":[";
+    for (std::size_t k = 0; k < emit_n; ++k) {
+        if (k) out << ",";
+        out << fmt(tri.reproj_error_px[k]);
+    }
+    out << "]}";  // close "stats"
+    if (trackers != nullptr) {
+        // RAW SlimeVR trackers (no temporal smoothing): one entry per role in
+        // TrackerRole order, [role, px,py,pz, qw,qx,qy,qz, valid, roll_conf].
+        // The analyzer's `trackers` subcommand consumes this.
+        out << ",\"trackers\":[";
+        for (std::size_t t = 0; t < fitra::slimevr::kTrackerCount; ++t) {
+            if (t) out << ",";
+            const auto& tr = (*trackers)[t];
+            out << "[" << static_cast<int>(tr.role)
+                << "," << fmt(tr.pos[0]) << "," << fmt(tr.pos[1]) << "," << fmt(tr.pos[2])
+                << "," << fmt(tr.quat_wxyz[0]) << "," << fmt(tr.quat_wxyz[1])
+                << "," << fmt(tr.quat_wxyz[2]) << "," << fmt(tr.quat_wxyz[3])
+                << "," << (tr.valid ? "true" : "false")
+                << "," << fmt(tr.roll_confidence) << "]";
+        }
+        out << "]";
+    }
+    out << "}\n";  // close record
 }
+
+// The spatial rigid-segment fit and spine soft coupling live in lift/rigid_fit
+// (fitra::lift::apply_segment_rigid_fit / apply_spine_coupling) so this offline
+// harness and the live pipeline denoise with identical code.
 
 }  // namespace
 
@@ -575,28 +730,10 @@ int main(int argc, char** argv) {
             fitra::lift::set_active_keypoint_format(fmt);
         }
         auto calib = fitra::lift::load_calibration(args.calib);
-        // This analyzer is two-camera (cam0,cam1); a rig's extrinsics file may
-        // carry more cameras, or store them in a different order. Always select
-        // cam0,cam1 in order so a 3-camera extrinsics is valid input and the
-        // order matches require_camera_ids (mirrors make_threed;
-        // pose-3d-calib-latest-resolution.md).
-        calib = fitra::lift::select_calib_cameras(calib, {"cam0", "cam1"});
-        fitra::lift::Triangulator::Options tri_opts;
-        tri_opts.kp_conf_thresh = args.kp_conf_thresh;
-        tri_opts.max_reproj_px = args.max_reproj_px;
-        fitra::lift::Triangulator triangulator{calib, tri_opts};
-        triangulator.require_camera_ids({"cam0", "cam1"});
 
-        TrtLogger tlog;
-        std::unique_ptr<nvinfer1::IRuntime> runtime{nvinfer1::createInferRuntime(tlog)};
-        TRT_CHECK(runtime != nullptr);
-        auto yolox_engine = fitra::infer::TrtEngine::from_file(*runtime, args.det_engine, tlog);
-        auto rtmpose_engine = fitra::infer::TrtEngine::from_file(*runtime, args.pose_engine, tlog);
-        fitra::infer::Yolox::Options yolo_opts;
-        yolo_opts.score_thr = args.det_score;
-        fitra::infer::Yolox yolox{*yolox_engine, yolo_opts};
-        fitra::infer::RtmPose rtmpose{*rtmpose_engine};
-
+        // Resolve the jobs (and thus the camera count) before building the
+        // Triangulator: the count is the number of clips per pose-session entry,
+        // or the number of --video inputs in the standalone case.
         PoseSession pose_session;
         std::vector<VideoPair> jobs;
         if (!args.pose_session.empty()) {
@@ -608,19 +745,145 @@ int main(int argc, char** argv) {
         } else {
             VideoPair pair;
             pair.pose = "video";
-            pair.videos = {args.videos[0], args.videos[1]};
+            pair.videos = args.videos;  // already validated as size 2 or 3
             jobs.push_back(pair);
             pose_session.source_session = "";
         }
+        const std::size_t n_cams = jobs.front().videos.size();
+
+        // A rig's extrinsics file may carry more cameras than this run uses, or
+        // store them in a different order. Select cam0..cam{n-1} in order so a
+        // 3-camera extrinsics is valid input for a 2- or 3-view run and the order
+        // matches require_camera_ids (mirrors make_threed / threed_builder;
+        // pose-3d-calib-latest-resolution.md).
+        const std::vector<std::string> cam_ids = expected_camera_ids(n_cams);
+        calib = fitra::lift::select_calib_cameras(calib, cam_ids);
+        fitra::lift::Triangulator::Options tri_opts;
+        tri_opts.kp_conf_thresh = args.kp_conf_thresh;
+        tri_opts.max_reproj_px = args.max_reproj_px;
+        fitra::lift::Triangulator triangulator{calib, tri_opts};
+        triangulator.require_camera_ids(cam_ids);
+
+        TrtLogger tlog;
+        std::unique_ptr<nvinfer1::IRuntime> runtime{nvinfer1::createInferRuntime(tlog)};
+        TRT_CHECK(runtime != nullptr);
+        auto yolox_engine = fitra::infer::TrtEngine::from_file(*runtime, args.det_engine, tlog);
+        auto rtmpose_engine = fitra::infer::TrtEngine::from_file(*runtime, args.pose_engine, tlog);
+        fitra::infer::Yolox::Options yolo_opts;
+        yolo_opts.score_thr = args.det_score;
+        fitra::infer::Yolox yolox{*yolox_engine, yolo_opts};
+        fitra::infer::RtmPose rtmpose{*rtmpose_engine};
 
         std::filesystem::path outp{args.out};
         if (outp.has_parent_path()) std::filesystem::create_directories(outp.parent_path());
         std::ofstream jout{args.out, std::ios::trunc};
         if (!jout.is_open()) throw std::runtime_error("failed to open output: " + args.out);
 
+        // Subject profile (input): locks IK bone lengths and supplies the
+        // rigid-fit template — same source the live pipeline uses.
+        fitra::lift::SubjectProfile subject_profile;
+        bool have_profile = false;
+        if (!args.subject_profile.empty()) {
+            subject_profile = fitra::lift::load_subject_profile(args.subject_profile);
+            have_profile = true;
+        }
+
+        // Spatial rigid segment templates (Halpe26 only). valid=false unless the
+        // matching flag is set and the profile triangle is usable.
+        fitra::lift::RigidTemplate pelvis_template;   // {hip_center,l_hip,r_hip}
+        fitra::lift::RigidTemplate girdle_template;   // {neck,l_shoulder,r_shoulder}
+        double spine_len = 0.0;                        // hip_center -> neck
+        const bool rigid_any = args.rigid_pelvis || args.rigid_shoulders;
+        if (rigid_any) {
+            if (fitra::lift::active_keypoint_format() != fitra::lift::KeypointFormat::Halpe26) {
+                std::fprintf(stderr, "--rigid-pelvis/--rigid-shoulders require --keypoint-format halpe26\n");
+                return EXIT_FAILURE;
+            }
+            if (!have_profile) {
+                std::fprintf(stderr, "--rigid-pelvis/--rigid-shoulders require --subject-profile (template distances)\n");
+                return EXIT_FAILURE;
+            }
+        }
+        if (args.dump_trackers &&
+            fitra::lift::active_keypoint_format() != fitra::lift::KeypointFormat::Halpe26) {
+            std::fprintf(stderr, "--dump-trackers requires --keypoint-format halpe26 "
+                                 "(extract_trackers needs neck/hip_center/toe joints)\n");
+            return EXIT_FAILURE;
+        }
+        const bool tm_one_euro = args.tracker_smoothing == "one_euro";
+        const bool tm_st       = args.tracker_smoothing == "st";
+        if (args.tracker_smoothing != "raw" && !tm_one_euro && !tm_st) {
+            std::fprintf(stderr, "--tracker-smoothing must be raw|one_euro|st (got %s)\n",
+                         args.tracker_smoothing.c_str());
+            return EXIT_FAILURE;
+        }
+        if ((tm_one_euro || tm_st) && !args.dump_trackers) {
+            std::fprintf(stderr, "--tracker-smoothing %s requires --dump-trackers\n",
+                         args.tracker_smoothing.c_str());
+            return EXIT_FAILURE;
+        }
+        // Tracker-stage smoothing config (mirrors TrackerExtractorOptions defaults
+        // + MainConfig One Euro params). One Euro drives the swing base for both
+        // one_euro and st; st adds the regime twist override + pos filter.
+        const auto& st_cfg = fitra::slimevr::default_st_config();
+        const fitra::slimevr::OneEuroParams pos_euro{1.0f, 4.0f, 1.0f};
+        const fitra::slimevr::OneEuroParams quat_euro{1.5f, 1.5f, 1.0f};
+        constexpr float kNominalDt = 1.0f / 60.0f;  // live extract_rate_hz
+        // Floor-contact grounding (M-D) — last 3D stage, after Kalman+IK.
+        fitra::lift::FloorGroundingOptions fg_opts;
+        fg_opts.floor_z_m      = args.floor_z_m;
+        fg_opts.stance_vel_mps = args.floor_stance_vel_mps;
+        fg_opts.snap_band_m    = args.floor_snap_band_m;
+        if (args.rigid_pelvis) {
+            pelvis_template = fitra::lift::RigidTemplate::from_distances(
+                subject_profile.bone_lengths_m[11],   // hip_center -> l_hip
+                subject_profile.bone_lengths_m[12],   // hip_center -> r_hip
+                subject_profile.hip_width_m);          // l_hip <-> r_hip
+            if (!pelvis_template.valid) {
+                std::fprintf(stderr,
+                    "--rigid-pelvis: profile pelvis triangle degenerate "
+                    "(l_hip=%.4f r_hip=%.4f width=%.4f)\n",
+                    subject_profile.bone_lengths_m[11], subject_profile.bone_lengths_m[12],
+                    subject_profile.hip_width_m);
+                return EXIT_FAILURE;
+            }
+            FITRA_LOG_INFO("rigid-pelvis: template d(hc,lh)={} d(hc,rh)={} hip_w={} (spatial-first)",
+                           fmt(subject_profile.bone_lengths_m[11]),
+                           fmt(subject_profile.bone_lengths_m[12]),
+                           fmt(subject_profile.hip_width_m));
+        }
+        if (args.rigid_shoulders) {
+            girdle_template = fitra::lift::RigidTemplate::from_distances(
+                subject_profile.bone_lengths_m[5],    // neck -> l_shoulder
+                subject_profile.bone_lengths_m[6],    // neck -> r_shoulder
+                subject_profile.shoulder_width_m);     // l_shoulder <-> r_shoulder
+            spine_len = subject_profile.bone_lengths_m[18];  // hip_center -> neck
+            if (!girdle_template.valid) {
+                std::fprintf(stderr,
+                    "--rigid-shoulders: profile shoulder-girdle triangle degenerate "
+                    "(l_sh=%.4f r_sh=%.4f width=%.4f)\n",
+                    subject_profile.bone_lengths_m[5], subject_profile.bone_lengths_m[6],
+                    subject_profile.shoulder_width_m);
+                return EXIT_FAILURE;
+            }
+            if (spine_len <= 1.0e-6) {
+                std::fprintf(stderr, "--rigid-shoulders: profile spine length (bone[18]) missing\n");
+                return EXIT_FAILURE;
+            }
+            FITRA_LOG_INFO("rigid-shoulders: girdle d(nk,ls)={} d(nk,rs)={} sh_w={} spine={} tol=+/-{}%",
+                           fmt(subject_profile.bone_lengths_m[5]),
+                           fmt(subject_profile.bone_lengths_m[6]),
+                           fmt(subject_profile.shoulder_width_m),
+                           fmt(spine_len), fmt(args.spine_tol * 100.0));
+        }
+
         fitra::lift::IkSolver::Options ik_opts;
         ik_opts.bone_calib_frames = std::max(1, args.bone_calib_frames);
         ik_opts.subject_height_m = args.subject_height_m;
+        if (have_profile) {
+            ik_opts.has_subject_profile = true;
+            ik_opts.subject_profile = subject_profile;
+        }
         fitra::lift::IkSolver ik{ik_opts};
 
         ProfileAccumulator profile_acc;
@@ -635,97 +898,219 @@ int main(int argc, char** argv) {
         int frames_with_3d = 0;
         auto start = std::chrono::steady_clock::now();
 
+        // Per-camera start skips for pairing. --cam{K}-frame-offset > 0 skips
+        // camK; < 0 skips cam0 (the shared reference) by |N|. Each offset
+        // asserts the pairwise invariant start_skip[K] − start_skip[0] ==
+        // offset_K, so a common cam0 skip (base) must be compensated on EVERY
+        // other camera — including ones whose own offset is 0 (they must follow
+        // cam0's skip to stay aligned with it).
+        std::vector<int> start_skip(n_cams, 0);
+        const int off1 = args.cam1_frame_offset;
+        int off2 = 0;
+        if (n_cams >= 3) {
+            off2 = args.cam2_frame_offset;
+        } else if (args.cam2_frame_offset != 0) {
+            FITRA_LOG_WARN("--cam2-frame-offset ignored for a {}-camera run", n_cams);
+        }
+        const int base = std::max({0, -off1, -off2});
+        start_skip[0] = base;
+        start_skip[1] = base + off1;  // ≥ 0 by construction of base
+        if (n_cams >= 3) start_skip[2] = base + off2;
+
         for (const auto& job : jobs) {
             if (args.max_frames > 0 && processed >= args.max_frames) break;
             std::vector<cv::VideoCapture> caps;
-            caps.reserve(2);
+            caps.reserve(n_cams);
             for (const auto& path : job.videos) {
                 caps.emplace_back(path);
                 if (!caps.back().isOpened()) throw std::runtime_error("failed to open video: " + path);
             }
 
-            if (args.cam1_frame_offset > 0) {
+            for (std::size_t cam = 0; cam < n_cams; ++cam) {
                 cv::Mat tmp;
-                for (int i = 0; i < args.cam1_frame_offset; ++i) caps[1].read(tmp);
-            } else if (args.cam1_frame_offset < 0) {
-                cv::Mat tmp;
-                for (int i = 0; i < -args.cam1_frame_offset; ++i) caps[0].read(tmp);
+                for (int i = 0; i < start_skip[cam]; ++i) caps[cam].read(tmp);
             }
 
-            double fps = caps[0].get(cv::CAP_PROP_FPS);
+            // record_3cam clips carry a nominal header fps that can differ from
+            // the true per-frame interval (encode-bound sync rate). Prefer the
+            // explicit --fps (recorder meta.json fps_written) so the Kalman dt is
+            // real; else fall back to the MP4 header.
+            double fps = args.fps_override > 0.0 ? args.fps_override
+                                                 : caps[0].get(cv::CAP_PROP_FPS);
             if (fps <= 0.0) fps = 30.0;
-            int w = static_cast<int>(caps[0].get(cv::CAP_PROP_FRAME_WIDTH));
-            int h = static_cast<int>(caps[0].get(cv::CAP_PROP_FRAME_HEIGHT));
 
-            std::vector<std::unique_ptr<cv::VideoWriter>> overlays(2);
+            std::vector<std::unique_ptr<cv::VideoWriter>> overlays(n_cams);
             if (!args.overlay_dir.empty()) {
                 std::filesystem::create_directories(args.overlay_dir);
-                for (int i = 0; i < 2; ++i) {
+                for (std::size_t i = 0; i < n_cams; ++i) {
+                    // Size each writer from its own camera: a rig may pair cameras
+                    // of different resolutions, and a writer sized to cam0 would
+                    // drop every frame from a differently-sized camera.
+                    int w = static_cast<int>(caps[i].get(cv::CAP_PROP_FRAME_WIDTH));
+                    int h = static_cast<int>(caps[i].get(cv::CAP_PROP_FRAME_HEIGHT));
                     std::string name = jobs.size() > 1
                         ? (job.pose + "_cam" + std::to_string(i) + "_reproj.mp4")
                         : ("cam" + std::to_string(i) + "_reproj.mp4");
                     std::filesystem::path path = std::filesystem::path(args.overlay_dir) / name;
-                    overlays[static_cast<std::size_t>(i)] = std::make_unique<cv::VideoWriter>(
+                    overlays[i] = std::make_unique<cv::VideoWriter>(
                         path.string(), cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
                         fps, cv::Size(w, h));
-                    if (!overlays[static_cast<std::size_t>(i)]->isOpened()) {
+                    if (!overlays[i]->isOpened()) {
                         throw std::runtime_error("failed to open overlay writer: " + path.string());
                     }
                 }
             }
 
-            fitra::lift::SkeletonKalman kalman;
+            // st mode: the chain Kalman is untouched by default (weaken = 1,
+            // the M-C4 data-driven setting mirrored by the live pipeline's
+            // kStWeaken; the M-C3 seed ×100 injected jitter at rest). A
+            // non-1 --st-kalman-weaken scales the process noise for sweeps.
+            fitra::lift::SkeletonKalman::Options kopts;
+            if (tm_st && args.st_kalman_weaken != 1.0) {
+                const double w = args.st_kalman_weaken;
+                kopts.q_pos *= w; kopts.q_vel *= w;
+                kopts.q_pos_offset *= w; kopts.q_vel_offset *= w;
+            }
+            fitra::lift::SkeletonKalman kalman{kopts};
+            // Per-job foot-anchor state for extract_trackers' FK fallback,
+            // mirroring TrackerExtractor::extract_ctx_. Declared inside the job
+            // loop so it resets between poses (matches `kalman`).
+            fitra::slimevr::ExtractContext tracker_ctx;
+            fitra::lift::FloorGroundingState fg_state;  // per-job (resets between poses)
+            // Per-job tracker-smoothing state (reset between poses like `kalman`).
+            std::array<cv::Vec4f, fitra::slimevr::kTrackerCount> tk_prev_quat;
+            tk_prev_quat.fill(cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f});
+            std::array<cv::Vec3f, fitra::slimevr::kTrackerCount> tk_prev_pos{};
+            fitra::slimevr::QuatSmoothingContext tk_quat_ctx{};
+            fitra::slimevr::PosSmoothingContext tk_pos_ctx{};
+            fitra::slimevr::StPosState  tk_st_pos{};
+            fitra::slimevr::StTwistState tk_st_twist{};
             for (int frame_idx = 0;; ++frame_idx) {
                 if (args.max_frames > 0 && processed >= args.max_frames) break;
-                std::vector<cv::Mat> frames(2);
+                std::vector<cv::Mat> frames(n_cams);
                 bool ok = true;
-                for (int cam = 0; cam < 2; ++cam) {
-                    ok = caps[static_cast<std::size_t>(cam)].read(frames[static_cast<std::size_t>(cam)])
-                         && !frames[static_cast<std::size_t>(cam)].empty();
+                for (std::size_t cam = 0; cam < n_cams; ++cam) {
+                    ok = caps[cam].read(frames[cam]) && !frames[cam].empty();
                     if (!ok) break;
                 }
                 if (!ok) break;
 
-                std::vector<std::vector<fitra::infer::Person>> persons_by_cam(2);
+                std::vector<std::vector<fitra::infer::Person>> persons_by_cam(n_cams);
                 std::vector<fitra::lift::PerCameraObservation> observations;
-                for (int cam = 0; cam < 2; ++cam) {
-                    auto bboxes = keep_largest_if_needed(yolox.infer(frames[static_cast<std::size_t>(cam)]),
+                for (std::size_t cam = 0; cam < n_cams; ++cam) {
+                    auto bboxes = keep_largest_if_needed(yolox.infer(frames[cam]),
                                                          args.multi_person);
-                    persons_by_cam[static_cast<std::size_t>(cam)] = rtmpose.infer(
-                        frames[static_cast<std::size_t>(cam)], bboxes);
-                    if (!persons_by_cam[static_cast<std::size_t>(cam)].empty()) {
+                    persons_by_cam[cam] = rtmpose.infer(frames[cam], bboxes);
+                    if (!persons_by_cam[cam].empty()) {
                         observations.push_back(
                             fitra::lift::PerCameraObservation{
-                                cam, &persons_by_cam[static_cast<std::size_t>(cam)][0]});
+                                static_cast<int>(cam), &persons_by_cam[cam][0]});
                     }
                 }
 
                 auto tri = triangulator.triangulate(observations);
                 auto skel = tri.skeleton;
-                if (!args.no_kalman) {
-                    skel = kalman.update(skel, 1.0 / fps);
+                double drift_before = 0.0;
+                double drift_after = 0.0;
+                // Run the enabled rigid stages; `applied` tracks whether any fit
+                // actually modified the skeleton this frame. Order: 1) pelvis,
+                // 2) shoulder girdle, 3) spine soft coupling (neck bounded to the
+                // now-fitted hip_center). Each stage is a no-op (returns false /
+                // self-guards) when its joints are missing/degenerate.
+                bool applied = false;
+                if (rigid_any) {
+                    if (args.rigid_pelvis)
+                        applied |= fitra::lift::apply_segment_rigid_fit(skel, tri, pelvis_template, {19, 11, 12});
+                    if (args.rigid_shoulders) {
+                        applied |= fitra::lift::apply_segment_rigid_fit(skel, tri, girdle_template, {18, 5, 6});
+                        fitra::lift::apply_spine_coupling(skel, 19, 18, {18, 5, 6}, spine_len, args.spine_tol);
+                    }
                 }
-                profile_acc.observe(job.pose, skel, tri);
-                double drift_before = ik.bone_drift_pct(skel);
-                if (!args.no_ik) {
-                    skel = ik.update(skel);
+                if (applied) {
+                    // Spatial-first (design A): tri -> rigid fit(s) -> IK -> Kalman.
+                    drift_before = ik.bone_drift_pct(skel);
+                    // Observe the PRE-FIT triangulation, not `skel`: the rigid
+                    // fit above has already forced the pelvis/girdle joints onto
+                    // the *input* profile's template distances (a rigid transform
+                    // preserves them exactly), so observing the fitted skeleton
+                    // would make --subject-profile-out echo the input profile
+                    // instead of the measured geometry — the same echo the
+                    // pre-IK placement exists to avoid.
+                    profile_acc.observe(job.pose, tri.skeleton, tri);
+                    if (!args.no_ik) skel = ik.update(skel);
+                    if (!args.no_kalman) skel = kalman.update(skel, 1.0 / fps);
+                    drift_after = ik.bone_drift_pct(skel);
+                } else {
+                    // Baseline (design B): tri -> Kalman -> IK. Also the fallback
+                    // when no rigid stage applied (flags off, or every enabled fit
+                    // failed this frame) so such frames match the no-rigid path.
+                    if (!args.no_kalman) skel = kalman.update(skel, 1.0 / fps);
+                    profile_acc.observe(job.pose, skel, tri);
+                    drift_before = ik.bone_drift_pct(skel);
+                    if (!args.no_ik) skel = ik.update(skel);
+                    drift_after = ik.bone_drift_pct(skel);
                 }
-                double drift_after = ik.bone_drift_pct(skel);
 
+                // Floor-contact grounding (M-D): last 3D stage (after Kalman+IK),
+                // mirrors multi_pipeline. No-op on COCO17 / when off.
+                if (args.floor_grounding) {
+                    fitra::lift::apply_floor_grounding(skel, fg_state, 1.0 / fps, fg_opts);
+                }
+
+                // Tracker harness (M-C1): RAW SlimeVR trackers from the final
+                // skeleton, no temporal smoothing (that lives downstream in
+                // TrackerExtractor). Product placement defaults (foot=Ankle,
+                // chest/waist spine fracs 0.65/0.15) so the geometry matches the
+                // live pipeline. Emitted on every frame (all-invalid on a
+                // dropout) so the trackers array stays frame-aligned with
+                // persons_3d.
+                std::array<fitra::slimevr::SlimeTracker,
+                           fitra::slimevr::kTrackerCount> trackers{};
+                if (args.dump_trackers) {
+                    trackers = fitra::slimevr::extract_trackers(
+                        skel, &tracker_ctx, fitra::slimevr::FootPosMode::Ankle,
+                        0.65f, 0.15f, args.roll_hysteresis);
+                    // Optional tracker-stage smoothing (one_euro / st), replaying
+                    // the live TrackerExtractor per 3D frame at the clip cadence.
+                    if (tm_one_euro || tm_st) {
+                        const float dtf = static_cast<float>(1.0 / fps);
+                        // Hip context for the position hold (skel[19]=hip_center).
+                        const auto& hc = skel.joints[19];
+                        tk_pos_ctx.hip_valid = hc.valid;
+                        if (hc.valid) tk_pos_ctx.current_hip_pos = cv::Vec3f{hc.x, hc.y, hc.z};
+                        tk_pos_ctx.dt_s = dtf;
+                        if (tm_st) {
+                            std::array<float, fitra::slimevr::kTrackerCount> tw;
+                            fitra::slimevr::fill_st_twist_overrides(
+                                trackers, tk_prev_quat, tk_st_twist, st_cfg, dtf, kNominalDt, tw);
+                            fitra::slimevr::apply_quat_smoothing(
+                                trackers, tk_prev_quat, tk_quat_ctx, quat_euro, dtf, kNominalDt, &tw);
+                            const cv::Vec3f* waist_fallback =
+                                tk_pos_ctx.hip_valid ? &tk_pos_ctx.current_hip_pos : nullptr;
+                            fitra::slimevr::apply_pos_st_filter(
+                                trackers, tk_st_pos, st_cfg, dtf, kNominalDt, waist_fallback);
+                        } else {  // one_euro
+                            fitra::slimevr::apply_quat_smoothing(
+                                trackers, tk_prev_quat, tk_quat_ctx, quat_euro, dtf, kNominalDt);
+                            fitra::slimevr::apply_pos_smoothing(
+                                trackers, tk_prev_pos, tk_pos_ctx, pos_euro, kNominalDt);
+                        }
+                    }
+                }
                 write_json_line(jout, global_frame++, job.pose, skel, tri,
-                                drift_before, drift_after, ik.locked());
+                                drift_before, drift_after, ik.locked(),
+                                args.dump_trackers ? &trackers : nullptr);
                 if (tri.valid_joints > 0) {
                     frames_with_3d += 1;
                     med_reproj_values.push_back(tri.median_reproj_px);
                     if (ik.locked()) drift_values.push_back(drift_after);
                 }
 
-                for (int cam = 0; cam < 2; ++cam) {
-                    if (!overlays[static_cast<std::size_t>(cam)]) continue;
-                    draw_2d(frames[static_cast<std::size_t>(cam)],
-                            persons_by_cam[static_cast<std::size_t>(cam)]);
-                    draw_reprojection(frames[static_cast<std::size_t>(cam)], triangulator, cam, skel);
-                    overlays[static_cast<std::size_t>(cam)]->write(frames[static_cast<std::size_t>(cam)]);
+                for (std::size_t cam = 0; cam < n_cams; ++cam) {
+                    if (!overlays[cam]) continue;
+                    draw_2d(frames[cam], persons_by_cam[cam]);
+                    draw_reprojection(frames[cam], triangulator, static_cast<int>(cam), skel);
+                    overlays[cam]->write(frames[cam]);
                 }
 
                 processed += 1;
@@ -775,9 +1160,14 @@ int main(int argc, char** argv) {
             sout << "  \"profile_quality_status\":\""
                  << json_escape(generated_profile.quality_status) << "\",\n";
         }
-        sout << "  \"videos\":[\"" << json_escape(jobs.front().videos[0]) << "\",\""
-             << json_escape(jobs.front().videos[1]) << "\"],\n";
-        sout << "  \"calib\":\"" << args.calib << "\"\n";
+        sout << "  \"num_cameras\":" << n_cams << ",\n";
+        sout << "  \"videos\":[";
+        for (std::size_t i = 0; i < jobs.front().videos.size(); ++i) {
+            if (i) sout << ",";
+            sout << "\"" << json_escape(jobs.front().videos[i]) << "\"";
+        }
+        sout << "],\n";
+        sout << "  \"calib\":\"" << json_escape(args.calib) << "\"\n";
         sout << "}\n";
 
         FITRA_LOG_INFO("done: {} frames, {} with 3D, median reproj={} px -> {}",
