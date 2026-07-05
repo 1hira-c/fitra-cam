@@ -24,7 +24,7 @@ bool apply_floor_grounding(infer::Skeleton3D& skel,
     bool modified = false;
 
     for (std::size_t j : kSoleJoints) {
-        if (j >= skel.kp_count) continue;         // COCO17 / short topology: no-op
+        if (j >= skel.kp_count || j >= infer::kMaxKeypoints) continue;  // COCO17 / short topology: no-op
         infer::Joint3D& p = skel.joints[j];
         if (!p.valid) { state.has_prev[j] = false; continue; }
 

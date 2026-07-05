@@ -224,7 +224,10 @@ void TrackerExtractor::run_loop() {
                 apply_quat_smoothing(trackers, prev_quat_, opts_.quat_smooth,
                                      dt_s, nominal_dt_s, &twist_override);
             }
-            apply_pos_st_filter(trackers, st_pos_state_, st_cfg_, dt_s, nominal_dt_s);
+            const cv::Vec3f* waist_fallback =
+                pos_ctx_.hip_valid ? &pos_ctx_.current_hip_pos : nullptr;
+            apply_pos_st_filter(trackers, st_pos_state_, st_cfg_, dt_s, nominal_dt_s,
+                                waist_fallback);
         } else if (opts_.one_euro) {
             // Speed-adaptive: low cutoff (smooth) at rest, high cutoff
             // (responsive) in motion. quat_smooth/pos_smooth are ignored.

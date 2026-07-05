@@ -1085,8 +1085,10 @@ int main(int argc, char** argv) {
                                 trackers, tk_prev_quat, tk_st_twist, st_cfg, dtf, kNominalDt, tw);
                             fitra::slimevr::apply_quat_smoothing(
                                 trackers, tk_prev_quat, tk_quat_ctx, quat_euro, dtf, kNominalDt, &tw);
+                            const cv::Vec3f* waist_fallback =
+                                tk_pos_ctx.hip_valid ? &tk_pos_ctx.current_hip_pos : nullptr;
                             fitra::slimevr::apply_pos_st_filter(
-                                trackers, tk_st_pos, st_cfg, dtf, kNominalDt);
+                                trackers, tk_st_pos, st_cfg, dtf, kNominalDt, waist_fallback);
                         } else {  // one_euro
                             fitra::slimevr::apply_quat_smoothing(
                                 trackers, tk_prev_quat, tk_quat_ctx, quat_euro, dtf, kNominalDt);

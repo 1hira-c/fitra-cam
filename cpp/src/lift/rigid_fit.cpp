@@ -59,9 +59,19 @@ bool fit_rigid_triangle(const RigidTemplate& templ,
                 H(r, cc) += weights[i] * a[r] * b[cc];
     }
 
+    cv::Mat w_mat, U_mat, Vt_mat;
+    cv::SVD::compute(cv::Mat(H), w_mat, U_mat, Vt_mat);
+    auto w_at = [&](int i) {
+        return (w_mat.rows == 1) ? w_mat.at<double>(0, i) : w_mat.at<double>(i, 0);
+    };
+    const cv::Vec3d w{w_at(0), w_at(1), w_at(2)};
     cv::Matx33d U, Vt;
-    cv::Vec3d w;
-    cv::SVD::compute(cv::Mat(H), w, U, Vt);
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            U(r, c) = U_mat.at<double>(r, c);
+            Vt(r, c) = Vt_mat.at<double>(r, c);
+        }
+    }
     // A collapsed covariance (all singular values ~0) means no usable structure.
     if (w[0] < 1.0e-12) return false;
     // The measured points must span a plane (rank >= 2). If they are (nearly)

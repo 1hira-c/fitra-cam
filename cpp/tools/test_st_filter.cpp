@@ -370,6 +370,33 @@ void test_st_pos_invalid_limb_drags_with_waist() {
     check(arm_out[0] > 0.2f + 0.02f, "invalid arm did not drag with the waist");
 }
 
+void test_st_pos_invalid_waist_uses_hip_fallback() {
+    // Regression: the Waist tracker can be invalid when neck / hip-axis inputs
+    // drop, while Halpe26 hip_center is still valid. In st_filter mode the
+    // waist-relative reference must then follow hip_center, otherwise invalid
+    // limbs are held at an old world position instead of moving with the body.
+    const StFilterConfig cfg = default_st_config();
+    StPosState st{};
+    const float dt = 1.0f / 60.0f;
+    const cv::Vec3f arm_off{0.2f, 0.0f, 0.4f};
+
+    {   // seed with a normal waist reference
+        auto t = blank_trackers();
+        set_pos(t, kWaistIdx, {0.0f, 0.0f, 1.0f});
+        set_pos(t, kArmIdx,   cv::Vec3f{0.0f, 0.0f, 1.0f} + arm_off);
+        apply_pos_st_filter(t, st, cfg, dt, dt);
+    }
+    {   // waist invalid, but hip_center moved and is still available
+        auto t = blank_trackers();
+        const cv::Vec3f hip_fallback{0.12f, 0.0f, 1.0f};
+        apply_pos_st_filter(t, st, cfg, dt, dt, &hip_fallback);
+        check(!t[kWaistIdx].valid, "fallback must not mark waist valid");
+        check_vec3(t[kWaistIdx].pos, hip_fallback, "waist did not follow hip fallback");
+        check_vec3(t[kArmIdx].pos, hip_fallback + arm_off,
+                   "invalid limb did not follow hip fallback");
+    }
+}
+
 void test_st_pos_recovery_snaps() {
     // After a dropout, a returning limb at a far-away position must SNAP to the
     // measurement (not be rejected as an outlier or lag-capped toward it).
@@ -511,6 +538,7 @@ int main() {
         test_st_pos_whole_body_translation_no_limb_lag();
         test_st_pos_static_jitter_suppressed();
         test_st_pos_invalid_limb_drags_with_waist();
+        test_st_pos_invalid_waist_uses_hip_fallback();
         test_st_pos_recovery_snaps();
         test_st_pos_waist_recovery_limb_continuity();
         test_st_twist_overrides_scope();

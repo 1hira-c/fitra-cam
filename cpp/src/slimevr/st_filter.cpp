@@ -186,7 +186,8 @@ float st_twist_alpha(float d_roll, float v_roll, float roll_confidence,
 
 void apply_pos_st_filter(std::array<SlimeTracker, kTrackerCount>& curr,
                          StPosState& st, const StFilterConfig& cfg,
-                         float dt_s, float nominal_dt_s) {
+                         float dt_s, float nominal_dt_s,
+                         const cv::Vec3f* waist_fallback_world) {
     constexpr std::size_t kWaist = static_cast<std::size_t>(TrackerRole::Waist);
 
     // --- 1. Waist in world (the limb-relative reference) --------------------
@@ -214,6 +215,17 @@ void apply_pos_st_filter(std::array<SlimeTracker, kTrackerCount>& curr,
                 st.last_raw[kWaist] = c.pos;
             }
             st.waist_seen = true;
+        } else if (waist_fallback_world != nullptr) {
+            // Waist orientation/axis can be invalid while Halpe26 hip_center is
+            // still valid. Keep the limb reference following that anatomical
+            // pelvis anchor so invalid limbs do not freeze in world during a
+            // temporary neck/hip-axis dropout. The actual waist tracker remains
+            // non-steady; when it recovers the normal snap path below shifts
+            // steady limb state to keep world output continuous.
+            st.held[kWaist]     = *waist_fallback_world;
+            st.last_raw[kWaist] = *waist_fallback_world;
+            st.steady[kWaist]   = false;
+            st.waist_seen       = true;
         } else {
             st.steady[kWaist] = false;  // hold; recovery re-snaps
         }

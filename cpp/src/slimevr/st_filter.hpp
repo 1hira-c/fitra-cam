@@ -175,12 +175,15 @@ struct StTwistState {
 // in world first, then each limb in the waist-relative frame, writing the
 // smoothed WORLD position back to curr[i].pos. Invalid trackers hold their
 // working-frame position — for a limb that means "held relative offset + current
-// waist", so it drags with the torso (subsumes the hip-relative hold). A tracker
-// returning from invalid, or the frame the waist reference first appears, snaps
-// its anchor. Owns no hip context; the waist-relative framing replaces it.
+// waist", so it drags with the torso. If the waist tracker itself is invalid
+// while a valid hip_center is still available, `waist_fallback_world` keeps the
+// reference moving with the body instead of freezing at the last valid waist.
+// A tracker returning from invalid, or the frame the waist reference first
+// appears, snaps its anchor.
 void apply_pos_st_filter(std::array<SlimeTracker, kTrackerCount>& curr,
                          StPosState& st, const StFilterConfig& cfg,
-                         float dt_s, float nominal_dt_s);
+                         float dt_s, float nominal_dt_s,
+                         const cv::Vec3f* waist_fallback_world = nullptr);
 
 // Fill a per-tracker twist_alpha override for apply_quat_smoothing. For each
 // has_roll tracker that is valid and steady, computes the regime twist weight

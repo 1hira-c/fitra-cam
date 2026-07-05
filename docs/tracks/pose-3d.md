@@ -92,6 +92,13 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-05 — PR #50 review follow-up: st 腰欠損 fallback + OpenCV SVD/floor guard
+PR #50 の自動レビュー指摘を反映。`rigid_fit` の Kabsch SVD は Jetson/OpenCV 環境差で固定長
+`Matx` 出力が例外化しないよう `cv::Mat` 受けに変更。`floor_grounding` は将来の sole index 変更に備え
+`infer::kMaxKeypoints` guard を追加。時空フィルタ position path は `Waist` tracker が neck/hip-axis 欠損で
+invalid でも Halpe26 `hip_center` が valid なら腰 reference を hip に fallback し、invalid limb が旧 world 位置へ
+置き去りにならないようにした。回帰 ctest: `test_st_filter` に waist invalid + hip fallback ケースを追加。
+
 ### 2026-07-05 — 着座 occlusion は stateless triangulator ではなく measurement gate へ分離
 `outputs/records/chair_occluded/` で、椅子に体が隠れた時に高 score hallucinated keypoint が 3D lift へ混ざり、
 右半身が揺れる現象を診断。これは frame-edge / bbox truncation ではなく **画面内 occlusion**。score は正常 view と同程度で、
