@@ -86,6 +86,10 @@ struct CameraPose3D {
 struct Skeleton3DSnapshot {
     std::uint64_t seq = 0;
     std::chrono::system_clock::time_point ts{};
+    // Internal Skeleton3DBus update counter + steady timestamp. Unlike seq, this
+    // increments for every bus update, including sync-miss / disabled snapshots.
+    std::uint64_t update_seq = 0;
+    std::chrono::steady_clock::time_point updated_at{};
     // steady_clock capture time of the OLDEST contributing camera frame
     // (min over the synced cameras). Lets VR publishers measure end-to-end
     // capture->send latency. Default (epoch) means "no valid capture time";

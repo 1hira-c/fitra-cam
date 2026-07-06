@@ -45,10 +45,8 @@ struct TrackerExtractorOptions {
     // block on the Skeleton3DBus and react to each new triangulation result
     // (one smoothing step per real 3D frame). Removes the extractor's fixed-
     // cadence latency hop. A timeout fallback (extract_rate_hz period) still
-    // fires so stale trackers are cleared when the 3D bus goes quiet. Default
-    // off to preserve the validated fixed-rate behavior; opt in for minimum
-    // capture->send latency.
-    bool   event_driven      = false;
+    // fires so stale trackers are cleared when the 3D bus goes quiet.
+    bool   event_driven      = true;
 
     // One Euro (speed-adaptive) smoothing. Default on: it kills at-rest jitter
     // a fixed-alpha EMA cannot, while staying lag-free in motion (see

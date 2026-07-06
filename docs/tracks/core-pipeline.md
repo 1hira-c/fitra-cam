@@ -300,7 +300,8 @@ MMAPI common-class ソースの取り込みが要）。`--pixel-format nvjpeg` �
 `e2e_capture_to_send_ms` を追加。`--pixel-format {mjpeg,yuyv}` / `--n-buffers` を CLI/YAML 化
 (`Frame.jpeg`→`data`、YUYV は `cv::cvtColor` 経路)。capture/decode/central の 2ms poll sleep を
 condition_variable に置換 (単一カメラ)。`--vr-extract-event-driven` で TrackerExtractor を
-三角測量フレーム駆動に (opt-in, default off)。実機計測: 単一カメラ 640×480@30 で
+三角測量フレーム駆動に (当初 opt-in、2026-07-07 以降 default on / fixed A/B は
+`--no-vr-extract-event-driven`)。実機計測: 単一カメラ 640×480@30 で
 **YUYV は MJPEG 比 cap→pub −5.5ms** (cap→dec 6.7→0.95ms、decode 消滅) かつ 30fps 維持。
 M4 VR e2e は被写体 (`ik_locked`) 要のため残課題。
 → [design/core-pipeline-e2e-latency.md](../design/core-pipeline-e2e-latency.md)

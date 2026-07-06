@@ -60,11 +60,27 @@ struct SlimeTrackerStats {
     int window_frames = 0;
 };
 
+// Stream-level diagnostics for the single TrackerExtractor producer. These are
+// intentionally separate from per-tracker quality stats: they answer whether the
+// extractor is consuming fresh 3D frames or reusing old source state.
+struct SlimeTrackerStreamStats {
+    std::string mode;
+    std::uint64_t source_update_seq = 0;  // Skeleton3DBus internal update_seq
+    std::uint64_t source_pose_seq = 0;    // Skeleton3DSnapshot::seq
+    double source_age_ms = 0.0;
+    double filter_dt_ms = 0.0;
+    double fresh_hz = 0.0;
+    std::uint64_t duplicate_ticks = 0;
+    std::uint64_t stale_clears = 0;
+    bool source_stale = false;
+};
+
 struct SlimeTrackerSnapshot {
     std::uint64_t                              seq = 0;
     std::chrono::system_clock::time_point      ts{};
     std::array<SlimeTracker, kTrackerCount>    trackers{};
     SlimeTrackerStats                          stats{};
+    SlimeTrackerStreamStats                    stream{};
     bool                                       has_data = false;
 };
 
@@ -73,7 +89,8 @@ public:
     SlimeTrackerBus() = default;
 
     void publish(const std::array<SlimeTracker, kTrackerCount>& trackers,
-                 const SlimeTrackerStats&                       stats);
+                 const SlimeTrackerStats&                       stats,
+                 const SlimeTrackerStreamStats&                 stream = SlimeTrackerStreamStats{});
 
     SlimeTrackerSnapshot snapshot() const;
 

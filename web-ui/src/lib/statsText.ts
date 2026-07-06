@@ -70,6 +70,7 @@ export function build3dStatsText(
     return { text: "enabled         false", hmdStatus: { text: "no hmd", cls: "" } };
   }
   const s = bundle.stats || {};
+  const stream = bundle.tracker_stream || null;
   const vmt = bundle.vmt || null;
   const a = vmt && vmt.alignment ? vmt.alignment : null;
   const vmtLine = vmt
@@ -135,6 +136,17 @@ export function build3dStatsText(
       `\ncont_updates   ${cont.updates ?? 0}/${cont.resolves ?? 0}`;
   }
 
+  const streamLine = stream
+    ? `\ntrk_mode       ${stream.mode || "-"}` +
+      `\ntrk_fresh_hz   ${(stream.fresh_hz ?? 0).toFixed(2)}` +
+      `\ntrk_age_ms     ${(stream.source_age_ms ?? 0).toFixed(1)}` +
+      `\ntrk_dt_ms      ${(stream.filter_dt_ms ?? 0).toFixed(1)}` +
+      `\ntrk_src_seq    ${stream.source_update_seq ?? 0}/${stream.source_pose_seq ?? 0}` +
+      `\ntrk_dup_ticks  ${stream.duplicate_ticks ?? 0}` +
+      `\ntrk_clears     ${stream.stale_clears ?? 0}` +
+      `\ntrk_stale      ${stream.source_stale ? "true" : "false"}`
+    : "";
+
   const text =
     `tri_fps         ${(s.tri_fps ?? 0).toFixed(2)}\n` +
     `reproj_med_px  ${(s.reproj_err_med_px ?? 0).toFixed(2)}\n` +
@@ -153,6 +165,7 @@ export function build3dStatsText(
     vmtLine +
     discLine +
     hmdLine +
-    contLine;
+    contLine +
+    streamLine;
   return { text, hmdStatus };
 }

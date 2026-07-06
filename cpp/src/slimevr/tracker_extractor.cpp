@@ -103,10 +103,19 @@ void TrackerExtractor::run_loop() {
     const float nominal_dt_s = static_cast<float>(period.count());
     const int   nominal_dt_ms = static_cast<int>(period.count() * 1000.0);
     const auto  timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(period_d);
+    const auto  stale_clear_after = std::chrono::milliseconds(250);
 
     auto next = clk::now() + period_d;
     auto last_tick = clk::now();
     std::uint64_t last_update_seq = 0;
+    std::uint64_t last_source_update_seq = 0;
+    std::uint64_t duplicate_ticks = 0;
+    std::uint64_t stale_clears = 0;
+    double fresh_hz_ema = 0.0;
+    bool have_publish_tick = false;
+    bool have_fresh_update = false;
+    bool stale_clear_published = false;
+    clk::time_point last_fresh_update{};
     bool was_idle = false;
 
     while (!stop_.load(std::memory_order_relaxed)) {
@@ -116,20 +125,53 @@ void TrackerExtractor::run_loop() {
         // gap doesn't blow up the stats.
         float dt_s;
         int   dt_ms;
+        bool  force_clear = false;
+        clk::time_point tick_now{};
         if (opts_.event_driven) {
             // React to each new 3D frame; the timeout still ticks at
-            // extract_rate_hz so stale trackers get cleared when 3D is quiet.
-            skel_bus_.wait_for_update(last_update_seq, stop_, timeout_ms);
+            // extract_rate_hz so the source can be marked stale when 3D is quiet.
+            const bool fresh_update =
+                skel_bus_.wait_for_update(last_update_seq, stop_, timeout_ms);
             if (stop_.load(std::memory_order_relaxed)) break;
-            auto now = clk::now();
-            double measured = std::chrono::duration<double>(now - last_tick).count();
-            last_tick = now;
+            tick_now = clk::now();
+            if (!fresh_update) {
+                if (have_fresh_update) ++duplicate_ticks;
+                const bool stale_due =
+                    have_fresh_update &&
+                    (tick_now - last_fresh_update >= stale_clear_after);
+                if (!stale_due || stale_clear_published) {
+                    continue;
+                }
+                force_clear = true;
+                stale_clear_published = true;
+                ++stale_clears;
+            } else {
+                if (have_fresh_update) {
+                    const double gap_s =
+                        std::chrono::duration<double>(tick_now - last_fresh_update).count();
+                    if (gap_s > 1.0e-3) {
+                        const double hz = 1.0 / gap_s;
+                        fresh_hz_ema = fresh_hz_ema <= 0.0
+                                           ? hz
+                                           : (0.2 * hz + 0.8 * fresh_hz_ema);
+                    }
+                }
+                have_fresh_update = true;
+                last_fresh_update = tick_now;
+                stale_clear_published = false;
+            }
+            double measured = have_publish_tick
+                                  ? std::chrono::duration<double>(tick_now - last_tick).count()
+                                  : nominal_dt_s;
+            last_tick = tick_now;
+            have_publish_tick = true;
             measured = std::min(0.5, std::max(1e-3, measured));
             dt_s  = static_cast<float>(measured);
             dt_ms = static_cast<int>(measured * 1000.0);
         } else {
             std::this_thread::sleep_until(next);
             next += period_d;
+            tick_now = clk::now();
             dt_s  = nominal_dt_s;
             dt_ms = nominal_dt_ms;
         }
@@ -149,24 +191,31 @@ void TrackerExtractor::run_loop() {
         was_idle = idle;
 
         auto snap = skel_bus_.snapshot();
+        if (opts_.event_driven) {
+            if (!force_clear) last_source_update_seq = snap.update_seq;
+        } else if (snap.update_seq != 0) {
+            if (last_source_update_seq == snap.update_seq) {
+                ++duplicate_ticks;
+            } else {
+                last_source_update_seq = snap.update_seq;
+            }
+        }
         const infer::Skeleton3D* sk =
-            snap.stats.enabled ? pick_skeleton(snap) : nullptr;
+            (!force_clear && snap.stats.enabled) ? pick_skeleton(snap) : nullptr;
         const bool halpe = fitra::lift::active_keypoint_format() ==
                            fitra::lift::KeypointFormat::Halpe26;
 
-        // Publish on EVERY tick — even when the skeleton snapshot is empty
-        // / disabled / in the wrong KP format — so the bus does not retain
-        // stale `has_data=true` trackers from a previous successful frame.
-        // Without this, /ws3d would keep rendering old AxesHelpers and
-        // NativePublisher would keep sending last-known rotations while
-        // the actual subject is out of view.
+        // Publish every processed source frame — even when the skeleton snapshot
+        // is empty / disabled / in the wrong KP format — so the bus does not
+        // retain stale `has_data=true` trackers from a previous successful
+        // frame. In event-driven mode, timeout-only loops are skipped; a single
+        // forced invalid publish is emitted only after the 3D bus stays quiet.
         //
         // The "no data" case is signalled by marking every tracker
         // valid=false: apply_quat_smoothing replaces each curr.quat with
         // its prev_quat (so smoothing continuity is preserved for when the
-        // subject reappears), the publisher skips them all (no rotations
-        // on the wire), and the WebUI fades the axes via the existing
-        // valid→opacity mapping.
+        // subject reappears), and consumers can fade / hold / skip according to
+        // their existing degeneracy policy.
         std::array<SlimeTracker, kTrackerCount> raw_trackers{};
         for (std::size_t i = 0; i < kTrackerCount; ++i) {
             raw_trackers[i].role = static_cast<TrackerRole>(i);
@@ -332,7 +381,24 @@ void TrackerExtractor::run_loop() {
         }
         have_last_emitted_ = true;
 
-        tracker_bus_.publish(trackers, stats_out);
+        double source_age_ms = 0.0;
+        if (snap.updated_at.time_since_epoch().count() != 0) {
+            source_age_ms =
+                std::chrono::duration<double, std::milli>(tick_now - snap.updated_at).count();
+            source_age_ms = std::max(0.0, source_age_ms);
+        }
+        SlimeTrackerStreamStats stream_out{};
+        stream_out.mode = opts_.event_driven ? "event" : "fixed";
+        stream_out.source_update_seq = snap.update_seq;
+        stream_out.source_pose_seq = snap.seq;
+        stream_out.source_age_ms = source_age_ms;
+        stream_out.filter_dt_ms = static_cast<double>(dt_s) * 1000.0;
+        stream_out.fresh_hz = opts_.event_driven ? fresh_hz_ema : snap.stats.tri_fps;
+        stream_out.duplicate_ticks = duplicate_ticks;
+        stream_out.stale_clears = stale_clears;
+        stream_out.source_stale = force_clear;
+
+        tracker_bus_.publish(trackers, stats_out, stream_out);
     }
 }
 

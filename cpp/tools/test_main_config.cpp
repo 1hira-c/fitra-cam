@@ -523,6 +523,7 @@ void test_validate_slimevr_requires_halpe26() {
 void test_one_euro_yaml_cli_and_validate() {
     auto p = write_tmp("one_euro.yaml", R"(schema: fitra_main_config_v1
 three_d:
+  vr_extract_event_driven: false
   vr_one_euro: false
   vr_pos_mincutoff: 0.5
   vr_pos_beta: 0.2
@@ -530,6 +531,10 @@ three_d:
 )");
     MainOptions opts;
     load_main_config(p.string(), opts);
+    check(MainOptions{}.vr_extract_event_driven == true,
+          "default three_d.vr_extract_event_driven is true");
+    check(opts.vr_extract_event_driven == false,
+          "three_d.vr_extract_event_driven loads false");
     check(opts.vr_one_euro == false,        "three_d.vr_one_euro loads");
     check(opts.vr_pos_mincutoff == 0.5,     "three_d.vr_pos_mincutoff loads");
     check(opts.vr_pos_beta == 0.2,          "three_d.vr_pos_beta loads");
@@ -537,11 +542,20 @@ three_d:
 
     // CLI numeric overrides take precedence over the YAML-loaded values.
     std::vector<std::string> argv_buf{
-        "--vr-pos-mincutoff", "0.9", "--vr-quat-beta", "0.4"};
+        "--vr-pos-mincutoff", "0.9", "--vr-quat-beta", "0.4",
+        "--vr-extract-event-driven"};
     auto argv = make_argv(argv_buf);
     apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
     check(opts.vr_pos_mincutoff == 0.9, "--vr-pos-mincutoff CLI overrides YAML");
     check(opts.vr_quat_beta == 0.4,     "--vr-quat-beta CLI sets value");
+    check(opts.vr_extract_event_driven == true,
+          "--vr-extract-event-driven CLI overrides YAML");
+
+    std::vector<std::string> no_event_argv_buf{"--no-vr-extract-event-driven"};
+    auto no_event_argv = make_argv(no_event_argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(no_event_argv.size()), no_event_argv.data());
+    check(opts.vr_extract_event_driven == false,
+          "--no-vr-extract-event-driven CLI disables event mode");
 
     // dcutoff <= 0 must fail validation.
     opts.cam_paths[0] = "/tmp/a";
@@ -1145,7 +1159,7 @@ void test_emit_load_round_trip() {
     o.bone_calib_frames = 200;
     o.kalman_3d = false;   // -> no_3d_kalman: true
     o.ik_3d = false;       // -> no_3d_ik: true
-    o.vr_extract_event_driven = true; o.vr_one_euro = false;
+    o.vr_extract_event_driven = false; o.vr_one_euro = false;
     o.vr_pos_mincutoff = 2.0; o.vr_pos_beta = 6.0; o.vr_quat_beta = 2.5;
     o.subjects_dir = "calibrations/subjects"; o.subject_id = "alice";
     o.subject_height_m = 1.72;
