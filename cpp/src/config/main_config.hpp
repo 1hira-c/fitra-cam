@@ -126,8 +126,10 @@ struct MainOptions {
     double floor_snap_band_m = 0.03;     // snap zone height above the floor
     // VR tracker extraction: react to each new 3D frame (event-driven) instead
     // of resampling at a fixed cadence. Cuts the extractor's contribution to
-    // capture->VR-send latency. Feeds both SlimeVR and VMT. Default off.
-    bool   vr_extract_event_driven = false;
+    // capture->VR-send latency and avoids re-filtering stale snapshots. Feeds
+    // both SlimeVR and VMT. Default on; use --no-vr-extract-event-driven for
+    // fixed-cadence A/B testing.
+    bool   vr_extract_event_driven = true;
     // One Euro (speed-adaptive) tracker smoothing. Feeds both SlimeVR and VMT
     // (single producer). Default on: kills at-rest jitter that a fixed-alpha
     // EMA cannot, staying lag-free in motion. When off, the fixed-alpha EMA

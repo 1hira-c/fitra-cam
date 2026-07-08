@@ -62,8 +62,9 @@ USB cam 2 ┘                                 │
 > (1) ピクセル形式は MJPEG 固定ではなく `--pixel-format {mjpeg,yuyv,nvjpeg}` で切替可 (YUYV は decode を
 > `cv::cvtColor` に分岐、nvjpeg は Jetson HW NVJPEG)。(2) per-cam SPSC slot (size 1, drop-old は不変) の
 > ハンドオフは 2ms poll sleep から condition_variable 通知 (単一カメラ) に変更。(3) ステージ別レイテンシ
-> 計測 + VR `e2e_capture_to_send_ms` を追加。(4) TrackerExtractor をイベント駆動にする opt-in
-> (`--vr-extract-event-driven`)。詳細・実機数値は
+> 計測 + VR `e2e_capture_to_send_ms` を追加。(4) TrackerExtractor をイベント駆動にする
+> `--vr-extract-event-driven`（2026-07-07 以降 default on、旧 fixed-rate は
+> `--no-vr-extract-event-driven`）。詳細・実機数値は
 > [`design/core-pipeline-e2e-latency.md`](design/core-pipeline-e2e-latency.md)。
 >
 > **続き (nvjpeg + 全 GPU フロントエンド)**: MJPEG HW デコード (`--pixel-format nvjpeg`、独立 .so に

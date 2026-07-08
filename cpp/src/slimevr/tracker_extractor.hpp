@@ -31,7 +31,9 @@
 namespace fitra::slimevr {
 
 struct TrackerExtractorOptions {
-    double extract_rate_hz   = 60.0;   // produce snapshots at this cadence
+    // Fixed mode publish cadence. In event mode this is the wait timeout used to
+    // check for source staleness while real tracker frames follow 3D bus updates.
+    double extract_rate_hz   = 60.0;
     float  quat_smooth       = 0.5f;   // apply_quat_smoothing base alpha
     // Position EMA base alpha (apply_pos_smoothing). Independent
     // from quat_smooth so the operator can dial pos and quat damping
@@ -45,10 +47,9 @@ struct TrackerExtractorOptions {
     // block on the Skeleton3DBus and react to each new triangulation result
     // (one smoothing step per real 3D frame). Removes the extractor's fixed-
     // cadence latency hop. A timeout fallback (extract_rate_hz period) still
-    // fires so stale trackers are cleared when the 3D bus goes quiet. Default
-    // off to preserve the validated fixed-rate behavior; opt in for minimum
-    // capture->send latency.
-    bool   event_driven      = false;
+    // fires so stale trackers are cleared when the 3D bus goes quiet.
+    bool   event_driven      = true;
+    int    stale_clear_after_ms = 250;
 
     // One Euro (speed-adaptive) smoothing. Default on: it kills at-rest jitter
     // a fixed-alpha EMA cannot, while staying lag-free in motion (see
