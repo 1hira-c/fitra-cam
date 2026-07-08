@@ -87,7 +87,7 @@ struct Skeleton3DSnapshot {
     std::uint64_t seq = 0;
     std::chrono::system_clock::time_point ts{};
     // Internal Skeleton3DBus update counter + steady timestamp. Unlike seq, this
-    // increments for every bus update, including sync-miss / disabled snapshots.
+    // increments for every bus update, including sync-miss snapshots.
     std::uint64_t update_seq = 0;
     std::chrono::steady_clock::time_point updated_at{};
     // steady_clock capture time of the OLDEST contributing camera frame

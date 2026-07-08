@@ -174,13 +174,14 @@ export interface Stats3D {
 }
 
 export interface TrackerStream {
-  mode?: "event" | "fixed" | string;
+  mode?: "event" | "fixed";
   source_update_seq?: number;
   source_pose_seq?: number;
   source_age_ms?: number;
   filter_dt_ms?: number;
   fresh_hz?: number;
-  duplicate_ticks?: number;
+  suppressed_wakeups?: number;
+  refiltered_duplicates?: number;
   stale_clears?: number;
   source_stale?: boolean;
   [k: string]: unknown;

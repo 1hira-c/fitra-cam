@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "lift/keypoint_format.hpp"
+#include "util/logging.hpp"
 
 namespace fitra::slimevr {
 
@@ -103,29 +104,37 @@ void TrackerExtractor::run_loop() {
     const float nominal_dt_s = static_cast<float>(period.count());
     const int   nominal_dt_ms = static_cast<int>(period.count() * 1000.0);
     const auto  timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(period_d);
-    const auto  stale_clear_after = std::chrono::milliseconds(250);
+    const auto  stale_clear_after =
+        std::chrono::milliseconds(std::max(1, opts_.stale_clear_after_ms));
+    const auto  fresh_hz_reset_after = std::chrono::milliseconds(500);
 
-    auto next = clk::now() + period_d;
-    auto last_tick = clk::now();
+    const auto started_at = clk::now();
+    auto next = started_at + period_d;
+    auto last_tick = started_at;
+    auto source_quiet_since = started_at;
     std::uint64_t last_update_seq = 0;
     std::uint64_t last_source_update_seq = 0;
-    std::uint64_t duplicate_ticks = 0;
+    std::uint64_t suppressed_wakeups = 0;
+    std::uint64_t refiltered_duplicates = 0;
     std::uint64_t stale_clears = 0;
     double fresh_hz_ema = 0.0;
     bool have_publish_tick = false;
     bool have_fresh_update = false;
     bool stale_clear_published = false;
+    bool source_stale_active = false;
     clk::time_point last_fresh_update{};
+    clk::time_point source_stale_since{};
     bool was_idle = false;
 
     while (!stop_.load(std::memory_order_relaxed)) {
-        // dt for angular-velocity / freeze stats. Fixed-rate mode uses the
-        // nominal period; event-driven mode measures the real interval (which
-        // varies with the triangulation cadence) and clamps it so a post-idle
-        // gap doesn't blow up the stats.
+        // dt for smoothing/filter steps plus angular-velocity / freeze stats.
+        // Fixed-rate mode uses the nominal period; event-driven mode measures the
+        // real interval (which varies with the triangulation cadence) and clamps
+        // it so a post-idle gap doesn't blow up the stats.
         float dt_s;
         int   dt_ms;
         bool  force_clear = false;
+        bool  stale_clear_candidate = false;
         clk::time_point tick_now{};
         if (opts_.event_driven) {
             // React to each new 3D frame; the timeout still ticks at
@@ -135,30 +144,15 @@ void TrackerExtractor::run_loop() {
             if (stop_.load(std::memory_order_relaxed)) break;
             tick_now = clk::now();
             if (!fresh_update) {
-                if (have_fresh_update) ++duplicate_ticks;
                 const bool stale_due =
-                    have_fresh_update &&
-                    (tick_now - last_fresh_update >= stale_clear_after);
+                    (tick_now - source_quiet_since >= stale_clear_after);
                 if (!stale_due || stale_clear_published) {
+                    ++suppressed_wakeups;
                     continue;
                 }
-                force_clear = true;
-                stale_clear_published = true;
-                ++stale_clears;
+                stale_clear_candidate = true;
             } else {
-                if (have_fresh_update) {
-                    const double gap_s =
-                        std::chrono::duration<double>(tick_now - last_fresh_update).count();
-                    if (gap_s > 1.0e-3) {
-                        const double hz = 1.0 / gap_s;
-                        fresh_hz_ema = fresh_hz_ema <= 0.0
-                                           ? hz
-                                           : (0.2 * hz + 0.8 * fresh_hz_ema);
-                    }
-                }
-                have_fresh_update = true;
-                last_fresh_update = tick_now;
-                stale_clear_published = false;
+                stale_clear_candidate = false;
             }
             double measured = have_publish_tick
                                   ? std::chrono::duration<double>(tick_now - last_tick).count()
@@ -192,12 +186,60 @@ void TrackerExtractor::run_loop() {
 
         auto snap = skel_bus_.snapshot();
         if (opts_.event_driven) {
-            if (!force_clear) last_source_update_seq = snap.update_seq;
+            const bool source_changed =
+                snap.update_seq != 0 && snap.update_seq != last_source_update_seq;
+            if (source_changed) {
+                if (source_stale_active && !idle) {
+                    const auto stale_ms =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            tick_now - source_stale_since).count();
+                    FITRA_LOG_INFO("[slimevr] tracker source recovered after {} ms",
+                                   static_cast<long long>(stale_ms));
+                }
+                source_stale_active = false;
+                if (have_fresh_update) {
+                    const auto gap = tick_now - last_fresh_update;
+                    const double gap_s = std::chrono::duration<double>(gap).count();
+                    if (gap > fresh_hz_reset_after) {
+                        fresh_hz_ema = 0.0;
+                    } else if (gap_s > 1.0e-3) {
+                        const double hz = 1.0 / gap_s;
+                        fresh_hz_ema = fresh_hz_ema <= 0.0
+                                           ? hz
+                                           : (0.2 * hz + 0.8 * fresh_hz_ema);
+                    }
+                }
+                have_fresh_update = true;
+                last_fresh_update = tick_now;
+                last_source_update_seq = snap.update_seq;
+                last_update_seq = snap.update_seq;  // closes wait->snapshot race
+                source_quiet_since = tick_now;
+                stale_clear_published = false;
+            } else if (stale_clear_candidate) {
+                force_clear = true;
+                stale_clear_published = true;
+                ++stale_clears;
+                if (!source_stale_active) {
+                    source_stale_active = true;
+                    source_stale_since = tick_now;
+                    if (!idle) {
+                        const auto quiet_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                tick_now - source_quiet_since).count();
+                        FITRA_LOG_WARN("[slimevr] tracker source stale: no 3D updates for {} ms",
+                                       static_cast<long long>(quiet_ms));
+                    }
+                }
+            } else {
+                ++suppressed_wakeups;
+                continue;
+            }
         } else if (snap.update_seq != 0) {
             if (last_source_update_seq == snap.update_seq) {
-                ++duplicate_ticks;
+                ++refiltered_duplicates;
             } else {
                 last_source_update_seq = snap.update_seq;
+                source_quiet_since = tick_now;
             }
         }
         const infer::Skeleton3D* sk =
@@ -386,17 +428,25 @@ void TrackerExtractor::run_loop() {
             source_age_ms =
                 std::chrono::duration<double, std::milli>(tick_now - snap.updated_at).count();
             source_age_ms = std::max(0.0, source_age_ms);
+        } else {
+            source_age_ms =
+                std::chrono::duration<double, std::milli>(tick_now - source_quiet_since).count();
+            source_age_ms = std::max(0.0, source_age_ms);
         }
         SlimeTrackerStreamStats stream_out{};
-        stream_out.mode = opts_.event_driven ? "event" : "fixed";
+        stream_out.mode = opts_.event_driven
+                              ? SlimeTrackerStreamMode::Event
+                              : SlimeTrackerStreamMode::Fixed;
         stream_out.source_update_seq = snap.update_seq;
         stream_out.source_pose_seq = snap.seq;
         stream_out.source_age_ms = source_age_ms;
         stream_out.filter_dt_ms = static_cast<double>(dt_s) * 1000.0;
         stream_out.fresh_hz = opts_.event_driven ? fresh_hz_ema : snap.stats.tri_fps;
-        stream_out.duplicate_ticks = duplicate_ticks;
+        stream_out.suppressed_wakeups = suppressed_wakeups;
+        stream_out.refiltered_duplicates = refiltered_duplicates;
         stream_out.stale_clears = stale_clears;
-        stream_out.source_stale = force_clear;
+        stream_out.source_stale = force_clear || source_age_ms >= static_cast<double>(
+            stale_clear_after.count());
 
         tracker_bus_.publish(trackers, stats_out, stream_out);
     }

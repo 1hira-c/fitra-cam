@@ -12,19 +12,12 @@ void append_float(std::string& out, double v, int precision = 6) {
     out += buf;
 }
 
-void append_json_string(std::string& out, const std::string& value) {
-    out += "\"";
-    for (char ch : value) {
-        switch (ch) {
-            case '\\': out += "\\\\"; break;
-            case '"': out += "\\\""; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default: out += ch; break;
-        }
+const char* stream_mode_name(SlimeTrackerStreamMode mode) {
+    switch (mode) {
+        case SlimeTrackerStreamMode::Event: return "event";
+        case SlimeTrackerStreamMode::Fixed: return "fixed";
     }
-    out += "\"";
+    return "unknown";
 }
 
 }  // namespace
@@ -66,7 +59,7 @@ const char* tracker_role_name(TrackerRole role) {
 std::string make_tracker_bundle_fragment(const SlimeTrackerBus& bus) {
     auto snap = bus.snapshot();
     std::string out;
-    out.reserve(2048);
+    out.reserve(4096);
     out += "\"trackers\":[";
     if (snap.has_data) {
         const auto& s = snap.stats;
@@ -111,8 +104,9 @@ std::string make_tracker_bundle_fragment(const SlimeTrackerBus& bus) {
         out += std::to_string(snap.stats.window_frames);
         const auto& stream = snap.stream;
         out += ",\"tracker_stream\":{";
-        out += "\"mode\":";
-        append_json_string(out, stream.mode);
+        out += "\"mode\":\"";
+        out += stream_mode_name(stream.mode);
+        out += "\"";
         out += ",\"source_update_seq\":";
         out += std::to_string(static_cast<long long>(stream.source_update_seq));
         out += ",\"source_pose_seq\":";
@@ -123,8 +117,10 @@ std::string make_tracker_bundle_fragment(const SlimeTrackerBus& bus) {
         append_float(out, stream.filter_dt_ms, 4);
         out += ",\"fresh_hz\":";
         append_float(out, stream.fresh_hz, 4);
-        out += ",\"duplicate_ticks\":";
-        out += std::to_string(static_cast<long long>(stream.duplicate_ticks));
+        out += ",\"suppressed_wakeups\":";
+        out += std::to_string(static_cast<long long>(stream.suppressed_wakeups));
+        out += ",\"refiltered_duplicates\":";
+        out += std::to_string(static_cast<long long>(stream.refiltered_duplicates));
         out += ",\"stale_clears\":";
         out += std::to_string(static_cast<long long>(stream.stale_clears));
         out += ",\"source_stale\":";

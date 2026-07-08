@@ -96,7 +96,7 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 `vr_extract_event_driven` を default on にし、event-driven `TrackerExtractor` が `wait_for_update` timeout 時に
 同じ `Skeleton3DSnapshot` を再処理しないよう修正。`Skeleton3DBus` の内部 `update_seq` / 更新時刻を snapshot
 へ伝搬し、`SlimeTrackerBus` から `/ws3d` / `/stats3d` に `tracker_stream`（mode, source age, filter dt,
-fresh_hz, duplicate_ticks, stale_clears）を出す。旧 fixed-rate producer は `--no-vr-extract-event-driven`
+fresh_hz, suppressed_wakeups, refiltered_duplicates, stale_clears）を出す。旧 fixed-rate producer は `--no-vr-extract-event-driven`
 で A/B 可能。`test_tracker_extractor` と `test_main_config` で回帰固定。
 → [design/pose-3d-tracker-freshness.md](../design/pose-3d-tracker-freshness.md)
 

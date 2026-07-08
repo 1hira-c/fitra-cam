@@ -142,7 +142,8 @@ export function build3dStatsText(
       `\ntrk_age_ms     ${(stream.source_age_ms ?? 0).toFixed(1)}` +
       `\ntrk_dt_ms      ${(stream.filter_dt_ms ?? 0).toFixed(1)}` +
       `\ntrk_src_seq    ${stream.source_update_seq ?? 0}/${stream.source_pose_seq ?? 0}` +
-      `\ntrk_dup_ticks  ${stream.duplicate_ticks ?? 0}` +
+      `\ntrk_supp_wake  ${stream.suppressed_wakeups ?? 0}` +
+      `\ntrk_refilter   ${stream.refiltered_duplicates ?? 0}` +
       `\ntrk_clears     ${stream.stale_clears ?? 0}` +
       `\ntrk_stale      ${stream.source_stale ? "true" : "false"}`
     : "";
