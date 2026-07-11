@@ -92,38 +92,6 @@ struct MainOptions {
     // negated flags; the runtime predicate stays positive (kalman_3d / ik_3d).
     bool   kalman_3d = true;
     bool   ik_3d     = true;
-    // Spatial pelvis rigid fit (docs/design/pose-3d-spatial-filtering.md, M-A).
-    // When on AND a subject profile is loaded, the 3D path runs spatial-first
-    // (tri -> pelvis rigid fit -> IK -> Kalman) and weighted-Kabsch fits
-    // {hip_center,l_hip,r_hip} to the profile template — cuts pelvis stationary
-    // jitter ~10-20% with no lag. Default off; a no-op without a subject profile
-    // or under COCO17 (no hip_center). YAML key three_d.rigid_pelvis.
-    bool   rigid_pelvis_3d = false;
-    // Spatiotemporal filter (docs/design/pose-3d-spatiotemporal-filter.md).
-    // When on, the tracker stage uses the distance×velocity regime filter for
-    // position (waist-relative) and ARM inferred-roll twist instead of One Euro /
-    // the fixed EMA (Kalman weaken defaults to 1 = unchanged; M-C4 found ×100
-    // harmful). Feeds both the tracker extractor (TrackerExtractorOptions::st_filter)
-    // and the 3D pipeline (ThreeDConfig::st_filter). YAML key three_d.st_filter,
-    // CLI --st-filter / --no-st-filter.
-    // DEFAULT ON (M-C5): offline lag-free + real-hardware A/B >= One Euro with no
-    // new dealbreaker; benefit is arm-twist. --no-st-filter falls back to One Euro.
-    bool   st_filter_3d = true;
-    // #2 roll gate-raise hysteresis (arm/thigh inferred-roll): hold the last
-    // confident roll while a limb straightens through the noisy near-degenerate
-    // band instead of following the amplified mid-band roll noise (fixes the
-    // extension roll snap). Tracker stage only; default off. YAML three_d.roll_hysteresis,
-    // CLI --roll-hysteresis. See docs/design/pose-3d-spatiotemporal-filter.md.
-    bool   roll_hysteresis_3d = false;
-    // Floor-contact grounding (docs/design/pose-3d-floor-grounding.md, M-D). When
-    // on, the last 3D stage clamps below-floor foot sole points to the floor and
-    // snaps near-floor low-speed (stance) points onto it — fixes heel-sink /
-    // penetration. Halpe26 only (needs toe/heel). Default off = byte-identical.
-    // YAML three_d.floor_grounding, CLI --floor-grounding.
-    bool   floor_grounding_3d = false;
-    double floor_z_m = 0.0;              // world floor plane (fitra Z-up, floor = Z = 0)
-    double floor_stance_vel_mps = 0.15;  // below this foot speed a near-floor point is planted
-    double floor_snap_band_m = 0.03;     // snap zone height above the floor
     // VR tracker extraction: react to each new 3D frame (event-driven) instead
     // of resampling at a fixed cadence. Cuts the extractor's contribution to
     // capture->VR-send latency. Feeds both SlimeVR and VMT. Default off.

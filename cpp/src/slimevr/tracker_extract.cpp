@@ -60,17 +60,6 @@ constexpr std::size_t kLBigToe   = 20, kRBigToe   = 21;
 constexpr float kRollSinLow  = 0.15f;  // sin 8.6°: degenerate gate
 constexpr float kRollSinHigh = 0.30f;  // sin 17.5°: full-confidence ceiling
 
-// Roll hysteresis (opt-in via extract_trackers' roll_hysteresis; arm/thigh
-// inferred-roll only). The measured roll azimuth noise near the degenerate cone
-// is amplified ∝ 1/sin θ (≈3–7× in the 0.15–0.30 band), so following it there
-// and then freezing at sin θ<0.15 pins a random roll each extension = the "roll
-// snap". Raise the effective trust gate above kRollSinHigh with an
-// acquire/release hysteresis: only lock (follow) roll once clearly bent, and
-// hold the last-confident roll (confidence→0, carried by swing + parent-yaw
-// transport) while straightening through the noisy band.
-constexpr float kRollAcquireSin = 0.42f;  // sin 24.8°: lock = trust roll
-constexpr float kRollReleaseSin = 0.26f;  // sin 15.1°: unlock = freeze/hold
-
 // Smoothing throttle for foot trackers. The foot is treated as a rigid
 // extension of the shin (up = tibia axis; see foot_tracker below) because
 // the heel KP is too noisy in our 2D→3D pipeline. Even after dropping heel
@@ -110,7 +99,6 @@ constexpr float kPelvisYawGateHigh_rps = 16.0f;
 // so a future tweak that inverts a bound fails to compile rather than silently
 // turning the gate into a step / NaN at runtime.
 static_assert(kRollSinLow         < kRollSinHigh,         "roll sin gate: low < high");
-static_assert(kRollReleaseSin     < kRollAcquireSin,     "roll hysteresis: release < acquire");
 static_assert(kPosVelGateLow_mps  < kPosVelGateHigh_mps,  "pos vel gate: low < high");
 static_assert(kPelvisYawGateLow_rps < kPelvisYawGateHigh_rps, "pelvis yaw gate: low < high");
 
@@ -343,54 +331,6 @@ cv::Vec3f fallback_up_for(const cv::Vec3f& fwd) {
     return cv::Vec3f{0, 1, 0};
 }
 
-// Roll gate-raise hysteresis for the arm / thigh inferred-roll bones (#2). Per
-// bone (indexed by out_idx) latch: acquire (start trusting roll) at
-// sinθ ≥ kRollAcquireSin, release (freeze/hold roll) at sinθ < kRollReleaseSin.
-// While locked, confidence is smoothstep over [release, acquire]; while unlocked
-// it is 0 (roll held — build_tracker still emits the bone direction, and
-// apply_quat_smoothing carries the held roll via swing + parent-yaw transport).
-// `up_meas` must be the RAW up hint (up_primary) — the pick_up_multistage return
-// collapses to the zero sentinel below kRollSinLow and loses the sinθ signal.
-// enabled==false or ctx==nullptr returns `confidence` untouched (byte-identical).
-// A latch held across a LONG occlusion must re-acquire on resume — the limb may
-// have straightened while unseen, and resuming mid-band trust is exactly what
-// the hysteresis exists to prevent. Short flickers keep the latch (a 1-frame KP
-// dropout must not force a full re-acquire). Ticks are extract calls (3D frames
-// offline, extractor ticks live), so this is ~0.5-1 s of continuous dropout.
-constexpr std::uint32_t kRollLatchDropTicks = 30;
-
-// Called on frames where the bone has NO roll measurement (missing endpoint /
-// missing up-hint keypoint): the latch is left untouched for short streaks and
-// cleared (forcing re-acquire) once the dropout persists.
-void note_roll_dropout(ExtractContext* ctx, bool enabled, std::size_t idx) {
-    if (!enabled || ctx == nullptr) return;
-    auto& ticks = ctx->roll_invalid_ticks[idx];
-    if (ticks < kRollLatchDropTicks) ++ticks;
-    if (ticks >= kRollLatchDropTicks) ctx->roll_locked[idx] = false;
-}
-
-float apply_roll_hysteresis(ExtractContext* ctx, bool enabled, std::size_t idx,
-                            const cv::Vec3f& fwd, const cv::Vec3f& up_meas,
-                            float confidence) {
-    if (!enabled || ctx == nullptr) return confidence;
-    const float un = norm(up_meas), fn = norm(fwd);
-    if (un <= 1.0e-6f || fn <= 1.0e-6f) {
-        // No roll measurement this frame: a zero up_meas is the invalid-KP
-        // sentinel (missing wrist/ankle), NOT "limb measured straight" — do not
-        // release the latch on it (a 1-frame flicker would otherwise freeze a
-        // mid-band roll until the limb re-bends past acquire). Roll is held for
-        // the frame; a long streak forces re-acquire via note_roll_dropout.
-        note_roll_dropout(ctx, enabled, idx);
-        return 0.0f;
-    }
-    ctx->roll_invalid_ticks[idx] = 0;
-    const float sinth = norm(cross(up_meas, fwd)) / (un * fn);
-    bool& locked = ctx->roll_locked[idx];
-    if (!locked && sinth >= kRollAcquireSin) locked = true;
-    if (locked && sinth < kRollReleaseSin)   locked = false;
-    return locked ? smoothstep01(sinth, kRollReleaseSin, kRollAcquireSin) : 0.0f;
-}
-
 // Try to build a SlimeTracker for one role from a position joint, a forward
 // hint and an up hint. Updates `out` in place.
 //   * forward degenerate (no bone direction)      → valid=false (publisher skips)
@@ -440,8 +380,7 @@ bool build_tracker(TrackerRole role,
 std::array<SlimeTracker, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
                  FootPosMode foot_pos_mode,
-                 float chest_height_frac, float waist_height_frac,
-                 bool roll_hysteresis) {
+                 float chest_height_frac, float waist_height_frac) {
     if (lift::active_keypoint_format() != lift::KeypointFormat::Halpe26) {
         throw std::runtime_error(
             "extract_trackers requires --keypoint-format=halpe26");
@@ -472,10 +411,7 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
     // is unobservable from 3D KP alone in that configuration.
     auto upper_arm = [&](TrackerRole role, std::size_t shoulder, std::size_t elbow,
                           std::size_t wrist, std::size_t out_idx) {
-        if (!joints_valid(skel, {shoulder, elbow})) {
-            note_roll_dropout(ctx, roll_hysteresis, out_idx);
-            return;
-        }
+        if (!joints_valid(skel, {shoulder, elbow})) return;
         cv::Vec3f sp = to_vec3f(skel.joints[shoulder]);
         cv::Vec3f ep = to_vec3f(skel.joints[elbow]);
         cv::Vec3f pos = (sp + ep) * 0.5f;
@@ -491,7 +427,6 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
         // degeneracy test collapses; tertiary is the zero sentinel.
         cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_primary, up_tertiary,
                                            confidence, which);
-        confidence = apply_roll_hysteresis(ctx, roll_hysteresis, out_idx, fwd, up_primary, confidence);
         build_tracker(role, pos, fwd, up, out[out_idx], confidence);
     };
     upper_arm(TrackerRole::LeftUpperArm,  kLShoulder, kLElbow, kLWrist, 0);
@@ -550,10 +485,7 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
     // shallow bends when primary's sin θ briefly dips below kRollSinLow.
     auto upper_leg = [&](TrackerRole role, std::size_t hip, std::size_t knee,
                          std::size_t ankle, std::size_t out_idx) {
-        if (!joints_valid(skel, {hip, knee})) {
-            note_roll_dropout(ctx, roll_hysteresis, out_idx);
-            return;
-        }
+        if (!joints_valid(skel, {hip, knee})) return;
         cv::Vec3f hp = to_vec3f(skel.joints[hip]);
         cv::Vec3f kp = to_vec3f(skel.joints[knee]);
         cv::Vec3f pos = (hp + kp) * 0.5f;
@@ -571,7 +503,6 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
         // ending in world Z.
         cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_primary, up_tertiary,
                                            confidence, which);
-        confidence = apply_roll_hysteresis(ctx, roll_hysteresis, out_idx, fwd, up_primary, confidence);
         build_tracker(role, pos, fwd, up, out[out_idx], confidence);
     };
     upper_leg(TrackerRole::LeftUpperLeg,  kLHip, kLKnee, kLAnkle, 4);
@@ -730,8 +661,7 @@ namespace {
 void apply_quat_smoothing_impl(std::array<SlimeTracker, kTrackerCount>& curr,
                                std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                                const std::array<float, kTrackerCount>& alpha,
-                               float dt_s, float nominal_dt_s,
-                               const std::array<float, kTrackerCount>* twist_override) {
+                               float dt_s, float nominal_dt_s) {
     // ---- Pelvis-yaw transport for held-roll bones -------------------------
     // An extended limb's roll is unobservable (roll_confidence → 0), so it is
     // held frame-to-frame. For a near-vertical limb (standing, legs/arms down)
@@ -783,12 +713,7 @@ void apply_quat_smoothing_impl(std::array<SlimeTracker, kTrackerCount>& curr,
         // confidence.
         const float alpha_rate = alpha[i];
         const float sa = std::clamp(alpha_rate * curr[i].swing_confidence, 0.0f, 1.0f);
-        // Twist weight: a non-negative override entry (spatiotemporal filter,
-        // has_roll bones) replaces the built-in alpha_rate·roll_confidence; the
-        // sentinel (< 0) / null pointer keeps the built-in value byte-identical.
-        const float ta = (twist_override && (*twist_override)[i] >= 0.0f)
-                             ? std::clamp((*twist_override)[i], 0.0f, 1.0f)
-                             : std::clamp(alpha_rate * curr[i].roll_confidence, 0.0f, 1.0f);
+        const float ta = std::clamp(alpha_rate * curr[i].roll_confidence,  0.0f, 1.0f);
         cv::Vec4f p = quat_normalize(prev_quat[i]);
         const cv::Vec4f q = quat_normalize(curr[i].quat_wxyz);
 
@@ -803,16 +728,6 @@ void apply_quat_smoothing_impl(std::array<SlimeTracker, kTrackerCount>& curr,
         // (carry = 1, the prior is all we have); as the roll becomes observable
         // (ta → sa) carry → 0 and the twist slerp toward q takes over, so a limb
         // twisting relative to its parent is not forced to follow it.
-        //
-        // CAVEAT (st filter, M-C3+): with a twist_override active, ta is the
-        // regime alpha, NOT alpha_rate·roll_confidence — so carry no longer
-        // equals 1 − roll_confidence. At rest a fully-confident arm roll gets
-        // carry ≈ 0.26 (regime alpha_rest 0.10 vs One Euro sa ≈ 0.136), i.e.
-        // ~26% parent-yaw coupling where the pre-st invariant guaranteed 0.
-        // Bounded (transport_t = carry·alpha_rate ≤ measured rate, cannot
-        // overshoot in steady state) but an undocumented deviation from the
-        // design doc's "swing・transport・pin は不変" claim — revisit if arm
-        // counter-rotation against torso yaw ever reads as coupled.
         const bool is_arm = (i == static_cast<std::size_t>(TrackerRole::LeftUpperArm) ||
                              i == static_cast<std::size_t>(TrackerRole::RightUpperArm));
         const bool  have_ref  = is_arm ? (have_chest_delta || have_waist_delta)
@@ -863,21 +778,19 @@ void apply_quat_smoothing_impl(std::array<SlimeTracker, kTrackerCount>& curr,
 
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
-                          float base_alpha, float dt_s, float nominal_dt_s,
-                          const std::array<float, kTrackerCount>* twist_override) {
+                          float base_alpha, float dt_s, float nominal_dt_s) {
     // Fixed-alpha path: one rate-adjusted weight shared by every tracker.
     const float alpha_rate = rate_adjust_alpha(base_alpha, dt_s, nominal_dt_s);
     std::array<float, kTrackerCount> alpha;
     alpha.fill(alpha_rate);
-    apply_quat_smoothing_impl(curr, prev_quat, alpha, dt_s, nominal_dt_s, twist_override);
+    apply_quat_smoothing_impl(curr, prev_quat, alpha, dt_s, nominal_dt_s);
 }
 
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           QuatSmoothingContext& ctx,
                           const OneEuroParams& params,
-                          float dt_s, float nominal_dt_s,
-                          const std::array<float, kTrackerCount>* twist_override) {
+                          float dt_s, float nominal_dt_s) {
     const float te = std::max(1.0e-3f, (dt_s > 0.0f) ? dt_s : nominal_dt_s);
     const float a_d = one_euro_alpha(params.dcutoff, te);
     std::array<float, kTrackerCount> alpha{};  // 0 for held/first-frame trackers
@@ -903,7 +816,7 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
         const float cutoff = params.mincutoff + params.beta * std::abs(ctx.ang_vel_hat[i]);
         alpha[i] = one_euro_alpha(cutoff, te);
     }
-    apply_quat_smoothing_impl(curr, prev_quat, alpha, dt_s, nominal_dt_s, twist_override);
+    apply_quat_smoothing_impl(curr, prev_quat, alpha, dt_s, nominal_dt_s);
 }
 
 void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
