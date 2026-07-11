@@ -85,19 +85,18 @@ timeout fallback tick で維持。VR 挙動は実機検証が要るため**デ�
   `sources_[0]->wait_available(stop_, 100ms)`。各 `stop()` は flag→wake→join 順。
   `try_pop_latest*` は pose_bench / multi-cam 用に残す。
 
-### M4 VR イベント駆動 (当初 opt-in)
+### M4 VR イベント駆動 (opt-in)
 - `Skeleton3DBus` に内部 `update_seq_` + CV + `wait_for_update`/`wake`。`update()` で bump+notify。
 - `TrackerExtractorOptions::event_driven`。`run_loop` は event_driven 時に bus 更新を待ち、
   実測 dt (clamp [1e-3, 0.5]s) を ang-vel/freeze stats に使う。fixed 時は nominal dt のまま。
-- config `three_d.vr_extract_event_driven` / `--vr-extract-event-driven` を `main.cpp` で
-  `tex_opts.event_driven` に配線。当初 default off。2026-07-07 以降は stale snapshot 再フィルタ防止のため
-  default on、比較用に `--no-vr-extract-event-driven` を追加。
+- config `three_d.vr_extract_event_driven` / `--vr-extract-event-driven` (default off)、
+  `main.cpp` で `tex_opts.event_driven` に配線。
 
 ## Milestone
 - **M1**: 計測基盤 (TS + breakdown 拡張 + VR e2e stat)。挙動変更なし。
 - **M2**: pixel_format/n_buffers config + YUYV 経路。default MJPEG。
 - **M3**: 2ms poll sleep → CV (単一カメラ)。
-- **M4**: イベント駆動 extractor (当初 opt-in、現在 default on)。
+- **M4**: イベント駆動 extractor (opt-in)。
 
 ## 検証
 - ビルド: `cmake --build cpp/build -j` クリーン、ctest 9/9 pass、`--help` に新フラグ表示。
@@ -128,6 +127,5 @@ timeout fallback tick で維持。VR 挙動は実機検証が要るため**デ�
 ## 残課題
 - 多カメラ central loop の共有 CV wakeup (現状 multi-cam は 2ms poll 維持)。
 - GPU 前処理 / NVJPEG decode (migration-plan の Phase 6 残課題) — decode を CPU から剥がす。
-- イベント駆動 extractor のレイテンシ目的チューニングは VR 側ではなく freshness 目的で default-on 済み
-  ([pose-3d-tracker-freshness](pose-3d-tracker-freshness.md))。
+- イベント駆動 extractor の実機チューニング後、デフォルト化を検討。
 - pose-side TRT FP16 drift は本作業のスコープ外 (migration-plan 参照)。

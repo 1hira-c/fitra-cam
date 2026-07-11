@@ -92,14 +92,6 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
-### 2026-07-07 — TrackerExtractor freshness: stale snapshot 再フィルタを停止（default event-driven）
-`vr_extract_event_driven` を default on にし、event-driven `TrackerExtractor` が `wait_for_update` timeout 時に
-同じ `Skeleton3DSnapshot` を再処理しないよう修正。`Skeleton3DBus` の内部 `update_seq` / 更新時刻を snapshot
-へ伝搬し、`SlimeTrackerBus` から `/ws3d` / `/stats3d` に `tracker_stream`（mode, source age, filter dt,
-fresh_hz, suppressed_wakeups, refiltered_duplicates, stale_clears）を出す。旧 fixed-rate producer は `--no-vr-extract-event-driven`
-で A/B 可能。`test_tracker_extractor` と `test_main_config` で回帰固定。
-→ [design/pose-3d-tracker-freshness.md](../design/pose-3d-tracker-freshness.md)
-
 ### 2026-07-05 — PR #50 review follow-up: st 腰欠損 fallback + OpenCV SVD/floor guard
 PR #50 の自動レビュー指摘を反映。`rigid_fit` の Kabsch SVD は Jetson/OpenCV 環境差で固定長
 `Matx` 出力が例外化しないよう `cv::Mat` 受けに変更。`floor_grounding` は将来の sole index 変更に備え

@@ -173,20 +173,6 @@ export interface Stats3D {
   ik_locked?: boolean;
 }
 
-export interface TrackerStream {
-  mode?: "event" | "fixed";
-  source_update_seq?: number;
-  source_pose_seq?: number;
-  source_age_ms?: number;
-  filter_dt_ms?: number;
-  fresh_hz?: number;
-  suppressed_wakeups?: number;
-  refiltered_duplicates?: number;
-  stale_clears?: number;
-  source_stale?: boolean;
-  [k: string]: unknown;
-}
-
 export interface Bundle3D {
   seq: number;
   ts_ms: number;
@@ -195,7 +181,6 @@ export interface Bundle3D {
   persons_3d?: Person3D[];
   cameras?: Camera3D[];
   trackers?: Tracker[];
-  tracker_stream?: TrackerStream;
   stats?: Stats3D;
   vmt?: VmtBlock;
   hmd?: HmdBlock;

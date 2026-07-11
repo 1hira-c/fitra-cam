@@ -784,7 +784,6 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--floor-grounding")   { out.floor_grounding_3d = true; }
         else if (a == "--roll-hysteresis")   { out.roll_hysteresis_3d = true; }
         else if (a == "--vr-extract-event-driven") { out.vr_extract_event_driven = true; }
-        else if (a == "--no-vr-extract-event-driven") { out.vr_extract_event_driven = false; }
         else if (a == "--foot-tracker-pos")  { out.vr_foot_pos_mode = need(i, "--foot-tracker-pos"); }
         else if (a == "--chest-height-frac") { out.vr_chest_height_frac = std::stod(need(i, "--chest-height-frac")); }
         else if (a == "--waist-height-frac") { out.vr_waist_height_frac = std::stod(need(i, "--waist-height-frac")); }

@@ -723,22 +723,6 @@ set_target_properties(fitra_test_tracker_extract_pos PROPERTIES
 
 add_test(NAME test_tracker_extract_pos COMMAND fitra_test_tracker_extract_pos)
 
-# TrackerExtractor event-driven producer cadence.
-add_executable(fitra_test_tracker_extractor
-    test_tracker_extractor.cpp
-)
-
-target_link_libraries(fitra_test_tracker_extractor PRIVATE
-    fitra_slimevr
-)
-
-set_target_properties(fitra_test_tracker_extractor PROPERTIES
-    OUTPUT_NAME "test_tracker_extractor"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
-)
-
-add_test(NAME test_tracker_extractor COMMAND fitra_test_tracker_extractor)
-
 # Kinematic-tree Kalman: root vs offset state, FK propagation, child
 # skipping when parent uninitialized, missing-run reset.
 add_executable(fitra_test_kalman_chain

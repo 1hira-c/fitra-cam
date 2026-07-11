@@ -6,29 +6,19 @@ namespace fitra::slimevr {
 
 namespace {
 
-void append_float(std::string& out, double v, int precision = 6) {
+void append_float(std::string& out, float v, int precision = 6) {
     char buf[40];
-    std::snprintf(buf, sizeof(buf), "%.*g", precision, v);
+    std::snprintf(buf, sizeof(buf), "%.*g", precision, static_cast<double>(v));
     out += buf;
-}
-
-const char* stream_mode_name(SlimeTrackerStreamMode mode) {
-    switch (mode) {
-        case SlimeTrackerStreamMode::Event: return "event";
-        case SlimeTrackerStreamMode::Fixed: return "fixed";
-    }
-    return "unknown";
 }
 
 }  // namespace
 
 void SlimeTrackerBus::publish(const std::array<SlimeTracker, kTrackerCount>& trackers,
-                              const SlimeTrackerStats&                       stats,
-                              const SlimeTrackerStreamStats&                 stream) {
+                              const SlimeTrackerStats&                       stats) {
     std::lock_guard<std::mutex> lk{mu_};
     snapshot_.trackers = trackers;
     snapshot_.stats    = stats;
-    snapshot_.stream   = stream;
     snapshot_.seq += 1;
     snapshot_.ts = std::chrono::system_clock::now();
     snapshot_.has_data = true;
@@ -59,7 +49,7 @@ const char* tracker_role_name(TrackerRole role) {
 std::string make_tracker_bundle_fragment(const SlimeTrackerBus& bus) {
     auto snap = bus.snapshot();
     std::string out;
-    out.reserve(4096);
+    out.reserve(1024);
     out += "\"trackers\":[";
     if (snap.has_data) {
         const auto& s = snap.stats;
@@ -102,30 +92,6 @@ std::string make_tracker_bundle_fragment(const SlimeTrackerBus& bus) {
     if (snap.has_data) {
         out += ",\"tracker_stats_window_frames\":";
         out += std::to_string(snap.stats.window_frames);
-        const auto& stream = snap.stream;
-        out += ",\"tracker_stream\":{";
-        out += "\"mode\":\"";
-        out += stream_mode_name(stream.mode);
-        out += "\"";
-        out += ",\"source_update_seq\":";
-        out += std::to_string(static_cast<long long>(stream.source_update_seq));
-        out += ",\"source_pose_seq\":";
-        out += std::to_string(static_cast<long long>(stream.source_pose_seq));
-        out += ",\"source_age_ms\":";
-        append_float(out, stream.source_age_ms, 4);
-        out += ",\"filter_dt_ms\":";
-        append_float(out, stream.filter_dt_ms, 4);
-        out += ",\"fresh_hz\":";
-        append_float(out, stream.fresh_hz, 4);
-        out += ",\"suppressed_wakeups\":";
-        out += std::to_string(static_cast<long long>(stream.suppressed_wakeups));
-        out += ",\"refiltered_duplicates\":";
-        out += std::to_string(static_cast<long long>(stream.refiltered_duplicates));
-        out += ",\"stale_clears\":";
-        out += std::to_string(static_cast<long long>(stream.stale_clears));
-        out += ",\"source_stale\":";
-        out += (stream.source_stale ? "true" : "false");
-        out += "}";
     }
     return out;
 }

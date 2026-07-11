@@ -343,9 +343,8 @@ smoothing が **dt 非依存の固定 alpha** のままで、ソースレート�
 frame-rate 非依存形に一般化 (`run_loop` の実測 dt / nominal dt を配線)。固定レート (`dt==nominal`) は
 従来と完全一致 (既定ゼロリスク)、イベント駆動は過平滑解消。これがレート引き上げ・イベント駆動を
 安全にするキーストーン。`test_tracker_extract_pos` に rate-independence テスト追加 (dt/2 の 2 ステップ ==
-dt の 1 ステップ 他)、ctest 9/9。実機 judder / e2e 数値検証 + publisher hop2 は
-被写体 (`ik_locked`)+SteamVR 要のため M2 送り。イベント駆動既定化は後にレイテンシ目的ではなく
-stale snapshot 再フィルタ防止の freshness 修正として 2026-07-07 に実施済み。
+dt の 1 ステップ 他)、ctest 9/9。実機 judder / e2e 数値検証 + イベント駆動既定化 + publisher hop2 は
+被写体 (`ik_locked`)+SteamVR 要のため M2 送り。
 → [design/vr-output-latency.md](../design/vr-output-latency.md)
 
 ### 2026-05-29 — 出力レイテンシ M2: 被写体実測 — VR ペーシングは lever でない (負の結果)
