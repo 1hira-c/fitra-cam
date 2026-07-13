@@ -558,6 +558,67 @@ three_d:
     check(threw, "vr_pos_dcutoff <= 0 must throw");
 }
 
+void test_floor_contact_yaml_cli_emit_and_validate() {
+    MainOptions defaults;
+    check(defaults.floor_contact_stability, "floor contact defaults on");
+
+    auto p = write_tmp("floor_contact.yaml", R"(schema: fitra_main_config_v1
+three_d:
+  floor_contact_stability: false
+  floor_z_m: 0.12
+  floor_contact_enter_height_m: 0.04
+  floor_contact_exit_height_m: 0.07
+  floor_contact_enter_speed_mps: 0.3
+  floor_contact_exit_speed_mps: 0.9
+  floor_contact_xy_tau_s: 0.4
+  floor_contact_max_xy_correction_m: 0.025
+  floor_contact_max_z_correction_m: 0.09
+  floor_contact_missing_grace_frames: 1
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(!opts.floor_contact_stability, "floor contact YAML bool loads");
+    check(std::abs(opts.floor_z_m - 0.12) < 1e-9, "floor_z_m loads");
+    check(std::abs(opts.floor_contact_enter_height_m - 0.04) < 1e-9,
+          "floor enter height loads");
+    check(std::abs(opts.floor_contact_exit_speed_mps - 0.9) < 1e-9,
+          "floor exit speed loads");
+    check(opts.floor_contact_missing_grace_frames == 1,
+          "floor missing grace loads");
+
+    std::vector<std::string> argv_buf{
+        "--floor-contact-stability", "--floor-z-m", "0.2",
+        "--no-floor-contact-stability"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(!opts.floor_contact_stability, "last floor CLI toggle wins");
+    check(std::abs(opts.floor_z_m - 0.2) < 1e-9, "floor-z CLI overrides YAML");
+
+    opts.cam_paths[0] = "/tmp/a";
+    opts.det_engine = "/tmp/y";
+    opts.pose_engine = "/tmp/r";
+    opts.floor_contact_exit_height_m = opts.floor_contact_enter_height_m;
+    bool threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "enter < exit", "floor height validation msg");
+    }
+    check(threw, "invalid floor contact hysteresis must throw");
+
+    opts.floor_contact_exit_height_m = 0.07;
+    opts.floor_z_m = std::nan("");
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "finite", "floor finite validation msg");
+    }
+    check(threw, "non-finite floor contact settings must throw");
+}
+
 void test_early_args_extracts_config_and_probe() {
     std::vector<std::string> argv_buf{"--config", "/tmp/x.yaml", "--probe"};
     auto argv = make_argv(argv_buf);
@@ -1145,6 +1206,16 @@ void test_emit_load_round_trip() {
     o.bone_calib_frames = 200;
     o.kalman_3d = false;   // -> no_3d_kalman: true
     o.ik_3d = false;       // -> no_3d_ik: true
+    o.floor_contact_stability = false;
+    o.floor_z_m = 0.12;
+    o.floor_contact_enter_height_m = 0.04;
+    o.floor_contact_exit_height_m = 0.07;
+    o.floor_contact_enter_speed_mps = 0.30;
+    o.floor_contact_exit_speed_mps = 0.90;
+    o.floor_contact_xy_tau_s = 0.40;
+    o.floor_contact_max_xy_correction_m = 0.025;
+    o.floor_contact_max_z_correction_m = 0.09;
+    o.floor_contact_missing_grace_frames = 1;
     o.vr_extract_event_driven = true; o.vr_one_euro = false;
     o.vr_pos_mincutoff = 2.0; o.vr_pos_beta = 6.0; o.vr_quat_beta = 2.5;
     o.subjects_dir = "calibrations/subjects"; o.subject_id = "alice";
@@ -1225,6 +1296,28 @@ void test_emit_load_round_trip() {
     eq_i(o.bone_calib_frames, r.bone_calib_frames, "bone_calib_frames");
     eq_b(o.kalman_3d, r.kalman_3d, "kalman_3d (negated key)");
     eq_b(o.ik_3d, r.ik_3d, "ik_3d (negated key)");
+    eq_b(o.floor_contact_stability, r.floor_contact_stability,
+         "floor_contact_stability");
+    eq_f(o.floor_z_m, r.floor_z_m, "floor_z_m");
+    eq_f(o.floor_contact_enter_height_m, r.floor_contact_enter_height_m,
+         "floor_contact_enter_height_m");
+    eq_f(o.floor_contact_exit_height_m, r.floor_contact_exit_height_m,
+         "floor_contact_exit_height_m");
+    eq_f(o.floor_contact_enter_speed_mps, r.floor_contact_enter_speed_mps,
+         "floor_contact_enter_speed_mps");
+    eq_f(o.floor_contact_exit_speed_mps, r.floor_contact_exit_speed_mps,
+         "floor_contact_exit_speed_mps");
+    eq_f(o.floor_contact_xy_tau_s, r.floor_contact_xy_tau_s,
+         "floor_contact_xy_tau_s");
+    eq_f(o.floor_contact_max_xy_correction_m,
+         r.floor_contact_max_xy_correction_m,
+         "floor_contact_max_xy_correction_m");
+    eq_f(o.floor_contact_max_z_correction_m,
+         r.floor_contact_max_z_correction_m,
+         "floor_contact_max_z_correction_m");
+    eq_i(o.floor_contact_missing_grace_frames,
+         r.floor_contact_missing_grace_frames,
+         "floor_contact_missing_grace_frames");
     eq_b(o.vr_extract_event_driven, r.vr_extract_event_driven, "vr_extract_event_driven");
     eq_b(o.vr_one_euro, r.vr_one_euro, "vr_one_euro");
     eq_f(o.vr_pos_mincutoff, r.vr_pos_mincutoff, "vr_pos_mincutoff");
@@ -1450,6 +1543,8 @@ const TestCase kTests[] = {
     {"setup_store_refuses_example_path",       test_setup_store_refuses_example_path},
     {"subject_calib_schema",                   test_subject_calib_schema},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
+    {"floor_contact_yaml_cli_emit_and_validate",
+                                               test_floor_contact_yaml_cli_emit_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},
     {"validate_slimevr_requires_halpe26",      test_validate_slimevr_requires_halpe26},

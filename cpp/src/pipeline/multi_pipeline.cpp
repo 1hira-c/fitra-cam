@@ -32,6 +32,19 @@ MultiCameraDriver::MultiCameraDriver(
           opts.subject_profile = threed_.subject_profile;
           return lift::IkSolver{opts};
       }()},
+      floor_contact_{[&]() {
+          lift::FloorContactOptions opts;
+          opts.floor_z_m = threed_.floor_z_m;
+          opts.enter_height_m = threed_.floor_contact_enter_height_m;
+          opts.exit_height_m = threed_.floor_contact_exit_height_m;
+          opts.enter_speed_mps = threed_.floor_contact_enter_speed_mps;
+          opts.exit_speed_mps = threed_.floor_contact_exit_speed_mps;
+          opts.xy_anchor_tau_s = threed_.floor_contact_xy_tau_s;
+          opts.max_xy_correction_m = threed_.floor_contact_max_xy_correction_m;
+          opts.max_z_correction_m = threed_.floor_contact_max_z_correction_m;
+          opts.missing_grace_frames = threed_.floor_contact_missing_grace_frames;
+          return lift::FloorContactStabilizer{opts};
+      }()},
       latest_per_cam_(sources_.size()),
       latest_snapshots_(sources_.size()),
       last_3d_input_seqs_(sources_.size(), 0),
@@ -44,6 +57,16 @@ MultiCameraDriver::MultiCameraDriver(
     }
     if ((threed_.triangulator || threed_.bus) && (!threed_.triangulator || !threed_.bus)) {
         throw std::invalid_argument("3D pipeline requires both triangulator and Skeleton3DBus");
+    }
+    if (threed_.triangulator && threed_.bus) {
+        FITRA_LOG_INFO(
+            "3D floor-contact stability {} (floor_z={}m enter={}m/{}mps exit={}m/{}mps)",
+            threed_.floor_contact_stability ? "ENABLED" : "disabled",
+            threed_.floor_z_m,
+            threed_.floor_contact_enter_height_m,
+            threed_.floor_contact_enter_speed_mps,
+            threed_.floor_contact_exit_height_m,
+            threed_.floor_contact_exit_speed_mps);
     }
     for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
         latest_snapshots_[i].id = static_cast<int>(i);
@@ -412,6 +435,8 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         miss.stats.sync_miss = tri_sync_miss_;
         miss.stats.processed = tri_processed_;
         miss.stats.ik_locked = ik_.locked();
+        miss.stats.floor_stability_enabled = threed_.floor_contact_stability;
+        miss.stats.floor_z_m = threed_.floor_z_m;
         miss.cameras = camera_poses;
         bus->update(miss);
         for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
@@ -432,11 +457,11 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
 
     auto tri = triangulator->triangulate(observations);
     infer::Skeleton3D skel = tri.skeleton;
+    double dt_s = 1.0 / 30.0;
+    if (has_last_3d_update_) {
+        dt_s = std::chrono::duration<double>(now - last_3d_update_).count();
+    }
     if (threed_.kalman_enabled) {
-        double dt_s = 1.0 / 30.0;
-        if (has_last_3d_update_) {
-            dt_s = std::chrono::duration<double>(now - last_3d_update_).count();
-        }
         skel = kalman_.update(skel, dt_s);
     }
     // Subject calibration classifies the pose from anatomical joint *angles* on
@@ -475,6 +500,14 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         skel_tap_local(measured_skel, drift);
     }
 
+    lift::FloorContactReport floor_report;
+    if (threed_.floor_contact_stability) {
+        // Final 3D stage: keep subject-calibration measurements and IK state
+        // untouched while publishing one grounded skeleton to both WebUI and
+        // the shared VR tracker extractor.
+        floor_report = floor_contact_.update(skel, dt_s);
+    }
+
     auto t1 = std::chrono::steady_clock::now();
 
     ++tri_processed_;
@@ -507,6 +540,12 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     out.stats.profile_quality_status = ik_.profile_quality_status();
     out.stats.processed = tri_processed_;
     out.stats.sync_miss = tri_sync_miss_;
+    out.stats.floor_stability_enabled = threed_.floor_contact_stability;
+    out.stats.floor_z_m = threed_.floor_z_m;
+    out.stats.floor_contact_left = floor_report.feet[0].contact;
+    out.stats.floor_contact_right = floor_report.feet[1].contact;
+    out.stats.floor_correction_left_m = cv::norm(floor_report.feet[0].correction_m);
+    out.stats.floor_correction_right_m = cv::norm(floor_report.feet[1].correction_m);
     out.cameras = std::move(camera_poses);
     bus->update(out);
     for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
@@ -542,6 +581,8 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         snap.stats.profile_quality_status = ik_.profile_quality_status();
         snap.stats.processed = tri_processed_;
         snap.stats.sync_miss = tri_sync_miss_;
+        snap.stats.floor_stability_enabled = threed_.floor_contact_stability;
+        snap.stats.floor_z_m = threed_.floor_z_m;
         bus->update(snap);
     } else {
         // Resuming from standby: drop the Kalman's stale pre-idle state so the
@@ -550,6 +591,7 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         // lock / bone lengths (subject calibration) are preserved. Runs on the
         // loop thread, the only writer of kalman_ / has_last_3d_update_.
         kalman_.reset();
+        floor_contact_.reset();
         has_last_3d_update_ = false;
     }
 }

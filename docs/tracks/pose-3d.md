@@ -3,7 +3,7 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-06-12)
+## 現状 (2026-07-13)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
@@ -77,6 +77,11 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
   world 6D state、それ以外は parent-relative offset 6D state。出力は `world = parent_world + offset`
   の FK 再構成。hip 移動が child の world に自然に伝播する (per-joint 独立は廃止)。
   Process noise は root と offset で分離 (`q_pos` / `q_pos_offset`)。
+- **床接地安定化は公開直前の有界足部平行移動**: Halpe26 の左右 sole から接地を独立判定し、
+  接地中だけ ankle + toe/heel を同じ XYZ だけ移動する。Kalman / IK / calibration tap へ
+  フィードバックせず、XY 3cm / Z 8cm を超える要求は fail-open。既定 ON だが
+  `--no-floor-contact-stability` を常設し、`/stats3d` と WebUI 接地リングで状態を確認できる。
+  → [design/pose-3d-floor-contact-stability.md](../design/pose-3d-floor-contact-stability.md)
 - **subject profile schema は厳格分離**: `fitra_subject_profile_v1` (COCO17) と `v2` (Halpe26) は
   マイグレーションせず再キャリブを要求 (keypoint topology は core-pipeline トラック参照)。
 - **フル IK は backstop 設計のみ**: Tier A swing-twist + ROM clamp + 角速度 clamp + constrained
@@ -91,6 +96,16 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-07-13 — 床接地を利用した足部安定化（既定 ON・有界出力段）
+
+Halpe26 の ankle + sole を左右独立に扱う `FloorContactStabilizer` を追加。sole 2 点以上、床高、
+足首速度のヒステリシスで接地を判定し、接地中は足部全体を剛体平行移動して最下 sole を床へ置きつつ
+XY skating を時定数 0.25s で抑制する。XY 3cm / Z 8cm 上限、sole 欠損 2 フレーム猶予、長い dt / idle
+reset、非接地時の状態レス床貫通 clamp を備え、COCO17 は no-op。`three_d` 設定、CLI kill switch、
+`/stats3d`、WebUI 接地リング、`dump_keypoints_3d` ON/OFF と A/B summary 指標を同じ実装へ配線。
+`test_floor_contact_stabilizer` と `test_main_config` で状態遷移・剛体性・境界・設定往復を固定した。
+設計と実機受け入れ基準: [design/pose-3d-floor-contact-stability.md](../design/pose-3d-floor-contact-stability.md)。
 
 ### 2026-06-27 — calib-latest 解決の堅牢化（レビュー指摘対応・コードレビュー / bot 指摘） (バグ修正)
 latest 解決 PR に対する自動/手動レビューの指摘をまとめて対応。

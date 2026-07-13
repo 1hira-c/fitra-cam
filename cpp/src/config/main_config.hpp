@@ -92,6 +92,21 @@ struct MainOptions {
     // negated flags; the runtime predicate stays positive (kalman_3d / ik_3d).
     bool   kalman_3d = true;
     bool   ik_3d     = true;
+    // Output-stage Halpe26 foot stabilization. Contact is detected from the
+    // sole points and one bounded translation is applied to ankle + sole, so
+    // both the WebUI skeleton and the default ankle-based VR foot position use
+    // the same grounded result. Default on; --no-floor-contact-stability is
+    // the live kill switch. COCO17 is an automatic no-op.
+    bool   floor_contact_stability = true;
+    double floor_z_m = 0.0;
+    double floor_contact_enter_height_m = 0.03;
+    double floor_contact_exit_height_m = 0.06;
+    double floor_contact_enter_speed_mps = 0.25;
+    double floor_contact_exit_speed_mps = 0.80;
+    double floor_contact_xy_tau_s = 0.25;
+    double floor_contact_max_xy_correction_m = 0.03;
+    double floor_contact_max_z_correction_m = 0.08;
+    int    floor_contact_missing_grace_frames = 2;
     // VR tracker extraction: react to each new 3D frame (event-driven) instead
     // of resampling at a fixed cadence. Cuts the extractor's contribution to
     // capture->VR-send latency. Feeds both SlimeVR and VMT. Default off.

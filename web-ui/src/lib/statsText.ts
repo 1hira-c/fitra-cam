@@ -149,6 +149,10 @@ export function build3dStatsText(
     `processed      ${s.processed ?? 0}\n` +
     `sync_miss      ${s.sync_miss ?? 0}\n` +
     `ik_locked      ${s.ik_locked ? "true" : "false"}\n` +
+    `floor_contact  ${s.floor_stability_enabled
+      ? `L=${s.floor_contact_left ? "plant" : "air"} R=${s.floor_contact_right ? "plant" : "air"}`
+      : "off"}\n` +
+    `floor_corr_m   L=${(s.floor_correction_left_m ?? 0).toFixed(3)} R=${(s.floor_correction_right_m ?? 0).toFixed(3)}\n` +
     `bundle_seq     ${server3dSeq}` +
     vmtLine +
     discLine +

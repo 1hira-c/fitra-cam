@@ -72,6 +72,12 @@ struct Skeleton3DStats {
     std::string profile_quality_status;
     std::uint64_t processed = 0;
     std::uint64_t sync_miss = 0;
+    bool floor_stability_enabled = false;
+    double floor_z_m = 0.0;
+    bool floor_contact_left = false;
+    bool floor_contact_right = false;
+    double floor_correction_left_m = 0.0;
+    double floor_correction_right_m = 0.0;
 };
 
 // Static camera placement in the fitra Z-up world frame, surfaced to the 3D
