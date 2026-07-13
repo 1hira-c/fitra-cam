@@ -77,6 +77,13 @@ struct TrackerExtractorOptions {
     // and the rotation-only SlimeVR Firmware UDP path are unchanged.
     float chest_height_frac = 0.65f;
     float waist_height_frac = 0.15f;
+
+    // Near-extension tracker reconstruction. Both features are default-off for
+    // hardware A/B: `snap` straightens arm/leg tracker positions + swing on a
+    // private skeleton copy; `toe_direction` supplies extended thigh/shin
+    // twist from ankle->big-toe. The shared hysteresis thresholds are flexion
+    // away from straight (0 deg = fully extended).
+    LimbExtensionOptions limb_extension{};
 };
 
 class TrackerExtractor {

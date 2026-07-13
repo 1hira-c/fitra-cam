@@ -42,6 +42,8 @@ constexpr std::size_t kLAnkle    = 15, kRAnkle    = 16;
 constexpr std::size_t kNeck      = 18;
 constexpr std::size_t kHipCenter = 19;
 constexpr std::size_t kLBigToe   = 20, kRBigToe   = 21;
+constexpr std::size_t kLSmallToe = 22, kRSmallToe = 23;
+constexpr std::size_t kLHeel     = 24, kRHeel     = 25;
 
 // Confidence smoothstep bounds on sin(angle(up, fwd)) for upper arm / thigh
 // roll. Below kRollSinLow the chosen up is treated as degenerate (confidence 0,
@@ -95,6 +97,14 @@ constexpr float kPosVelGateHigh_mps = 16.0f;
 constexpr float kPelvisYawGateLow_rps  = 8.0f;
 constexpr float kPelvisYawGateHigh_rps = 16.0f;
 
+// Reverse directional hysteresis needs motion evidence in addition to the
+// overlapping enter/exit band. Require two consecutive valid observations and
+// up to 2 degrees of accumulated travel from the current regime's extremum.
+// For a deliberately narrow configured band, half the band remains reachable.
+constexpr std::uint8_t kExtensionTransitionConfirmFrames = 2;
+constexpr float kExtensionMotionConfirmMaxDeg = 2.0f;
+constexpr float kExtensionDirectionMinDeg = 0.05f;
+
 // smoothstep01 requires low < high for every gate it drives; pin the invariant
 // so a future tweak that inverts a bound fails to compile rather than silently
 // turning the gate into a step / NaN at runtime.
@@ -115,6 +125,185 @@ inline float smoothstep01(float x, float low, float high) {
     if (x >= high) return 1.0f;
     float t = (x - low) / (high - low);
     return t * t * (3.0f - 2.0f * t);
+}
+
+struct ExtensionState {
+    bool active = false;
+};
+
+// Return the flexion away from a straight parent->hinge->distal chain.
+// 0 deg is fully extended; 90 deg is a right-angle bend.
+float chain_flex_deg(const infer::Skeleton3D& skel,
+                     std::size_t parent, std::size_t hinge,
+                     std::size_t distal) {
+    if (!joints_valid(skel, {parent, hinge, distal})) return -1.0f;
+    const cv::Vec3f a = to_vec3f(skel.joints[hinge]) - to_vec3f(skel.joints[parent]);
+    const cv::Vec3f b = to_vec3f(skel.joints[distal]) - to_vec3f(skel.joints[hinge]);
+    const float an = norm(a), bn = norm(b);
+    if (an < 1.0e-6f || bn < 1.0e-6f) return -1.0f;
+    const float cos_angle = std::clamp(a.dot(b) / (an * bn), -1.0f, 1.0f);
+    constexpr float kRadToDeg = 57.29577951308232f;
+    return std::acos(cos_angle) * kRadToDeg;
+}
+
+ExtensionState update_extension_state(const infer::Skeleton3D& skel,
+                                      ExtractContext* ctx,
+                                      std::size_t state_idx,
+                                      std::size_t parent,
+                                      std::size_t hinge,
+                                      std::size_t distal,
+                                      const LimbExtensionOptions& opts) {
+    ExtensionState out;
+    if (!opts.snap && !opts.toe_direction) return out;
+
+    const float flex = chain_flex_deg(skel, parent, hinge, distal);
+    if (!(flex >= 0.0f)) {
+        // A missing sample must break the consecutive-frame confirmation, but
+        // keep the last regime/extremum for recovery on the next valid pose.
+        if (ctx != nullptr) {
+            ctx->extension_prev_flex_deg[state_idx] = -1.0f;
+            ctx->extension_transition_frames[state_idx] = 0;
+        }
+        return out;  // missing/degenerate: no fabricated chain
+    }
+
+    if (ctx == nullptr) {
+        // Direction is unknowable without inter-frame state. Only acquire when
+        // the limb is inside the unambiguously extended (release) threshold.
+        out.active = flex <= opts.exit_flex_deg;
+        return out;
+    }
+
+    bool& latched = ctx->extension_latched[state_idx];
+    float& extreme = ctx->extension_flex_extreme_deg[state_idx];
+    float& prev_flex = ctx->extension_prev_flex_deg[state_idx];
+    std::uint8_t& transition_frames =
+        ctx->extension_transition_frames[state_idx];
+
+    if (!(extreme >= 0.0f)) {
+        // At startup the exit..enter overlap has no known motion direction, so
+        // remain unsnapped there. A clearly straight limb may start active.
+        latched = flex <= opts.exit_flex_deg;
+        extreme = flex;
+        prev_flex = flex;
+        transition_frames = 0;
+        out.active = latched;
+        return out;
+    }
+
+    if (!(prev_flex >= 0.0f)) {
+        // Do not infer a direction across a missing/degenerate observation.
+        extreme = latched ? std::min(extreme, flex)
+                          : std::max(extreme, flex);
+        prev_flex = flex;
+        transition_frames = 0;
+        out.active = latched;
+        return out;
+    }
+
+    const float motion_confirm_deg = std::min(
+        kExtensionMotionConfirmMaxDeg,
+        0.5f * (opts.enter_flex_deg - opts.exit_flex_deg));
+    const bool extending_now =
+        flex <= prev_flex - kExtensionDirectionMinDeg;
+    const bool flexing_now =
+        flex >= prev_flex + kExtensionDirectionMinDeg;
+    bool wants_transition = false;
+    if (latched) {
+        // The minimum flexion reached while snapped is evidence of how far the
+        // user has subsequently bent the limb.
+        extreme = std::min(extreme, flex);
+        wants_transition =
+            flexing_now &&
+            flex >= opts.exit_flex_deg &&
+            flex - extreme >= motion_confirm_deg;
+    } else {
+        // The maximum flexion reached while free is evidence of how far the
+        // user has subsequently extended the limb.
+        extreme = std::max(extreme, flex);
+        wants_transition =
+            extending_now &&
+            flex <= opts.enter_flex_deg &&
+            extreme - flex >= motion_confirm_deg;
+    }
+
+    if (wants_transition) {
+        if (transition_frames < kExtensionTransitionConfirmFrames) {
+            ++transition_frames;
+        }
+        if (transition_frames >= kExtensionTransitionConfirmFrames) {
+            latched = !latched;
+            extreme = flex;
+            transition_frames = 0;
+        }
+    } else {
+        transition_frames = 0;
+    }
+    prev_flex = flex;
+    out.active = latched;
+    return out;
+}
+
+void set_joint_pos(infer::Joint3D& joint, const cv::Vec3f& p) {
+    joint.x = p[0];
+    joint.y = p[1];
+    joint.z = p[2];
+}
+
+void translate_joint_if_valid(infer::Skeleton3D& skel, std::size_t idx,
+                              const cv::Vec3f& delta) {
+    if (!skel.joints[idx].valid) return;
+    set_joint_pos(skel.joints[idx], to_vec3f(skel.joints[idx]) + delta);
+}
+
+// Reconstruct only the tracker-facing copy of a limb: keep the parent fixed,
+// preserve both current segment lengths, and place hinge + distal on the
+// parent->distal axis. Distal descendants are translated rigidly so snapping a
+// leg does not rotate or resize its measured foot.
+bool snap_chain(infer::Skeleton3D& skel,
+                std::size_t parent, std::size_t hinge, std::size_t distal,
+                std::initializer_list<std::size_t> distal_descendants) {
+    if (!joints_valid(skel, {parent, hinge, distal})) return false;
+    const cv::Vec3f pp = to_vec3f(skel.joints[parent]);
+    const cv::Vec3f hp = to_vec3f(skel.joints[hinge]);
+    const cv::Vec3f dp = to_vec3f(skel.joints[distal]);
+    const float parent_len = norm(hp - pp);
+    const float distal_len = norm(dp - hp);
+    const cv::Vec3f axis = normalize_or_zero(dp - pp);
+    if (parent_len < 1.0e-6f || distal_len < 1.0e-6f || norm(axis) < 0.5f) {
+        return false;
+    }
+
+    const cv::Vec3f snapped_hinge = pp + axis * parent_len;
+    const cv::Vec3f snapped_distal = snapped_hinge + axis * distal_len;
+    const cv::Vec3f distal_delta = snapped_distal - dp;
+    set_joint_pos(skel.joints[hinge], snapped_hinge);
+    set_joint_pos(skel.joints[distal], snapped_distal);
+    for (const auto idx : distal_descendants) {
+        translate_joint_if_valid(skel, idx, distal_delta);
+    }
+    return true;
+}
+
+// An observed ankle->toe direction, projected into the plane perpendicular to
+// the extended leg axis. `quat_from_forward_up`'s leg up convention follows
+// the adjacent-chain handle (knee->ankle for the thigh, knee->hip for the
+// shin); its bend-plane component points opposite the anatomical foot-forward
+// direction. Negating the projection preserves twist continuity as a normally
+// bent knee straightens instead of introducing a 180-degree roll flip.
+// A zero return means the toe is missing/degenerate and callers must keep the
+// existing hinge/held-roll behavior.
+cv::Vec3f toe_twist_reference(const infer::Skeleton3D& skel,
+                              std::size_t hip, std::size_t ankle,
+                              std::size_t toe) {
+    if (!joints_valid(skel, {hip, ankle, toe})) return cv::Vec3f{0, 0, 0};
+    const cv::Vec3f axis = normalize_or_zero(
+        to_vec3f(skel.joints[ankle]) - to_vec3f(skel.joints[hip]));
+    const cv::Vec3f toe_raw =
+        to_vec3f(skel.joints[toe]) - to_vec3f(skel.joints[ankle]);
+    if (norm(axis) < 0.5f || norm(toe_raw) < 1.0e-6f) return cv::Vec3f{0, 0, 0};
+    const cv::Vec3f projected = toe_raw - axis * toe_raw.dot(axis);
+    return norm(projected) >= 1.0e-4f ? -projected : cv::Vec3f{0, 0, 0};
 }
 
 // ---- Quaternion (wxyz) helpers for apply_quat_smoothing -------------------
@@ -380,11 +569,58 @@ bool build_tracker(TrackerRole role,
 std::array<SlimeTracker, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
                  FootPosMode foot_pos_mode,
-                 float chest_height_frac, float waist_height_frac) {
+                 float chest_height_frac, float waist_height_frac,
+                 LimbExtensionOptions extension) {
     if (lift::active_keypoint_format() != lift::KeypointFormat::Halpe26) {
         throw std::runtime_error(
             "extract_trackers requires --keypoint-format=halpe26");
     }
+    if (!std::isfinite(extension.enter_flex_deg) ||
+        !std::isfinite(extension.exit_flex_deg) ||
+        extension.exit_flex_deg < 0.0f ||
+        extension.exit_flex_deg >= extension.enter_flex_deg ||
+        extension.enter_flex_deg >= 90.0f) {
+        throw std::invalid_argument(
+            "limb extension thresholds require 0 <= exit < enter < 90 deg");
+    }
+
+    // Evaluate all four latches from the measured post-IK skeleton before any
+    // local reconstruction. Arm/leg pairs share one decision each, so upper +
+    // lower leg cannot disagree about whether this frame is extended.
+    const std::array<ExtensionState, 4> ext_state{
+        update_extension_state(skel, ctx, 0, kLShoulder, kLElbow, kLWrist, extension),
+        update_extension_state(skel, ctx, 1, kRShoulder, kRElbow, kRWrist, extension),
+        update_extension_state(skel, ctx, 2, kLHip, kLKnee, kLAnkle, extension),
+        update_extension_state(skel, ctx, 3, kRHip, kRKnee, kRAnkle, extension),
+    };
+
+    // Default-off stays on the original reference with no copy. With snapping
+    // enabled, mutate a private skeleton copy only; calibration, /ws3d joints,
+    // and every upstream consumer retain the measured/IK result.
+    infer::Skeleton3D snapped_skel;
+    const infer::Skeleton3D* source = &skel;
+    if (extension.snap &&
+        (ext_state[0].active || ext_state[1].active ||
+         ext_state[2].active || ext_state[3].active)) {
+        snapped_skel = skel;
+        if (ext_state[0].active) {
+            snap_chain(snapped_skel, kLShoulder, kLElbow, kLWrist, {});
+        }
+        if (ext_state[1].active) {
+            snap_chain(snapped_skel, kRShoulder, kRElbow, kRWrist, {});
+        }
+        if (ext_state[2].active) {
+            snap_chain(snapped_skel, kLHip, kLKnee, kLAnkle,
+                       {kLBigToe, kLSmallToe, kLHeel});
+        }
+        if (ext_state[3].active) {
+            snap_chain(snapped_skel, kRHip, kRKnee, kRAnkle,
+                       {kRBigToe, kRSmallToe, kRHeel});
+        }
+        source = &snapped_skel;
+    }
+    const infer::Skeleton3D& pose = *source;
+
     std::array<SlimeTracker, kTrackerCount> out{};
     for (std::size_t i = 0; i < kTrackerCount; ++i) {
         out[i].role = static_cast<TrackerRole>(i);
@@ -403,21 +639,21 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
     // straight, secondary rigidly couples upper-arm roll to torso yaw — the
     // same "rigid pelvis pin" anti-pattern we removed from upper_leg.
     // With both fallbacks zeroed, pick_up_multistage hits its confidence=0
-    // sentinel and quat_from_forward_up returns valid=false →
-    // apply_quat_smoothing holds the previous humerus quat.
+    // sentinel; build_tracker emits a forward-only valid quat so smoothing
+    // holds only humerus roll while swing keeps tracking the arm direction.
     //
     // Active regime: knee/elbow-style hinge with wrist offset > sin 0.15 from
-    // the upper-arm axis (≈ 8.6° elbow flexion). Below that, freeze — twist
-    // is unobservable from 3D KP alone in that configuration.
+    // the upper-arm axis (≈ 8.6° elbow flexion). Below that, hold twist — it is
+    // unobservable from 3D KP alone — while continuing to track swing.
     auto upper_arm = [&](TrackerRole role, std::size_t shoulder, std::size_t elbow,
                           std::size_t wrist, std::size_t out_idx) {
-        if (!joints_valid(skel, {shoulder, elbow})) return;
-        cv::Vec3f sp = to_vec3f(skel.joints[shoulder]);
-        cv::Vec3f ep = to_vec3f(skel.joints[elbow]);
+        if (!joints_valid(pose, {shoulder, elbow})) return;
+        cv::Vec3f sp = to_vec3f(pose.joints[shoulder]);
+        cv::Vec3f ep = to_vec3f(pose.joints[elbow]);
         cv::Vec3f pos = (sp + ep) * 0.5f;
         cv::Vec3f fwd = ep - sp;
-        cv::Vec3f up_primary = skel.joints[wrist].valid
-                                ? (to_vec3f(skel.joints[wrist]) - ep)
+        cv::Vec3f up_primary = pose.joints[wrist].valid
+                                ? (to_vec3f(pose.joints[wrist]) - ep)
                                 : cv::Vec3f{0, 0, 0};
         cv::Vec3f up_tertiary = cv::Vec3f{0, 0, 0};
         float confidence = 0.0f;
@@ -437,11 +673,11 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
     // (spine); forward = ⊥(shoulder_axis × spine) so the chest faces forward.
     // frac 0.5 reproduces the historical midpoint(neck, hip_center); the
     // product default is higher (toward the sternum) — see extract_trackers().
-    if (joints_valid(skel, {kNeck, kHipCenter, kLShoulder, kRShoulder})) {
-        cv::Vec3f neck = to_vec3f(skel.joints[kNeck]);
-        cv::Vec3f hc   = to_vec3f(skel.joints[kHipCenter]);
+    if (joints_valid(pose, {kNeck, kHipCenter, kLShoulder, kRShoulder})) {
+        cv::Vec3f neck = to_vec3f(pose.joints[kNeck]);
+        cv::Vec3f hc   = to_vec3f(pose.joints[kHipCenter]);
         cv::Vec3f spine = neck - hc;
-        cv::Vec3f shoulder_axis = to_vec3f(skel.joints[kLShoulder]) - to_vec3f(skel.joints[kRShoulder]);
+        cv::Vec3f shoulder_axis = to_vec3f(pose.joints[kLShoulder]) - to_vec3f(pose.joints[kRShoulder]);
         cv::Vec3f fwd = cross(shoulder_axis, spine);
         cv::Vec3f pos = hc + chest_height_frac * spine;
         build_tracker(TrackerRole::Chest, pos, fwd, spine, out[2]);
@@ -452,13 +688,27 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
     // forward = ⊥(hip_axis × spine). frac 0.0 reproduces the historical
     // hip_center placement; the product default is slightly higher (toward the
     // belt line) — see extract_trackers().
-    if (joints_valid(skel, {kHipCenter, kNeck, kLHip, kRHip})) {
-        cv::Vec3f hc = to_vec3f(skel.joints[kHipCenter]);
-        cv::Vec3f spine = to_vec3f(skel.joints[kNeck]) - hc;
-        cv::Vec3f hip_axis = to_vec3f(skel.joints[kLHip]) - to_vec3f(skel.joints[kRHip]);
+    if (joints_valid(pose, {kHipCenter, kNeck, kLHip, kRHip})) {
+        cv::Vec3f hc = to_vec3f(pose.joints[kHipCenter]);
+        cv::Vec3f spine = to_vec3f(pose.joints[kNeck]) - hc;
+        cv::Vec3f hip_axis = to_vec3f(pose.joints[kLHip]) - to_vec3f(pose.joints[kRHip]);
         cv::Vec3f fwd = cross(hip_axis, spine);
         cv::Vec3f pos = hc + waist_height_frac * spine;
         build_tracker(TrackerRole::Waist, pos, fwd, spine, out[3]);
+    }
+
+    // A straight leg loses its knee-plane roll handle because hip->knee and
+    // knee->ankle become collinear. The foot still exposes an anatomical
+    // forward direction. When requested, use that observed direction for both
+    // leg segments so thigh and shin agree on twist through the singularity.
+    // Missing/degenerate toe data yields zero and falls back to the existing
+    // held-roll path; no world axis is ever invented.
+    std::array<cv::Vec3f, 2> extended_toe_up{};
+    if (extension.toe_direction && ext_state[2].active) {
+        extended_toe_up[0] = toe_twist_reference(pose, kLHip, kLAnkle, kLBigToe);
+    }
+    if (extension.toe_direction && ext_state[3].active) {
+        extended_toe_up[1] = toe_twist_reference(pose, kRHip, kRAnkle, kRBigToe);
     }
 
     // ---- Upper legs (thigh: hip → knee) -----------------------------------
@@ -475,24 +725,28 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
     // degenerate — e.g. 直座り / 長座 / あぐら-からの-脚伸ばし (a very common
     // indoor sitting style in Japan: legs extended forward on the floor with
     // knees fully straight, so (ankle - knee) is colinear with the thigh
-    // axis). With the zero tertiary, pick_up_multistage hits its
-    // confidence=0 sentinel and quat_from_forward_up returns valid=false →
-    // apply_quat_smoothing holds the previous thigh quat.
+    // axis). With the zero tertiary, pick_up_multistage hits its confidence=0
+    // sentinel; build_tracker emits a forward-only valid quat so smoothing
+    // holds only thigh roll while swing keeps tracking the leg direction.
     //
     // The earlier lateral pin (hip - hip_center) was removed for a different
     // reason: it equals the pelvis lateral axis, which rigidly couples thigh
     // roll to waist yaw and makes them visually inseparable during walking /
     // shallow bends when primary's sin θ briefly dips below kRollSinLow.
     auto upper_leg = [&](TrackerRole role, std::size_t hip, std::size_t knee,
-                         std::size_t ankle, std::size_t out_idx) {
-        if (!joints_valid(skel, {hip, knee})) return;
-        cv::Vec3f hp = to_vec3f(skel.joints[hip]);
-        cv::Vec3f kp = to_vec3f(skel.joints[knee]);
+                         std::size_t ankle, std::size_t out_idx,
+                         const cv::Vec3f& toe_up) {
+        if (!joints_valid(pose, {hip, knee})) return;
+        cv::Vec3f hp = to_vec3f(pose.joints[hip]);
+        cv::Vec3f kp = to_vec3f(pose.joints[knee]);
         cv::Vec3f pos = (hp + kp) * 0.5f;
         cv::Vec3f fwd = kp - hp;
-        cv::Vec3f up_primary = skel.joints[ankle].valid
-                                ? (to_vec3f(skel.joints[ankle]) - kp)
-                                : cv::Vec3f{0, 0, 0};
+        const bool using_toe = norm(toe_up) >= 1.0e-6f;
+        cv::Vec3f up_primary = using_toe
+                                ? toe_up
+                                : (pose.joints[ankle].valid
+                                    ? (to_vec3f(pose.joints[ankle]) - kp)
+                                    : cv::Vec3f{0, 0, 0});
         cv::Vec3f up_tertiary = cv::Vec3f{0, 0, 0};
         float confidence = 0.0f;
         int which = -1;
@@ -503,27 +757,40 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
         // ending in world Z.
         cv::Vec3f up = pick_up_multistage(fwd, up_primary, up_primary, up_tertiary,
                                            confidence, which);
+        if (using_toe && confidence > 0.0f) {
+            // Toe direction carries the same residual KP jitter as the foot
+            // tracker. Match its established low-pass weight instead of
+            // promoting this inferred twist to a rigid confidence of 1.
+            confidence *= kFootSmoothingWeight;
+        }
         build_tracker(role, pos, fwd, up, out[out_idx], confidence);
     };
-    upper_leg(TrackerRole::LeftUpperLeg,  kLHip, kLKnee, kLAnkle, 4);
-    upper_leg(TrackerRole::RightUpperLeg, kRHip, kRKnee, kRAnkle, 5);
+    upper_leg(TrackerRole::LeftUpperLeg,  kLHip, kLKnee, kLAnkle, 4,
+              extended_toe_up[0]);
+    upper_leg(TrackerRole::RightUpperLeg, kRHip, kRKnee, kRAnkle, 5,
+              extended_toe_up[1]);
 
     // ---- Lower legs (shin: knee → ankle) ----------------------------------
     // pos = midpoint(knee, ankle); forward = ankle - knee; up = hip - knee
     // (back-up the chain to pin shin yaw).
-    auto lower_leg = [&](TrackerRole role, std::size_t hip, std::size_t knee, std::size_t ankle,
-                         std::size_t out_idx) {
-        if (!joints_valid(skel, {hip, knee, ankle})) return;
-        cv::Vec3f hp = to_vec3f(skel.joints[hip]);
-        cv::Vec3f kp = to_vec3f(skel.joints[knee]);
-        cv::Vec3f ap = to_vec3f(skel.joints[ankle]);
+    auto lower_leg = [&](TrackerRole role, std::size_t hip, std::size_t knee,
+                         std::size_t ankle, std::size_t out_idx,
+                         const cv::Vec3f& toe_up) {
+        if (!joints_valid(pose, {hip, knee, ankle})) return;
+        cv::Vec3f hp = to_vec3f(pose.joints[hip]);
+        cv::Vec3f kp = to_vec3f(pose.joints[knee]);
+        cv::Vec3f ap = to_vec3f(pose.joints[ankle]);
         cv::Vec3f pos = (kp + ap) * 0.5f;
         cv::Vec3f fwd = ap - kp;
-        cv::Vec3f up  = hp - kp;
-        build_tracker(role, pos, fwd, up, out[out_idx]);
+        const bool using_toe = norm(toe_up) >= 1.0e-6f;
+        cv::Vec3f up = using_toe ? toe_up : (hp - kp);
+        build_tracker(role, pos, fwd, up, out[out_idx],
+                      using_toe ? kFootSmoothingWeight : 1.0f);
     };
-    lower_leg(TrackerRole::LeftLowerLeg,  kLHip, kLKnee, kLAnkle, 6);
-    lower_leg(TrackerRole::RightLowerLeg, kRHip, kRKnee, kRAnkle, 7);
+    lower_leg(TrackerRole::LeftLowerLeg,  kLHip, kLKnee, kLAnkle, 6,
+              extended_toe_up[0]);
+    lower_leg(TrackerRole::RightLowerLeg, kRHip, kRKnee, kRAnkle, 7,
+              extended_toe_up[1]);
 
     // ---- Feet (yaw only; tibia-aligned up) --------------------------------
     // heel KP precision is poor in the 2D→3D pipeline, so the foot is treated
@@ -547,14 +814,14 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
     auto foot_tracker = [&](TrackerRole role, std::size_t knee, std::size_t ankle,
                             std::size_t toe, std::size_t out_idx,
                             std::size_t anchor_idx) {
-        if (!skel.joints[knee].valid) return;
-        cv::Vec3f kp = to_vec3f(skel.joints[knee]);
+        if (!pose.joints[knee].valid) return;
+        cv::Vec3f kp = to_vec3f(pose.joints[knee]);
 
         // Resolve ankle: real KP when valid, else FK from anchor.
         cv::Vec3f ap;
         bool ap_synth = false;
-        if (skel.joints[ankle].valid) {
-            ap = to_vec3f(skel.joints[ankle]);
+        if (pose.joints[ankle].valid) {
+            ap = to_vec3f(pose.joints[ankle]);
         } else if (ctx != nullptr && ctx->foot_anchors[anchor_idx].valid) {
             const auto& a = ctx->foot_anchors[anchor_idx];
             ap = cv::Vec3f{kp[0] + a.knee_to_ankle_dir[0] * a.tibia_len_m,
@@ -568,8 +835,8 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
         // Resolve toe: real KP when valid, else FK from anchor (ankle + dir·len).
         cv::Vec3f tp;
         bool tp_synth = false;
-        if (skel.joints[toe].valid) {
-            tp = to_vec3f(skel.joints[toe]);
+        if (pose.joints[toe].valid) {
+            tp = to_vec3f(pose.joints[toe]);
         } else if (ctx != nullptr && ctx->foot_anchors[anchor_idx].valid) {
             const auto& a = ctx->foot_anchors[anchor_idx];
             tp = cv::Vec3f{ap[0] + a.ankle_to_toe_dir[0] * a.foot_len_m,
@@ -599,11 +866,18 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
 
         // Only re-anchor from a fully measured frame; an FK-synthesized
         // direction would otherwise drift on itself if a real KP never returns.
-        if (ctx != nullptr && !ap_synth && !tp_synth) {
+        if (ctx != nullptr && joints_valid(skel, {knee, ankle, toe})) {
             auto& a = ctx->foot_anchors[anchor_idx];
-            cv::Vec3f ka{ap[0] - kp[0], ap[1] - kp[1], ap[2] - kp[2]};
+            // Always learn from the original measured skeleton, never from
+            // the private extension-snapped copy. Otherwise a snapped frame
+            // would poison the later dropout fallback with a synthetic tibia
+            // direction even though the anchor contract is "real frames only".
+            const cv::Vec3f measured_kp = to_vec3f(skel.joints[knee]);
+            const cv::Vec3f measured_ap = to_vec3f(skel.joints[ankle]);
+            const cv::Vec3f measured_tp = to_vec3f(skel.joints[toe]);
+            cv::Vec3f ka = measured_ap - measured_kp;
             float ka_len = norm(ka);
-            cv::Vec3f at{tp[0] - ap[0], tp[1] - ap[1], tp[2] - ap[2]};
+            cv::Vec3f at = measured_tp - measured_ap;
             float at_len = norm(at);
             if (ka_len > 1.0e-4f && at_len > 1.0e-4f) {
                 a.knee_to_ankle_dir = cv::Vec3f{ka[0] / ka_len, ka[1] / ka_len, ka[2] / ka_len};

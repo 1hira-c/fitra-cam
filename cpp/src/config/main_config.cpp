@@ -139,6 +139,8 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
         "vr_one_euro", "vr_pos_mincutoff", "vr_pos_beta", "vr_pos_dcutoff",
         "vr_quat_mincutoff", "vr_quat_beta", "vr_quat_dcutoff",
         "vr_foot_pos_mode", "vr_chest_height_frac", "vr_waist_height_frac",
+        "limb_extension_snap", "extended_leg_toe_direction",
+        "extension_snap_enter_deg", "extension_snap_exit_deg",
     };
     check_keys(section, allowed, "three_d");
     if (section["enable_3d"])         out.enable_3d         = parse_scalar<bool>(section["enable_3d"],            "three_d.enable_3d");
@@ -169,6 +171,10 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
     if (section["vr_foot_pos_mode"])  out.vr_foot_pos_mode  = parse_scalar<std::string>(section["vr_foot_pos_mode"], "three_d.vr_foot_pos_mode");
     if (section["vr_chest_height_frac"]) out.vr_chest_height_frac = parse_scalar<double>(section["vr_chest_height_frac"], "three_d.vr_chest_height_frac");
     if (section["vr_waist_height_frac"]) out.vr_waist_height_frac = parse_scalar<double>(section["vr_waist_height_frac"], "three_d.vr_waist_height_frac");
+    if (section["limb_extension_snap"]) out.limb_extension_snap_3d = parse_scalar<bool>(section["limb_extension_snap"], "three_d.limb_extension_snap");
+    if (section["extended_leg_toe_direction"]) out.extended_leg_toe_direction_3d = parse_scalar<bool>(section["extended_leg_toe_direction"], "three_d.extended_leg_toe_direction");
+    if (section["extension_snap_enter_deg"]) out.extension_snap_enter_deg = parse_scalar<double>(section["extension_snap_enter_deg"], "three_d.extension_snap_enter_deg");
+    if (section["extension_snap_exit_deg"]) out.extension_snap_exit_deg = parse_scalar<double>(section["extension_snap_exit_deg"], "three_d.extension_snap_exit_deg");
 }
 
 void load_subject(const YAML::Node& section, MainOptions& out) {
@@ -522,6 +528,10 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.vr_foot_pos_mode  != d.vr_foot_pos_mode)  e << YAML::Key << "vr_foot_pos_mode"  << YAML::Value << o.vr_foot_pos_mode;
     if (o.vr_chest_height_frac != d.vr_chest_height_frac) e << YAML::Key << "vr_chest_height_frac" << YAML::Value << o.vr_chest_height_frac;
     if (o.vr_waist_height_frac != d.vr_waist_height_frac) e << YAML::Key << "vr_waist_height_frac" << YAML::Value << o.vr_waist_height_frac;
+    if (o.limb_extension_snap_3d != d.limb_extension_snap_3d) e << YAML::Key << "limb_extension_snap" << YAML::Value << o.limb_extension_snap_3d;
+    if (o.extended_leg_toe_direction_3d != d.extended_leg_toe_direction_3d) e << YAML::Key << "extended_leg_toe_direction" << YAML::Value << o.extended_leg_toe_direction_3d;
+    if (o.extension_snap_enter_deg != d.extension_snap_enter_deg) e << YAML::Key << "extension_snap_enter_deg" << YAML::Value << o.extension_snap_enter_deg;
+    if (o.extension_snap_exit_deg != d.extension_snap_exit_deg) e << YAML::Key << "extension_snap_exit_deg" << YAML::Value << o.extension_snap_exit_deg;
     e << YAML::EndMap;
 
     // subject --------------------------------------------------------------
@@ -758,6 +768,10 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--foot-tracker-pos")  { out.vr_foot_pos_mode = need(i, "--foot-tracker-pos"); }
         else if (a == "--chest-height-frac") { out.vr_chest_height_frac = std::stod(need(i, "--chest-height-frac")); }
         else if (a == "--waist-height-frac") { out.vr_waist_height_frac = std::stod(need(i, "--waist-height-frac")); }
+        else if (a == "--limb-extension-snap") { out.limb_extension_snap_3d = true; }
+        else if (a == "--extended-leg-toe-direction") { out.extended_leg_toe_direction_3d = true; }
+        else if (a == "--extension-snap-enter-deg") { out.extension_snap_enter_deg = std::stod(need(i, "--extension-snap-enter-deg")); }
+        else if (a == "--extension-snap-exit-deg") { out.extension_snap_exit_deg = std::stod(need(i, "--extension-snap-exit-deg")); }
         else if (a == "--vr-no-one-euro")    { out.vr_one_euro = false; }
         else if (a == "--vr-pos-mincutoff")  { out.vr_pos_mincutoff  = std::stod(need(i, "--vr-pos-mincutoff")); }
         else if (a == "--vr-pos-beta")       { out.vr_pos_beta       = std::stod(need(i, "--vr-pos-beta")); }
@@ -1227,6 +1241,13 @@ void validate_options(const MainOptions& opts) {
     }
     if (opts.vr_waist_height_frac < 0.0 || opts.vr_waist_height_frac > 1.0) {
         fail("--waist-height-frac must be in [0, 1] (0 = hip_center, 1 = neck)");
+    }
+    if (!std::isfinite(opts.extension_snap_enter_deg) ||
+        !std::isfinite(opts.extension_snap_exit_deg) ||
+        opts.extension_snap_exit_deg < 0.0 ||
+        opts.extension_snap_exit_deg >= opts.extension_snap_enter_deg ||
+        opts.extension_snap_enter_deg >= 90.0) {
+        fail("--extension-snap-{enter,exit}-deg require 0 <= exit < enter < 90");
     }
     if (opts.calibrate && !opts.enable_3d) {
         fail("--calibrate requires --enable-3d");
