@@ -163,28 +163,6 @@ set_target_properties(fitra_excal_record PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
-# Synchronized N-camera (2 or 3) raw MP4 recorder for the spatial-filtering
-# harness. Config-driven (same session.yaml `run` uses) so recorded frames match
-# the live pose pipeline. Standalone: no TRT execution (link pulls fitra_infer
-# via fitra_camera, unused at runtime), no Crow.
-add_executable(fitra_record_3cam
-    record_3cam.cpp
-)
-
-target_link_libraries(fitra_record_3cam PRIVATE
-    fitra_camera      # V4l2Capture (link pulls fitra_infer; unused at runtime)
-    fitra_config      # load_main_config / MainOptions
-    opencv_videoio
-    opencv_imgcodecs
-    opencv_imgproc
-    opencv_core
-)
-
-set_target_properties(fitra_record_3cam PROPERTIES
-    OUTPUT_NAME "record_3cam"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
-)
-
 # Recorded two-camera 2D -> 3D dump with reprojection overlays.
 add_executable(fitra_dump_keypoints_3d
     dump_keypoints_3d.cpp
@@ -193,7 +171,6 @@ add_executable(fitra_dump_keypoints_3d
 target_link_libraries(fitra_dump_keypoints_3d PRIVATE
     fitra_infer
     fitra_lift
-    fitra_slimevr     # extract_trackers for --dump-trackers (M-C1 harness)
     opencv_videoio
     opencv_imgproc
     opencv_core
@@ -220,37 +197,6 @@ set_target_properties(fitra_test_geom_frames PROPERTIES
 )
 
 add_test(NAME test_geom_frames COMMAND fitra_test_geom_frames)
-
-add_executable(fitra_test_rigid_fit
-    test_rigid_fit.cpp
-)
-
-target_link_libraries(fitra_test_rigid_fit PRIVATE
-    fitra_lift
-    opencv_calib3d
-)
-
-set_target_properties(fitra_test_rigid_fit PROPERTIES
-    OUTPUT_NAME "test_rigid_fit"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
-)
-
-add_test(NAME test_rigid_fit COMMAND fitra_test_rigid_fit)
-
-add_executable(fitra_test_floor_grounding
-    test_floor_grounding.cpp
-)
-
-target_link_libraries(fitra_test_floor_grounding PRIVATE
-    fitra_lift
-)
-
-set_target_properties(fitra_test_floor_grounding PROPERTIES
-    OUTPUT_NAME "test_floor_grounding"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
-)
-
-add_test(NAME test_floor_grounding COMMAND fitra_test_floor_grounding)
 
 add_executable(fitra_test_triangulator
     test_triangulator.cpp
@@ -541,22 +487,6 @@ set_target_properties(fitra_test_tracker_extract PROPERTIES
 
 add_test(NAME test_tracker_extract COMMAND fitra_test_tracker_extract)
 
-# Arm/thigh roll gate-raise hysteresis (#2, roll extension snap).
-add_executable(fitra_test_tracker_extract_roll
-    test_tracker_extract_roll.cpp
-)
-
-target_link_libraries(fitra_test_tracker_extract_roll PRIVATE
-    fitra_slimevr
-)
-
-set_target_properties(fitra_test_tracker_extract_roll PROPERTIES
-    OUTPUT_NAME "test_tracker_extract_roll"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
-)
-
-add_test(NAME test_tracker_extract_roll COMMAND fitra_test_tracker_extract_roll)
-
 # VMT OSC 1.0 wire-format byte-level golden test, including
 # the `/VMT/Room/Driver` packet shape.
 add_executable(fitra_test_vmt_osc_writer
@@ -690,22 +620,6 @@ set_target_properties(fitra_test_continuous_aligner PROPERTIES
 
 add_test(NAME test_continuous_aligner COMMAND fitra_test_continuous_aligner)
 
-# Spatiotemporal filter core (M-C2): regime primitives in slimevr/st_filter.
-add_executable(fitra_test_st_filter
-    test_st_filter.cpp
-)
-
-target_link_libraries(fitra_test_st_filter PRIVATE
-    fitra_slimevr
-)
-
-set_target_properties(fitra_test_st_filter PROPERTIES
-    OUTPUT_NAME "test_st_filter"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
-)
-
-add_test(NAME test_st_filter COMMAND fitra_test_st_filter)
-
 # Position EMA in TrackerExtractor. Lives in fitra_slimevr because the
 # helper is part of tracker_extract.{hpp,cpp}.
 add_executable(fitra_test_tracker_extract_pos
@@ -722,22 +636,6 @@ set_target_properties(fitra_test_tracker_extract_pos PROPERTIES
 )
 
 add_test(NAME test_tracker_extract_pos COMMAND fitra_test_tracker_extract_pos)
-
-# TrackerExtractor event-driven producer cadence.
-add_executable(fitra_test_tracker_extractor
-    test_tracker_extractor.cpp
-)
-
-target_link_libraries(fitra_test_tracker_extractor PRIVATE
-    fitra_slimevr
-)
-
-set_target_properties(fitra_test_tracker_extractor PROPERTIES
-    OUTPUT_NAME "test_tracker_extractor"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
-)
-
-add_test(NAME test_tracker_extractor COMMAND fitra_test_tracker_extractor)
 
 # Kinematic-tree Kalman: root vs offset state, FK propagation, child
 # skipping when parent uninitialized, missing-run reset.

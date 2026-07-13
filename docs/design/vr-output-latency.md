@@ -17,7 +17,7 @@ E2E (photon → VR 出力) の支配項は、GPU フロントエンド (core-pip
 各 60Hz ホップは平均 +8.3ms / 最悪 +16.7ms を足し、2 ホップで **avg +16.7ms / worst ~33ms** —
 パイプライン本体 (11.7ms) を上回る最大の遅延源。
 
-e2e-latency M4 は hop1 を**イベント駆動** (`--vr-extract-event-driven`、当初 opt-in) にして固定 60Hz の
+e2e-latency M4 は hop1 を**イベント駆動** (`--vr-extract-event-driven`、opt-in) にして固定 60Hz の
 ホップ遅延を除いたが、**smoothing は dt 非依存の固定 alpha のまま**だった。これは罠で:
 
 - `apply_quat_smoothing` / `apply_pos_smoothing` の `base_alpha` は「1 フレームあたりの重み」。
@@ -81,11 +81,9 @@ frame-rate 非依存 smoothing が入った後の follow-up とする。
     pose-3d トラック領域。
   - **結論**: M1 (frame-rate 非依存 smoothing) は**過平滑バグの correctness 修正として有効・維持**
     (event-driven が高 fps で過平滑する潜在バグを解消)。ただし**レイテンシ目的の VR ペーシング変更
-    (レート上げ) は実測で無効と確定し見送り**。2026-07-07 には stale snapshot 再フィルタ防止という
-    freshness/correctness 目的で event-driven extractor を default-on 化した
-    ([pose-3d-tracker-freshness](pose-3d-tracker-freshness.md))。VR レイテンシを下げたいなら 3D 設定を nvjpeg
+    (既定化・レート上げ) は実測で無効と確定し見送り**。VR レイテンシを下げたいなら 3D 設定を nvjpeg
     全 GPU フロントエンドにするのが唯一効く手 (本コミットで `medium_3d.yaml` を nvjpeg に切替)。
-    fixed-rate との体感比較は `--no-vr-extract-event-driven` で可能。
+    judder の体感比較 (event-driven vs fixed) は被写体 + HMD 装着の主観評価として残す。
     - **設定方法**: per-machine config (`configs/*.yaml` は gitignored) の `cameras.pixel_format: nvjpeg`、
       または CLI `--pixel-format nvjpeg`。tracked な雛形 `configs/live_2cam_3d.yaml.example` に既定として
       記載済み (コピーして使う)。

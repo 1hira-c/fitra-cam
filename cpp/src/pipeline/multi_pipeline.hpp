@@ -23,10 +23,8 @@
 
 #include "camera/frame_source.hpp"
 #include "infer/rtmpose.hpp"
-#include "lift/floor_grounding.hpp"
 #include "lift/ik.hpp"
 #include "lift/kalman.hpp"
-#include "lift/rigid_fit.hpp"
 #include "lift/triangulator.hpp"
 #include "pipeline/pose_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
@@ -41,26 +39,6 @@ public:
         double sync_window_ms = 15.0;
         bool kalman_enabled = true;
         bool ik_enabled = true;
-        // Spatial pelvis rigid fit (spatial-filtering M-A). Only takes effect
-        // when a subject profile is present (its distances form the pelvis
-        // template) and the topology is Halpe26; otherwise a no-op.
-        bool rigid_pelvis = false;
-        // Spatiotemporal filter (spatiotemporal-filter M-C3). Reserved knob: the
-        // M-C3 seed weakened the chain Kalman ×100 here, but M-C4 falsified that
-        // (harmful at rest) and the factor is now 1 — this flag is currently a
-        // functional no-op on the 3D chain (kept as the wiring point for the
-        // M-C4-D motion/lag sweep). No effect on the tracker stage itself (that
-        // is gated by TrackerExtractorOptions::st_filter, product default ON
-        // since M-C5 via MainOptions::st_filter_3d).
-        bool st_filter = false;
-        // Floor-contact grounding (spatial-filtering M-D). When true the LAST 3D
-        // stage clamps below-floor foot sole points to the floor (Z=0) and snaps
-        // near-floor low-speed (stance) points onto it, fixing heel-sink /
-        // penetration. Halpe26 only (needs toe/heel). Default off = byte-identical.
-        bool floor_grounding = false;
-        double floor_z_m = 0.0;
-        double floor_stance_vel_mps = 0.15;
-        double floor_snap_band_m = 0.03;
         int bone_calib_frames = 150;
         double subject_height_m = 0.0;
         bool has_subject_profile = false;
@@ -150,17 +128,6 @@ private:
     ThreeDConfig         threed_;
     lift::SkeletonKalman kalman_;
     lift::IkSolver       ik_;
-    // Spatial pelvis rigid-fit template + gate, built once in the constructor
-    // from threed_.subject_profile. rigid_pelvis_active_ is true only when the
-    // flag is set, a profile is loaded, and the pelvis template is non-degenerate
-    // — otherwise the 3D path is byte-identical to the pre-M-A behavior.
-    lift::RigidTemplate  pelvis_template_{};
-    bool                 rigid_pelvis_active_ = false;
-    // Floor-contact grounding (M-D). opts built once from threed_; state holds
-    // the per-foot-point prev anchor for the stance-speed estimate. Only touched
-    // when threed_.floor_grounding is set.
-    lift::FloorGroundingOptions floor_opts_{};
-    lift::FloorGroundingState   floor_state_{};
     std::mutex           threed_mu_;
 
     // Tap callbacks. Loop reads these via a local snapshot to avoid holding

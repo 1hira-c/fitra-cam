@@ -25,15 +25,12 @@
 
 #include "pipeline/snapshot.hpp"
 #include "slimevr/slime_tracker_bus.hpp"
-#include "slimevr/st_filter.hpp"
 #include "slimevr/tracker_extract.hpp"
 
 namespace fitra::slimevr {
 
 struct TrackerExtractorOptions {
-    // Fixed mode publish cadence. In event mode this is the wait timeout used to
-    // check for source staleness while real tracker frames follow 3D bus updates.
-    double extract_rate_hz   = 60.0;
+    double extract_rate_hz   = 60.0;   // produce snapshots at this cadence
     float  quat_smooth       = 0.5f;   // apply_quat_smoothing base alpha
     // Position EMA base alpha (apply_pos_smoothing). Independent
     // from quat_smooth so the operator can dial pos and quat damping
@@ -47,9 +44,10 @@ struct TrackerExtractorOptions {
     // block on the Skeleton3DBus and react to each new triangulation result
     // (one smoothing step per real 3D frame). Removes the extractor's fixed-
     // cadence latency hop. A timeout fallback (extract_rate_hz period) still
-    // fires so stale trackers are cleared when the 3D bus goes quiet.
-    bool   event_driven      = true;
-    int    stale_clear_after_ms = 250;
+    // fires so stale trackers are cleared when the 3D bus goes quiet. Default
+    // off to preserve the validated fixed-rate behavior; opt in for minimum
+    // capture->send latency.
+    bool   event_driven      = false;
 
     // One Euro (speed-adaptive) smoothing. Default on: it kills at-rest jitter
     // a fixed-alpha EMA cannot, while staying lag-free in motion (see
@@ -59,22 +57,6 @@ struct TrackerExtractorOptions {
     // regression); set beta = 0 in the params for a fixed-cutoff (still
     // speed-independent) low-pass without leaving the One Euro path.
     bool          one_euro      = true;
-    // Spatiotemporal filter (M-C3, ship M-C5): regime-adaptive position +
-    // inferred-roll twist smoothing at the tracker stage. Priority st_filter >
-    // one_euro > fixed EMA — when true, the position path uses the
-    // distance×velocity regime (slimevr/st_filter) instead of One Euro / the
-    // fixed EMA, and the ARM inferred-roll twist is regime-driven (legs kept
-    // out per M-C4/M-C5); swing / rigid-roll pins are unchanged. Struct default
-    // off, but the PRODUCT default is ON via MainOptions::st_filter_3d (M-C5) —
-    // output_builder always overwrites this field. The chain Kalman is NOT
-    // weakened (M-C4: ×100 was harmful; weaken factor is 1).
-    // docs/design/pose-3d-spatiotemporal-filter.md.
-    bool          st_filter     = false;
-    // #2 roll gate-raise hysteresis for the ARM / THIGH inferred-roll bones: hold
-    // the last-confident roll while the limb straightens through the noisy
-    // near-degenerate band instead of following the amplified mid-band roll noise
-    // (the "extension roll snap"). swing / rigid-roll bones unchanged. Default off.
-    bool          roll_hysteresis = false;
     // Defaults mirror MainConfig's hardware-tuned values (M3); main.cpp always
     // overwrites these from the config/CLI, so they only matter for callers that
     // construct TrackerExtractorOptions directly. Position is per-axis (m/s);
@@ -161,15 +143,6 @@ private:
     // Hip cache + per-tracker initialization flags + frame dt for the
     // position smoother. See PosSmoothingContext docstring.
     PosSmoothingContext pos_ctx_{};
-
-    // Spatiotemporal filter (opts_.st_filter). Per-group config (code defaults,
-    // tuned in M-C4) + the regime position state (waist-relative held/last_raw)
-    // and the inferred-roll twist state (previous raw quat for v_roll). All
-    // reset by reset_smoothing() on idle resume, same as the One Euro / EMA
-    // history. Unused when st_filter is off.
-    StFilterConfig st_cfg_ = default_st_config();
-    StPosState     st_pos_state_{};
-    StTwistState   st_twist_state_{};
 
     // Per-tracker rolling stats state.
     //

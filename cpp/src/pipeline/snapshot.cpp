@@ -134,8 +134,6 @@ void Skeleton3DBus::update(const Skeleton3DSnapshot& s) {
     snapshot_ = s;
     snapshot_.stats.enabled = true;
     ++update_seq_;
-    snapshot_.update_seq = update_seq_;
-    snapshot_.updated_at = std::chrono::steady_clock::now();
     cv_.notify_all();  // wake an extractor parked in wait_for_update
 }
 

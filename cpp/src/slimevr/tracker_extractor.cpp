@@ -5,7 +5,6 @@
 #include <cmath>
 
 #include "lift/keypoint_format.hpp"
-#include "util/logging.hpp"
 
 namespace fitra::slimevr {
 
@@ -93,8 +92,6 @@ void TrackerExtractor::reset_smoothing() {
     quat_ctx_    = QuatSmoothingContext{};
     pos_ctx_     = PosSmoothingContext{};
     extract_ctx_ = ExtractContext{};
-    st_pos_state_   = StPosState{};
-    st_twist_state_ = StTwistState{};
 }
 
 void TrackerExtractor::run_loop() {
@@ -104,68 +101,33 @@ void TrackerExtractor::run_loop() {
     const float nominal_dt_s = static_cast<float>(period.count());
     const int   nominal_dt_ms = static_cast<int>(period.count() * 1000.0);
     const auto  timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(period_d);
-    const auto  stale_clear_after =
-        std::chrono::milliseconds(std::max(1, opts_.stale_clear_after_ms));
-    const auto  fresh_hz_reset_after = std::chrono::milliseconds(500);
 
-    const auto started_at = clk::now();
-    auto next = started_at + period_d;
-    auto last_tick = started_at;
-    auto source_quiet_since = started_at;
+    auto next = clk::now() + period_d;
+    auto last_tick = clk::now();
     std::uint64_t last_update_seq = 0;
-    std::uint64_t last_source_update_seq = 0;
-    std::uint64_t suppressed_wakeups = 0;
-    std::uint64_t refiltered_duplicates = 0;
-    std::uint64_t stale_clears = 0;
-    double fresh_hz_ema = 0.0;
-    bool have_publish_tick = false;
-    bool have_fresh_update = false;
-    bool stale_clear_published = false;
-    bool source_stale_active = false;
-    clk::time_point last_fresh_update{};
-    clk::time_point source_stale_since{};
     bool was_idle = false;
 
     while (!stop_.load(std::memory_order_relaxed)) {
-        // dt for smoothing/filter steps plus angular-velocity / freeze stats.
-        // Fixed-rate mode uses the nominal period; event-driven mode measures the
-        // real interval (which varies with the triangulation cadence) and clamps
-        // it so a post-idle gap doesn't blow up the stats.
+        // dt for angular-velocity / freeze stats. Fixed-rate mode uses the
+        // nominal period; event-driven mode measures the real interval (which
+        // varies with the triangulation cadence) and clamps it so a post-idle
+        // gap doesn't blow up the stats.
         float dt_s;
         int   dt_ms;
-        bool  force_clear = false;
-        bool  stale_clear_candidate = false;
-        clk::time_point tick_now{};
         if (opts_.event_driven) {
             // React to each new 3D frame; the timeout still ticks at
-            // extract_rate_hz so the source can be marked stale when 3D is quiet.
-            const bool fresh_update =
-                skel_bus_.wait_for_update(last_update_seq, stop_, timeout_ms);
+            // extract_rate_hz so stale trackers get cleared when 3D is quiet.
+            skel_bus_.wait_for_update(last_update_seq, stop_, timeout_ms);
             if (stop_.load(std::memory_order_relaxed)) break;
-            tick_now = clk::now();
-            if (!fresh_update) {
-                const bool stale_due =
-                    (tick_now - source_quiet_since >= stale_clear_after);
-                if (!stale_due || stale_clear_published) {
-                    ++suppressed_wakeups;
-                    continue;
-                }
-                stale_clear_candidate = true;
-            } else {
-                stale_clear_candidate = false;
-            }
-            double measured = have_publish_tick
-                                  ? std::chrono::duration<double>(tick_now - last_tick).count()
-                                  : nominal_dt_s;
-            last_tick = tick_now;
-            have_publish_tick = true;
+            auto now = clk::now();
+            double measured = std::chrono::duration<double>(now - last_tick).count();
+            last_tick = now;
             measured = std::min(0.5, std::max(1e-3, measured));
             dt_s  = static_cast<float>(measured);
             dt_ms = static_cast<int>(measured * 1000.0);
         } else {
             std::this_thread::sleep_until(next);
             next += period_d;
-            tick_now = clk::now();
             dt_s  = nominal_dt_s;
             dt_ms = nominal_dt_ms;
         }
@@ -185,79 +147,24 @@ void TrackerExtractor::run_loop() {
         was_idle = idle;
 
         auto snap = skel_bus_.snapshot();
-        if (opts_.event_driven) {
-            const bool source_changed =
-                snap.update_seq != 0 && snap.update_seq != last_source_update_seq;
-            if (source_changed) {
-                if (source_stale_active && !idle) {
-                    const auto stale_ms =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            tick_now - source_stale_since).count();
-                    FITRA_LOG_INFO("[slimevr] tracker source recovered after {} ms",
-                                   static_cast<long long>(stale_ms));
-                }
-                source_stale_active = false;
-                if (have_fresh_update) {
-                    const auto gap = tick_now - last_fresh_update;
-                    const double gap_s = std::chrono::duration<double>(gap).count();
-                    if (gap > fresh_hz_reset_after) {
-                        fresh_hz_ema = 0.0;
-                    } else if (gap_s > 1.0e-3) {
-                        const double hz = 1.0 / gap_s;
-                        fresh_hz_ema = fresh_hz_ema <= 0.0
-                                           ? hz
-                                           : (0.2 * hz + 0.8 * fresh_hz_ema);
-                    }
-                }
-                have_fresh_update = true;
-                last_fresh_update = tick_now;
-                last_source_update_seq = snap.update_seq;
-                last_update_seq = snap.update_seq;  // closes wait->snapshot race
-                source_quiet_since = tick_now;
-                stale_clear_published = false;
-            } else if (stale_clear_candidate) {
-                force_clear = true;
-                stale_clear_published = true;
-                ++stale_clears;
-                if (!source_stale_active) {
-                    source_stale_active = true;
-                    source_stale_since = tick_now;
-                    if (!idle) {
-                        const auto quiet_ms =
-                            std::chrono::duration_cast<std::chrono::milliseconds>(
-                                tick_now - source_quiet_since).count();
-                        FITRA_LOG_WARN("[slimevr] tracker source stale: no 3D updates for {} ms",
-                                       static_cast<long long>(quiet_ms));
-                    }
-                }
-            } else {
-                ++suppressed_wakeups;
-                continue;
-            }
-        } else if (snap.update_seq != 0) {
-            if (last_source_update_seq == snap.update_seq) {
-                ++refiltered_duplicates;
-            } else {
-                last_source_update_seq = snap.update_seq;
-                source_quiet_since = tick_now;
-            }
-        }
         const infer::Skeleton3D* sk =
-            (!force_clear && snap.stats.enabled) ? pick_skeleton(snap) : nullptr;
+            snap.stats.enabled ? pick_skeleton(snap) : nullptr;
         const bool halpe = fitra::lift::active_keypoint_format() ==
                            fitra::lift::KeypointFormat::Halpe26;
 
-        // Publish every processed source frame — even when the skeleton snapshot
-        // is empty / disabled / in the wrong KP format — so the bus does not
-        // retain stale `has_data=true` trackers from a previous successful
-        // frame. In event-driven mode, timeout-only loops are skipped; a single
-        // forced invalid publish is emitted only after the 3D bus stays quiet.
+        // Publish on EVERY tick — even when the skeleton snapshot is empty
+        // / disabled / in the wrong KP format — so the bus does not retain
+        // stale `has_data=true` trackers from a previous successful frame.
+        // Without this, /ws3d would keep rendering old AxesHelpers and
+        // NativePublisher would keep sending last-known rotations while
+        // the actual subject is out of view.
         //
         // The "no data" case is signalled by marking every tracker
         // valid=false: apply_quat_smoothing replaces each curr.quat with
         // its prev_quat (so smoothing continuity is preserved for when the
-        // subject reappears), and consumers can fade / hold / skip according to
-        // their existing degeneracy policy.
+        // subject reappears), the publisher skips them all (no rotations
+        // on the wire), and the WebUI fades the axes via the existing
+        // valid→opacity mapping.
         std::array<SlimeTracker, kTrackerCount> raw_trackers{};
         for (std::size_t i = 0; i < kTrackerCount; ++i) {
             raw_trackers[i].role = static_cast<TrackerRole>(i);
@@ -269,8 +176,7 @@ void TrackerExtractor::run_loop() {
         if (sk != nullptr && halpe) {
             raw_trackers = extract_trackers(*sk, &extract_ctx_, opts_.foot_pos_mode,
                                             opts_.chest_height_frac,
-                                            opts_.waist_height_frac,
-                                            opts_.roll_hysteresis);
+                                            opts_.waist_height_frac);
             // Halpe26 idx 19 = hip_center. This is the anatomical pelvis anchor
             // for the hip-relative position hold; the waist tracker is built
             // from the same joint (offset up the spine by waist_height_frac), so
@@ -297,29 +203,7 @@ void TrackerExtractor::run_loop() {
         // event-driven mode passes the measured interval so high-fps frames get
         // proportionally gentler per-step smoothing instead of over-damping.
         auto trackers = raw_trackers;
-        if (opts_.st_filter) {
-            // Spatiotemporal filter (priority st_filter > one_euro > EMA).
-            // Position = distance×velocity regime in the waist-relative frame;
-            // inferred-roll twist = regime-driven for the ARM group only
-            // (legs kept out per M-C4/M-C5 — see st_filter make_default_config).
-            // The twist override is computed from the RAW orientations (and the
-            // held prev_quat_) BEFORE apply_quat_smoothing mutates them; swing
-            // still rides the One Euro / fixed base so it is unchanged.
-            std::array<float, kTrackerCount> twist_override;
-            fill_st_twist_overrides(trackers, prev_quat_, st_twist_state_, st_cfg_,
-                                    dt_s, nominal_dt_s, twist_override);
-            if (opts_.one_euro) {
-                apply_quat_smoothing(trackers, prev_quat_, quat_ctx_,
-                                     opts_.quat_one_euro, dt_s, nominal_dt_s, &twist_override);
-            } else {
-                apply_quat_smoothing(trackers, prev_quat_, opts_.quat_smooth,
-                                     dt_s, nominal_dt_s, &twist_override);
-            }
-            const cv::Vec3f* waist_fallback =
-                pos_ctx_.hip_valid ? &pos_ctx_.current_hip_pos : nullptr;
-            apply_pos_st_filter(trackers, st_pos_state_, st_cfg_, dt_s, nominal_dt_s,
-                                waist_fallback);
-        } else if (opts_.one_euro) {
+        if (opts_.one_euro) {
             // Speed-adaptive: low cutoff (smooth) at rest, high cutoff
             // (responsive) in motion. quat_smooth/pos_smooth are ignored.
             apply_quat_smoothing(trackers, prev_quat_, quat_ctx_,
@@ -423,32 +307,7 @@ void TrackerExtractor::run_loop() {
         }
         have_last_emitted_ = true;
 
-        double source_age_ms = 0.0;
-        if (snap.updated_at.time_since_epoch().count() != 0) {
-            source_age_ms =
-                std::chrono::duration<double, std::milli>(tick_now - snap.updated_at).count();
-            source_age_ms = std::max(0.0, source_age_ms);
-        } else {
-            source_age_ms =
-                std::chrono::duration<double, std::milli>(tick_now - source_quiet_since).count();
-            source_age_ms = std::max(0.0, source_age_ms);
-        }
-        SlimeTrackerStreamStats stream_out{};
-        stream_out.mode = opts_.event_driven
-                              ? SlimeTrackerStreamMode::Event
-                              : SlimeTrackerStreamMode::Fixed;
-        stream_out.source_update_seq = snap.update_seq;
-        stream_out.source_pose_seq = snap.seq;
-        stream_out.source_age_ms = source_age_ms;
-        stream_out.filter_dt_ms = static_cast<double>(dt_s) * 1000.0;
-        stream_out.fresh_hz = opts_.event_driven ? fresh_hz_ema : snap.stats.tri_fps;
-        stream_out.suppressed_wakeups = suppressed_wakeups;
-        stream_out.refiltered_duplicates = refiltered_duplicates;
-        stream_out.stale_clears = stale_clears;
-        stream_out.source_stale = force_clear || source_age_ms >= static_cast<double>(
-            stale_clear_after.count());
-
-        tracker_bus_.publish(trackers, stats_out, stream_out);
+        tracker_bus_.publish(trackers, stats_out);
     }
 }
 

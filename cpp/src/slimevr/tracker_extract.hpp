@@ -122,18 +122,6 @@ struct FootAnchor {
 struct ExtractContext {
     // [0] = left foot, [1] = right foot.
     std::array<FootAnchor, 2> foot_anchors{};
-    // Per-inferred-roll-bone hysteresis latch for the roll gate-raise (#2, opt-in
-    // via extract_trackers' roll_hysteresis param). Indexed directly by the arm /
-    // thigh tracker out_idx (0/1 arms, 4/5 thighs; other slots unused/harmless).
-    // Reset to false by reset_smoothing()'s `ExtractContext{}`, same lifecycle as
-    // foot_anchors. See docs/design/pose-3d-spatiotemporal-filter.md (roll snap).
-    std::array<bool, kTrackerCount> roll_locked{};
-    // Consecutive extract calls in which the bone had NO roll measurement
-    // (missing endpoint joints or a missing up-hint keypoint). Short streaks
-    // hold the latch; once the streak exceeds kRollLatchDropTicks the latch is
-    // cleared so a limb that moved while unseen must re-acquire (sinθ ≥ acquire)
-    // before its roll is trusted again. Reset to 0 by any measured frame.
-    std::array<std::uint32_t, kTrackerCount> roll_invalid_ticks{};
 };
 
 // Extract 10 trackers from a Halpe26 3D skeleton. A missing forward hint
@@ -163,20 +151,12 @@ struct ExtractContext {
 // (chest = spine midpoint 0.5, waist = hip_center 0.0) to preserve golden
 // tests; the runtime product defaults (TrackerExtractorOptions) sit higher so
 // the trackers land nearer the sternum / belt line for VRChat FBT.
-// `roll_hysteresis` (opt-in, default off) raises the effective roll trust gate
-// for the ARM / THIGH inferred-roll bones via an acquire/release hysteresis on
-// sin θ(up, forward): roll is only followed once the limb is clearly bent
-// (acquire) and is HELD (frozen, tracked by swing + parent-yaw transport) once
-// it straightens past release — killing the noisy mid-band roll following near
-// the degenerate cone. Needs `ctx` non-null (per-bone latch). Off / null ctx is
-// byte-identical to the legacy path. See docs/design/pose-3d-spatiotemporal-filter.md.
 std::array<SlimeTracker, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel,
                  ExtractContext* ctx = nullptr,
                  FootPosMode foot_pos_mode = FootPosMode::Midpoint,
                  float chest_height_frac = 0.5f,
-                 float waist_height_frac = 0.0f,
-                 bool roll_hysteresis = false);
+                 float waist_height_frac = 0.0f);
 
 // ---- One Euro filter (speed-adaptive low-pass) ----------------------------
 //
@@ -242,19 +222,10 @@ struct QuatSmoothingContext {
 // behavior is unchanged. Invalid trackers keep prev unchanged (curr is replaced
 // by prev so the publisher can still see a stable quat). Updates `prev_quat` in
 // place with the smoothed values.
-// `twist_alpha_override` (optional): when non-null, entry [i] >= 0 replaces the
-// per-tracker TWIST weight (ta) for tracker i — the swing weight and everything
-// else are unchanged. Entry < 0 (or a null pointer) keeps the built-in ta
-// (alpha_rate·roll_confidence). Used by the spatiotemporal filter (M-C3) to
-// drive the inferred-roll twist by its regime — ARM inferred-roll only since
-// M-C4/M-C5 (legs kept out: no measured twist benefit; see
-// st_filter.cpp make_default_config); null (the default) is byte-identical to
-// the pre-M-C3 behavior.
 void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           float base_alpha,
-                          float dt_s = 0.0f, float nominal_dt_s = 0.0f,
-                          const std::array<float, kTrackerCount>* twist_alpha_override = nullptr);
+                          float dt_s = 0.0f, float nominal_dt_s = 0.0f);
 
 // One Euro overload: identical swing/twist + parent-yaw-transport machinery as
 // the fixed-alpha form, but the per-step base weight is the speed-adaptive
@@ -267,8 +238,7 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           QuatSmoothingContext& ctx,
                           const OneEuroParams& params,
-                          float dt_s, float nominal_dt_s,
-                          const std::array<float, kTrackerCount>* twist_alpha_override = nullptr);
+                          float dt_s, float nominal_dt_s);
 
 // Inter-frame state for the position smoothing path. Pass-by-ref so the
 // extractor can hold one of these per loop; default-constructed value is

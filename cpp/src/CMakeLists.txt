@@ -13,8 +13,6 @@ add_library(fitra_lift STATIC
     lift/charuco_board.cpp
     lift/kalman.cpp
     lift/ik.cpp
-    lift/rigid_fit.cpp
-    lift/floor_grounding.cpp
     lift/subject_profile.cpp
     lift/pose_recognizer.cpp
     lift/keypoint_format.cpp
@@ -159,7 +157,6 @@ add_library(fitra_slimevr STATIC
     slimevr/firmware_protocol.cpp
     slimevr/native_publisher.cpp
     slimevr/slime_tracker_bus.cpp
-    slimevr/st_filter.cpp
     slimevr/tracker_extract.cpp
     slimevr/tracker_extractor.cpp
 )
