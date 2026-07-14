@@ -56,6 +56,8 @@ private:
         double elapsed_since_prev_s = 0.0;
         cv::Vec2f anchor_xy{0.0f, 0.0f};
         cv::Vec3f last_correction{0.0f, 0.0f, 0.0f};
+        double exit_candidate_s = 0.0;
+        int exit_candidate_frames = 0;
         int missing_frames = 0;
     };
 

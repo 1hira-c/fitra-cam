@@ -562,6 +562,15 @@ three_d:
 void test_floor_contact_yaml_cli_emit_and_validate() {
     MainOptions defaults;
     check(defaults.floor_contact_stability, "floor contact defaults on");
+    check(std::abs(defaults.floor_contact_enter_height_m - 0.04) < 1e-9
+              && std::abs(defaults.floor_contact_exit_height_m - 0.08) < 1e-9,
+          "floor contact defaults leave a wider height hysteresis");
+    check(std::abs(defaults.floor_contact_enter_speed_mps - 0.35) < 1e-9
+              && std::abs(defaults.floor_contact_exit_speed_mps - 1.00) < 1e-9,
+          "floor contact defaults tolerate measured 3D speed jitter");
+    check(defaults.floor_contact_missing_grace_frames == 4
+              && std::abs(defaults.floor_contact_exit_grace_s - 0.05) < 1e-9,
+          "floor contact defaults debounce missing and transient exit evidence");
     check(std::abs(defaults.floor_contact_reset_gap_s - 0.50) < 1e-9,
           "floor contact reset gap supports low-rate input by default");
 
@@ -579,6 +588,7 @@ three_d:
   floor_contact_missing_grace_frames: 1
   floor_contact_reset_gap_s: 0.7
   floor_contact_release_tau_s: 0.08
+  floor_contact_exit_grace_s: 0.12
 )");
     MainOptions opts;
     load_main_config(p.string(), opts);
@@ -594,16 +604,20 @@ three_d:
           "floor reset gap loads");
     check(std::abs(opts.floor_contact_release_tau_s - 0.08) < 1e-9,
           "floor release tau loads");
+    check(std::abs(opts.floor_contact_exit_grace_s - 0.12) < 1e-9,
+          "floor exit grace loads");
 
     const auto floor = floor_contact_options(opts);
     check(std::abs(floor.reset_dt_s - 0.7) < 1e-9
-              && std::abs(floor.release_tau_s - 0.08) < 1e-9,
+              && std::abs(floor.release_tau_s - 0.08) < 1e-9
+              && std::abs(floor.exit_grace_s - 0.12) < 1e-9,
           "flat config maps once into typed floor options");
 
     std::vector<std::string> argv_buf{
         "--floor-contact-stability", "--floor-z-m", "0.2",
         "--floor-contact-reset-gap-s", "0.8",
         "--floor-contact-release-tau-s", "0.06",
+        "--floor-contact-exit-grace-s", "0.09",
         "--no-floor-contact-stability"};
     auto argv = make_argv(argv_buf);
     apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
@@ -611,6 +625,8 @@ three_d:
     check(std::abs(opts.floor_z_m - 0.2) < 1e-9, "floor-z CLI overrides YAML");
     check(std::abs(opts.floor_contact_reset_gap_s - 0.8) < 1e-9,
           "floor reset gap CLI overrides YAML");
+    check(std::abs(opts.floor_contact_exit_grace_s - 0.09) < 1e-9,
+          "floor exit grace CLI overrides YAML");
 
     opts.cam_paths[0] = "/tmp/a";
     opts.det_engine = "/tmp/y";
@@ -626,6 +642,17 @@ three_d:
     check(threw, "invalid floor contact hysteresis must throw");
 
     opts.floor_contact_exit_height_m = 0.07;
+    opts.floor_contact_exit_grace_s = -0.01;
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), ">= 0", "floor exit grace validation msg");
+    }
+    check(threw, "negative floor exit grace must throw");
+
+    opts.floor_contact_exit_grace_s = 0.05;
     opts.floor_z_m = std::nan("");
     threw = false;
     try {
@@ -1236,6 +1263,7 @@ void test_emit_load_round_trip() {
     o.floor_contact_missing_grace_frames = 1;
     o.floor_contact_reset_gap_s = 0.7;
     o.floor_contact_release_tau_s = 0.08;
+    o.floor_contact_exit_grace_s = 0.11;
     o.vr_extract_event_driven = true; o.vr_one_euro = false;
     o.vr_pos_mincutoff = 2.0; o.vr_pos_beta = 6.0; o.vr_quat_beta = 2.5;
     o.subjects_dir = "calibrations/subjects"; o.subject_id = "alice";
@@ -1342,6 +1370,8 @@ void test_emit_load_round_trip() {
          "floor_contact_reset_gap_s");
     eq_f(o.floor_contact_release_tau_s, r.floor_contact_release_tau_s,
          "floor_contact_release_tau_s");
+    eq_f(o.floor_contact_exit_grace_s, r.floor_contact_exit_grace_s,
+         "floor_contact_exit_grace_s");
     eq_b(o.vr_extract_event_driven, r.vr_extract_event_driven, "vr_extract_event_driven");
     eq_b(o.vr_one_euro, r.vr_one_euro, "vr_one_euro");
     eq_f(o.vr_pos_mincutoff, r.vr_pos_mincutoff, "vr_pos_mincutoff");

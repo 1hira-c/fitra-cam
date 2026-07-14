@@ -141,6 +141,7 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
         "floor_contact_xy_tau_s", "floor_contact_max_xy_correction_m",
         "floor_contact_max_z_correction_m", "floor_contact_missing_grace_frames",
         "floor_contact_reset_gap_s", "floor_contact_release_tau_s",
+        "floor_contact_exit_grace_s",
         "vr_extract_event_driven",
         "vr_one_euro", "vr_pos_mincutoff", "vr_pos_beta", "vr_pos_dcutoff",
         "vr_quat_mincutoff", "vr_quat_beta", "vr_quat_dcutoff",
@@ -219,6 +220,11 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
         out.floor_contact_release_tau_s = parse_scalar<double>(
             section["floor_contact_release_tau_s"],
             "three_d.floor_contact_release_tau_s");
+    }
+    if (section["floor_contact_exit_grace_s"]) {
+        out.floor_contact_exit_grace_s = parse_scalar<double>(
+            section["floor_contact_exit_grace_s"],
+            "three_d.floor_contact_exit_grace_s");
     }
     if (section["vr_extract_event_driven"]) {
         out.vr_extract_event_driven = parse_scalar<bool>(
@@ -626,6 +632,10 @@ std::string emit_main_config(const MainOptions& o) {
         e << YAML::Key << "floor_contact_release_tau_s"
           << YAML::Value << o.floor_contact_release_tau_s;
     }
+    if (o.floor_contact_exit_grace_s != d.floor_contact_exit_grace_s) {
+        e << YAML::Key << "floor_contact_exit_grace_s"
+          << YAML::Value << o.floor_contact_exit_grace_s;
+    }
     if (o.vr_extract_event_driven != d.vr_extract_event_driven) e << YAML::Key << "vr_extract_event_driven" << YAML::Value << o.vr_extract_event_driven;
     if (o.vr_one_euro       != d.vr_one_euro)       e << YAML::Key << "vr_one_euro"       << YAML::Value << o.vr_one_euro;
     if (o.vr_pos_mincutoff  != d.vr_pos_mincutoff)  e << YAML::Key << "vr_pos_mincutoff"  << YAML::Value << o.vr_pos_mincutoff;
@@ -874,6 +884,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--floor-z-m")                   { out.floor_z_m = std::stod(need(i, "--floor-z-m")); }
         else if (a == "--floor-contact-reset-gap-s")   { out.floor_contact_reset_gap_s = std::stod(need(i, "--floor-contact-reset-gap-s")); }
         else if (a == "--floor-contact-release-tau-s") { out.floor_contact_release_tau_s = std::stod(need(i, "--floor-contact-release-tau-s")); }
+        else if (a == "--floor-contact-exit-grace-s")  { out.floor_contact_exit_grace_s = std::stod(need(i, "--floor-contact-exit-grace-s")); }
         else if (a == "--vr-extract-event-driven") { out.vr_extract_event_driven = true; }
         else if (a == "--foot-tracker-pos")  { out.vr_foot_pos_mode = need(i, "--foot-tracker-pos"); }
         else if (a == "--chest-height-frac") { out.vr_chest_height_frac = std::stod(need(i, "--chest-height-frac")); }
@@ -1128,6 +1139,7 @@ lift::FloorContactOptions floor_contact_options(const MainOptions& opts) {
     out.missing_grace_frames = opts.floor_contact_missing_grace_frames;
     out.reset_dt_s = opts.floor_contact_reset_gap_s;
     out.release_tau_s = opts.floor_contact_release_tau_s;
+    out.exit_grace_s = opts.floor_contact_exit_grace_s;
     return out;
 }
 

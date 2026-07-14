@@ -71,13 +71,14 @@ MultiCameraDriver::MultiCameraDriver(
     }
     if (threed_.triangulator && threed_.bus) {
         FITRA_LOG_INFO(
-            "3D floor-contact stability {} (floor_z={}m enter={}m/{}mps exit={}m/{}mps)",
+            "3D floor-contact stability {} (floor_z={}m enter={}m/{}mps exit={}m/{}mps grace={}s)",
             threed_.floor_contact_stability ? "ENABLED" : "disabled",
             threed_.floor_contact.floor_z_m,
             threed_.floor_contact.enter_height_m,
             threed_.floor_contact.enter_speed_mps,
             threed_.floor_contact.exit_height_m,
-            threed_.floor_contact.exit_speed_mps);
+            threed_.floor_contact.exit_speed_mps,
+            threed_.floor_contact.exit_grace_s);
     }
     for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
         latest_snapshots_[i].id = static_cast<int>(i);

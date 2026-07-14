@@ -3,7 +3,7 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-07-14)
+## 現状 (2026-07-15)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
@@ -80,7 +80,8 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
 - **床接地安定化は公開直前の有界足部平行移動**: Halpe26 の左右 sole から接地を独立判定し、
   接地中だけ ankle + toe/heel を同じ XYZ だけ移動する。Kalman / IK / calibration tap へ
   フィードバックしない。孤立した床下 sole は invalid 化し、深い貫通も Z 8cm まで fail-safe 補正、
-  離地時は補正を連続減衰する。VR FootAnchor は補正前の脚形状で更新する。既定 ON だが
+  高さ・速度・XYの離地候補は2回以上かつ50ms継続時だけ解除し、低fpsでも単発の3D跳ねを吸収する。離地時は補正を
+  連続減衰する。VR FootAnchor は補正前の脚形状で更新する。既定 ON だが
   `--no-floor-contact-stability` を常設し、`/stats3d` の fresh/evidence と WebUI 接地リングで確認できる。
   → [design/pose-3d-floor-contact-stability.md](../design/pose-3d-floor-contact-stability.md)
 - **subject profile schema は厳格分離**: `fitra_subject_profile_v1` (COCO17) と `v2` (Halpe26) は
@@ -97,6 +98,17 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-07-15 — 実機フィードバックに基づく接地判定の遊び拡大
+
+実機で静止接地中にも判定が外れやすかったため、接地/離地の高さを4/8cm、速度を0.35/1.00m/s、
+XY許容を4cmへ拡大し、sole欠測猶予を4フレームへ延長。高さ・速度・XYの離地候補は2回以上かつ50ms継続した
+場合だけ解除し、候補中は外れ値から新しい補正を作らず直前の有界補正を保持する。床下方向の
+Z補正要求が8cmを超えた場合だけ安全上即時解除し、候補中もZは床貫通防止範囲へ制約する。
+YAML/CLI/offline dump、単発跳ねと
+継続離地の回帰テスト、設計文書を同時更新。同じ240フレーム録画で静止 pooled ankle XY RMS は
+OFF 3.390→ON 1.903mm（43.9%低下）、sole床下率0%。歩行の接地率は L/R 47.1% / 48.8%へ増え、
+状態遷移8/6回とsole床下率0%を維持した。
 
 ### 2026-07-14 — 床接地安定化のレビュー指摘対応（外れ値・離地・VR・指標）
 

@@ -107,7 +107,7 @@ void test_planted_xy_jitter_is_attenuated() {
     check(std::abs(s.joints[kLAnkle].x) < kRawJitter * 0.2f,
           "planted ankle XY jitter is attenuated by at least 80 percent");
     check(std::hypot(r.feet[0].correction_m[0], r.feet[0].correction_m[1])
-              <= 0.03f + kEps,
+              <= 0.04f + kEps,
           "XY correction stays within the configured safety bound");
 }
 
@@ -124,7 +124,10 @@ void test_stateless_penetration_clamp() {
 
 void test_release_conditions() {
     {
-        FloorContactStabilizer st;
+        FloorContactOptions opts;
+        opts.exit_grace_s = 0.0;
+        opts.exit_height_m = 0.06;
+        FloorContactStabilizer st{opts};
         enter_left_contact(st);
         auto high = skeleton(0.0f, 0.07f);
         auto r = st.update(high, kDt);
@@ -136,7 +139,9 @@ void test_release_conditions() {
               "release removes the correction gradually, not in one frame");
     }
     {
-        FloorContactStabilizer st;
+        FloorContactOptions opts;
+        opts.exit_grace_s = 0.0;
+        FloorContactStabilizer st{opts};
         enter_left_contact(st);
         auto drift = skeleton(0.01f);
         auto planted = st.update(drift, kDt);
@@ -152,7 +157,9 @@ void test_release_conditions() {
               "release frame avoids an XY snap to the raw ankle");
     }
     {
-        FloorContactStabilizer st;
+        FloorContactOptions opts;
+        opts.exit_grace_s = 0.0;
+        FloorContactStabilizer st{opts};
         enter_left_contact(st);
         auto fast_low = skeleton(0.05f, 0.005f);
         auto r = st.update(fast_low, kDt);
@@ -161,7 +168,9 @@ void test_release_conditions() {
               "release decay cannot pull a sole through the floor");
     }
     {
-        FloorContactStabilizer st;
+        FloorContactOptions opts;
+        opts.exit_grace_s = 0.0;
+        FloorContactStabilizer st{opts};
         enter_left_contact(st);
         auto outlier = skeleton(0.0f, -0.09f);
         auto r = st.update(outlier, kDt);
@@ -171,6 +180,71 @@ void test_release_conditions() {
         close(outlier.joints[kLBigToe].z, -0.01f,
               "oversized penetration no longer fails open");
     }
+}
+
+void test_transient_exit_signal_keeps_contact_latched() {
+    FloorContactStabilizer st;
+    enter_left_contact(st);
+
+    auto drift = skeleton(0.01f);
+    auto planted = st.update(drift, kDt);
+    check(planted.feet[0].contact,
+          "small planted drift remains in contact");
+    const cv::Vec3f prior_correction = planted.feet[0].correction_m;
+
+    auto spike = skeleton(0.06f, -0.02f);
+    auto first = st.update(spike, kDt);
+    check(first.feet[0].contact,
+          "one-frame speed/XY spike starts grace without unlatching");
+    close(first.feet[0].correction_m[0], prior_correction[0],
+          "exit grace holds the last bounded X correction");
+    close(first.feet[0].correction_m[1], prior_correction[1],
+          "exit grace holds the last bounded Y correction");
+    close(spike.joints[kLBigToe].z, 0.0f,
+          "exit grace still prevents floor penetration");
+
+    auto recovered = skeleton(0.01f);
+    auto second = st.update(recovered, kDt);
+    check(second.feet[0].contact,
+          "return edge of a one-frame spike also remains latched");
+
+    auto stable = skeleton(0.01f);
+    auto third = st.update(stable, kDt);
+    check(third.feet[0].contact,
+          "stable evidence clears the pending exit signal");
+}
+
+void test_persistent_exit_signal_releases_after_grace() {
+    FloorContactStabilizer st;
+    enter_left_contact(st);
+
+    for (int frame = 1; frame <= 2; ++frame) {
+        auto moving = skeleton(0.06f * static_cast<float>(frame));
+        auto report = st.update(moving, kDt);
+        check(report.feet[0].contact,
+              "exit signal frame " + std::to_string(frame)
+                  + " remains inside grace");
+    }
+
+    auto moving = skeleton(0.18f);
+    auto released = st.update(moving, kDt);
+    check(!released.feet[0].contact,
+          "persistent exit signal releases at the configured grace time");
+}
+
+void test_low_rate_single_exit_sample_keeps_contact_latched() {
+    FloorContactStabilizer st;
+    enter_left_contact(st);
+
+    auto spike = skeleton(0.0f, 0.09f);
+    auto first = st.update(spike, 0.12);
+    check(first.feet[0].contact,
+          "one high support sample at 8 fps remains inside grace");
+
+    auto moving = skeleton(0.0f, 0.09f);
+    auto second = st.update(moving, 0.12);
+    check(!second.feet[0].contact,
+          "a second low-rate high support sample confirms release");
 }
 
 void test_isolated_low_sole_outlier_is_rejected() {
@@ -215,7 +289,7 @@ void test_missing_grace_then_release() {
     FloorContactStabilizer st;
     enter_left_contact(st);
 
-    for (int frame = 1; frame <= 2; ++frame) {
+    for (int frame = 1; frame <= 4; ++frame) {
         auto s = skeleton();
         s.joints[kLSmallToe].valid = false;
         s.joints[kLHeel].valid = false;  // only one sole point remains
@@ -230,12 +304,12 @@ void test_missing_grace_then_release() {
               "missing grace keeps the remaining sole point grounded");
     }
 
-    auto third = skeleton();
-    third.joints[kLSmallToe].valid = false;
-    third.joints[kLHeel].valid = false;
-    auto r3 = st.update(third, kDt);
-    check(!r3.feet[0].contact && r3.feet[0].corrected,
-          "third missing frame releases through the decay path");
+    auto after_grace = skeleton();
+    after_grace.joints[kLSmallToe].valid = false;
+    after_grace.joints[kLHeel].valid = false;
+    auto released = st.update(after_grace, kDt);
+    check(!released.feet[0].contact && released.feet[0].corrected,
+          "missing evidence releases after the enlarged default grace");
 }
 
 void test_full_dropout_reports_no_applied_correction() {
@@ -257,7 +331,7 @@ void test_full_dropout_clears_velocity_history() {
     FloorContactStabilizer st;
     enter_left_contact(st);
 
-    for (int frame = 0; frame < 3; ++frame) {
+    for (int frame = 0; frame < 5; ++frame) {
         auto missing = skeleton();
         missing.joints[kLAnkle].valid = false;
         missing.joints[kLBigToe].valid = false;
@@ -346,6 +420,9 @@ int main() {
         test_planted_xy_jitter_is_attenuated();
         test_stateless_penetration_clamp();
         test_release_conditions();
+        test_transient_exit_signal_keeps_contact_latched();
+        test_persistent_exit_signal_releases_after_grace();
+        test_low_rate_single_exit_sample_keeps_contact_latched();
         test_isolated_low_sole_outlier_is_rejected();
         test_release_correction_converges_to_zero();
         test_missing_grace_then_release();

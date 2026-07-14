@@ -121,16 +121,17 @@ void print_help() {
         "  --floor-contact-stability enable floor-contact stabilization (default on)\n"
         "  --no-floor-contact-stability disable it for A/B output\n"
         "  --floor-z-m F             floor height in fitra Z-up world metres (default 0)\n"
-        "  --floor-contact-enter-height-m F  contact enter band (default 0.03)\n"
-        "  --floor-contact-exit-height-m F   contact exit band (default 0.06)\n"
-        "  --floor-contact-enter-speed-mps F enter speed (default 0.25)\n"
-        "  --floor-contact-exit-speed-mps F  exit speed (default 0.80)\n"
+        "  --floor-contact-enter-height-m F  contact enter band (default 0.04)\n"
+        "  --floor-contact-exit-height-m F   contact exit band (default 0.08)\n"
+        "  --floor-contact-enter-speed-mps F enter speed (default 0.35)\n"
+        "  --floor-contact-exit-speed-mps F  exit speed (default 1.00)\n"
         "  --floor-contact-xy-tau-s F        planted XY time constant (default 0.25)\n"
-        "  --floor-contact-max-xy-m F        max XY correction (default 0.03)\n"
+        "  --floor-contact-max-xy-m F        max XY correction (default 0.04)\n"
         "  --floor-contact-max-z-m F         max Z correction (default 0.08)\n"
-        "  --floor-contact-missing-grace N   missing-frame grace (default 2)\n"
+        "  --floor-contact-missing-grace N   missing-frame grace (default 4)\n"
         "  --floor-contact-reset-gap-s F     discontinuity reset gap (default 0.50)\n"
         "  --floor-contact-release-tau-s F   release decay time constant (default 0.05)\n"
+        "  --floor-contact-exit-grace-s F    persistent exit duration (default 0.05)\n"
         "  --keypoint-format FMT     pose topology: coco17 (default) or halpe26\n"
         "  --help                    show this help\n");
 }
@@ -220,6 +221,10 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--floor-contact-release-tau-s") {
             args.floor_contact_opts.release_tau_s =
                 std::stod(need("--floor-contact-release-tau-s"));
+        }
+        else if (a == "--floor-contact-exit-grace-s") {
+            args.floor_contact_opts.exit_grace_s =
+                std::stod(need("--floor-contact-exit-grace-s"));
         }
         else if (a == "--keypoint-format") { args.keypoint_format_str = need("--keypoint-format"); }
         else {

@@ -87,6 +87,8 @@ FloorContactReport FloorContactStabilizer::update(infer::Skeleton3D& skel,
         auto begin_release = [&]() {
             st.contact = false;
             st.missing_frames = 0;
+            st.exit_candidate_s = 0.0;
+            st.exit_candidate_frames = 0;
             st.release_active = nonzero(st.last_correction);
         };
         auto seed_prev = [&](const cv::Vec3f& raw_ankle) {
@@ -156,6 +158,8 @@ FloorContactReport FloorContactStabilizer::update(infer::Skeleton3D& skel,
         if (!evidence_valid) {
             if (st.contact && st.missing_frames < opts_.missing_grace_frames) {
                 ++st.missing_frames;
+                st.exit_candidate_s = 0.0;
+                st.exit_candidate_frames = 0;
                 foot_report.contact = true;
                 foot_report.missing_grace = true;
                 cv::Vec3f raw_ankle;
@@ -174,6 +178,8 @@ FloorContactReport FloorContactStabilizer::update(infer::Skeleton3D& skel,
                 st.release_active = false;
                 st.last_correction = {0.0f, 0.0f, 0.0f};
                 st.missing_frames = 0;
+                st.exit_candidate_s = 0.0;
+                st.exit_candidate_frames = 0;
                 st.has_prev_ankle = false;
                 st.elapsed_since_prev_s = 0.0;
                 continue;
@@ -200,19 +206,37 @@ FloorContactReport FloorContactStabilizer::update(infer::Skeleton3D& skel,
         const float z_correction = floor_z - support_z;
         const bool z_within_limit =
             std::abs(z_correction) <= static_cast<float>(opts_.max_z_correction_m);
+        const bool deep_penetration =
+            z_correction > static_cast<float>(opts_.max_z_correction_m);
 
         bool released_this_frame = false;
+        bool exit_pending = false;
         if (st.contact) {
             const cv::Vec2f raw_xy{raw_ankle[0], raw_ankle[1]};
             const float anchor_error = static_cast<float>(cv::norm(st.anchor_xy - raw_xy));
-            const bool release =
+            const bool exit_signal =
                 support_height > static_cast<float>(opts_.exit_height_m)
                 || (speed_known && speed_mps > static_cast<float>(opts_.exit_speed_mps))
-                || anchor_error > static_cast<float>(opts_.max_xy_correction_m)
-                || !z_within_limit;
-            if (release) {
+                || anchor_error > static_cast<float>(opts_.max_xy_correction_m);
+            if (deep_penetration) {
                 begin_release();
                 released_this_frame = true;
+            } else if (exit_signal) {
+                st.exit_candidate_s += dt_s;
+                ++st.exit_candidate_frames;
+                const bool exit_confirmed = opts_.exit_grace_s == 0.0
+                    || (st.exit_candidate_frames >= 2
+                        && st.exit_candidate_s + 1.0e-9
+                            >= opts_.exit_grace_s);
+                if (exit_confirmed) {
+                    begin_release();
+                    released_this_frame = true;
+                } else {
+                    exit_pending = true;
+                }
+            } else {
+                st.exit_candidate_s = 0.0;
+                st.exit_candidate_frames = 0;
             }
         }
 
@@ -222,19 +246,39 @@ FloorContactReport FloorContactStabilizer::update(infer::Skeleton3D& skel,
             && z_within_limit) {
             st.contact = true;
             st.release_active = false;
+            st.exit_candidate_s = 0.0;
+            st.exit_candidate_frames = 0;
             st.anchor_xy = {raw_ankle[0], raw_ankle[1]};
             st.missing_frames = 0;
         }
 
         cv::Vec3f correction{0.0f, 0.0f, 0.0f};
         if (st.contact) {
-            const float alpha = static_cast<float>(1.0 - std::exp(
-                -dt_s / std::max(opts_.xy_anchor_tau_s, 1.0e-6)));
-            const cv::Vec2f raw_xy{raw_ankle[0], raw_ankle[1]};
-            st.anchor_xy += alpha * (raw_xy - st.anchor_xy);
-            const cv::Vec2f xy_correction = st.anchor_xy - raw_xy;
-            correction = {xy_correction[0], xy_correction[1], z_correction};
-            st.last_correction = correction;
+            if (exit_pending) {
+                // Keep the last bounded correction during a transient exit
+                // signal. Recomputing from a one-frame position/height spike
+                // would pin the outlier to the floor before it is confirmed.
+                correction = st.last_correction;
+                if (z_correction >= 0.0f) {
+                    correction[2] = std::max(
+                        correction[2],
+                        std::min(z_correction,
+                                 static_cast<float>(opts_.max_z_correction_m)));
+                } else {
+                    // Do not carry an upward correction onto a sole that is
+                    // already above the floor, or pull it through the floor.
+                    correction[2] = std::clamp(
+                        correction[2], z_correction, 0.0f);
+                }
+            } else {
+                const float alpha = static_cast<float>(1.0 - std::exp(
+                    -dt_s / std::max(opts_.xy_anchor_tau_s, 1.0e-6)));
+                const cv::Vec2f raw_xy{raw_ankle[0], raw_ankle[1]};
+                st.anchor_xy += alpha * (raw_xy - st.anchor_xy);
+                const cv::Vec2f xy_correction = st.anchor_xy - raw_xy;
+                correction = {xy_correction[0], xy_correction[1], z_correction};
+                st.last_correction = correction;
+            }
             st.missing_frames = 0;
             foot_report.contact = true;
         } else {

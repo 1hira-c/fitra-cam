@@ -101,16 +101,17 @@ struct MainOptions {
     // the live kill switch. COCO17 is an automatic no-op.
     bool   floor_contact_stability = true;
     double floor_z_m = 0.0;
-    double floor_contact_enter_height_m = 0.03;
-    double floor_contact_exit_height_m = 0.06;
-    double floor_contact_enter_speed_mps = 0.25;
-    double floor_contact_exit_speed_mps = 0.80;
+    double floor_contact_enter_height_m = 0.04;
+    double floor_contact_exit_height_m = 0.08;
+    double floor_contact_enter_speed_mps = 0.35;
+    double floor_contact_exit_speed_mps = 1.00;
     double floor_contact_xy_tau_s = 0.25;
-    double floor_contact_max_xy_correction_m = 0.03;
+    double floor_contact_max_xy_correction_m = 0.04;
     double floor_contact_max_z_correction_m = 0.08;
-    int    floor_contact_missing_grace_frames = 2;
+    int    floor_contact_missing_grace_frames = 4;
     double floor_contact_reset_gap_s = 0.50;
     double floor_contact_release_tau_s = 0.05;
+    double floor_contact_exit_grace_s = 0.05;
     // VR tracker extraction: react to each new 3D frame (event-driven) instead
     // of resampling at a fixed cadence. Cuts the extractor's contribution to
     // capture->VR-send latency. Feeds both SlimeVR and VMT. Default off.
