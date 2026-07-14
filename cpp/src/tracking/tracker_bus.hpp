@@ -1,10 +1,9 @@
 #pragma once
 //
-// Latest SlimeVR tracker snapshot bus.
+// Latest tracker snapshot bus.
 //
 // Produced by TrackerExtractor (extract_trackers + apply_quat_smoothing on the
 // Skeleton3DBus output, owning the prev_quat smoothing state). Consumed by:
-//   * NativePublisher (Firmware UDP serialize + send) when --slimevr-out is on
 //   * snapshot.cpp::Skeleton3DBus::make_bundle_json() when populating the
 //     `trackers` field of the WS bundle for the Three.js viewer
 //
@@ -17,9 +16,9 @@
 #include <mutex>
 #include <string>
 
-#include "slimevr/tracker_extract.hpp"
+#include "tracking/tracker_extract.hpp"
 
-namespace fitra::slimevr {
+namespace fitra::tracking {
 
 // Per-tracker rolling stats published alongside the smoothed
 // trackers themselves. Computed by TrackerExtractor over a fixed window
@@ -27,9 +26,9 @@ namespace fitra::slimevr {
 // 60 Hz). Exposed to the WebUI so the user can see which tracker is the
 // noise source when something jitters or snaps.
 //
-// Indices match SlimeTracker indices in `trackers[]` (= TrackerRole enum
+// Indices match TrackerPose indices in `trackers[]` (= TrackerRole enum
 // order = sensor_id).
-struct SlimeTrackerStats {
+struct TrackerStats {
     // Quaternion angular velocity in rad/s, percentiles over the window.
     // delta_rad = 2 * acos(|dot(prev_smoothed, curr_smoothed)|), then /dt.
     std::array<float, kTrackerCount> angular_velocity_rad_s_p50{};
@@ -60,26 +59,26 @@ struct SlimeTrackerStats {
     int window_frames = 0;
 };
 
-struct SlimeTrackerSnapshot {
+struct TrackerSnapshot {
     std::uint64_t                              seq = 0;
     std::chrono::system_clock::time_point      ts{};
-    std::array<SlimeTracker, kTrackerCount>    trackers{};
-    SlimeTrackerStats                          stats{};
+    std::array<TrackerPose, kTrackerCount>    trackers{};
+    TrackerStats                          stats{};
     bool                                       has_data = false;
 };
 
-class SlimeTrackerBus {
+class TrackerBus {
 public:
-    SlimeTrackerBus() = default;
+    TrackerBus() = default;
 
-    void publish(const std::array<SlimeTracker, kTrackerCount>& trackers,
-                 const SlimeTrackerStats&                       stats);
+    void publish(const std::array<TrackerPose, kTrackerCount>& trackers,
+                 const TrackerStats&                       stats);
 
-    SlimeTrackerSnapshot snapshot() const;
+    TrackerSnapshot snapshot() const;
 
 private:
     mutable std::mutex   mu_;
-    SlimeTrackerSnapshot snapshot_{};
+    TrackerSnapshot snapshot_{};
 };
 
 // Render the bus snapshot as a JSON fragment ready to inject into
@@ -94,11 +93,11 @@ private:
 //
 // Empty bus (no publish yet) returns `"trackers":[]` so the WebUI receives a
 // well-formed key even before TrackerExtractor has run once.
-std::string make_tracker_bundle_fragment(const SlimeTrackerBus& bus);
+std::string make_tracker_bundle_fragment(const TrackerBus& bus);
 
 // Human-readable role name (PascalCase, no spaces). Stable wire string for
 // the WebUI to switch on. Used by make_tracker_bundle_fragment but also
 // available to /stats3d builders.
 const char* tracker_role_name(TrackerRole role);
 
-}  // namespace fitra::slimevr
+}  // namespace fitra::tracking

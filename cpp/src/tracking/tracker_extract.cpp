@@ -1,4 +1,4 @@
-#include "slimevr/tracker_extract.hpp"
+#include "tracking/tracker_extract.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -6,7 +6,7 @@
 
 #include "lift/keypoint_format.hpp"
 
-namespace fitra::slimevr {
+namespace fitra::tracking {
 
 namespace {
 
@@ -47,7 +47,7 @@ constexpr std::size_t kLBigToe   = 20, kRBigToe   = 21;
 // roll. Below kRollSinLow the chosen up is treated as degenerate (confidence 0,
 // previous roll held). Above kRollSinHigh the measurement is fully trusted
 // (confidence 1). Between, smoothstep gradually opens the gate so the update
-// rate scales with measurement reliability. See docs/phase12-slimevr-bridge-relay.md.
+// rate scales with measurement reliability.
 //
 // しきい:
 //   * sin 0.15 ≈ 8.6° bend: degenerate gate。歩行 (>30°) / しゃがみ (>60°) /
@@ -226,26 +226,6 @@ cv::Vec3f pick_up_multistage(const cv::Vec3f& fwd,
 
 }  // namespace
 
-TrackerPosition position_for(TrackerRole role) {
-    switch (role) {
-        case TrackerRole::LeftUpperArm:  return TrackerPosition::LeftUpperArm;
-        case TrackerRole::RightUpperArm: return TrackerPosition::RightUpperArm;
-        case TrackerRole::Chest:         return TrackerPosition::Chest;
-        // The pelvis tracker (pos = hip_center) is anatomically a Hip, not a
-        // Waist. SlimeVR Server auto-assigns it correctly only as Hip in the
-        // 10-tracker firmware UDP configuration.
-        case TrackerRole::Waist:         return TrackerPosition::Hip;
-        case TrackerRole::LeftUpperLeg:  return TrackerPosition::LeftUpperLeg;
-        case TrackerRole::RightUpperLeg: return TrackerPosition::RightUpperLeg;
-        case TrackerRole::LeftLowerLeg:  return TrackerPosition::LeftLowerLeg;
-        case TrackerRole::RightLowerLeg: return TrackerPosition::RightLowerLeg;
-        case TrackerRole::LeftFoot:      return TrackerPosition::LeftFoot;
-        case TrackerRole::RightFoot:     return TrackerPosition::RightFoot;
-        case TrackerRole::Count:         break;
-    }
-    return TrackerPosition::None;
-}
-
 namespace detail {
 
 bool quat_from_forward_up(const cv::Vec3f& forward_raw,
@@ -331,7 +311,7 @@ cv::Vec3f fallback_up_for(const cv::Vec3f& fwd) {
     return cv::Vec3f{0, 1, 0};
 }
 
-// Try to build a SlimeTracker for one role from a position joint, a forward
+// Try to build a TrackerPose for one role from a position joint, a forward
 // hint and an up hint. Updates `out` in place.
 //   * forward degenerate (no bone direction)      → valid=false (publisher skips)
 //   * forward valid, up valid                      → valid=true, roll_confidence as passed
@@ -344,7 +324,7 @@ bool build_tracker(TrackerRole role,
                    const cv::Vec3f& world_pos,
                    const cv::Vec3f& forward,
                    const cv::Vec3f& up,
-                   SlimeTracker& out,
+                   TrackerPose& out,
                    float roll_confidence = 1.0f,
                    float swing_confidence = 1.0f) {
     out.role = role;
@@ -377,7 +357,7 @@ bool build_tracker(TrackerRole role,
 
 }  // namespace
 
-std::array<SlimeTracker, kTrackerCount>
+std::array<TrackerPose, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
                  FootPosMode foot_pos_mode,
                  float chest_height_frac, float waist_height_frac) {
@@ -385,7 +365,7 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
         throw std::runtime_error(
             "extract_trackers requires --keypoint-format=halpe26");
     }
-    std::array<SlimeTracker, kTrackerCount> out{};
+    std::array<TrackerPose, kTrackerCount> out{};
     for (std::size_t i = 0; i < kTrackerCount; ++i) {
         out[i].role = static_cast<TrackerRole>(i);
     }
@@ -530,7 +510,7 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
     // as a rigid extension of the shin: up follows the tibia (knee → ankle)
     // and fwd is ankle → toe. This forfeits foot roll (inversion/eversion)
     // and isolates pitch (toe/heel stance) into the fwd tilt, but yaw — the
-    // only quantity needed for in-place foot direction in SlimeVR IK — stays
+    // only quantity needed for in-place foot direction — stays
     // free of heel noise. A strong smoothing throttle (kFootSmoothingWeight)
     // further damps residual ankle/toe jitter via apply_quat_smoothing.
     //
@@ -658,7 +638,7 @@ namespace {
 // base weight for tracker i (the same value for every i in the fixed-alpha
 // path; per-tracker One Euro alpha in the adaptive path). Everything else is
 // identical regardless of how the alpha was produced.
-void apply_quat_smoothing_impl(std::array<SlimeTracker, kTrackerCount>& curr,
+void apply_quat_smoothing_impl(std::array<TrackerPose, kTrackerCount>& curr,
                                std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                                const std::array<float, kTrackerCount>& alpha,
                                float dt_s, float nominal_dt_s) {
@@ -776,7 +756,7 @@ void apply_quat_smoothing_impl(std::array<SlimeTracker, kTrackerCount>& curr,
 }
 }  // namespace
 
-void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+void apply_quat_smoothing(std::array<TrackerPose, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           float base_alpha, float dt_s, float nominal_dt_s) {
     // Fixed-alpha path: one rate-adjusted weight shared by every tracker.
@@ -786,7 +766,7 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
     apply_quat_smoothing_impl(curr, prev_quat, alpha, dt_s, nominal_dt_s);
 }
 
-void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+void apply_quat_smoothing(std::array<TrackerPose, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           QuatSmoothingContext& ctx,
                           const OneEuroParams& params,
@@ -819,7 +799,7 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
     apply_quat_smoothing_impl(curr, prev_quat, alpha, dt_s, nominal_dt_s);
 }
 
-void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+void apply_pos_smoothing(std::array<TrackerPose, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          PosSmoothingContext& ctx,
                          float base_alpha, float nominal_dt_s) {
@@ -906,7 +886,7 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
     ctx.prev_hip_valid = ctx.hip_valid;
 }
 
-void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+void apply_pos_smoothing(std::array<TrackerPose, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          PosSmoothingContext& ctx,
                          const OneEuroParams& params, float /*nominal_dt_s*/) {
@@ -988,7 +968,7 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
 
 // World-absolute hold form: no hip re-anchor, no velocity gate. Frame-rate
 // independent via dt_s/nominal_dt_s. Kept for tests and context-less callers.
-void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+void apply_pos_smoothing(std::array<TrackerPose, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          float base_alpha, float dt_s, float nominal_dt_s) {
     const float alpha = rate_adjust_alpha(base_alpha, dt_s, nominal_dt_s);
@@ -1006,4 +986,4 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
     }
 }
 
-}  // namespace fitra::slimevr
+}  // namespace fitra::tracking

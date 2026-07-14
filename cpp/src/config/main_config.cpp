@@ -233,39 +233,6 @@ void load_logging(const YAML::Node& section, MainOptions& out) {
     if (section["log_every_s"]) out.log_every_s = parse_scalar<double>(section["log_every_s"], "logging.log_every_s");
 }
 
-void load_slimevr(const YAML::Node& section, MainOptions& out) {
-    ensure_map(section, "slimevr");
-    static const std::set<std::string> allowed{
-        "slimevr_out", "host", "port", "rate_hz", "quat_smooth",
-        "preview_no_reset",
-    };
-    check_keys(section, allowed, "slimevr");
-    if (section["slimevr_out"]) {
-        out.slimevr_out = parse_scalar<bool>(
-            section["slimevr_out"], "slimevr.slimevr_out");
-    }
-    if (section["host"]) {
-        out.slimevr_host = parse_scalar<std::string>(
-            section["host"], "slimevr.host");
-    }
-    if (section["port"]) {
-        out.slimevr_port = parse_scalar<int>(
-            section["port"], "slimevr.port");
-    }
-    if (section["rate_hz"]) {
-        out.slimevr_rate_hz = parse_scalar<double>(
-            section["rate_hz"], "slimevr.rate_hz");
-    }
-    if (section["quat_smooth"]) {
-        out.slimevr_quat_smooth = parse_scalar<double>(
-            section["quat_smooth"], "slimevr.quat_smooth");
-    }
-    if (section["preview_no_reset"]) {
-        out.slimevr_preview_no_reset = parse_scalar<bool>(
-            section["preview_no_reset"], "slimevr.preview_no_reset");
-    }
-}
-
 void load_vmt(const YAML::Node& section, MainOptions& out) {
     ensure_map(section, "vmt");
     static const std::set<std::string> allowed{
@@ -417,9 +384,12 @@ void load_main_config(const std::string& path, MainOptions& out) {
 
     static const std::set<std::string> top_allowed{
         "schema", "cameras", "inference", "web", "idle", "three_d",
-        "subject", "subject_calib", "calibration", "logging", "slimevr", "vmt",
+        "subject", "subject_calib", "calibration", "logging", "vmt",
         "extrinsic_calib", "intrinsic_calib",
     };
+    if (root["slimevr"]) {
+        fail("SlimeVR output has been removed; delete the `slimevr` block and use `vmt` instead");
+    }
     for (auto it = root.begin(); it != root.end(); ++it) {
         const auto key = it->first.as<std::string>();
         if (top_allowed.count(key) == 0) {
@@ -439,7 +409,6 @@ void load_main_config(const std::string& path, MainOptions& out) {
     if (root["calibration"])   load_calibration (root["calibration"],   out);
     if (root["subject_calib"]) load_subject_calib(root["subject_calib"], out);
     if (root["logging"])     load_logging   (root["logging"],     out);
-    if (root["slimevr"])     load_slimevr   (root["slimevr"],     out);
     if (root["vmt"])         load_vmt       (root["vmt"],         out);
     if (root["extrinsic_calib"]) load_extrinsic_calib(root["extrinsic_calib"], out);
     if (root["intrinsic_calib"]) load_intrinsic_calib(root["intrinsic_calib"], out);
@@ -548,16 +517,6 @@ std::string emit_main_config(const MainOptions& o) {
     // logging --------------------------------------------------------------
     e << YAML::Key << "logging" << YAML::Value << YAML::BeginMap;
     if (o.log_every_s != d.log_every_s) e << YAML::Key << "log_every_s" << YAML::Value << o.log_every_s;
-    e << YAML::EndMap;
-
-    // slimevr (bare host/port/... keys) ------------------------------------
-    e << YAML::Key << "slimevr" << YAML::Value << YAML::BeginMap;
-    if (o.slimevr_out != d.slimevr_out)                 e << YAML::Key << "slimevr_out"      << YAML::Value << o.slimevr_out;
-    if (o.slimevr_host != d.slimevr_host)               e << YAML::Key << "host"             << YAML::Value << o.slimevr_host;
-    if (o.slimevr_port != d.slimevr_port)               e << YAML::Key << "port"             << YAML::Value << o.slimevr_port;
-    if (o.slimevr_rate_hz != d.slimevr_rate_hz)         e << YAML::Key << "rate_hz"          << YAML::Value << o.slimevr_rate_hz;
-    if (o.slimevr_quat_smooth != d.slimevr_quat_smooth) e << YAML::Key << "quat_smooth"      << YAML::Value << o.slimevr_quat_smooth;
-    if (o.slimevr_preview_no_reset != d.slimevr_preview_no_reset) e << YAML::Key << "preview_no_reset" << YAML::Value << o.slimevr_preview_no_reset;
     e << YAML::EndMap;
 
     // vmt (bare host/port/... keys + hmd receiver + continuous align) ------
@@ -765,14 +724,8 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--vr-quat-mincutoff") { out.vr_quat_mincutoff = std::stod(need(i, "--vr-quat-mincutoff")); }
         else if (a == "--vr-quat-beta")      { out.vr_quat_beta      = std::stod(need(i, "--vr-quat-beta")); }
         else if (a == "--vr-quat-dcutoff")   { out.vr_quat_dcutoff   = std::stod(need(i, "--vr-quat-dcutoff")); }
-        else if (a == "--slimevr-out")       { out.slimevr_out = true; }
-        else if (a == "--no-slimevr-out")    { out.slimevr_out = false; }
-        else if (a == "--slimevr-host")      { out.slimevr_host = need(i, "--slimevr-host"); }
-        else if (a == "--slimevr-port")      { out.slimevr_port = std::atoi(need(i, "--slimevr-port")); }
-        else if (a == "--slimevr-rate-hz")   { out.slimevr_rate_hz = std::stod(need(i, "--slimevr-rate-hz")); }
-        else if (a == "--slimevr-quat-smooth"){ out.slimevr_quat_smooth = std::stod(need(i, "--slimevr-quat-smooth")); }
-        else if (a == "--slimevr-preview-no-reset") {
-            out.slimevr_preview_no_reset = true;
+        else if (a.starts_with("--slimevr") || a.starts_with("--no-slimevr")) {
+            fail("SlimeVR output has been removed; remove " + std::string(a) + " and use --vmt-out instead");
         }
         else if (a == "--vmt-out")           { out.vmt_out = true; }
         else if (a == "--no-vmt-out")        { out.vmt_out = false; }
@@ -1100,30 +1053,6 @@ void validate_options(const MainOptions& opts) {
     if (!opts.enable_3d && (!opts.subject_id.empty() || !opts.subject_profile.empty())) {
         fail("--subject-id/--subject-profile require --enable-3d");
     }
-    if (opts.slimevr_out) {
-        if (!opts.enable_3d) {
-            fail("--slimevr-out requires --enable-3d");
-        }
-        if (opts.keypoint_format != "halpe26") {
-            fail("--slimevr-out requires --keypoint-format=halpe26");
-        }
-        if (opts.calibrate) {
-            fail("--slimevr-out cannot be combined with --calibrate");
-        }
-        if (mode != RunMode::Run) {
-            fail("--slimevr-out cannot be combined with a calibration mode "
-                 "(--extrinsic-calib/--floor-calib/--calib-intrinsic/--calibrate)");
-        }
-        if (opts.slimevr_port <= 0 || opts.slimevr_port > 65535) {
-            fail("--slimevr-port must be in [1, 65535]");
-        }
-        if (opts.slimevr_rate_hz <= 0.0 || opts.slimevr_rate_hz > 240.0) {
-            fail("--slimevr-rate-hz must be in (0, 240]");
-        }
-        if (opts.slimevr_quat_smooth < 0.0 || opts.slimevr_quat_smooth > 1.0) {
-            fail("--slimevr-quat-smooth must be in [0, 1]");
-        }
-    }
     if (opts.vmt_out) {
         if (!opts.enable_3d) {
             fail("--vmt-out requires --enable-3d");
@@ -1206,8 +1135,8 @@ void validate_options(const MainOptions& opts) {
     if (opts.vmt_align_hmd_forward_m < 0.0 || opts.vmt_align_hmd_forward_m > 0.5) {
         fail("--vmt-align-hmd-forward must be in [0, 0.5] metres (0 = off)");
     }
-    // One Euro params drive the TrackerExtractor whenever 3D is on (feeds both
-    // SlimeVR/VMT and the WebUI viz), so validate unconditionally. mincutoff and
+    // One Euro params drive the TrackerExtractor whenever 3D is on (feeds VMT
+    // and the WebUI viz), so validate unconditionally. mincutoff and
     // beta may be 0 (0 mincutoff with 0 beta freezes — allowed but degenerate);
     // dcutoff must be > 0 (it is a cutoff, not a coefficient).
     if (opts.vr_pos_mincutoff < 0.0 || opts.vr_quat_mincutoff < 0.0) {

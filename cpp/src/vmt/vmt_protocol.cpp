@@ -22,9 +22,9 @@ bool parse_vmt_preset(const std::string& s, VmtTrackerPreset& out) {
     return false;
 }
 
-std::array<bool, slimevr::kTrackerCount> role_mask_for(VmtTrackerPreset p) {
-    using R = slimevr::TrackerRole;
-    std::array<bool, slimevr::kTrackerCount> m{};   // all false
+std::array<bool, tracking::kTrackerCount> role_mask_for(VmtTrackerPreset p) {
+    using R = tracking::TrackerRole;
+    std::array<bool, tracking::kTrackerCount> m{};   // all false
     auto on = [&](R r) { m[static_cast<std::size_t>(r)] = true; };
     // Nested supersets (Full only adds the shins).
     on(R::Waist); on(R::LeftFoot); on(R::RightFoot);            // P3: hip + feet

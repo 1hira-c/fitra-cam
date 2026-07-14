@@ -94,12 +94,12 @@ struct MainOptions {
     bool   ik_3d     = true;
     // VR tracker extraction: react to each new 3D frame (event-driven) instead
     // of resampling at a fixed cadence. Cuts the extractor's contribution to
-    // capture->VR-send latency. Feeds both SlimeVR and VMT. Default off.
+    // capture->VR-send latency. Feeds VMT and the WebUI. Default off.
     bool   vr_extract_event_driven = false;
-    // One Euro (speed-adaptive) tracker smoothing. Feeds both SlimeVR and VMT
+    // One Euro (speed-adaptive) tracker smoothing. Feeds VMT and the WebUI
     // (single producer). Default on: kills at-rest jitter that a fixed-alpha
     // EMA cannot, staying lag-free in motion. When off, the fixed-alpha EMA
-    // (slimevr.quat_smooth / vmt.pos_smooth) is used. Position params are
+    // (fixed quaternion alpha / vmt.pos_smooth) is used. Position params are
     // per-axis (m/s); rotation params on geodesic angular speed (rad/s). beta=0
     // → fixed-cutoff low-pass without leaving the One Euro path.
     bool   vr_one_euro       = true;
@@ -142,17 +142,8 @@ struct MainOptions {
     // logging
     double log_every_s = 2.0;
 
-    // slimevr native Firmware UDP publisher
-    bool   slimevr_out = false;
-    std::string slimevr_host = "127.0.0.1";
-    int    slimevr_port = 6969;
-    double slimevr_rate_hz = 60.0;
-    double slimevr_quat_smooth = 0.5;
-    bool   slimevr_preview_no_reset = false;
-
     // VMT (Virtual Motion Tracker) publisher, SteamVR Driver direct.
-    // Independent of slimevr; both can be enabled simultaneously and share
-    // the same TrackerExtractor state (single-producer invariant).
+    // Shares the TrackerExtractor state with the WebUI (single producer).
     bool   vmt_out = false;
     // Empty = resolve the VMT host via zeroconf discovery (when vmt_discovery
     // is on). A non-empty host is an explicit manual destination and always
@@ -406,7 +397,7 @@ EarlyArgs scan_early_args(int argc, char** argv);
 
 // Verify the post-overlay options are runnable. Mirrors the historical
 // start-up checks in main.cpp (required cam0 + engines, --enable-3d gating,
-// subject-height range, slimevr gating, calibrate gating, etc.).
+// subject-height range, VMT gating, calibrate gating, etc.).
 //
 // Throws std::runtime_error with a user-facing message on the first failure.
 void validate_options(const MainOptions& opts);

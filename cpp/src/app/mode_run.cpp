@@ -78,7 +78,7 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
 
     // Start the TrackerExtractor before any consumer so the publishers and
     // the WebUI both see the same smoothed tracker stream.
-    std::unique_ptr<slimevr::TrackerExtractor> tracker_extractor;
+    std::unique_ptr<tracking::TrackerExtractor> tracker_extractor;
     if (threed.bus3d && threed.tracker_bus) {
         tracker_extractor =
             make_tracker_extractor(opts, *threed.bus3d, *threed.tracker_bus,
@@ -101,7 +101,7 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     struct OutputStop {
         RunOutputs* outputs;
         PoseRelay*  relay;
-        slimevr::TrackerExtractor* tex;
+        tracking::TrackerExtractor* tex;
         ~OutputStop() {
             if (outputs) outputs->stop();
             if (relay)   relay->stop();
@@ -112,7 +112,6 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     auto server = make_server(opts, config::RunMode::Run, bus, threed.bus3d.get(),
                               &flow);
     if (server) {
-        if (outputs.slime_pub) server->set_native_publisher(outputs.slime_pub.get());
         if (outputs.vmt_pub)   server->set_vmt_publisher(outputs.vmt_pub.get());
         if (relay.beacon)      server->set_discovery_beacon(relay.beacon.get());
         if (threed.tracker_bus) server->set_tracker_bus(threed.tracker_bus.get());
@@ -131,7 +130,7 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     // have been requested but the receiver socket failed to bind (relay.receiver
     // == nullptr). Use the real state, not the flag — otherwise we'd report VR
     // as observable (vr_observable=true) while never seeing a peer, and a
-    // VMT/SlimeVR-out rig with a dead receiver would standby after enter_after_s
+    // VMT rig with a dead receiver would standby after enter_after_s
     // and stop emitting pose. With hmd_live=false the evaluator's safe default
     // keeps VR "present" so we never idle on an unobservable axis.
     const bool hmd_live = relay.receiver != nullptr;
@@ -145,7 +144,7 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     idle_cfg.enter_after_s      = opts.idle_enter_after_s;
     idle_cfg.tick_hz            = opts.idle_tick_hz;
     idle_cfg.hmd_stale_ms       = opts.hmd_stale_ms;
-    idle_cfg.has_vr_output      = opts.vmt_out || opts.slimevr_out;
+    idle_cfg.has_vr_output      = opts.vmt_out;
     idle_cfg.hmd_listen_enabled = hmd_live;
     app::IdleEvaluator idle_eval{
         idle_state,

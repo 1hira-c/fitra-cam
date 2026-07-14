@@ -1,8 +1,8 @@
-#include "slimevr/slime_tracker_bus.hpp"
+#include "tracking/tracker_bus.hpp"
 
 #include <cstdio>
 
-namespace fitra::slimevr {
+namespace fitra::tracking {
 
 namespace {
 
@@ -14,8 +14,8 @@ void append_float(std::string& out, float v, int precision = 6) {
 
 }  // namespace
 
-void SlimeTrackerBus::publish(const std::array<SlimeTracker, kTrackerCount>& trackers,
-                              const SlimeTrackerStats&                       stats) {
+void TrackerBus::publish(const std::array<TrackerPose, kTrackerCount>& trackers,
+                              const TrackerStats&                       stats) {
     std::lock_guard<std::mutex> lk{mu_};
     snapshot_.trackers = trackers;
     snapshot_.stats    = stats;
@@ -24,7 +24,7 @@ void SlimeTrackerBus::publish(const std::array<SlimeTracker, kTrackerCount>& tra
     snapshot_.has_data = true;
 }
 
-SlimeTrackerSnapshot SlimeTrackerBus::snapshot() const {
+TrackerSnapshot TrackerBus::snapshot() const {
     std::lock_guard<std::mutex> lk{mu_};
     return snapshot_;
 }
@@ -46,7 +46,7 @@ const char* tracker_role_name(TrackerRole role) {
     return "Unknown";
 }
 
-std::string make_tracker_bundle_fragment(const SlimeTrackerBus& bus) {
+std::string make_tracker_bundle_fragment(const TrackerBus& bus) {
     auto snap = bus.snapshot();
     std::string out;
     out.reserve(1024);
@@ -96,4 +96,4 @@ std::string make_tracker_bundle_fragment(const SlimeTrackerBus& bus) {
     return out;
 }
 
-}  // namespace fitra::slimevr
+}  // namespace fitra::tracking

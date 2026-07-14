@@ -106,13 +106,13 @@ public:
     // Build the WebSocket JSON bundle. `extra_fields_json` (optional) is
     // inserted at the top level as a sibling of `stats` — caller supplies
     // a comma-less fragment of the form `"key":value[,"key":value]`.
-    // Used by CrowServer to embed SlimeVR tracker snapshots without
-    // creating a circular dep on the slimevr lib.
+    // Used by CrowServer to embed tracker snapshots without creating a
+    // circular dependency on the tracker library.
     std::string make_bundle_json(const std::string& extra_fields_json = "");
 
     // Lock-protected value-copy of the latest snapshot. Used by external
     // consumers that want the raw Skeleton3DSnapshot (Joint3D + stats) rather
-    // than the JSON wire form -- in particular the SlimeVR / VMT publishers,
+    // than the JSON wire form -- in particular the VMT publisher,
     // which need to run their own quaternion compose and coordinate transform
     // on the snapshot before serializing.
     Skeleton3DSnapshot snapshot() const;
@@ -121,7 +121,7 @@ public:
     // or sync-miss), `consumer_stop` is set, or `timeout` elapses. `last_seen`
     // is the caller's last-observed internal update counter; it is refreshed to
     // the current value on return. Returns true if a genuinely new update was
-    // observed (false on timeout/stop). Lets the SlimeVR/VMT extractor react to
+    // observed (false on timeout/stop). Lets the tracker extractor react to
     // each 3D frame instead of polling at a fixed cadence -- removing the
     // extractor's contribution to capture->send latency.
     bool wait_for_update(std::uint64_t& last_seen,

@@ -13,16 +13,16 @@
 #include "lift/triangulator.hpp"
 #include "pipeline/multi_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
-#include "slimevr/slime_tracker_bus.hpp"
+#include "tracking/tracker_bus.hpp"
 
 namespace fitra::app {
 
 struct ThreeDSet {
     std::shared_ptr<lift::Triangulator>        triangulator;
     std::unique_ptr<pipeline::Skeleton3DBus>   bus3d;
-    // SlimeVR tracker snapshot bus. Always alive when 3D is on so the WebUI
-    // orientation viz works without --slimevr-out.
-    std::unique_ptr<slimevr::SlimeTrackerBus>  tracker_bus;
+    // Tracker snapshot bus. Always alive when 3D is on so the WebUI
+    // orientation viz works without VMT output.
+    std::unique_ptr<tracking::TrackerBus>  tracker_bus;
     lift::SubjectProfile subject_profile;
     bool   has_subject_profile = false;
     // Resolved height: profile value wins over --subject-height-m.

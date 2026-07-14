@@ -50,7 +50,7 @@ bool sendto_buf(int fd, const std::uint8_t* data, std::size_t n,
 }  // namespace
 
 VmtPublisher::VmtPublisher(pipeline::Skeleton3DBus&  skel_bus,
-                           slimevr::SlimeTrackerBus& tracker_bus,
+                           tracking::TrackerBus& tracker_bus,
                            VmtPublisherOptions       opts)
     : skel_bus_{skel_bus},
       tracker_bus_{tracker_bus},
@@ -97,7 +97,7 @@ bool VmtPublisher::start() {
                                   : (opts_.host + ":" + std::to_string(opts_.port)),
                    opts_.send_rate_hz, enabled, vmt_preset_name(opts_.preset),
                    opts_.index_base,
-                   opts_.index_base + static_cast<int>(slimevr::kTrackerCount) - 1,
+                   opts_.index_base + static_cast<int>(tracking::kTrackerCount) - 1,
                    degen_mode_name(opts_.degeneracy_mode));
     return true;
 }
@@ -211,7 +211,7 @@ void VmtPublisher::send_loop() {
         writer.clear();
         writer.begin_bundle(OscWriter::ntp_timetag_now());
         const VmtAlignment alignment = this->alignment();
-        std::array<bool, slimevr::kTrackerCount> mask;
+        std::array<bool, tracking::kTrackerCount> mask;
         {
             std::lock_guard<std::mutex> lk{preset_mu_};
             mask = role_enabled_;
@@ -220,7 +220,7 @@ void VmtPublisher::send_loop() {
         std::uint64_t msgs_this_bundle = 0;
         std::uint64_t disabled_this_bundle = 0;
 
-        for (std::size_t i = 0; i < slimevr::kTrackerCount; ++i) {
+        for (std::size_t i = 0; i < tracking::kTrackerCount; ++i) {
             if (!mask[i]) continue;   // role excluded by the active preset
             const auto& t = tracker_snap.trackers[i];
             int  enable = 1;

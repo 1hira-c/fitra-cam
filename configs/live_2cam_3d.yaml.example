@@ -16,8 +16,8 @@
 #       --port 8000
 #
 # To run a previously calibrated subject's IK profile, fill in `subject.subject_id`.
-# To attach the SlimeVR Firmware UDP publisher, uncomment the slimevr block and
-# point `host` at your SlimeVR Server machine.
+# To publish trackers into SteamVR, configure the VMT block below. An empty
+# host uses zeroconf discovery; set host to pin the Windows VMT Manager.
 
 schema: fitra_main_config_v1
 
@@ -49,13 +49,6 @@ subject:
 
 web:
   port: 8000
-
-# slimevr:
-#   slimevr_out: true
-#   host: 192.168.1.100   # IP of your Windows SlimeVR Server
-#   port: 6969
-#   rate_hz: 60.0
-#   preview_no_reset: true # make SlimeVR GUI skeleton preview usable before reset
 
 # vmt:
 #   vmt_out: true

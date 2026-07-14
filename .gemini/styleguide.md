@@ -17,7 +17,7 @@
 - **完了の定義**: コード変更だけでは不十分。track doc（`docs/tracks/<track>.md`）changelog の日付入りエントリ、（非自明なら）design doc、（アーキ/検証に触れるなら）`docs/cpp-migration-plan.md` の更新が揃っているか。揃っていなければ指摘する。
 
 ### 2. モジュール横断影響
-- `cpp/src/` の各モジュール（`camera` / `infer` / `lift` / `slimevr` / `vmt` / `pipeline` / `web` / `config` / `util`）間の依存関係・契約破壊を見る。
+- `cpp/src/` の各モジュール（`camera` / `infer` / `lift` / `tracking` / `vmt` / `pipeline` / `web` / `config` / `util`）間の依存関係・契約破壊を見る。
 - 一方の変更が他モジュールの前提（データ形式、スレッド境界、所有権）を壊していないか。
 
 ### 3. 性能含意
@@ -28,7 +28,7 @@
 ### 4. 互換性・スキーマ
 - `web/dual_rtmpose/` の **JSON スキーマ互換**（`python/scripts/dual_rtmpose_web.py` の publisher が定義）を壊していないか。フロントは vanilla HTML/JS。
 - subject profile v1（COCO17）/ v2（Halpe26）はマイグレーションしない設計。
-- VR 出力の **固定 10 TrackerRole 順序**（SlimeVR `TrackerPosition` enum 準拠、自動割当なし）を変えていないか。
+- VR 出力の **固定 10 TrackerRole 順序**と VMT index の対応を変えていないか。
 
 ## 知っておくべき制約
 

@@ -4,7 +4,7 @@
 //
 // See docs/design/pose-3d-typed-coordinate-frames.md. This used to be hand-
 // written in three places (vmt_protocol::world_pos_to_vmt, the calib session's
-// kVmtWorldToFitra, and firmware_protocol's Slime variant). The wire helpers
+// kVmtWorldToFitra). The wire helpers
 // stay as-is (their tests cross-check them against this basis); SE(3)-layer code
 // composes the typed Transforms below so the conversion direction is checked.
 //

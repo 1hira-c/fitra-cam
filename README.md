@@ -2,7 +2,7 @@
 
 > **「妥協じゃない」フルボディカメラトラッキング** —
 > Jetson Orin Nano Super 上で複数 USB カメラから 2D 姿勢 → 多視点三角測量 → IK + Kalman で
-> 3D skeleton を止めずに回し、SlimeVR / SteamVR に full-body tracker として流す。
+> 3D skeleton を止めずに回し、SteamVR に full-body tracker として流す。
 > 速度 (per-camera TRT + cross-camera batched RTMPose + 全 GPU フロントエンド)、
 > 精度 (被験者ごとの骨長 IK lock)、立体性 (床原点 PnP) を全部譲らない。
 
@@ -23,11 +23,8 @@
 - **3D リフト**: `--enable-3d --calib <cam_params.yaml>` で多視点三角測量 → kinematic-tree 6D
   Kalman → 骨長 IK → `/ws3d` で配信。立位伸展・横移動でも足 tracker が世界座標に置き去りに
   ならない locomotion 安定化済み。
-- **VR 出力** (要 `--enable-3d --keypoint-format halpe26`、2 経路は同時 enable 可):
-  - **SlimeVR Firmware UDP** (`--slimevr-out`, port 6969) — 回転のみ。位置は SlimeVR 側 IK が
-    骨格 + HMD から再構築。10 tracker を named display。
-  - **VMT (Virtual Motion Tracker) → SteamVR 直結** (`--vmt-out`) — 位置 + 回転。SlimeVR Server を
-    飛ばし SteamVR Driver に直結。HMD pose との 2D Procrustes で yaw+xyz を自動 alignment。
+- **VR 出力** (要 `--enable-3d --keypoint-format halpe26`): **VMT (Virtual Motion Tracker) → SteamVR
+  直結** (`--vmt-out`) で位置 + 回転を送信。HMD pose との 2D Procrustes で yaw+xyz を自動 alignment。
 - **被験者キャリブ wizard**: `--calibrate --calib-subject-id <ID> --calib-subject-height-m <m>` で
   4 ポーズ自動キャプチャ → `calibrations/subjects/<ID>/latest_profile.yaml` を出力。
   Web UI: `web/subject_calibration/`。
@@ -50,14 +47,13 @@ truth は各トラック doc** ([`docs/tracks/README.md`](docs/tracks/README.md)
 |---|---|---|
 | [core-pipeline](docs/tracks/core-pipeline.md) | capture / TRT 推論 / Web / 性能 / keypoint topology / GPU フロントエンド | 安定 |
 | [pose-3d](docs/tracks/pose-3d.md) | 3D lift / IK / Kalman / roll 品質 / locomotion 安定化 / subject calibration | 継続改善 |
-| [vr-output](docs/tracks/vr-output.md) | SlimeVR Firmware UDP / VMT / SteamVR alignment / 出力レイテンシ | 最もアクティブ |
+| [vr-output](docs/tracks/vr-output.md) | VMT / SteamVR alignment / 出力レイテンシ | 最もアクティブ |
 
 未着手の構想 (backlog):
 
 - [`backlog-yolox-detector-upgrade.md`](docs/backlog-yolox-detector-upgrade.md) — 検出器の選択肢拡張 / INT8
 - [`backlog-pose-backend-abstraction.md`](docs/backlog-pose-backend-abstraction.md) — 推論バックエンド抽象化
 - [`backlog-main-yaml-config.md`](docs/backlog-main-yaml-config.md) — 残りの CLI を YAML config に寄せる
-- [`backlog-slimevr-body-proportions.md`](docs/backlog-slimevr-body-proportions.md) — 被験者プロファイル → SlimeVR body-config
 
 > ドキュメント構成: トラック doc = 現状 + 逆時系列 changelog、実装済み/進行中の設計は
 > [`docs/design/`](docs/design/)、過去 phase の詳細設計は [`docs/archive/`](docs/archive/) に凍結、
@@ -79,8 +75,8 @@ USB cam × N → V4L2 mmap (4 buf/cam) → FrameSource (decode + YOLOX, per-cam 
                                           ▼
                 TrackerExtractor (単一 producer, swing/twist smoothing)
               ┌───────────────┬───────────────┬──────────────────────┐
-              ▼               ▼               ▼                      ▼
-        Crow /ws (2D)   Crow /ws3d (3D)  SlimeVR Firmware UDP    VMT → SteamVR
+              ▼               ▼               ▼
+        Crow /ws (2D)   Crow /ws3d (3D)       VMT → SteamVR
 ```
 
 設計の肝:
@@ -89,7 +85,7 @@ USB cam × N → V4L2 mmap (4 buf/cam) → FrameSource (decode + YOLOX, per-cam 
   ないので `ICudaEngine` を `shared_ptr` 共有 + per-camera context。RTMPose は 3 カメラ分の bbox を
   `B≤3` の dynamic profile で 1 回 enqueue。
 - **latest-frame-wins capture**: SPSC queue size 1 で drop-old。フレーム取りこぼしより**鮮度**を優先。
-- **TrackerExtractor は tracker snapshot の単一 producer**: Firmware UDP / VMT / WebUI が同じ
+- **TrackerExtractor は tracker snapshot の単一 producer**: VMT / WebUI が同じ
   smoothing 履歴を共有。位置は hip 相対 hold、向きは swing/twist 分離で伸展肢の roll を保持。
 
 詳細は [`docs/cpp-migration-plan.md`](docs/cpp-migration-plan.md) と各トラック doc。
@@ -157,7 +153,6 @@ nlohmann_json, CLI11, readerwriterqueue, yaml-cpp) は `FetchContent` で取得 
 | 取り込み | `--width 640 --height 480 --fps 30`, `--pixel-format {mjpeg,yuyv,nvjpeg}`, `--n-buffers 4`, `--det-frequency 10` |
 | 推論 | `--keypoint-format {coco17,halpe26}`, `--multi-person`, `--det-score 0.5` |
 | 3D | `--enable-3d --calib <yaml>`, `--subject-id <ID>`, `--no-3d-kalman`, `--no-3d-ik`, `--sync-window-ms 15` |
-| SlimeVR | `--slimevr-out --slimevr-host <IP>` (要 halpe26) |
 | VMT/SteamVR | `--vmt-out --vmt-host <IP>`, `--vmt-degeneracy-mode {hold,disable,skip}` (要 halpe26) |
 | キャリブ wizard | `--calibrate --calib-subject-id <ID> --calib-subject-height-m <m>` |
 | Web | `--port 8000 --host 0.0.0.0`, `--no-web` (driver only) |
@@ -186,10 +181,6 @@ HMD pose 中継) は **VMT フォーク** (`vmt_driver.sln` / `vmt_manager.sln`)
 
 > `windows/vmt_hmd_pose_sender/` は独立 overlay app 時代の名残で、現在は `vmt_manager` に
 > 吸収済み (vr-output トラック 2026-05-27 参照)。wire format の記録としてのみ残置。
-
-SlimeVR Firmware UDP 経路は Windows 側の SlimeVR Server がそのまま受ける (10 tracker を named display)。
-
----
 
 ## Python 版を使う (フォールバック)
 
@@ -229,7 +220,7 @@ YOLOX・RTMPose 等) のライセンスと著作権表示は [`THIRD_PARTY_NOTIC
 ```
 fitra-cam/
 ├── cpp/                # C++ / TensorRT 実装 (主軸)
-│   ├── src/{camera,infer,pipeline,lift,slimevr,vmt,config,web,util}/
+│   ├── src/{camera,infer,pipeline,lift,tracking,vmt,config,web,util}/
 │   ├── tools/          # build_engines, dump_keypoints(_3d), pose_bench, det_bench,
 │   │                   #   gpu_preprocess_check, check_calibration, test_* (ctest)
 │   └── CMakeLists.txt

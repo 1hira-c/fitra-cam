@@ -37,7 +37,7 @@ ThreeDSet make_threed(const config::MainOptions& opts,
     t.triangulator = std::make_shared<lift::Triangulator>(calib, tri_opts);
     t.triangulator->require_camera_ids(expected_camera_ids(n_cams));
     t.bus3d = std::make_unique<pipeline::Skeleton3DBus>();
-    t.tracker_bus = std::make_unique<slimevr::SlimeTrackerBus>();
+    t.tracker_bus = std::make_unique<tracking::TrackerBus>();
     FITRA_LOG_INFO("3D lifting enabled ({} calibrated cameras, sync_window={}ms)",
                    t.triangulator->camera_count(), opts.sync_window_ms);
     if (t.subject_height_m > 0.0) {

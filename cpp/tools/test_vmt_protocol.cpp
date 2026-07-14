@@ -9,7 +9,7 @@
 #include <string>
 
 #include "vmt/vmt_protocol.hpp"
-#include "slimevr/tracker_extract.hpp"
+#include "tracking/tracker_extract.hpp"
 #include "geom/world_convention.hpp"
 
 namespace {
@@ -107,7 +107,7 @@ void test_quat_cardinals() {
 
 void test_index_mapping() {
     using fitra::vmt::vmt_index_for;
-    using fitra::slimevr::TrackerRole;
+    using fitra::tracking::TrackerRole;
     if (vmt_index_for(TrackerRole::LeftUpperArm)  != 0) throw std::runtime_error("LeftUpperArm != 0");
     if (vmt_index_for(TrackerRole::RightUpperArm) != 1) throw std::runtime_error("RightUpperArm != 1");
     if (vmt_index_for(TrackerRole::Chest)         != 2) throw std::runtime_error("Chest != 2");
@@ -118,19 +118,19 @@ void test_index_mapping() {
     if (vmt_index_for(TrackerRole::RightLowerLeg) != 7) throw std::runtime_error("RightLowerLeg != 7");
     if (vmt_index_for(TrackerRole::LeftFoot)      != 8) throw std::runtime_error("LeftFoot != 8");
     if (vmt_index_for(TrackerRole::RightFoot)     != 9) throw std::runtime_error("RightFoot != 9");
-    if (fitra::slimevr::kTrackerCount             != 10) throw std::runtime_error("kTrackerCount != 10");
+    if (fitra::tracking::kTrackerCount             != 10) throw std::runtime_error("kTrackerCount != 10");
 }
 
 void test_index_base_mapping() {
     using fitra::vmt::vmt_index_for;
-    using fitra::slimevr::TrackerRole;
+    using fitra::tracking::TrackerRole;
     if (vmt_index_for(TrackerRole::LeftUpperArm, 10)  != 10) throw std::runtime_error("LeftUpperArm base 10 != 10");
     if (vmt_index_for(TrackerRole::RightUpperArm, 10) != 11) throw std::runtime_error("RightUpperArm base 10 != 11");
     if (vmt_index_for(TrackerRole::Chest, 10)         != 12) throw std::runtime_error("Chest base 10 != 12");
     if (vmt_index_for(TrackerRole::RightFoot, 10)     != 19) throw std::runtime_error("RightFoot base 10 != 19");
 }
 
-int mask_count(const std::array<bool, fitra::slimevr::kTrackerCount>& m) {
+int mask_count(const std::array<bool, fitra::tracking::kTrackerCount>& m) {
     int n = 0;
     for (bool b : m) n += b ? 1 : 0;
     return n;
@@ -155,7 +155,7 @@ void test_preset_parse_roundtrip() {
 void test_preset_masks() {
     using fitra::vmt::VmtTrackerPreset;
     using fitra::vmt::role_mask_for;
-    using fitra::slimevr::TrackerRole;
+    using fitra::tracking::TrackerRole;
     auto idx = [](TrackerRole r) { return static_cast<std::size_t>(r); };
 
     auto p3   = role_mask_for(VmtTrackerPreset::P3);
@@ -187,7 +187,7 @@ void test_preset_masks() {
     }
 
     // Nesting: p3 ⊆ p6 ⊆ p8 ⊆ full.
-    for (std::size_t i = 0; i < fitra::slimevr::kTrackerCount; ++i) {
+    for (std::size_t i = 0; i < fitra::tracking::kTrackerCount; ++i) {
         if (p3[i] && !p6[i])   throw std::runtime_error("p3 not subset of p6");
         if (p6[i] && !p8[i])   throw std::runtime_error("p6 not subset of p8");
         if (p8[i] && !full[i]) throw std::runtime_error("p8 not subset of full");

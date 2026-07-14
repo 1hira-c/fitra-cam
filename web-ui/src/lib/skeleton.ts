@@ -36,8 +36,7 @@ export function kpCountFor(format: KpFormat): number {
   return KP_COUNT_BY_FORMAT[format] ?? 17;
 }
 
-// 10 SlimeVR trackers in role order (sensor_id 0..9) — matches the wire
-// ordering in the C++ TrackerRole enum.
+// 10 tracker roles in the C++ TrackerRole enum order.
 export const TRACKER_ROLES = [
   "LeftUpperArm", "RightUpperArm",
   "Chest", "Waist",

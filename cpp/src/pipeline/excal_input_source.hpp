@@ -11,7 +11,7 @@
 //     frames.jsonl with the frame↔pose pairing fixed at record time).
 // The interface stays free of camera/vmt types so fitra_pipeline can host the
 // replay implementation without depending on fitra_vmt (which would be
-// circular: fitra_vmt → fitra_slimevr → fitra_pipeline).
+// circular: fitra_vmt → fitra_tracking → fitra_pipeline).
 // See docs/design/pose-3d-calib-mode-separation.md.
 
 #include <cstddef>

@@ -1,7 +1,7 @@
 # AGENTS.md — Codex CLI 向け指示
 
 `fitra-cam` は Jetson Orin Nano Super 上で YOLOX 人物検出 + RTMPose 17/26 keypoint 2D pose を
-複数 USB カメラで動かし、3D lift / IK を経て VR トラッカー出力（SlimeVR Firmware UDP / VMT→SteamVR）
+複数 USB カメラで動かし、3D lift / IK を経て VMT→SteamVR の VR トラッカー出力
 する C++/TensorRT プロジェクト。Python (ONNX Runtime) 実装は**数値参照・フォールバック**として保持。
 
 詳細・規約の一次情報は **`CLAUDE.md`** と **`docs/tracks/README.md`**。本ファイルはその要約と、
@@ -14,7 +14,7 @@ Codex がローカルレビュー時に重点を置く観点をまとめる。
 cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
 cmake --build cpp/build -j
 ctest --test-dir cpp/build                       # 全テスト
-ctest --test-dir cpp/build -R 'tracker_extract|firmware_protocol|kalman'   # pose-3d 系
+ctest --test-dir cpp/build -R 'tracker_extract|kalman'   # pose-3d 系
 ctest --test-dir cpp/build -R 'vmt|hmd_pose|auto_alignment|continuous_aligner'  # vr-output 系
 
 # Python（参照 / フォールバック・新機能追加はしない）

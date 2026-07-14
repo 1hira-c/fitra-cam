@@ -168,7 +168,7 @@ intrinsic は 1280 校正→`scale_intrinsics` 640。設計: `docs/design/core-p
 - **M4** 復帰ジャンプ対策: idle→active で `SkeletonKalman::reset()` + One Euro (TrackerExtractor)
   の `reset_smoothing()`。idle 中は更新が来ず missing-frame 安全網が効かないため明示リセットが必須
   (固定レートでは dt が常に nominal で自己回復しない)。IK ロック/ボーン長は温存。
-- **M5** VR 観測不能の安全既定: `(vmt_out||slimevr_out) && !hmd_listen_enabled` なら戻り信号が
+- **M5** VR 観測不能の安全既定: `vmt_out && !hmd_listen_enabled` なら戻り信号が
   無く VR ピアを観測できないため `vr_observable=false` 固定かつ VR 軸では present 扱い (idle に
   入れない)。status に `vr_observable` を出して理由を可視化。
 - 検証: `tools/test_idle_evaluator` (ヒステリシス / 観測可否 / 安全既定の純ロジック)、ctest 全通過。

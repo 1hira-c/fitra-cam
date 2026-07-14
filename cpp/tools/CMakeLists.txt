@@ -452,32 +452,14 @@ set_target_properties(fitra_test_crow_excal PROPERTIES
 
 add_test(NAME test_crow_excal COMMAND fitra_test_crow_excal)
 
-# SlimeVR Firmware UDP wire-format byte-level golden test. Verifies
-# handshake / sensor_info / rotation_data / ping_reply layouts and the MAC
-# derivation. No SlimeVR server needed.
-add_executable(fitra_test_firmware_protocol
-    test_firmware_protocol.cpp
-)
-
-target_link_libraries(fitra_test_firmware_protocol PRIVATE
-    fitra_slimevr
-)
-
-set_target_properties(fitra_test_firmware_protocol PROPERTIES
-    OUTPUT_NAME "test_firmware_protocol"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
-)
-
-add_test(NAME test_firmware_protocol COMMAND fitra_test_firmware_protocol)
-
-# Halpe26 → 10 SlimeVR tracker extraction test
+# Halpe26 → 10 tracker extraction test
 # (upper arms / chest / waist / upper legs / lower legs / feet).
 add_executable(fitra_test_tracker_extract
     test_tracker_extract.cpp
 )
 
 target_link_libraries(fitra_test_tracker_extract PRIVATE
-    fitra_slimevr
+    fitra_tracking
 )
 
 set_target_properties(fitra_test_tracker_extract PROPERTIES
@@ -620,14 +602,14 @@ set_target_properties(fitra_test_continuous_aligner PROPERTIES
 
 add_test(NAME test_continuous_aligner COMMAND fitra_test_continuous_aligner)
 
-# Position EMA in TrackerExtractor. Lives in fitra_slimevr because the
+# Position EMA in TrackerExtractor. Lives in fitra_tracking because the
 # helper is part of tracker_extract.{hpp,cpp}.
 add_executable(fitra_test_tracker_extract_pos
     test_tracker_extract_pos.cpp
 )
 
 target_link_libraries(fitra_test_tracker_extract_pos PRIVATE
-    fitra_slimevr
+    fitra_tracking
 )
 
 set_target_properties(fitra_test_tracker_extract_pos PROPERTIES

@@ -282,63 +282,6 @@
 .viewer-page .trackers-table tr.state-active  { background: transparent; }
 .viewer-page .trackers-table td.warn { color: #ff9966; }
 .viewer-page .trackers-table td.bad  { color: #ff6666; }
-.viewer-page .slimevr-corrections {
-  border-top: 1px solid #2b2f36;
-  padding-top: 8px;
-}
-.viewer-page .slimevr-corrections-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-.viewer-page .slimevr-corrections-head h3 {
-  margin: 0;
-  font-size: 12px;
-  color: var(--accent);
-}
-.viewer-page .slimevr-corrections-head button,
-.viewer-page .slimevr-table button {
-  min-width: 28px;
-  height: 24px;
-  border: 1px solid #444;
-  border-radius: 4px;
-  background: #252525;
-  color: #ddd;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-.viewer-page .slimevr-corrections-head button:hover,
-.viewer-page .slimevr-table button:hover {
-  border-color: var(--accent);
-  color: var(--fg);
-}
-.viewer-page .slimevr-corrections-head button:disabled,
-.viewer-page .slimevr-table button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.viewer-page .slimevr-correction-status {
-  color: #888;
-  font-size: 11px;
-}
-.viewer-page .slimevr-correction-status.live { color: #4cf; }
-.viewer-page .slimevr-correction-status.dead { color: #f66; }
-.viewer-page .slimevr-table td {
-  vertical-align: middle;
-}
-.viewer-page .slimevr-axis-control {
-  display: inline-grid;
-  grid-template-columns: 28px 48px 28px;
-  align-items: center;
-  gap: 4px;
-}
-.viewer-page .slimevr-axis-value {
-  color: #ddd;
-  text-align: center;
-}
-
 @media (max-width: 900px) {
   .viewer-page .cams { grid-template-columns: 1fr; }
   .viewer-page .conn-group { flex-direction: column; align-items: flex-end; gap: 2px; }

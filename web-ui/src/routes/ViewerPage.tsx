@@ -4,7 +4,6 @@ import { ThreeDView } from "../components/ThreeDView";
 import { VmtAlignForm, type VmtAlignHandle } from "../components/VmtAlignForm";
 import { VmtAutoForm } from "../components/VmtAutoForm";
 import { VmtPresetForm } from "../components/VmtPresetForm";
-import { SlimeCorrectionTable } from "../components/SlimeCorrectionTable";
 import { TrackerStatsTable } from "../components/TrackerStatsTable";
 import { WizardLayout } from "../components/WizardLayout";
 import { useWebSocketJson, type WsStatus } from "../hooks/useWebSocketJson";
@@ -197,7 +196,6 @@ export function ViewerPage() {
           continuousAlign={contAlign}
           onAlignmentResolved={onAlignmentResolved}
         />
-        <SlimeCorrectionTable />
         <TrackerStatsTable trackers={trackers} />
       </section>
     </div>

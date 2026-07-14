@@ -6,7 +6,7 @@
 
 WebUI はバニラ JS/Canvas/Three.js の静的ファイル群で、ビルドツールも型もなかった:
 
-- `web/dual_rtmpose/`（2D/3D ビューア, Three.js, VMT alignment, SlimeVR correction, trackers stats）= `app.js` 1450 行。
+- `web/dual_rtmpose/`（2D/3D ビューア, Three.js, VMT alignment, trackers stats）= `app.js` 1450 行。
 - `web/subject_calibration/`（IK プロファイル取得ウィザード, REST ポーリング）。
 - 両者とも C++ Crow サーバ (:8000) が静的配信（`/` と `/subject-calib`）。
 
@@ -52,7 +52,7 @@ web-ui/  (Vite + React + TS, web/ と並置, dist は .gitignore)
     main.tsx          BrowserRouter: "/"→ViewerPage, "/subject-calib"→SubjectCalibPage, "*"→/
     lib/config.ts     ★httpUrl()/wsUrl() = 接続先の単一の真実
     lib/transport.ts  getJson/postJson/openWs（config 経由のみが fetch/WebSocket に触れる）
-    lib/api.ts        /api/vmt・/api/slimevr・/api/calib の型付きラッパ
+    lib/api.ts        /api/vmt・/api/calib の型付きラッパ
     lib/skeleton.ts   SKELETON_COCO17/HALPE26, KP_THR, TRACKER_ROLES, colors
     lib/draw2d.ts     drawCamera()（2D overlay）
     lib/statsText.ts  build2dStatsText/build3dStatsText（旧テキストレイアウト保持）
@@ -63,7 +63,7 @@ web-ui/  (Vite + React + TS, web/ と並置, dist は .gitignore)
     hooks/useFlowWatch.ts      /api/state polling + mode mismatch redirect (viewer は redirect しない)
     routes/ViewerPage.tsx      ref に WS データ保持 → rAF で 2D 描画 + viewer.update/render + ~6Hz で stats state 更新
     routes/SubjectCalibPage.tsx 状態機械をポーリング結果から純関数的に描画
-    components/  CameraPane / ThreeDView / VmtAlignForm(imperative writeForm) / VmtAutoForm / SlimeCorrectionTable / TrackerStatsTable
+    components/  CameraPane / ThreeDView / VmtAlignForm(imperative writeForm) / VmtAutoForm / TrackerStatsTable
   public/
     flow.js           legacy web/extrinsic_calibration 用の /flow.js 互換 helper
 ```
@@ -89,7 +89,7 @@ web-ui/  (Vite + React + TS, web/ と並置, dist は .gitignore)
 ## Milestone（コミット境界）
 - M1: web-ui scaffold（Vite/React/TS, BrowserRouter, proxy, lib/config・transport・api・skeleton, types/bundle）+ 本ドキュメント。
 - M2: ViewerPage 2D/3D 描画（CameraPane, SkeletonViewer, WS フック, rAF）。
-- M3: VMT/SlimeVR 制御 UI（VmtAlignForm, VmtAutoForm, SlimeCorrectionTable, TrackerStatsTable）。
+- M3: VMT 制御 UI（VmtAlignForm, VmtAutoForm, TrackerStatsTable）。
 - M4: SubjectCalibPage。
 - M5: Crow static_dir を web-ui/dist に + Python フォールバック追従 + .gitignore。
 - M6: 旧 `web/{dual_rtmpose,subject_calibration}` 削除 + 本トラック changelog 確定。
@@ -100,7 +100,7 @@ web-ui/  (Vite + React + TS, web/ と並置, dist は .gitignore)
   別マシン実機は `VITE_CROW=http://<jetson-ip>:8000`。
 - **別ホスト/デスクトップ想定**: `localStorage['fitra.apiBase']='http://<jetson-ip>:8000'` を設定し、proxy 無しでも実 Jetson に接続できる。
 - **prod (dist 配信)**: `pnpm build` → Crow 再起動し `/` と `/subject-calib` が同一 SPA を配信、全機能
-  （VMT alignment 適用 / SlimeVR correction / calib state 遷移）が動作。
+  （VMT alignment 適用 / calib state 遷移）が動作。
 - **flow daemon**: `GET /api/state` に応じて viewer の banner / calib link / managed run の再キャリブボタンが切り替わる。
   subject approve 後は `next_step` 表示から run へ自動遷移する。`/extrinsic-calib` は legacy UI のまま `/flow.js`
   を読み、solve 後に calib-subject へ追従する。

@@ -1,36 +1,28 @@
 # Track: vr-output
 
-カメラ由来の 3D pose / tracker を **VR (SlimeVR Server / SteamVR) に流す経路**。
+カメラ由来の 3D pose / tracker を **SteamVR に流す経路**。
 現状最もアクティブなトラック。
 
-## 現状 (2026-05-29)
+## 現状 (2026-07-14)
 
-2 つの出力経路が **同時 enable 可能**で、いずれも pose-3d トラックの `TrackerExtractor`
-(単一 producer) を read-only consumer として共有する:
-
-1. **SlimeVR Firmware UDP** (`--slimevr-out`, port 6969) — 回転のみ。位置は SlimeVR 側 IK が
-   骨格 + HMD から再構築。10 trackers を named display。
-2. **VMT (Virtual Motion Tracker) → SteamVR 直結** (`--vmt-out`) — 位置 + 回転。SlimeVR Server を
-   飛ばして SteamVR Driver に直結。VMT_10..VMT_19 を `/VMT/Room/Driver` OSC 60Hz。
+**VMT (Virtual Motion Tracker) → SteamVR 直結** (`--vmt-out`) が唯一の出力経路。pose-3d
+トラックの `TrackerExtractor` (単一 producer) が生成する 10 tracker pose を read-only に消費し、
+VMT_10..VMT_19 へ `/VMT/Room/Driver` OSC を送る。
 
 ### 設計原則 / live な制約
 
-- **10 trackers の TrackerRole 順は固定**: LeftUpperArm / RightUpperArm / Chest / Hip /
+- **10 trackers の TrackerRole 順は固定**: LeftUpperArm / RightUpperArm / Chest / Waist /
   LeftUpperLeg / RightUpperLeg / LeftLowerLeg / RightLowerLeg / LeftFoot / RightFoot。
-  SlimeVR `TrackerPosition` enum に完全一致 (骨盤は `HIP(6)`、`WAIST(5)` は auto-assign されない)。
 - **VMT 送信トラッカーは preset で選択** (`--vmt-preset {p3,p6,p8,full}`, 既定 `p8`)。VRChat FBT は
   最大 8 点 (hip/chest/両足/両膝/両肘) で脛 (LowerLeg) に対応 role が無いため、既定 `p8` は脛 2 本を落とす。
-  `p3`=腰+両足 / `p6`=+胸+両膝 / `full`=全 10 (SlimeVR 互換)。**間引きは VMT publisher のみ**で行い
-  extractor は 10 点維持 (SlimeVR 路は不変)。**VMT index は role 固定**なので preset を変えても
+  `p3`=腰+両足 / `p6`=+胸+両膝 / `full`=全 10。**間引きは VMT publisher のみ**で行い
+  extractor は 10 点維持。**VMT index は role 固定**なので preset を変えても
   SteamVR「Manage Trackers」の role 割当 (VMT_10=Left Elbow … 18=Left Foot / 19=Right Foot) は安定。
   ランタイム切替は `POST /api/vmt/preset` / Web UI `VmtPresetForm`。設計: [`../design/vr-output-vrchat-tracker-presets.md`](../design/vr-output-vrchat-tracker-presets.md)。
 - **足トラッカー位置は `--foot-tracker-pos {ankle,midpoint}`** (既定 `ankle`)。`ankle` は足首位置、
   `midpoint` は足首/足先中点。回転は両モードとも不変 (`fwd = ankle→toe` で足先方向を保持)。位置を
-  消費するのは VMT 送信と WebUI viz のみ (SlimeVR は回転のみ)。VRChat 実機で A/B して既定を確定する。
-- **Bridge relay (Jetson → Windows .NET relay → Named Pipe → SlimeVR Server) は没**。理由は
-  SteamVR 起動中の `\\.\pipe\SlimeVRInput` 排他 + 座標系整合の不安定。位置を VR に流す要求は
-  VMT 経路で解決済み。実装一式は `archive/botsu-phase12-bridge-relay` ブランチに凍結。
-- **座標変換**: `world_*_to_vmt` は SteamVR Y-up RH frame target。archive Bridge と完全同型。
+  消費するのは VMT 送信と WebUI viz のみ。VRChat 実機で A/B して既定を確定する。
+- **座標変換**: `world_*_to_vmt` は SteamVR Y-up RH frame target。
 - **VMT alignment**: HMD pose (SteamVR) を取り込み 2D Procrustes で yaw+xz を自動算出。
   単発(T ポーズ / 3 秒歩行、chest 対応)に加え、**常時バックグラウンドの `ContinuousAligner`**
   が頭部優先・chest フォールバックで継続サンプリング → reservoir → clamped EMA で半継続追従。
@@ -43,11 +35,18 @@
 
 ### 検証
 
-`ctest -R 'vmt|firmware_protocol|tracker_extract|hmd_pose|auto_alignment|continuous_aligner'` +
-Windows 実機 (SlimeVR Server GUI / SteamVR + VMT Manager + VRChat FBT)。
-詳細な合格基準は [`cpp-migration-plan.md` 検証戦略表](../cpp-migration-plan.md) の旧 Phase 11/14/15/15.5 行。
+`ctest -R 'vmt|tracker_extract|hmd_pose|auto_alignment|continuous_aligner'` +
+Windows 実機 (SteamVR + VMT Manager + VRChat FBT)。
+詳細な合格基準は [`cpp-migration-plan.md`](../cpp-migration-plan.md) の VMT 行を参照。
 
 ## Changelog (新しい順)
+
+### 2026-07-14 — SlimeVR Firmware UDP 出力を廃止し、VMT 専用化
+
+SlimeVR Firmware UDP publisher・wire protocol・設定・補正 API/UI を削除。共有していた tracker
+抽出/平滑化/bus は `tracking` に中立化し、VMT と WebUI の `trackers` bundle は維持した。旧
+`slimevr:` YAML ブロックと `--slimevr-*` は、削除して VMT を使うよう案内するエラーで停止する。
+過去の Phase 設計は archive に保存する。→ [design/vr-output-remove-slimevr.md](../design/vr-output-remove-slimevr.md)
 
 ### 2026-06-27 — discovery を初期設定 UI に露出 (自動検出/手動の選択)
 zeroconf discovery が出力先 VMT を実行時に自動解決できるのに、Web-UI は手動 IP 入力欄しか

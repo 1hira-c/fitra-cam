@@ -98,7 +98,6 @@ void test_module_argv() {
     check(has_arg(subj_args, "--calibrate"),       "subject argv: --calibrate");
     check(has_arg(subj_args, "--calib-auto-exit"), "subject argv: --calib-auto-exit");
     check(has_arg(subj_args, "--no-vmt-out"),      "subject argv: --no-vmt-out");
-    check(has_arg(subj_args, "--no-slimevr-out"),  "subject argv: --no-slimevr-out");
     check(has_arg(subj_args, "--flow-managed"),    "subject argv: --flow-managed");
     check(!has_arg(subj_args, "--subject-id"),
           "subject argv never carries --subject-id (a stale profile must not "
@@ -109,14 +108,13 @@ void test_module_argv() {
                                   "/tmp/session.yaml", false);
     check(has_arg(excal_args, "--extrinsic-calib"), "excal argv: --extrinsic-calib");
     check(has_arg(excal_args, "--no-vmt-out"),      "excal argv: --no-vmt-out");
-    check(has_arg(excal_args, "--no-slimevr-out"),  "excal argv: --no-slimevr-out");
     check(!has_arg(excal_args, "--calib-auto-exit"),
           "excal argv: solve auto-exits by itself");
 
     // setup: mode flag only — it constructs no publishers, so nothing to negate.
     auto setup_args = module_argv(RunMode::Setup, opts, "/tmp/session.yaml", false);
     check(has_arg(setup_args, "--setup"), "setup argv: --setup");
-    check(!has_arg(setup_args, "--no-vmt-out") && !has_arg(setup_args, "--no-slimevr-out"),
+    check(!has_arg(setup_args, "--no-vmt-out"),
           "setup argv: no publisher negations (none constructed)");
 
     // No --config: only the mode flags.

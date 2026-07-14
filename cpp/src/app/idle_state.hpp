@@ -28,7 +28,7 @@ struct IdleState {
     // from HmdPoseBus freshness.
     std::atomic<bool> vr_peer_live{false};
     // Whether VR presence is even observable. False when an output is enabled
-    // (vmt_out || slimevr_out) but no return signal is configured
+    // (vmt_out) but no return signal is configured
     // (hmd_listen_enabled off): we then cannot tell whether a peer is live, so
     // the evaluator keeps VR "present" and never idles on the VR axis.
     std::atomic<bool> vr_observable{false};

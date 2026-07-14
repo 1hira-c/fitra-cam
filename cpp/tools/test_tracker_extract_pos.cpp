@@ -21,19 +21,19 @@
 
 #include <opencv2/core.hpp>
 
-#include "slimevr/tracker_extract.hpp"
+#include "tracking/tracker_extract.hpp"
 
 namespace {
 
 constexpr float kEps = 1.0e-5f;
 
-using fitra::slimevr::OneEuroParams;
-using fitra::slimevr::PosSmoothingContext;
-using fitra::slimevr::SlimeTracker;
-using fitra::slimevr::TrackerRole;
-using fitra::slimevr::apply_pos_smoothing;
-using fitra::slimevr::kTrackerCount;
-using fitra::slimevr::one_euro_alpha;
+using fitra::tracking::OneEuroParams;
+using fitra::tracking::PosSmoothingContext;
+using fitra::tracking::TrackerPose;
+using fitra::tracking::TrackerRole;
+using fitra::tracking::apply_pos_smoothing;
+using fitra::tracking::kTrackerCount;
+using fitra::tracking::one_euro_alpha;
 
 void check(bool cond, const std::string& msg) {
     if (!cond) throw std::runtime_error(msg);
@@ -54,8 +54,8 @@ void check_vec3(const cv::Vec3f& got, const cv::Vec3f& want, const std::string& 
 
 // All-valid trackers at a uniform pos for the smoothing tests. role values
 // don't matter for apply_pos_smoothing.
-std::array<SlimeTracker, kTrackerCount> make_trackers(const cv::Vec3f& pos, bool valid) {
-    std::array<SlimeTracker, kTrackerCount> ts{};
+std::array<TrackerPose, kTrackerCount> make_trackers(const cv::Vec3f& pos, bool valid) {
+    std::array<TrackerPose, kTrackerCount> ts{};
     for (std::size_t i = 0; i < kTrackerCount; ++i) {
         ts[i].role  = static_cast<TrackerRole>(i);
         ts[i].pos   = pos;

@@ -296,7 +296,7 @@ punch 送信 (src=受信ポート 39571・OSC 20B・1s 間隔) を実証。将�
 `./main --daemon --config session.yaml` で main が常駐 daemon になり、モードモジュール
 (同一バイナリ + モードフラグ) を fork/exec して exit code (80/81/82) で連鎖する。
 M1 = flow 基盤 (`app/flow.hpp` FlowControl、`POST /api/flow/switch`、`/api/state.managed`、
-managed 時の calib 自動連鎖、`--flow-managed` / `--no-vmt-out` / `--no-slimevr-out`、
+managed 時の calib 自動連鎖、`--flow-managed` / `--no-vmt-out`、
 approve 応答 next_step)。M2 = daemon 本体 (`app/daemon.{hpp,cpp}`: argv 合成 / exit 判定 /
 initial auto 判定の純関数 + spawn/wait ループ、`--daemon` / `--daemon-initial`、SIGTERM 転送、
 crash→run fallback + 3 連続 give-up、新 ctest `test_flow_daemon` は stub スクリプトで実
@@ -360,7 +360,7 @@ approve 後の wizard も run モード再起動のガイダンスログに置�
 `run_mode(MainOptions)` で排他 RunMode (`run` / `calib-subject` / `calib-extrinsic`) を導出し
 (既存フラグから導出、invocation 互換)、main.cpp の構築をモードでゲート: CalibrationSession +
 `calib_recording_flag` 配布は calib-subject 限定、ExtrinsicCalibSession は calib-extrinsic 限定、
-SlimeVR/VMT publisher は run 限定 (`--slimevr-out`/`--vmt-out` × `--extrinsic-calib` を validate
+VMT publisher は run 限定 (`--vmt-out` × `--extrinsic-calib` を validate
 で排他化)。run モードの `/api/calib/*` は 503 スタブ廃止で未登録 (GET 404 / POST 405)。
 挙動変更: calib 中の tracker 出力停止、run での wizard API 消滅。ライブ再注入の削除は M2。
 → [design/pose-3d-calib-mode-separation.md](../design/pose-3d-calib-mode-separation.md)

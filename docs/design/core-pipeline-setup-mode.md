@@ -11,7 +11,7 @@
 「初回セットアップから実推論まで」をほぼ全部ブラウザから回したい。残っていた gap:
 
 1. **カメラ選択 UI が無い** — `cameras.cam0/1/2` (paths/解像度/fps/pixfmt)、engine パス、
-   出力先 (vmt/slimevr host:port) はいまだ `session.yaml` 手編集。`/api/cameras` も preview も無い。
+   出力先 (VMT host:port) はいまだ `session.yaml` 手編集。`/api/cameras` も preview も無い。
 2. **bootstrap の鶏卵** — flow daemon は portless で、WebUI は推論モジュール内にしか無い。
    config が無いと何も起動できず、初回は SSH で YAML を書く必要があった。
 3. **名前付き config 管理が無い** (save/load/list)。
@@ -49,7 +49,7 @@ loader の各キーと 1:1 で往復させる。要点:
 
 - **非デフォルト値のみ emit** (ファイルを汚さない)。
 - 否定キー `no_3d_kalman`/`no_3d_ik` は positive predicate の反転を emit。
-- `slimevr:`/`vmt:` は bare な `host`/`port`/... キー (loader 規約)。
+- `vmt:` は bare な `host`/`port`/... キー (loader 規約)。
 - **run-mode 派生フラグ (`calibration.calibrate`/`extrinsic_calib.enabled`/`*.replay_dir`) と
   launch-form フラグ (daemon/flow_managed/setup — YAML キー無し) は emit しない** → 書いた config は
   常に daemon が食える union config。

@@ -8,7 +8,7 @@ const PRESETS: { value: string; label: string }[] = [
   { value: "p3", label: "3点: 腰 + 両足" },
   { value: "p6", label: "6点: + 胸 + 両膝" },
   { value: "p8", label: "8点: + 両肘 (VRChat標準)" },
-  { value: "full", label: "10点: + 両脛 (SlimeVR互換)" },
+  { value: "full", label: "10点: + 両脛" },
 ];
 
 export function VmtPresetForm() {

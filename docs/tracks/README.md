@@ -23,7 +23,7 @@ phase 番号は「ゴールが事前に決まった一回限りの C++ 移行ロ
 |---|---|---|---|
 | [core-pipeline](core-pipeline.md) | capture / TRT 推論 / Web / 性能 / keypoint topology | 移行完了・安定 | 0–6, 9 |
 | [pose-3d](pose-3d.md) | 3D lift / IK / Kalman / roll 品質 / subject calibration | 継続改善 | 7, 8, 12-M1, 13 |
-| [vr-output](vr-output.md) | SlimeVR Firmware UDP / VMT / SteamVR alignment | 最もアクティブ | 11, 12-bridge, 14, 15, 15.5 |
+| [vr-output](vr-output.md) | VMT / SteamVR alignment | 最もアクティブ | 14, 15, 15.5 |
 
 ## ドキュメントの構成
 
