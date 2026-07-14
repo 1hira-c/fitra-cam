@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include "lift/keypoint_format.hpp"
+#include "lift/skeleton_def.hpp"
 
 namespace fitra::slimevr {
 
@@ -33,15 +34,22 @@ inline cv::Vec3f normalize_or_zero(const cv::Vec3f& v) {
 }
 
 // Halpe26 index symbols used by all role builders.
-constexpr std::size_t kLShoulder = 5,  kRShoulder = 6;
-constexpr std::size_t kLElbow    = 7,  kRElbow    = 8;
-constexpr std::size_t kLWrist    = 9,  kRWrist    = 10;
-constexpr std::size_t kLHip      = 11, kRHip      = 12;
-constexpr std::size_t kLKnee     = 13, kRKnee     = 14;
-constexpr std::size_t kLAnkle    = 15, kRAnkle    = 16;
-constexpr std::size_t kNeck      = 18;
-constexpr std::size_t kHipCenter = 19;
-constexpr std::size_t kLBigToe   = 20, kRBigToe   = 21;
+constexpr std::size_t kLShoulder = lift::kHalpeLeftShoulder;
+constexpr std::size_t kRShoulder = lift::kHalpeRightShoulder;
+constexpr std::size_t kLElbow    = lift::kHalpeLeftElbow;
+constexpr std::size_t kRElbow    = lift::kHalpeRightElbow;
+constexpr std::size_t kLWrist    = lift::kHalpeLeftWrist;
+constexpr std::size_t kRWrist    = lift::kHalpeRightWrist;
+constexpr std::size_t kLHip      = lift::kHalpeLeftHip;
+constexpr std::size_t kRHip      = lift::kHalpeRightHip;
+constexpr std::size_t kLKnee     = lift::kHalpeLeftKnee;
+constexpr std::size_t kRKnee     = lift::kHalpeRightKnee;
+constexpr std::size_t kLAnkle    = lift::kHalpeLeftAnkle;
+constexpr std::size_t kRAnkle    = lift::kHalpeRightAnkle;
+constexpr std::size_t kNeck      = lift::kHalpeNeck;
+constexpr std::size_t kHipCenter = lift::kHalpeHipCenter;
+constexpr std::size_t kLBigToe   = lift::kHalpeLeftBigToe;
+constexpr std::size_t kRBigToe   = lift::kHalpeRightBigToe;
 
 // Confidence smoothstep bounds on sin(angle(up, fwd)) for upper arm / thigh
 // roll. Below kRollSinLow the chosen up is treated as degenerate (confidence 0,
@@ -617,6 +625,49 @@ extract_trackers(const infer::Skeleton3D& skel, ExtractContext* ctx,
     foot_tracker(TrackerRole::LeftFoot,  kLKnee, kLAnkle, kLBigToe, 8, 0);
     foot_tracker(TrackerRole::RightFoot, kRKnee, kRAnkle, kRBigToe, 9, 1);
 
+    return out;
+}
+
+std::array<SlimeTracker, kTrackerCount>
+extract_trackers_with_floor_corrections(
+    const infer::Skeleton3D& grounded_skel,
+    const std::array<cv::Vec3f, 2>& corrections_m,
+    ExtractContext* ctx,
+    FootPosMode foot_pos_mode,
+    float chest_height_frac,
+    float waist_height_frac) {
+    infer::Skeleton3D raw_skel = grounded_skel;
+    std::array<cv::Vec3f, 2> finite_corrections{};
+    for (std::size_t side = 0; side < lift::kHalpeFeet.size(); ++side) {
+        const cv::Vec3f correction = corrections_m[side];
+        if (!std::isfinite(correction[0]) || !std::isfinite(correction[1])
+            || !std::isfinite(correction[2])) {
+            continue;
+        }
+        finite_corrections[side] = correction;
+        const auto& foot = lift::kHalpeFeet[side];
+        auto restore_raw = [&](std::size_t joint) {
+            if (joint >= static_cast<std::size_t>(raw_skel.kp_count)
+                || joint >= raw_skel.joints.size()
+                || !raw_skel.joints[joint].valid) {
+                return;
+            }
+            raw_skel.joints[joint].x -= correction[0];
+            raw_skel.joints[joint].y -= correction[1];
+            raw_skel.joints[joint].z -= correction[2];
+        };
+        restore_raw(foot.ankle);
+        for (std::size_t joint : foot.sole) restore_raw(joint);
+    }
+
+    auto out = extract_trackers(raw_skel, ctx, foot_pos_mode,
+                                chest_height_frac, waist_height_frac);
+    constexpr std::array<TrackerRole, 2> kFootRoles{
+        TrackerRole::LeftFoot, TrackerRole::RightFoot};
+    for (std::size_t side = 0; side < kFootRoles.size(); ++side) {
+        auto& tracker = out[static_cast<std::size_t>(kFootRoles[side])];
+        if (tracker.valid) tracker.pos += finite_corrections[side];
+    }
     return out;
 }
 

@@ -3,7 +3,7 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-07-13)
+## 現状 (2026-07-14)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
@@ -79,8 +79,9 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
   Process noise は root と offset で分離 (`q_pos` / `q_pos_offset`)。
 - **床接地安定化は公開直前の有界足部平行移動**: Halpe26 の左右 sole から接地を独立判定し、
   接地中だけ ankle + toe/heel を同じ XYZ だけ移動する。Kalman / IK / calibration tap へ
-  フィードバックせず、XY 3cm / Z 8cm を超える要求は fail-open。既定 ON だが
-  `--no-floor-contact-stability` を常設し、`/stats3d` と WebUI 接地リングで状態を確認できる。
+  フィードバックしない。孤立した床下 sole は invalid 化し、深い貫通も Z 8cm まで fail-safe 補正、
+  離地時は補正を連続減衰する。VR FootAnchor は補正前の脚形状で更新する。既定 ON だが
+  `--no-floor-contact-stability` を常設し、`/stats3d` の fresh/evidence と WebUI 接地リングで確認できる。
   → [design/pose-3d-floor-contact-stability.md](../design/pose-3d-floor-contact-stability.md)
 - **subject profile schema は厳格分離**: `fitra_subject_profile_v1` (COCO17) と `v2` (Halpe26) は
   マイグレーションせず再キャリブを要求 (keypoint topology は core-pipeline トラック参照)。
@@ -96,6 +97,17 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-07-14 — 床接地安定化のレビュー指摘対応（外れ値・離地・VR・指標）
+
+更新 gap の既定を 0.50s へ広げ YAML/CLI 設定化し、8 fps 相当でも latch を維持するテストを追加。
+孤立した床下 sole を外れ値として downstream から除外し、8cm 超の貫通にも上限まで補正を適用、
+離地補正は 0.05s の時定数で減衰して一フレーム snap と再接地 chatter を防ぐ。contact state と
+current evidence / actual correction / fresh snapshot を分離し、sync miss / idle は最後の接地状態を stale として
+保持する。VR extractor は補正前の tibia/foot 形状で FootAnchor と lower-leg を計算し、foot 位置だけ
+接地補正を戻す。offline dump に `--fps`、evidence 分母の接地率、input fps / observation frames を追加。
+`--fps 58.81` の静止 A/B で pooled ankle XY RMS 3.390→1.901mm（43.9%低下）、歩行録画でも
+valid sole の床下率 0% と接地/離地遷移を確認した。機能の既定 ON と kill switch は維持する。
 
 ### 2026-07-13 — 床接地を利用した足部安定化（既定 ON・有界出力段）
 

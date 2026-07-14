@@ -14,26 +14,18 @@
 #include <opencv2/core.hpp>
 
 #include "infer/types.hpp"
+#include "lift/floor_contact_options.hpp"
 
 namespace fitra::lift {
-
-struct FloorContactOptions {
-    double floor_z_m = 0.0;
-    double enter_height_m = 0.03;
-    double exit_height_m = 0.06;
-    double enter_speed_mps = 0.25;
-    double exit_speed_mps = 0.80;
-    double xy_anchor_tau_s = 0.25;
-    double max_xy_correction_m = 0.03;
-    double max_z_correction_m = 0.08;
-    int missing_grace_frames = 2;
-    double reset_dt_s = 0.10;
-};
 
 struct FootContactReport {
     bool contact = false;
     bool corrected = false;
     bool missing_grace = false;
+    // True only when ankle + at least two finite sole points were observed in
+    // this update. Contact may remain latched while this is false (grace).
+    bool evidence_valid = false;
+    bool sole_outlier_rejected = false;
     cv::Vec3f correction_m{0.0f, 0.0f, 0.0f};
 };
 
@@ -58,6 +50,7 @@ public:
 private:
     struct FootState {
         bool contact = false;
+        bool release_active = false;
         bool has_prev_ankle = false;
         cv::Vec3f prev_raw_ankle{0.0f, 0.0f, 0.0f};
         double elapsed_since_prev_s = 0.0;

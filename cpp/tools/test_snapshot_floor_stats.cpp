@@ -21,8 +21,11 @@ int main() {
         fitra::pipeline::Skeleton3DSnapshot snapshot;
         snapshot.stats.floor_stability_enabled = true;
         snapshot.stats.floor_z_m = 0.125;
+        snapshot.stats.floor_contact_fresh = true;
         snapshot.stats.floor_contact_left = true;
         snapshot.stats.floor_contact_right = false;
+        snapshot.stats.floor_evidence_left = true;
+        snapshot.stats.floor_evidence_right = false;
         snapshot.stats.floor_correction_left_m = 0.0125;
         snapshot.stats.floor_correction_right_m = 0.025;
         bus.update(snapshot);
@@ -30,8 +33,11 @@ int main() {
         const std::string json = bus.make_bundle_json();
         require_field(json, "\"floor_stability_enabled\":true");
         require_field(json, "\"floor_z_m\":0.125");
+        require_field(json, "\"floor_contact_fresh\":true");
         require_field(json, "\"floor_contact_left\":true");
         require_field(json, "\"floor_contact_right\":false");
+        require_field(json, "\"floor_evidence_left\":true");
+        require_field(json, "\"floor_evidence_right\":false");
         require_field(json, "\"floor_correction_left_m\":0.0125");
         require_field(json, "\"floor_correction_right_m\":0.025");
 

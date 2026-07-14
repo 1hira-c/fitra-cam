@@ -19,6 +19,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "lift/floor_contact_options.hpp"
+
 namespace fitra::config {
 
 struct MainOptions {
@@ -107,6 +109,8 @@ struct MainOptions {
     double floor_contact_max_xy_correction_m = 0.03;
     double floor_contact_max_z_correction_m = 0.08;
     int    floor_contact_missing_grace_frames = 2;
+    double floor_contact_reset_gap_s = 0.50;
+    double floor_contact_release_tau_s = 0.05;
     // VR tracker extraction: react to each new 3D frame (event-driven) instead
     // of resampling at a fixed cadence. Cuts the extractor's contribution to
     // capture->VR-send latency. Feeds both SlimeVR and VMT. Default off.
@@ -408,6 +412,10 @@ void load_main_config(const std::string& path, MainOptions& out);
 //
 // Pass `argv + 1` (i.e. skip the program name) and the matching argc.
 void apply_cli_overrides(MainOptions& out, int argc, char** argv);
+
+// Translate the flat YAML/CLI schema once at the config boundary. Runtime and
+// offline consumers then share the same typed option validation.
+lift::FloorContactOptions floor_contact_options(const MainOptions& opts);
 
 // Convenience: report whether the user asked for --probe, --help, or supplied
 // a --config PATH, without otherwise mutating `out`. `config_path` is set to

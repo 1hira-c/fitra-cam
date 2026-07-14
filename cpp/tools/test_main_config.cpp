@@ -23,6 +23,7 @@ namespace {
 using fitra::config::EarlyArgs;
 using fitra::config::MainOptions;
 using fitra::config::apply_cli_overrides;
+using fitra::config::floor_contact_options;
 using fitra::config::load_main_config;
 using fitra::config::scan_early_args;
 using fitra::config::validate_options;
@@ -561,6 +562,8 @@ three_d:
 void test_floor_contact_yaml_cli_emit_and_validate() {
     MainOptions defaults;
     check(defaults.floor_contact_stability, "floor contact defaults on");
+    check(std::abs(defaults.floor_contact_reset_gap_s - 0.50) < 1e-9,
+          "floor contact reset gap supports low-rate input by default");
 
     auto p = write_tmp("floor_contact.yaml", R"(schema: fitra_main_config_v1
 three_d:
@@ -574,6 +577,8 @@ three_d:
   floor_contact_max_xy_correction_m: 0.025
   floor_contact_max_z_correction_m: 0.09
   floor_contact_missing_grace_frames: 1
+  floor_contact_reset_gap_s: 0.7
+  floor_contact_release_tau_s: 0.08
 )");
     MainOptions opts;
     load_main_config(p.string(), opts);
@@ -585,14 +590,27 @@ three_d:
           "floor exit speed loads");
     check(opts.floor_contact_missing_grace_frames == 1,
           "floor missing grace loads");
+    check(std::abs(opts.floor_contact_reset_gap_s - 0.7) < 1e-9,
+          "floor reset gap loads");
+    check(std::abs(opts.floor_contact_release_tau_s - 0.08) < 1e-9,
+          "floor release tau loads");
+
+    const auto floor = floor_contact_options(opts);
+    check(std::abs(floor.reset_dt_s - 0.7) < 1e-9
+              && std::abs(floor.release_tau_s - 0.08) < 1e-9,
+          "flat config maps once into typed floor options");
 
     std::vector<std::string> argv_buf{
         "--floor-contact-stability", "--floor-z-m", "0.2",
+        "--floor-contact-reset-gap-s", "0.8",
+        "--floor-contact-release-tau-s", "0.06",
         "--no-floor-contact-stability"};
     auto argv = make_argv(argv_buf);
     apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
     check(!opts.floor_contact_stability, "last floor CLI toggle wins");
     check(std::abs(opts.floor_z_m - 0.2) < 1e-9, "floor-z CLI overrides YAML");
+    check(std::abs(opts.floor_contact_reset_gap_s - 0.8) < 1e-9,
+          "floor reset gap CLI overrides YAML");
 
     opts.cam_paths[0] = "/tmp/a";
     opts.det_engine = "/tmp/y";
@@ -1216,6 +1234,8 @@ void test_emit_load_round_trip() {
     o.floor_contact_max_xy_correction_m = 0.025;
     o.floor_contact_max_z_correction_m = 0.09;
     o.floor_contact_missing_grace_frames = 1;
+    o.floor_contact_reset_gap_s = 0.7;
+    o.floor_contact_release_tau_s = 0.08;
     o.vr_extract_event_driven = true; o.vr_one_euro = false;
     o.vr_pos_mincutoff = 2.0; o.vr_pos_beta = 6.0; o.vr_quat_beta = 2.5;
     o.subjects_dir = "calibrations/subjects"; o.subject_id = "alice";
@@ -1318,6 +1338,10 @@ void test_emit_load_round_trip() {
     eq_i(o.floor_contact_missing_grace_frames,
          r.floor_contact_missing_grace_frames,
          "floor_contact_missing_grace_frames");
+    eq_f(o.floor_contact_reset_gap_s, r.floor_contact_reset_gap_s,
+         "floor_contact_reset_gap_s");
+    eq_f(o.floor_contact_release_tau_s, r.floor_contact_release_tau_s,
+         "floor_contact_release_tau_s");
     eq_b(o.vr_extract_event_driven, r.vr_extract_event_driven, "vr_extract_event_driven");
     eq_b(o.vr_one_euro, r.vr_one_euro, "vr_one_euro");
     eq_f(o.vr_pos_mincutoff, r.vr_pos_mincutoff, "vr_pos_mincutoff");

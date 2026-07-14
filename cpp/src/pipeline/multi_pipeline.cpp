@@ -8,6 +8,29 @@
 
 namespace fitra::pipeline {
 
+namespace {
+
+void populate_floor_stats(Skeleton3DStats& stats,
+                          bool enabled,
+                          double floor_z_m,
+                          const lift::FloorContactReport& report,
+                          bool fresh) {
+    stats.floor_stability_enabled = enabled;
+    stats.floor_z_m = floor_z_m;
+    stats.floor_contact_fresh = enabled && fresh;
+    stats.floor_contact_left = report.feet[0].contact;
+    stats.floor_contact_right = report.feet[1].contact;
+    stats.floor_evidence_left = fresh && report.feet[0].evidence_valid;
+    stats.floor_evidence_right = fresh && report.feet[1].evidence_valid;
+    for (std::size_t side = 0; side < report.feet.size(); ++side) {
+        stats.floor_corrections_m[side] = report.feet[side].correction_m;
+    }
+    stats.floor_correction_left_m = cv::norm(stats.floor_corrections_m[0]);
+    stats.floor_correction_right_m = cv::norm(stats.floor_corrections_m[1]);
+}
+
+}  // namespace
+
 MultiCameraDriver::MultiCameraDriver(
     std::vector<std::unique_ptr<camera::FrameSource>> sources,
     infer::RtmPose& rtmpose,
@@ -32,19 +55,7 @@ MultiCameraDriver::MultiCameraDriver(
           opts.subject_profile = threed_.subject_profile;
           return lift::IkSolver{opts};
       }()},
-      floor_contact_{[&]() {
-          lift::FloorContactOptions opts;
-          opts.floor_z_m = threed_.floor_z_m;
-          opts.enter_height_m = threed_.floor_contact_enter_height_m;
-          opts.exit_height_m = threed_.floor_contact_exit_height_m;
-          opts.enter_speed_mps = threed_.floor_contact_enter_speed_mps;
-          opts.exit_speed_mps = threed_.floor_contact_exit_speed_mps;
-          opts.xy_anchor_tau_s = threed_.floor_contact_xy_tau_s;
-          opts.max_xy_correction_m = threed_.floor_contact_max_xy_correction_m;
-          opts.max_z_correction_m = threed_.floor_contact_max_z_correction_m;
-          opts.missing_grace_frames = threed_.floor_contact_missing_grace_frames;
-          return lift::FloorContactStabilizer{opts};
-      }()},
+      floor_contact_{threed_.floor_contact},
       latest_per_cam_(sources_.size()),
       latest_snapshots_(sources_.size()),
       last_3d_input_seqs_(sources_.size(), 0),
@@ -62,11 +73,11 @@ MultiCameraDriver::MultiCameraDriver(
         FITRA_LOG_INFO(
             "3D floor-contact stability {} (floor_z={}m enter={}m/{}mps exit={}m/{}mps)",
             threed_.floor_contact_stability ? "ENABLED" : "disabled",
-            threed_.floor_z_m,
-            threed_.floor_contact_enter_height_m,
-            threed_.floor_contact_enter_speed_mps,
-            threed_.floor_contact_exit_height_m,
-            threed_.floor_contact_exit_speed_mps);
+            threed_.floor_contact.floor_z_m,
+            threed_.floor_contact.enter_height_m,
+            threed_.floor_contact.enter_speed_mps,
+            threed_.floor_contact.exit_height_m,
+            threed_.floor_contact.exit_speed_mps);
     }
     for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
         latest_snapshots_[i].id = static_cast<int>(i);
@@ -435,8 +446,9 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         miss.stats.sync_miss = tri_sync_miss_;
         miss.stats.processed = tri_processed_;
         miss.stats.ik_locked = ik_.locked();
-        miss.stats.floor_stability_enabled = threed_.floor_contact_stability;
-        miss.stats.floor_z_m = threed_.floor_z_m;
+        populate_floor_stats(miss.stats, threed_.floor_contact_stability,
+                             threed_.floor_contact.floor_z_m,
+                             last_floor_report_, false);
         miss.cameras = camera_poses;
         bus->update(miss);
         for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
@@ -506,6 +518,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         // untouched while publishing one grounded skeleton to both WebUI and
         // the shared VR tracker extractor.
         floor_report = floor_contact_.update(skel, dt_s);
+        last_floor_report_ = floor_report;
     }
 
     auto t1 = std::chrono::steady_clock::now();
@@ -540,12 +553,9 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     out.stats.profile_quality_status = ik_.profile_quality_status();
     out.stats.processed = tri_processed_;
     out.stats.sync_miss = tri_sync_miss_;
-    out.stats.floor_stability_enabled = threed_.floor_contact_stability;
-    out.stats.floor_z_m = threed_.floor_z_m;
-    out.stats.floor_contact_left = floor_report.feet[0].contact;
-    out.stats.floor_contact_right = floor_report.feet[1].contact;
-    out.stats.floor_correction_left_m = cv::norm(floor_report.feet[0].correction_m);
-    out.stats.floor_correction_right_m = cv::norm(floor_report.feet[1].correction_m);
+    populate_floor_stats(out.stats, threed_.floor_contact_stability,
+                         threed_.floor_contact.floor_z_m,
+                         floor_report, true);
     out.cameras = std::move(camera_poses);
     bus->update(out);
     for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
@@ -581,8 +591,9 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         snap.stats.profile_quality_status = ik_.profile_quality_status();
         snap.stats.processed = tri_processed_;
         snap.stats.sync_miss = tri_sync_miss_;
-        snap.stats.floor_stability_enabled = threed_.floor_contact_stability;
-        snap.stats.floor_z_m = threed_.floor_z_m;
+        populate_floor_stats(snap.stats, threed_.floor_contact_stability,
+                             threed_.floor_contact.floor_z_m,
+                             last_floor_report_, false);
         bus->update(snap);
     } else {
         // Resuming from standby: drop the Kalman's stale pre-idle state so the
@@ -592,6 +603,7 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         // loop thread, the only writer of kalman_ / has_last_3d_update_.
         kalman_.reset();
         floor_contact_.reset();
+        last_floor_report_ = {};
         has_last_3d_update_ = false;
     }
 }

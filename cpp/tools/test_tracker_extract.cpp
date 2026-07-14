@@ -22,6 +22,7 @@
 
 #include "infer/types.hpp"
 #include "lift/keypoint_format.hpp"
+#include "lift/skeleton_def.hpp"
 #include "slimevr/tracker_extract.hpp"
 #include "slimevr/firmware_protocol.hpp"
 
@@ -185,6 +186,49 @@ void test_t_pose_extracts_all_ten() {
                  + t.quat_wxyz[2]*t.quat_wxyz[2] + t.quat_wxyz[3]*t.quat_wxyz[3];
         check(std::abs(n2 - 1.0f) < 1.0e-3f, "quat not unit length");
     }
+}
+
+void test_floor_correction_preserves_anchor_geometry() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    const auto raw = make_t_pose();
+    auto grounded = raw;
+    const std::array<cv::Vec3f, 2> corrections{
+        cv::Vec3f{0.02f, -0.01f, 0.04f}, cv::Vec3f{0.0f, 0.0f, 0.0f}};
+    for (std::size_t joint : {
+             fitra::lift::kHalpeLeftAnkle,
+             fitra::lift::kHalpeLeftBigToe,
+             fitra::lift::kHalpeLeftSmallToe,
+             fitra::lift::kHalpeLeftHeel}) {
+        if (!grounded.joints[joint].valid) continue;
+        grounded.joints[joint].x += corrections[0][0];
+        grounded.joints[joint].y += corrections[0][1];
+        grounded.joints[joint].z += corrections[0][2];
+    }
+
+    fitra::slimevr::ExtractContext ctx;
+    const auto trackers = fitra::slimevr::extract_trackers_with_floor_corrections(
+        grounded, corrections, &ctx);
+    const auto raw_trackers = fitra::slimevr::extract_trackers(raw);
+    using R = fitra::slimevr::TrackerRole;
+    const auto idx = [](R role) { return static_cast<std::size_t>(role); };
+
+    const cv::Vec3f raw_knee{
+        raw.joints[fitra::lift::kHalpeLeftKnee].x,
+        raw.joints[fitra::lift::kHalpeLeftKnee].y,
+        raw.joints[fitra::lift::kHalpeLeftKnee].z};
+    const cv::Vec3f raw_ankle{
+        raw.joints[fitra::lift::kHalpeLeftAnkle].x,
+        raw.joints[fitra::lift::kHalpeLeftAnkle].y,
+        raw.joints[fitra::lift::kHalpeLeftAnkle].z};
+    check(std::abs(ctx.foot_anchors[0].tibia_len_m
+                   - cv::norm(raw_ankle - raw_knee)) < kEps,
+          "floor correction must not contaminate FootAnchor tibia length");
+    check_vec3_close(trackers[idx(R::LeftLowerLeg)].pos,
+                     raw_trackers[idx(R::LeftLowerLeg)].pos,
+                     "floor correction leaves lower-leg position raw");
+    check_vec3_close(trackers[idx(R::LeftFoot)].pos,
+                     raw_trackers[idx(R::LeftFoot)].pos + corrections[0],
+                     "floor correction is restored only to foot position");
 }
 
 // Chest / Waist height fracs slide the tracker POSITION up the spine without
@@ -1214,6 +1258,7 @@ int main() {
     try {
         test_quat_from_forward_up_degenerate();   std::printf("[ok] quat_from_forward_up degeneracy\n");
         test_t_pose_extracts_all_ten();           std::printf("[ok] T-pose extracts all 10 trackers\n");
+        test_floor_correction_preserves_anchor_geometry(); std::printf("[ok] floor correction preserves FootAnchor geometry\n");
         test_torso_tracker_height_frac();         std::printf("[ok] chest/waist height frac slides position up the spine\n");
         test_role_to_position_mapping();          std::printf("[ok] role → TrackerPosition / sensor_id\n");
         test_missing_joints_yield_invalid();      std::printf("[ok] missing joints → invalid trackers\n");

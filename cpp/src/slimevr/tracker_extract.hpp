@@ -158,6 +158,19 @@ extract_trackers(const infer::Skeleton3D& skel,
                  float chest_height_frac = 0.5f,
                  float waist_height_frac = 0.0f);
 
+// Runtime bridge for a skeleton whose ankle + sole joints were translated by
+// FloorContactStabilizer. The base extraction (including FootAnchor learning
+// and lower-leg orientation) runs on de-grounded geometry; only the two foot
+// tracker positions receive the reported rigid translations afterwards.
+std::array<SlimeTracker, kTrackerCount>
+extract_trackers_with_floor_corrections(
+    const infer::Skeleton3D& grounded_skel,
+    const std::array<cv::Vec3f, 2>& corrections_m,
+    ExtractContext* ctx = nullptr,
+    FootPosMode foot_pos_mode = FootPosMode::Midpoint,
+    float chest_height_frac = 0.5f,
+    float waist_height_frac = 0.0f);
+
 // ---- One Euro filter (speed-adaptive low-pass) ----------------------------
 //
 // The fixed-alpha EMA overloads below cannot be both jitter-free at rest and

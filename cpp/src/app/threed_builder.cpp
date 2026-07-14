@@ -97,18 +97,7 @@ std::unique_ptr<pipeline::MultiCameraDriver> make_driver(
     cfg.kalman_enabled      = opts.kalman_3d;
     cfg.ik_enabled          = opts.ik_3d;
     cfg.floor_contact_stability = opts.floor_contact_stability;
-    cfg.floor_z_m = opts.floor_z_m;
-    cfg.floor_contact_enter_height_m = opts.floor_contact_enter_height_m;
-    cfg.floor_contact_exit_height_m = opts.floor_contact_exit_height_m;
-    cfg.floor_contact_enter_speed_mps = opts.floor_contact_enter_speed_mps;
-    cfg.floor_contact_exit_speed_mps = opts.floor_contact_exit_speed_mps;
-    cfg.floor_contact_xy_tau_s = opts.floor_contact_xy_tau_s;
-    cfg.floor_contact_max_xy_correction_m =
-        opts.floor_contact_max_xy_correction_m;
-    cfg.floor_contact_max_z_correction_m =
-        opts.floor_contact_max_z_correction_m;
-    cfg.floor_contact_missing_grace_frames =
-        opts.floor_contact_missing_grace_frames;
+    cfg.floor_contact       = config::floor_contact_options(opts);
     cfg.bone_calib_frames   = opts.bone_calib_frames;
     cfg.subject_height_m    = threed->subject_height_m;
     cfg.has_subject_profile = threed->has_subject_profile;

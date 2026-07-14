@@ -41,15 +41,7 @@ public:
         bool kalman_enabled = true;
         bool ik_enabled = true;
         bool floor_contact_stability = true;
-        double floor_z_m = 0.0;
-        double floor_contact_enter_height_m = 0.03;
-        double floor_contact_exit_height_m = 0.06;
-        double floor_contact_enter_speed_mps = 0.25;
-        double floor_contact_exit_speed_mps = 0.80;
-        double floor_contact_xy_tau_s = 0.25;
-        double floor_contact_max_xy_correction_m = 0.03;
-        double floor_contact_max_z_correction_m = 0.08;
-        int floor_contact_missing_grace_frames = 2;
+        lift::FloorContactOptions floor_contact;
         int bone_calib_frames = 150;
         double subject_height_m = 0.0;
         bool has_subject_profile = false;
@@ -140,6 +132,7 @@ private:
     lift::SkeletonKalman kalman_;
     lift::IkSolver       ik_;
     lift::FloorContactStabilizer floor_contact_;
+    lift::FloorContactReport     last_floor_report_;
     std::mutex           threed_mu_;
 
     // Tap callbacks. Loop reads these via a local snapshot to avoid holding

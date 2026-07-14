@@ -45,25 +45,32 @@ VR tracker は安定するが、sole 点との相対位置が変わり WebUI 上
 ```text
 triangulate → Kalman → calibration tap / IK → FloorContactStabilizer
                                                 ├→ Skeleton3DBus → WebUI
-                                                └→ TrackerExtractor → VMT / SlimeVR
+                                                └→ TrackerExtractor
+                                                     ├→ 補正前の脚形状で FootAnchor / 向きを更新
+                                                     └→ foot 位置だけ補正を復元 → VMT / SlimeVR
 ```
 
 `FloorContactStabilizer` は `MultiCameraDriver` が 1 個所有し、3D loop thread だけが更新する。
 subject calibration tap は補正前、`bone_len_drift_pct` は IK 出力に対して計算するため、床補正が
-校正値や IK state にフィードバックしない。idle 復帰と `dt > 0.10 s` では履歴をリセットする。
-COCO17 は sole 点を持たないため自動 no-op となる。
+校正値や IK state にフィードバックしない。VR 抽出時は足部へ適用済みの平行移動を一度除いて
+FootAnchor の tibia 長・方向と lower-leg を計算し、左右 foot tracker の位置だけ平行移動を戻す。
+idle 復帰と設定可能な更新 gap（既定 `dt > 0.50 s`）では履歴をリセットする。COCO17 は sole 点を
+持たないため自動 no-op となる。
 
 ### 接地状態機械
 
 左右それぞれに contact latch、前回の生 ankle、XY anchor、直前補正、欠損フレーム数を持つ。
 
 - 観測成立: ankle が valid かつ big-toe / small-toe / heel のうち 2 点以上が valid。
-- 支持高さ: valid sole の最小 Z と `floor_z_m` の差。
+- 支持高さ: valid sole の最小 Z と `floor_z_m` の差。ただし、床より 5 mm 以上低く、次点から
+  enter band より孤立した最下点は三角測量外れ値として invalid 化し、残る 2 点以上で判定する。
 - 接地開始: 前回から速度を計算でき、支持高さ `<= 0.03 m` かつ足首速度 `< 0.25 m/s`。
 - 離地: 支持高さ `> 0.06 m`、速度 `> 0.80 m/s`、XY 補正要求 `> 0.03 m`、または
-  Z 補正要求 `> 0.08 m` のいずれか。大外れ値は clamp せず fail-open する。
+  Z 補正要求 `> 0.08 m` のいずれか。直前補正は時定数 `0.05 s` で 0 へ減衰し、再接地は減衰完了後に
+  許可するため解除時 snap と re-enter chatter を避ける。
 - 欠損猶予: 接地中だけ直前の有界補正を最大 2 フレーム再適用し、3 フレーム目で解放する。
-- 非接地時: sole が床下に入った場合だけ、最大 Z 補正内で足部全体を状態レスに持ち上げる。
+- 非接地時: sole が床下に入った場合は最大 Z 補正まで必ず持ち上げ、8 cm を超える深い貫通も
+  fail-open にしない。離地減衰中も最終支持点が床下へ入らない範囲へ Z 補正を戻す。
 
 開始/終了に別しきい値を使うため、境界付近の contact chatter を避ける。最初の有効フレームは
 速度履歴の seed のみで、いきなり接地させない。
@@ -75,11 +82,12 @@ COCO17 は sole 点を持たないため自動 no-op となる。
 ```text
 alpha = 1 - exp(-dt / 0.25 s)
 a     = a + alpha * (p.xy - a)
-delta = (a - p.xy, floor_z_m - min(valid sole.z))
+delta = (a - p.xy, floor_z_m - robust_min(valid sole.z))
 ```
 
 `delta` を ankle と valid な 3 sole 点へ同一適用する。これは接地足の XY を時定数 0.25 s で
-低域通過しながら、最下点を床面へ置く操作である。左右は state を共有しない。
+低域通過しながら、外れ値除外後の最下点を床面へ置く操作である。左右は state を共有しない。
+接地解除時は `delta_release = delta_prev * exp(-dt / release_tau)` として連続的に 0 へ戻す。
 
 ### 設定と観測性
 
@@ -95,11 +103,16 @@ delta = (a - p.xy, floor_z_m - min(valid sole.z))
 | `floor_contact_max_xy_correction_m` | `0.03` | XY 補正要求の上限 |
 | `floor_contact_max_z_correction_m` | `0.08` | Z 補正要求の上限 |
 | `floor_contact_missing_grace_frames` | `2` | sole 観測欠損の猶予 |
+| `floor_contact_reset_gap_s` | `0.50` | 更新不連続として履歴を捨てる gap |
+| `floor_contact_release_tau_s` | `0.05` | 離地時補正減衰の時定数 |
 
-`/stats3d.stats` と `/ws3d` bundle は左右の contact、補正ノルム、床高を公開する。WebUI 3D viewer は
-接地中の ankle 直下へ緑のリングを表示する。`dump_keypoints_3d` は同じ段を既定 ON で通し、
-`--no-floor-contact-stability` A/B、接地率、補正 p95、左右および pooled 足首 XY RMS、床下 sole 割合を
-summary に出す。
+`/stats3d.stats` と `/ws3d` bundle は左右の contact、当該フレームの sole evidence、fresh/stale、
+実際に適用した補正ノルム、床高を公開する。sync miss / idle snapshot は最後の contact を保持したまま
+`floor_contact_fresh=false` とし、「未更新」を「両足 air」と誤報しない。WebUI 3D viewer は短い stale 区間で
+接地リングを保持し、stats は `plant / grace / air` を分ける。`dump_keypoints_3d` は同じ段を既定 ON で通し、
+`--fps` で入力 cadence を明示上書きできる。接地率の分母は各側の `evidence_valid` フレームだけとし、
+grace を分子に含めず 1.0 を超えない。A/B summary には補正 p95、左右および pooled 足首 XY RMS、
+床下 sole 割合、実効 input fps、左右の observation frame 数を出す。
 
 ## Milestone
 
@@ -117,8 +130,10 @@ ctest --test-dir cpp/build --output-on-failure
 pnpm -C web-ui build
 ```
 
-単体テストでは左右独立、足部の剛体平行移動、XY jitter 80% 以上減衰、床貫通 clamp、全離地条件、
-2 フレーム欠損猶予、長い `dt` / idle 相当 reset、床 offset、COCO17 no-op を固定する。
+単体テストでは左右独立、足部の剛体平行移動、XY jitter 80% 以上減衰、孤立 sole 外れ値除外、
+8 cm 超の床貫通への有界 fail-safe、離地補正の単調減衰、欠損 grace と実適用値の分離、8 fps 相当を
+維持する既定 reset gap、設定した長い `dt` / idle reset、VR FootAnchor の補正前脚長、床 offset、
+COCO17 no-op を固定する。
 
 録画 A/B は静止クリップを同じ engine / calib / frame 数で処理し、
 `ankle_xy_rms_m_pooled` が OFF 比 40% 以上低下、ON の `sole_below_floor_fraction == 0`、
@@ -130,23 +145,26 @@ pnpm -C web-ui build
 VMT / SlimeVR の足 tracker が接地時に安定し離地時に遅延しないことを確認する。ローカル green だけを
 既定値確定の根拠にはせず、実機で問題があれば kill switch で即時切り戻す。
 
-### 2026-07-13 録画検証結果
+### 2026-07-14 レビュー修正後の録画検証結果
 
 `outputs/records/still` の先頭 240 フレームを同じ calibration / TensorRT engine で A/B した。
+録画 metadata の実測値に合わせて `--fps 58.81` を明示した。
 
 | 指標 | OFF | ON | 変化 |
 |---|---:|---:|---:|
-| ankle XY RMS pooled | 3.410 mm | 1.907 mm | **44.1% 低下** |
-| ankle XY RMS left | 4.127 mm | 2.525 mm | 38.8% 低下 |
-| ankle XY RMS right | 2.494 mm | 0.946 mm | 62.0% 低下 |
-| sole below floor | 17.08% | **0%** | 床貫通解消 |
+| ankle XY RMS pooled | 3.390 mm | 1.901 mm | **43.9% 低下** |
+| ankle XY RMS left | 4.097 mm | 2.517 mm | 38.6% 低下 |
+| ankle XY RMS right | 2.489 mm | 0.946 mm | 62.0% 低下 |
+| sole below floor | 17.15% | **0%** | 床貫通解消 |
 | contact ratio L / R | — | 99.17% / 99.58% | 静止接地成立 |
 | correction p95 L / R | — | 11.5 mm / 14.3 mm | 合成上限内 |
 
 再投影誤差 median は ON/OFF とも 1.90781 px で同一（床段は三角測量へ非帰還）。
-`outputs/records/walk_around` 240 フレームでは contact ratio L/R = 37.1% / 31.7%、状態遷移
-L/R = 10 / 12 回、両足 air = 80 フレーム、両足 contact = 5 フレームとなり、歩行中の離地を確認した。
-補正最大ノルムは L/R = 57.6 / 36.2 mm、床下 sole は 0%。
+`outputs/records/walk_around` は `--fps 58.72` で 240 フレーム処理し、観測成立フレームに対する
+contact ratio L/R = 29.6% / 22.5%、状態遷移 L/R = 10 / 8 回、両足 air = 117 フレーム、
+両足 contact = 2 フレームとなり、歩行中の離地を確認した。補正 p95 L/R = 30.0 / 30.9 mm、
+床下 valid sole は 0%。右足の孤立した床下外れ値は 14 フレームで invalid 化され、足全体の持ち上げへ
+波及しなかった。
 
 これは保存録画による数値検証であり、VR出力を含む実機目視は別途必要である。
 

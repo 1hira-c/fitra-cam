@@ -5,6 +5,7 @@
 
 #include "infer/types.hpp"
 #include "lift/floor_contact_stabilizer.hpp"
+#include "lift/skeleton_def.hpp"
 
 namespace {
 
@@ -12,15 +13,15 @@ using fitra::infer::Skeleton3D;
 using fitra::lift::FloorContactOptions;
 using fitra::lift::FloorContactStabilizer;
 
-constexpr std::size_t kLKnee = 13;
-constexpr std::size_t kLAnkle = 15;
-constexpr std::size_t kRAnkle = 16;
-constexpr std::size_t kLBigToe = 20;
-constexpr std::size_t kRBigToe = 21;
-constexpr std::size_t kLSmallToe = 22;
-constexpr std::size_t kRSmallToe = 23;
-constexpr std::size_t kLHeel = 24;
-constexpr std::size_t kRHeel = 25;
+constexpr std::size_t kLKnee = fitra::lift::kHalpeLeftKnee;
+constexpr std::size_t kLAnkle = fitra::lift::kHalpeLeftAnkle;
+constexpr std::size_t kRAnkle = fitra::lift::kHalpeRightAnkle;
+constexpr std::size_t kLBigToe = fitra::lift::kHalpeLeftBigToe;
+constexpr std::size_t kRBigToe = fitra::lift::kHalpeRightBigToe;
+constexpr std::size_t kLSmallToe = fitra::lift::kHalpeLeftSmallToe;
+constexpr std::size_t kRSmallToe = fitra::lift::kHalpeRightSmallToe;
+constexpr std::size_t kLHeel = fitra::lift::kHalpeLeftHeel;
+constexpr std::size_t kRHeel = fitra::lift::kHalpeRightHeel;
 constexpr double kDt = 1.0 / 60.0;
 constexpr float kEps = 1.0e-5f;
 
@@ -80,6 +81,7 @@ void test_contact_rigid_translation_and_side_independence() {
     auto r = st.update(s, kDt);
 
     check(r.feet[0].contact && r.feet[0].corrected, "left contact corrects foot");
+    check(r.feet[0].evidence_valid, "contact has current sole evidence");
     check(!r.feet[1].contact && !r.feet[1].corrected, "right airborne foot untouched");
     close(s.joints[kLBigToe].z, 0.0f, "lowest sole is on floor");
     close(s.joints[kLAnkle].x - ankle_before.x,
@@ -127,15 +129,36 @@ void test_release_conditions() {
         auto high = skeleton(0.0f, 0.07f);
         auto r = st.update(high, kDt);
         check(!r.feet[0].contact, "exit height releases immediately");
-        close(high.joints[kLBigToe].z, 0.07f, "released high foot is raw");
+        check(r.feet[0].corrected && r.feet[0].correction_m[2] < 0.0f,
+              "released high foot retains a decaying correction");
+        check(high.joints[kLBigToe].z > 0.06f
+                  && high.joints[kLBigToe].z < 0.07f,
+              "release removes the correction gradually, not in one frame");
     }
     {
         FloorContactStabilizer st;
         enter_left_contact(st);
+        auto drift = skeleton(0.01f);
+        auto planted = st.update(drift, kDt);
+        check(planted.feet[0].contact
+                  && planted.feet[0].correction_m[0] < -0.005f,
+              "planted frame accumulates a visible XY correction");
         auto fast = skeleton(0.05f);
         auto r = st.update(fast, kDt);
         check(!r.feet[0].contact, "exit speed/XY bound releases immediately");
-        close(fast.joints[kLAnkle].x, 0.05f, "released fast foot is raw");
+        check(r.feet[0].correction_m[0] < 0.0f,
+              "release frame decays the previous XY correction");
+        check(fast.joints[kLAnkle].x < 0.05f,
+              "release frame avoids an XY snap to the raw ankle");
+    }
+    {
+        FloorContactStabilizer st;
+        enter_left_contact(st);
+        auto fast_low = skeleton(0.05f, 0.005f);
+        auto r = st.update(fast_low, kDt);
+        check(!r.feet[0].contact, "fast low foot releases contact");
+        close(fast_low.joints[kLBigToe].z, 0.0f,
+              "release decay cannot pull a sole through the floor");
     }
     {
         FloorContactStabilizer st;
@@ -143,8 +166,49 @@ void test_release_conditions() {
         auto outlier = skeleton(0.0f, -0.09f);
         auto r = st.update(outlier, kDt);
         check(!r.feet[0].contact, "oversized Z correction releases");
-        close(outlier.joints[kLBigToe].z, -0.09f, "oversized Z outlier is fail-open");
+        close(r.feet[0].correction_m[2], 0.08f,
+              "oversized penetration is corrected to the configured cap");
+        close(outlier.joints[kLBigToe].z, -0.01f,
+              "oversized penetration no longer fails open");
     }
+}
+
+void test_isolated_low_sole_outlier_is_rejected() {
+    FloorContactStabilizer st;
+    enter_left_contact(st);
+
+    auto s = skeleton();
+    s.joints[kLBigToe].z = -0.07f;
+    const float ankle_before = s.joints[kLAnkle].z;
+    auto r = st.update(s, kDt);
+
+    check(r.feet[0].contact, "one isolated low sole does not break the latch");
+    check(r.feet[0].sole_outlier_rejected
+              && !s.joints[kLBigToe].valid,
+          "isolated below-floor sole is removed from downstream geometry");
+    check(std::abs(r.feet[0].correction_m[2]) < 0.02f,
+          "one isolated low sole cannot lift the whole foot by centimetres");
+    check(std::abs(s.joints[kLAnkle].z - ankle_before) < 0.02f,
+          "ankle translation uses robust sole support");
+}
+
+void test_release_correction_converges_to_zero() {
+    FloorContactStabilizer st;
+    enter_left_contact(st);
+    auto drift = skeleton(0.01f);
+    st.update(drift, kDt);
+
+    float previous_abs = 1.0f;
+    for (int frame = 0; frame < 30; ++frame) {
+        auto moving = skeleton(0.05f, 0.07f);
+        auto r = st.update(moving, kDt);
+        const float current_abs = std::abs(r.feet[0].correction_m[0]);
+        check(current_abs <= previous_abs + kEps,
+              "release XY correction decays monotonically");
+        previous_abs = current_abs;
+    }
+    check(previous_abs < 1.0e-4f,
+          "release correction converges to zero in bounded time");
 }
 
 void test_missing_grace_then_release() {
@@ -158,6 +222,8 @@ void test_missing_grace_then_release() {
         auto r = st.update(s, kDt);
         check(r.feet[0].contact && r.feet[0].missing_grace,
               "missing frame " + std::to_string(frame) + " stays latched");
+        check(!r.feet[0].evidence_valid,
+              "missing grace is not counted as current contact evidence");
         check(r.feet[0].corrected,
               "missing grace reapplies the last rigid correction");
         close(s.joints[kLBigToe].z, 0.0f,
@@ -168,8 +234,23 @@ void test_missing_grace_then_release() {
     third.joints[kLSmallToe].valid = false;
     third.joints[kLHeel].valid = false;
     auto r3 = st.update(third, kDt);
-    check(!r3.feet[0].contact && !r3.feet[0].corrected,
-          "third missing frame releases");
+    check(!r3.feet[0].contact && r3.feet[0].corrected,
+          "third missing frame releases through the decay path");
+}
+
+void test_full_dropout_reports_no_applied_correction() {
+    FloorContactStabilizer st;
+    enter_left_contact(st);
+    auto missing = skeleton();
+    missing.joints[kLAnkle].valid = false;
+    missing.joints[kLBigToe].valid = false;
+    missing.joints[kLSmallToe].valid = false;
+    missing.joints[kLHeel].valid = false;
+    auto r = st.update(missing, kDt);
+    check(r.feet[0].contact && r.feet[0].missing_grace,
+          "full dropout remains in state-machine grace");
+    check(!r.feet[0].corrected && cv::norm(r.feet[0].correction_m) == 0.0,
+          "full dropout reports zero because no joint was actually corrected");
 }
 
 void test_full_dropout_clears_velocity_history() {
@@ -205,8 +286,17 @@ void test_reset_and_long_dt() {
 
     FloorContactStabilizer st2;
     enter_left_contact(st2);
+    auto low_rate = skeleton();
+    check(st2.update(low_rate, 0.12).feet[0].contact,
+          "default reset gap supports measured rates below 10 fps");
+
+    FloorContactOptions opts;
+    opts.reset_dt_s = 0.10;
+    FloorContactStabilizer st3{opts};
+    enter_left_contact(st3);
     auto after_gap = skeleton();
-    check(!st2.update(after_gap, 0.2).feet[0].contact, "long dt drops latch");
+    check(!st3.update(after_gap, 0.2).feet[0].contact,
+          "configured long dt drops latch");
 }
 
 void test_floor_offset() {
@@ -256,7 +346,10 @@ int main() {
         test_planted_xy_jitter_is_attenuated();
         test_stateless_penetration_clamp();
         test_release_conditions();
+        test_isolated_low_sole_outlier_is_rejected();
+        test_release_correction_converges_to_zero();
         test_missing_grace_then_release();
+        test_full_dropout_reports_no_applied_correction();
         test_full_dropout_clears_velocity_history();
         test_reset_and_long_dt();
         test_floor_offset();

@@ -55,6 +55,8 @@ three_d:
   # floor_contact_max_xy_correction_m: 0.03
   # floor_contact_max_z_correction_m: 0.08
   # floor_contact_missing_grace_frames: 2
+  # floor_contact_reset_gap_s: 0.50
+  # floor_contact_release_tau_s: 0.05
 
 subject:
   subjects_dir: calibrations/subjects

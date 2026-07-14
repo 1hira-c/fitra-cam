@@ -7,6 +7,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
+  HALPE_ANKLE_INDICES,
   PERSON_3D_COLORS,
   KP_THR,
   TRACKER_COUNT,
@@ -333,11 +334,17 @@ export class SkeletonViewer {
     const joints = Array.isArray(person?.joints) ? person.joints : [];
     const floorZ = Number(stats?.floor_z_m ?? 0);
     const active = [stats?.floor_contact_left === true, stats?.floor_contact_right === true];
-    const ankleIndices = [15, 16];
+    const stale = stats?.floor_contact_fresh === false;
 
     for (let side = 0; side < this.floorContactRings.length; side += 1) {
       const ring = this.floorContactRings[side];
-      const ankle = joints[ankleIndices[side]];
+      if (stale && active[side]
+          && performance.now() - this.lastDataAtMs < 3500) {
+        // Match the viewer's short last-person hold across sync misses so the
+        // ring does not flash plant -> air -> plant on a transport gap.
+        continue;
+      }
+      const ankle = joints[HALPE_ANKLE_INDICES[side]];
       if (stats?.floor_stability_enabled !== true || !active[side]
           || !Number.isFinite(floorZ) || !isVisible3DJoint(ankle)) {
         ring.visible = false;

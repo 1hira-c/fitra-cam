@@ -140,6 +140,7 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
         "floor_contact_enter_speed_mps", "floor_contact_exit_speed_mps",
         "floor_contact_xy_tau_s", "floor_contact_max_xy_correction_m",
         "floor_contact_max_z_correction_m", "floor_contact_missing_grace_frames",
+        "floor_contact_reset_gap_s", "floor_contact_release_tau_s",
         "vr_extract_event_driven",
         "vr_one_euro", "vr_pos_mincutoff", "vr_pos_beta", "vr_pos_dcutoff",
         "vr_quat_mincutoff", "vr_quat_beta", "vr_quat_dcutoff",
@@ -208,6 +209,16 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
         out.floor_contact_missing_grace_frames = parse_scalar<int>(
             section["floor_contact_missing_grace_frames"],
             "three_d.floor_contact_missing_grace_frames");
+    }
+    if (section["floor_contact_reset_gap_s"]) {
+        out.floor_contact_reset_gap_s = parse_scalar<double>(
+            section["floor_contact_reset_gap_s"],
+            "three_d.floor_contact_reset_gap_s");
+    }
+    if (section["floor_contact_release_tau_s"]) {
+        out.floor_contact_release_tau_s = parse_scalar<double>(
+            section["floor_contact_release_tau_s"],
+            "three_d.floor_contact_release_tau_s");
     }
     if (section["vr_extract_event_driven"]) {
         out.vr_extract_event_driven = parse_scalar<bool>(
@@ -607,6 +618,14 @@ std::string emit_main_config(const MainOptions& o) {
         e << YAML::Key << "floor_contact_missing_grace_frames"
           << YAML::Value << o.floor_contact_missing_grace_frames;
     }
+    if (o.floor_contact_reset_gap_s != d.floor_contact_reset_gap_s) {
+        e << YAML::Key << "floor_contact_reset_gap_s"
+          << YAML::Value << o.floor_contact_reset_gap_s;
+    }
+    if (o.floor_contact_release_tau_s != d.floor_contact_release_tau_s) {
+        e << YAML::Key << "floor_contact_release_tau_s"
+          << YAML::Value << o.floor_contact_release_tau_s;
+    }
     if (o.vr_extract_event_driven != d.vr_extract_event_driven) e << YAML::Key << "vr_extract_event_driven" << YAML::Value << o.vr_extract_event_driven;
     if (o.vr_one_euro       != d.vr_one_euro)       e << YAML::Key << "vr_one_euro"       << YAML::Value << o.vr_one_euro;
     if (o.vr_pos_mincutoff  != d.vr_pos_mincutoff)  e << YAML::Key << "vr_pos_mincutoff"  << YAML::Value << o.vr_pos_mincutoff;
@@ -853,6 +872,8 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--floor-contact-stability")    { out.floor_contact_stability = true; }
         else if (a == "--no-floor-contact-stability") { out.floor_contact_stability = false; }
         else if (a == "--floor-z-m")                   { out.floor_z_m = std::stod(need(i, "--floor-z-m")); }
+        else if (a == "--floor-contact-reset-gap-s")   { out.floor_contact_reset_gap_s = std::stod(need(i, "--floor-contact-reset-gap-s")); }
+        else if (a == "--floor-contact-release-tau-s") { out.floor_contact_release_tau_s = std::stod(need(i, "--floor-contact-release-tau-s")); }
         else if (a == "--vr-extract-event-driven") { out.vr_extract_event_driven = true; }
         else if (a == "--foot-tracker-pos")  { out.vr_foot_pos_mode = need(i, "--foot-tracker-pos"); }
         else if (a == "--chest-height-frac") { out.vr_chest_height_frac = std::stod(need(i, "--chest-height-frac")); }
@@ -1094,6 +1115,22 @@ bool precheck_mode_switch(const MainOptions& opts, RunMode target,
     return true;
 }
 
+lift::FloorContactOptions floor_contact_options(const MainOptions& opts) {
+    lift::FloorContactOptions out;
+    out.floor_z_m = opts.floor_z_m;
+    out.enter_height_m = opts.floor_contact_enter_height_m;
+    out.exit_height_m = opts.floor_contact_exit_height_m;
+    out.enter_speed_mps = opts.floor_contact_enter_speed_mps;
+    out.exit_speed_mps = opts.floor_contact_exit_speed_mps;
+    out.xy_anchor_tau_s = opts.floor_contact_xy_tau_s;
+    out.max_xy_correction_m = opts.floor_contact_max_xy_correction_m;
+    out.max_z_correction_m = opts.floor_contact_max_z_correction_m;
+    out.missing_grace_frames = opts.floor_contact_missing_grace_frames;
+    out.reset_dt_s = opts.floor_contact_reset_gap_s;
+    out.release_tau_s = opts.floor_contact_release_tau_s;
+    return out;
+}
+
 void validate_options(const MainOptions& opts) {
     const RunMode mode = run_mode(opts);
     if (mode == RunMode::Setup) {
@@ -1318,33 +1355,9 @@ void validate_options(const MainOptions& opts) {
     if (opts.vr_pos_dcutoff <= 0.0 || opts.vr_quat_dcutoff <= 0.0) {
         fail("--vr-{pos,quat}-dcutoff must be > 0");
     }
-    const auto finite = [](double value) { return std::isfinite(value); };
-    if (!finite(opts.floor_z_m)
-        || !finite(opts.floor_contact_enter_height_m)
-        || !finite(opts.floor_contact_exit_height_m)
-        || !finite(opts.floor_contact_enter_speed_mps)
-        || !finite(opts.floor_contact_exit_speed_mps)
-        || !finite(opts.floor_contact_xy_tau_s)
-        || !finite(opts.floor_contact_max_xy_correction_m)
-        || !finite(opts.floor_contact_max_z_correction_m)) {
-        fail("floor-contact settings must be finite");
-    }
-    if (opts.floor_contact_enter_height_m < 0.0
-        || opts.floor_contact_exit_height_m <= opts.floor_contact_enter_height_m) {
-        fail("floor contact heights require 0 <= enter < exit");
-    }
-    if (opts.floor_contact_enter_speed_mps < 0.0
-        || opts.floor_contact_exit_speed_mps <= opts.floor_contact_enter_speed_mps) {
-        fail("floor contact speeds require 0 <= enter < exit");
-    }
-    if (opts.floor_contact_xy_tau_s <= 0.0
-        || opts.floor_contact_max_xy_correction_m <= 0.0
-        || opts.floor_contact_max_z_correction_m <= 0.0) {
-        fail("floor contact tau/correction limits must be > 0");
-    }
-    if (opts.floor_contact_missing_grace_frames < 0
-        || opts.floor_contact_missing_grace_frames > 10) {
-        fail("floor contact missing grace frames must be in [0, 10]");
+    if (const char* error = lift::floor_contact_options_error(
+            floor_contact_options(opts))) {
+        fail(error);
     }
     if (opts.vr_foot_pos_mode != "ankle" && opts.vr_foot_pos_mode != "midpoint") {
         fail("--foot-tracker-pos must be one of ankle|midpoint");

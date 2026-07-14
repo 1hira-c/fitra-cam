@@ -89,6 +89,8 @@ void print_help() {
         "  --floor-contact-stability enable floor-contact foot stabilization (default on)\n"
         "  --no-floor-contact-stability  disable it for live A/B or emergency fallback\n"
         "  --floor-z-m F             floor height in fitra Z-up world metres (default 0)\n"
+        "  --floor-contact-reset-gap-s F  reset latch after this update gap (default 0.50)\n"
+        "  --floor-contact-release-tau-s F release correction decay tau (default 0.05)\n"
         "  --vr-extract-event-driven react to each 3D frame (lower VR latency)\n"
         "  --vr-no-one-euro          use fixed-alpha EMA instead of One Euro smoothing\n"
         "  --vr-pos-mincutoff F      One Euro position at-rest cutoff Hz (default 1.0; lower=smoother)\n"

@@ -9,9 +9,56 @@
 //   24 l_heel,    25 r_heel.
 
 #include <array>
+#include <cstddef>
 #include <utility>
 
 namespace fitra::lift {
+
+// Named Halpe26 landmarks shared by the stabilizer, offline analyzer and VR
+// extractor. Keeping these in the topology header prevents each consumer from
+// silently inventing its own numeric foot layout.
+inline constexpr std::size_t kHalpeLeftShoulder  = 5;
+inline constexpr std::size_t kHalpeRightShoulder = 6;
+inline constexpr std::size_t kHalpeLeftElbow     = 7;
+inline constexpr std::size_t kHalpeRightElbow    = 8;
+inline constexpr std::size_t kHalpeLeftWrist     = 9;
+inline constexpr std::size_t kHalpeRightWrist    = 10;
+inline constexpr std::size_t kHalpeLeftHip       = 11;
+inline constexpr std::size_t kHalpeRightHip      = 12;
+inline constexpr std::size_t kHalpeLeftKnee      = 13;
+inline constexpr std::size_t kHalpeRightKnee     = 14;
+inline constexpr std::size_t kHalpeLeftAnkle     = 15;
+inline constexpr std::size_t kHalpeRightAnkle    = 16;
+inline constexpr std::size_t kHalpeHeadTop       = 17;
+inline constexpr std::size_t kHalpeNeck          = 18;
+inline constexpr std::size_t kHalpeHipCenter     = 19;
+inline constexpr std::size_t kHalpeLeftBigToe    = 20;
+inline constexpr std::size_t kHalpeRightBigToe   = 21;
+inline constexpr std::size_t kHalpeLeftSmallToe  = 22;
+inline constexpr std::size_t kHalpeRightSmallToe = 23;
+inline constexpr std::size_t kHalpeLeftHeel      = 24;
+inline constexpr std::size_t kHalpeRightHeel     = 25;
+
+struct HalpeFootJoints {
+    std::size_t knee;
+    std::size_t ankle;
+    std::array<std::size_t, 3> sole;
+};
+
+// Index 0 = left, 1 = right. `sole[0]` is the big toe used by the VR foot
+// direction; all three sole points participate in floor evidence.
+inline constexpr std::array<HalpeFootJoints, 2> kHalpeFeet{{
+    {kHalpeLeftKnee, kHalpeLeftAnkle,
+     {kHalpeLeftBigToe, kHalpeLeftSmallToe, kHalpeLeftHeel}},
+    {kHalpeRightKnee, kHalpeRightAnkle,
+     {kHalpeRightBigToe, kHalpeRightSmallToe, kHalpeRightHeel}},
+}};
+
+inline constexpr std::array<std::size_t, 6> kHalpeSoleJoints{{
+    kHalpeLeftBigToe, kHalpeRightBigToe,
+    kHalpeLeftSmallToe, kHalpeRightSmallToe,
+    kHalpeLeftHeel, kHalpeRightHeel,
+}};
 
 // ---------------- COCO17 ----------------
 
