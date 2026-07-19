@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include <opencv2/core.hpp>
+
 #include "infer/types.hpp"
 
 namespace fitra::pipeline {
@@ -72,6 +74,21 @@ struct Skeleton3DStats {
     std::string profile_quality_status;
     std::uint64_t processed = 0;
     std::uint64_t sync_miss = 0;
+    bool floor_stability_enabled = false;
+    double floor_z_m = 0.0;
+    // False on sync-miss/idle snapshots. Contact booleans retain the last
+    // state so consumers do not misinterpret a transport gap as both feet
+    // becoming airborne.
+    bool floor_contact_fresh = false;
+    bool floor_contact_left = false;
+    bool floor_contact_right = false;
+    bool floor_evidence_left = false;
+    bool floor_evidence_right = false;
+    double floor_correction_left_m = 0.0;
+    double floor_correction_right_m = 0.0;
+    // Internal world-frame translations used to keep VR FootAnchor geometry
+    // on the ungrounded leg while restoring grounding to foot positions.
+    std::array<cv::Vec3f, 2> floor_corrections_m{};
 };
 
 // Static camera placement in the fitra Z-up world frame, surfaced to the 3D

@@ -37,6 +37,12 @@ std::unique_ptr<tracking::TrackerExtractor> make_tracker_extractor(
     // only — see extract_trackers().
     tex_opts.chest_height_frac = static_cast<float>(opts.vr_chest_height_frac);
     tex_opts.waist_height_frac = static_cast<float>(opts.vr_waist_height_frac);
+    tex_opts.limb_extension.snap = opts.limb_extension_snap_3d;
+    tex_opts.limb_extension.toe_direction = opts.extended_leg_toe_direction_3d;
+    tex_opts.limb_extension.enter_flex_deg =
+        static_cast<float>(opts.extension_snap_enter_deg);
+    tex_opts.limb_extension.exit_flex_deg =
+        static_cast<float>(opts.extension_snap_exit_deg);
     auto extractor = std::make_unique<tracking::TrackerExtractor>(
         bus3d, tracker_bus, tex_opts);
     extractor->set_idle_gate(idle_flag);  // before start(); null = no idling

@@ -2,7 +2,7 @@
 //
 // Runs YOLOX + RTMPose on synchronized recorded videos, triangulates either
 // COCO17 (17 kpts, default) or Halpe26 (26 kpts) joints with a calibration
-// YAML, then optionally applies 3D Kalman + IK.
+// YAML, then optionally applies 3D Kalman + IK + floor-contact stabilization.
 
 #include <algorithm>
 #include <array>
@@ -34,6 +34,7 @@
 #include "infer/trt_engine.hpp"
 #include "infer/yolox.hpp"
 #include "lift/calib_io.hpp"
+#include "lift/floor_contact_stabilizer.hpp"
 #include "lift/ik.hpp"
 #include "lift/kalman.hpp"
 #include "lift/keypoint_format.hpp"
@@ -75,12 +76,16 @@ struct Args {
     int cam1_frame_offset = 0;
     int bone_calib_frames = 150;
     double subject_height_m = 0.0;
+    double fps_override = 0.0;
+    bool fps_override_set = false;
     float det_score = 0.5f;
     float kp_conf_thresh = 0.3f;
     float max_reproj_px = 6.0f;
     bool multi_person = false;
     bool no_kalman = false;
     bool no_ik = false;
+    bool floor_contact_stability = true;
+    fitra::lift::FloorContactOptions floor_contact_opts;
     std::string keypoint_format_str = "coco17";
 };
 
@@ -103,6 +108,7 @@ void print_help() {
         "  --subject-profile-out PATH write subject profile YAML\n"
         "  --quality-out PATH        write quality JSON\n"
         "  --max-frames N            stop after N synchronized frames\n"
+        "  --fps F                   override input cadence used by temporal filters\n"
         "  --cam1-frame-offset N     skip N frames on cam1 before pairing (negative skips cam0)\n"
         "  --det-score F             YOLOX score threshold (default 0.5)\n"
         "  --kp-conf-thresh F        2D keypoint threshold for triangulation (default 0.3)\n"
@@ -112,6 +118,20 @@ void print_help() {
         "  --multi-person            keep all bboxes, but MVP triangulates person 0 only\n"
         "  --no-kalman               disable 3D Kalman smoothing\n"
         "  --no-ik                   disable IK length/hinge projection\n"
+        "  --floor-contact-stability enable floor-contact stabilization (default on)\n"
+        "  --no-floor-contact-stability disable it for A/B output\n"
+        "  --floor-z-m F             floor height in fitra Z-up world metres (default 0)\n"
+        "  --floor-contact-enter-height-m F  contact enter band (default 0.04)\n"
+        "  --floor-contact-exit-height-m F   contact exit band (default 0.08)\n"
+        "  --floor-contact-enter-speed-mps F enter speed (default 0.35)\n"
+        "  --floor-contact-exit-speed-mps F  exit speed (default 1.00)\n"
+        "  --floor-contact-xy-tau-s F        planted XY time constant (default 0.25)\n"
+        "  --floor-contact-max-xy-m F        max XY correction (default 0.04)\n"
+        "  --floor-contact-max-z-m F         max Z correction (default 0.08)\n"
+        "  --floor-contact-missing-grace N   missing-frame grace (default 4)\n"
+        "  --floor-contact-reset-gap-s F     discontinuity reset gap (default 0.50)\n"
+        "  --floor-contact-release-tau-s F   release decay time constant (default 0.05)\n"
+        "  --floor-contact-exit-grace-s F    persistent exit duration (default 0.05)\n"
         "  --keypoint-format FMT     pose topology: coco17 (default) or halpe26\n"
         "  --help                    show this help\n");
 }
@@ -139,6 +159,10 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--subject-profile-out") { args.subject_profile_out = need("--subject-profile-out"); }
         else if (a == "--quality-out")  { args.quality_out = need("--quality-out"); }
         else if (a == "--max-frames")   { args.max_frames = std::atoi(need("--max-frames")); }
+        else if (a == "--fps") {
+            args.fps_override = std::stod(need("--fps"));
+            args.fps_override_set = true;
+        }
         else if (a == "--cam1-frame-offset") { args.cam1_frame_offset = std::atoi(need("--cam1-frame-offset")); }
         else if (a == "--det-score")    { args.det_score = std::stof(need("--det-score")); }
         else if (a == "--kp-conf-thresh") { args.kp_conf_thresh = std::stof(need("--kp-conf-thresh")); }
@@ -148,6 +172,60 @@ Args parse_args(int argc, char** argv) {
         else if (a == "--multi-person") { args.multi_person = true; }
         else if (a == "--no-kalman")    { args.no_kalman = true; }
         else if (a == "--no-ik")        { args.no_ik = true; }
+        else if (a == "--floor-contact-stability") {
+            args.floor_contact_stability = true;
+        }
+        else if (a == "--no-floor-contact-stability") {
+            args.floor_contact_stability = false;
+        }
+        else if (a == "--floor-z-m") {
+            args.floor_contact_opts.floor_z_m =
+                std::stod(need("--floor-z-m"));
+        }
+        else if (a == "--floor-contact-enter-height-m") {
+            args.floor_contact_opts.enter_height_m =
+                std::stod(need("--floor-contact-enter-height-m"));
+        }
+        else if (a == "--floor-contact-exit-height-m") {
+            args.floor_contact_opts.exit_height_m =
+                std::stod(need("--floor-contact-exit-height-m"));
+        }
+        else if (a == "--floor-contact-enter-speed-mps") {
+            args.floor_contact_opts.enter_speed_mps =
+                std::stod(need("--floor-contact-enter-speed-mps"));
+        }
+        else if (a == "--floor-contact-exit-speed-mps") {
+            args.floor_contact_opts.exit_speed_mps =
+                std::stod(need("--floor-contact-exit-speed-mps"));
+        }
+        else if (a == "--floor-contact-xy-tau-s") {
+            args.floor_contact_opts.xy_anchor_tau_s =
+                std::stod(need("--floor-contact-xy-tau-s"));
+        }
+        else if (a == "--floor-contact-max-xy-m") {
+            args.floor_contact_opts.max_xy_correction_m =
+                std::stod(need("--floor-contact-max-xy-m"));
+        }
+        else if (a == "--floor-contact-max-z-m") {
+            args.floor_contact_opts.max_z_correction_m =
+                std::stod(need("--floor-contact-max-z-m"));
+        }
+        else if (a == "--floor-contact-missing-grace") {
+            args.floor_contact_opts.missing_grace_frames =
+                std::atoi(need("--floor-contact-missing-grace"));
+        }
+        else if (a == "--floor-contact-reset-gap-s") {
+            args.floor_contact_opts.reset_dt_s =
+                std::stod(need("--floor-contact-reset-gap-s"));
+        }
+        else if (a == "--floor-contact-release-tau-s") {
+            args.floor_contact_opts.release_tau_s =
+                std::stod(need("--floor-contact-release-tau-s"));
+        }
+        else if (a == "--floor-contact-exit-grace-s") {
+            args.floor_contact_opts.exit_grace_s =
+                std::stod(need("--floor-contact-exit-grace-s"));
+        }
         else if (a == "--keypoint-format") { args.keypoint_format_str = need("--keypoint-format"); }
         else {
             std::fprintf(stderr, "unknown arg: %s\n", argv[i]);
@@ -164,6 +242,16 @@ Args parse_args(int argc, char** argv) {
     }
     if (args.subject_height_m < 0.0 || args.subject_height_m > 2.5) {
         std::fprintf(stderr, "--subject-height-m must be 0 or a plausible meter value <= 2.5\n");
+        std::exit(EXIT_FAILURE);
+    }
+    if (args.fps_override_set
+        && (!std::isfinite(args.fps_override) || args.fps_override <= 0.0)) {
+        std::fprintf(stderr, "--fps must be finite and > 0 when specified\n");
+        std::exit(EXIT_FAILURE);
+    }
+    if (const char* error = fitra::lift::floor_contact_options_error(
+            args.floor_contact_opts)) {
+        std::fprintf(stderr, "%s\n", error);
         std::exit(EXIT_FAILURE);
     }
     if (args.summary.empty()) args.summary = args.out + ".summary.json";
@@ -190,6 +278,47 @@ double median(std::vector<double> vals) {
         m = 0.5 * (m + *mid2);
     }
     return m;
+}
+
+double percentile95(std::vector<double> vals) {
+    if (vals.empty()) return 0.0;
+    std::sort(vals.begin(), vals.end());
+    const std::size_t i = static_cast<std::size_t>(
+        std::ceil(0.95 * static_cast<double>(vals.size()))) - 1;
+    return vals[std::min(i, vals.size() - 1)];
+}
+
+double xy_rms_about_mean(const std::vector<cv::Vec2d>& points) {
+    if (points.empty()) return 0.0;
+    cv::Vec2d mean{0.0, 0.0};
+    for (const auto& point : points) mean += point;
+    mean *= 1.0 / static_cast<double>(points.size());
+
+    double squared_sum = 0.0;
+    for (const auto& point : points) {
+        const cv::Vec2d residual = point - mean;
+        squared_sum += residual.dot(residual);
+    }
+    return std::sqrt(squared_sum / static_cast<double>(points.size()));
+}
+
+double pooled_xy_rms_about_mean(
+    const std::array<std::vector<cv::Vec2d>, 2>& points_by_side) {
+    double squared_sum = 0.0;
+    std::size_t sample_count = 0;
+    for (const auto& points : points_by_side) {
+        if (points.empty()) continue;
+        cv::Vec2d mean{0.0, 0.0};
+        for (const auto& point : points) mean += point;
+        mean *= 1.0 / static_cast<double>(points.size());
+        for (const auto& point : points) {
+            const cv::Vec2d residual = point - mean;
+            squared_sum += residual.dot(residual);
+        }
+        sample_count += points.size();
+    }
+    if (sample_count == 0) return 0.0;
+    return std::sqrt(squared_sum / static_cast<double>(sample_count));
 }
 
 std::string json_escape(const std::string& s) {
@@ -530,7 +659,10 @@ void write_json_line(std::ofstream& out,
                      const fitra::lift::TriangulatedSkeleton& tri,
                      double bone_drift_before,
                      double bone_drift_after,
-                     bool ik_locked) {
+                     bool ik_locked,
+                     bool floor_enabled,
+                     double floor_z_m,
+                     const fitra::lift::FloorContactReport& floor_report) {
     out << "{\"frame\":" << frame
         << ",\"kp_format\":\""
         << fitra::lift::keypoint_format_name(fitra::lift::active_keypoint_format())
@@ -550,6 +682,23 @@ void write_json_line(std::ofstream& out,
     out << ",\"bone_len_drift_before_pct\":" << fmt(bone_drift_before);
     out << ",\"bone_len_drift_pct\":" << fmt(bone_drift_after);
     out << ",\"ik_locked\":" << (ik_locked ? "true" : "false");
+    out << ",\"floor_contact\":{\"enabled\":"
+        << (floor_enabled ? "true" : "false")
+        << ",\"floor_z_m\":" << fmt(floor_z_m);
+    constexpr std::array<const char*, 2> kSideNames{"left", "right"};
+    for (std::size_t side = 0; side < kSideNames.size(); ++side) {
+        const auto& f = floor_report.feet[side];
+        out << ",\"" << kSideNames[side] << "\":{\"contact\":"
+            << (f.contact ? "true" : "false")
+            << ",\"evidence_valid\":" << (f.evidence_valid ? "true" : "false")
+            << ",\"corrected\":" << (f.corrected ? "true" : "false")
+            << ",\"sole_outlier_rejected\":"
+            << (f.sole_outlier_rejected ? "true" : "false")
+            << ",\"missing_grace\":" << (f.missing_grace ? "true" : "false")
+            << ",\"correction_m\":[" << fmt(f.correction_m[0]) << ","
+            << fmt(f.correction_m[1]) << "," << fmt(f.correction_m[2]) << "]}";
+    }
+    out << "}";
     out << ",\"joint_view_counts\":[";
     for (std::size_t k = 0; k < emit_n; ++k) {
         if (k) out << ",";
@@ -630,9 +779,16 @@ int main(int argc, char** argv) {
 
         std::vector<double> med_reproj_values;
         std::vector<double> drift_values;
+        std::array<std::uint64_t, 2> floor_contact_frames{};
+        std::array<std::uint64_t, 2> floor_observation_frames{};
+        std::array<std::vector<double>, 2> floor_corrections;
+        std::array<std::vector<cv::Vec2d>, 2> ankle_xy_samples;
+        std::uint64_t floor_sole_samples = 0;
+        std::uint64_t floor_sole_below = 0;
         int processed = 0;
         int global_frame = 0;
         int frames_with_3d = 0;
+        std::vector<double> effective_input_fps;
         auto start = std::chrono::steady_clock::now();
 
         for (const auto& job : jobs) {
@@ -652,8 +808,11 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < -args.cam1_frame_offset; ++i) caps[0].read(tmp);
             }
 
-            double fps = caps[0].get(cv::CAP_PROP_FPS);
-            if (fps <= 0.0) fps = 30.0;
+            double fps = args.fps_override_set
+                ? args.fps_override
+                : caps[0].get(cv::CAP_PROP_FPS);
+            if (!std::isfinite(fps) || fps <= 0.0) fps = 30.0;
+            effective_input_fps.push_back(fps);
             int w = static_cast<int>(caps[0].get(cv::CAP_PROP_FRAME_WIDTH));
             int h = static_cast<int>(caps[0].get(cv::CAP_PROP_FRAME_HEIGHT));
 
@@ -675,6 +834,8 @@ int main(int argc, char** argv) {
             }
 
             fitra::lift::SkeletonKalman kalman;
+            fitra::lift::FloorContactStabilizer floor_contact{
+                args.floor_contact_opts};
             for (int frame_idx = 0;; ++frame_idx) {
                 if (args.max_frames > 0 && processed >= args.max_frames) break;
                 std::vector<cv::Mat> frames(2);
@@ -712,8 +873,49 @@ int main(int argc, char** argv) {
                 }
                 double drift_after = ik.bone_drift_pct(skel);
 
+                fitra::lift::FloorContactReport floor_report;
+                if (args.floor_contact_stability) {
+                    floor_report = floor_contact.update(skel, 1.0 / fps);
+                    for (std::size_t side = 0; side < floor_report.feet.size(); ++side) {
+                        const auto& f = floor_report.feet[side];
+                        if (f.evidence_valid) {
+                            ++floor_observation_frames[side];
+                            if (f.contact) ++floor_contact_frames[side];
+                        }
+                        if (f.corrected) floor_corrections[side].push_back(cv::norm(f.correction_m));
+                    }
+                }
+
+                for (std::size_t joint : fitra::lift::kHalpeSoleJoints) {
+                    if (joint >= static_cast<std::size_t>(skel.kp_count)
+                        || joint >= skel.joints.size()
+                        || !skel.joints[joint].valid) {
+                        continue;
+                    }
+                    ++floor_sole_samples;
+                    if (skel.joints[joint].z
+                        < static_cast<float>(args.floor_contact_opts.floor_z_m)
+                            - 1.0e-5f) {
+                        ++floor_sole_below;
+                    }
+                }
+
+                for (std::size_t side = 0; side < fitra::lift::kHalpeFeet.size(); ++side) {
+                    const std::size_t joint = fitra::lift::kHalpeFeet[side].ankle;
+                    if (joint >= static_cast<std::size_t>(skel.kp_count)
+                        || joint >= skel.joints.size()
+                        || !skel.joints[joint].valid) {
+                        continue;
+                    }
+                    ankle_xy_samples[side].push_back(
+                        {skel.joints[joint].x, skel.joints[joint].y});
+                }
+
                 write_json_line(jout, global_frame++, job.pose, skel, tri,
-                                drift_before, drift_after, ik.locked());
+                                drift_before, drift_after, ik.locked(),
+                                args.floor_contact_stability,
+                                args.floor_contact_opts.floor_z_m,
+                                floor_report);
                 if (tri.valid_joints > 0) {
                     frames_with_3d += 1;
                     med_reproj_values.push_back(tri.median_reproj_px);
@@ -762,11 +964,38 @@ int main(int argc, char** argv) {
         sout << "{\n";
         sout << "  \"frames\":" << processed << ",\n";
         sout << "  \"frames_with_3d\":" << frames_with_3d << ",\n";
+        sout << "  \"input_fps\":" << fmt(median(effective_input_fps)) << ",\n";
         sout << "  \"runtime_fps\":" << fmt(processed / std::max(secs, 1.0e-9)) << ",\n";
         sout << "  \"reproj_err_med_px\":" << fmt(median(med_reproj_values)) << ",\n";
         sout << "  \"bone_len_drift_pct\":" << fmt(median(drift_values)) << ",\n";
         sout << "  \"ik_locked\":" << (ik.locked() ? "true" : "false") << ",\n";
         sout << "  \"subject_height_m\":" << fmt(args.subject_height_m) << ",\n";
+        const double floor_below_denom = std::max<std::uint64_t>(1, floor_sole_samples);
+        sout << "  \"floor_contact\":{\"enabled\":"
+             << (args.floor_contact_stability ? "true" : "false")
+             << ",\"floor_z_m\":" << fmt(args.floor_contact_opts.floor_z_m)
+             << ",\"contact_ratio_left\":"
+             << fmt(static_cast<double>(floor_contact_frames[0])
+                    / static_cast<double>(std::max<std::uint64_t>(
+                        1, floor_observation_frames[0])))
+             << ",\"contact_ratio_right\":"
+             << fmt(static_cast<double>(floor_contact_frames[1])
+                    / static_cast<double>(std::max<std::uint64_t>(
+                        1, floor_observation_frames[1])))
+             << ",\"observation_frames_left\":" << floor_observation_frames[0]
+             << ",\"observation_frames_right\":" << floor_observation_frames[1]
+             << ",\"correction_p95_m_left\":" << fmt(percentile95(floor_corrections[0]))
+             << ",\"correction_p95_m_right\":" << fmt(percentile95(floor_corrections[1]))
+             << ",\"ankle_xy_rms_m_left\":" << fmt(xy_rms_about_mean(ankle_xy_samples[0]))
+             << ",\"ankle_xy_rms_m_right\":" << fmt(xy_rms_about_mean(ankle_xy_samples[1]))
+             << ",\"ankle_xy_rms_m_pooled\":"
+             << fmt(pooled_xy_rms_about_mean(ankle_xy_samples))
+             << ",\"ankle_samples_left\":" << ankle_xy_samples[0].size()
+             << ",\"ankle_samples_right\":" << ankle_xy_samples[1].size()
+             << ",\"sole_samples\":" << floor_sole_samples
+             << ",\"sole_below_floor_fraction\":"
+             << fmt(static_cast<double>(floor_sole_below) / static_cast<double>(floor_below_denom))
+             << "},\n";
         if (!args.pose_session.empty()) {
             sout << "  \"pose_session\":\"" << json_escape(args.pose_session) << "\",\n";
         }

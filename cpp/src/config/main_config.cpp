@@ -135,10 +135,19 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
     static const std::set<std::string> allowed{
         "enable_3d", "calib", "kp_conf_thresh", "max_reproj_px",
         "sync_window_ms", "bone_calib_frames", "no_3d_kalman", "no_3d_ik",
+        "floor_contact_stability", "floor_z_m",
+        "floor_contact_enter_height_m", "floor_contact_exit_height_m",
+        "floor_contact_enter_speed_mps", "floor_contact_exit_speed_mps",
+        "floor_contact_xy_tau_s", "floor_contact_max_xy_correction_m",
+        "floor_contact_max_z_correction_m", "floor_contact_missing_grace_frames",
+        "floor_contact_reset_gap_s", "floor_contact_release_tau_s",
+        "floor_contact_exit_grace_s",
         "vr_extract_event_driven",
         "vr_one_euro", "vr_quat_smooth", "vr_pos_mincutoff", "vr_pos_beta", "vr_pos_dcutoff",
         "vr_quat_mincutoff", "vr_quat_beta", "vr_quat_dcutoff",
         "vr_foot_pos_mode", "vr_chest_height_frac", "vr_waist_height_frac",
+        "limb_extension_snap", "extended_leg_toe_direction",
+        "extension_snap_enter_deg", "extension_snap_exit_deg",
     };
     check_keys(section, allowed, "three_d");
     if (section["enable_3d"])         out.enable_3d         = parse_scalar<bool>(section["enable_3d"],            "three_d.enable_3d");
@@ -155,6 +164,70 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
     if (section["no_3d_ik"]) {
         out.ik_3d = !parse_scalar<bool>(section["no_3d_ik"], "three_d.no_3d_ik");
     }
+    if (section["floor_contact_stability"]) {
+        out.floor_contact_stability = parse_scalar<bool>(
+            section["floor_contact_stability"],
+            "three_d.floor_contact_stability");
+    }
+    if (section["floor_z_m"]) {
+        out.floor_z_m = parse_scalar<double>(
+            section["floor_z_m"], "three_d.floor_z_m");
+    }
+    if (section["floor_contact_enter_height_m"]) {
+        out.floor_contact_enter_height_m = parse_scalar<double>(
+            section["floor_contact_enter_height_m"],
+            "three_d.floor_contact_enter_height_m");
+    }
+    if (section["floor_contact_exit_height_m"]) {
+        out.floor_contact_exit_height_m = parse_scalar<double>(
+            section["floor_contact_exit_height_m"],
+            "three_d.floor_contact_exit_height_m");
+    }
+    if (section["floor_contact_enter_speed_mps"]) {
+        out.floor_contact_enter_speed_mps = parse_scalar<double>(
+            section["floor_contact_enter_speed_mps"],
+            "three_d.floor_contact_enter_speed_mps");
+    }
+    if (section["floor_contact_exit_speed_mps"]) {
+        out.floor_contact_exit_speed_mps = parse_scalar<double>(
+            section["floor_contact_exit_speed_mps"],
+            "three_d.floor_contact_exit_speed_mps");
+    }
+    if (section["floor_contact_xy_tau_s"]) {
+        out.floor_contact_xy_tau_s = parse_scalar<double>(
+            section["floor_contact_xy_tau_s"],
+            "three_d.floor_contact_xy_tau_s");
+    }
+    if (section["floor_contact_max_xy_correction_m"]) {
+        out.floor_contact_max_xy_correction_m = parse_scalar<double>(
+            section["floor_contact_max_xy_correction_m"],
+            "three_d.floor_contact_max_xy_correction_m");
+    }
+    if (section["floor_contact_max_z_correction_m"]) {
+        out.floor_contact_max_z_correction_m = parse_scalar<double>(
+            section["floor_contact_max_z_correction_m"],
+            "three_d.floor_contact_max_z_correction_m");
+    }
+    if (section["floor_contact_missing_grace_frames"]) {
+        out.floor_contact_missing_grace_frames = parse_scalar<int>(
+            section["floor_contact_missing_grace_frames"],
+            "three_d.floor_contact_missing_grace_frames");
+    }
+    if (section["floor_contact_reset_gap_s"]) {
+        out.floor_contact_reset_gap_s = parse_scalar<double>(
+            section["floor_contact_reset_gap_s"],
+            "three_d.floor_contact_reset_gap_s");
+    }
+    if (section["floor_contact_release_tau_s"]) {
+        out.floor_contact_release_tau_s = parse_scalar<double>(
+            section["floor_contact_release_tau_s"],
+            "three_d.floor_contact_release_tau_s");
+    }
+    if (section["floor_contact_exit_grace_s"]) {
+        out.floor_contact_exit_grace_s = parse_scalar<double>(
+            section["floor_contact_exit_grace_s"],
+            "three_d.floor_contact_exit_grace_s");
+    }
     if (section["vr_extract_event_driven"]) {
         out.vr_extract_event_driven = parse_scalar<bool>(
             section["vr_extract_event_driven"], "three_d.vr_extract_event_driven");
@@ -170,6 +243,10 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
     if (section["vr_foot_pos_mode"])  out.vr_foot_pos_mode  = parse_scalar<std::string>(section["vr_foot_pos_mode"], "three_d.vr_foot_pos_mode");
     if (section["vr_chest_height_frac"]) out.vr_chest_height_frac = parse_scalar<double>(section["vr_chest_height_frac"], "three_d.vr_chest_height_frac");
     if (section["vr_waist_height_frac"]) out.vr_waist_height_frac = parse_scalar<double>(section["vr_waist_height_frac"], "three_d.vr_waist_height_frac");
+    if (section["limb_extension_snap"]) out.limb_extension_snap_3d = parse_scalar<bool>(section["limb_extension_snap"], "three_d.limb_extension_snap");
+    if (section["extended_leg_toe_direction"]) out.extended_leg_toe_direction_3d = parse_scalar<bool>(section["extended_leg_toe_direction"], "three_d.extended_leg_toe_direction");
+    if (section["extension_snap_enter_deg"]) out.extension_snap_enter_deg = parse_scalar<double>(section["extension_snap_enter_deg"], "three_d.extension_snap_enter_deg");
+    if (section["extension_snap_exit_deg"]) out.extension_snap_exit_deg = parse_scalar<double>(section["extension_snap_exit_deg"], "three_d.extension_snap_exit_deg");
 }
 
 void load_subject(const YAML::Node& section, MainOptions& out) {
@@ -481,6 +558,60 @@ std::string emit_main_config(const MainOptions& o) {
     // Negated CLI-equivalent keys: emit the inverse of the positive predicate.
     if (o.kalman_3d != d.kalman_3d) e << YAML::Key << "no_3d_kalman" << YAML::Value << !o.kalman_3d;
     if (o.ik_3d     != d.ik_3d)     e << YAML::Key << "no_3d_ik"     << YAML::Value << !o.ik_3d;
+    if (o.floor_contact_stability != d.floor_contact_stability) {
+        e << YAML::Key << "floor_contact_stability"
+          << YAML::Value << o.floor_contact_stability;
+    }
+    if (o.floor_z_m != d.floor_z_m) {
+        e << YAML::Key << "floor_z_m" << YAML::Value << o.floor_z_m;
+    }
+    if (o.floor_contact_enter_height_m != d.floor_contact_enter_height_m) {
+        e << YAML::Key << "floor_contact_enter_height_m"
+          << YAML::Value << o.floor_contact_enter_height_m;
+    }
+    if (o.floor_contact_exit_height_m != d.floor_contact_exit_height_m) {
+        e << YAML::Key << "floor_contact_exit_height_m"
+          << YAML::Value << o.floor_contact_exit_height_m;
+    }
+    if (o.floor_contact_enter_speed_mps != d.floor_contact_enter_speed_mps) {
+        e << YAML::Key << "floor_contact_enter_speed_mps"
+          << YAML::Value << o.floor_contact_enter_speed_mps;
+    }
+    if (o.floor_contact_exit_speed_mps != d.floor_contact_exit_speed_mps) {
+        e << YAML::Key << "floor_contact_exit_speed_mps"
+          << YAML::Value << o.floor_contact_exit_speed_mps;
+    }
+    if (o.floor_contact_xy_tau_s != d.floor_contact_xy_tau_s) {
+        e << YAML::Key << "floor_contact_xy_tau_s"
+          << YAML::Value << o.floor_contact_xy_tau_s;
+    }
+    if (o.floor_contact_max_xy_correction_m
+        != d.floor_contact_max_xy_correction_m) {
+        e << YAML::Key << "floor_contact_max_xy_correction_m"
+          << YAML::Value << o.floor_contact_max_xy_correction_m;
+    }
+    if (o.floor_contact_max_z_correction_m
+        != d.floor_contact_max_z_correction_m) {
+        e << YAML::Key << "floor_contact_max_z_correction_m"
+          << YAML::Value << o.floor_contact_max_z_correction_m;
+    }
+    if (o.floor_contact_missing_grace_frames
+        != d.floor_contact_missing_grace_frames) {
+        e << YAML::Key << "floor_contact_missing_grace_frames"
+          << YAML::Value << o.floor_contact_missing_grace_frames;
+    }
+    if (o.floor_contact_reset_gap_s != d.floor_contact_reset_gap_s) {
+        e << YAML::Key << "floor_contact_reset_gap_s"
+          << YAML::Value << o.floor_contact_reset_gap_s;
+    }
+    if (o.floor_contact_release_tau_s != d.floor_contact_release_tau_s) {
+        e << YAML::Key << "floor_contact_release_tau_s"
+          << YAML::Value << o.floor_contact_release_tau_s;
+    }
+    if (o.floor_contact_exit_grace_s != d.floor_contact_exit_grace_s) {
+        e << YAML::Key << "floor_contact_exit_grace_s"
+          << YAML::Value << o.floor_contact_exit_grace_s;
+    }
     if (o.vr_extract_event_driven != d.vr_extract_event_driven) e << YAML::Key << "vr_extract_event_driven" << YAML::Value << o.vr_extract_event_driven;
     if (o.vr_one_euro       != d.vr_one_euro)       e << YAML::Key << "vr_one_euro"       << YAML::Value << o.vr_one_euro;
     if (o.vr_quat_smooth    != d.vr_quat_smooth)    e << YAML::Key << "vr_quat_smooth"    << YAML::Value << o.vr_quat_smooth;
@@ -493,6 +624,10 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.vr_foot_pos_mode  != d.vr_foot_pos_mode)  e << YAML::Key << "vr_foot_pos_mode"  << YAML::Value << o.vr_foot_pos_mode;
     if (o.vr_chest_height_frac != d.vr_chest_height_frac) e << YAML::Key << "vr_chest_height_frac" << YAML::Value << o.vr_chest_height_frac;
     if (o.vr_waist_height_frac != d.vr_waist_height_frac) e << YAML::Key << "vr_waist_height_frac" << YAML::Value << o.vr_waist_height_frac;
+    if (o.limb_extension_snap_3d != d.limb_extension_snap_3d) e << YAML::Key << "limb_extension_snap" << YAML::Value << o.limb_extension_snap_3d;
+    if (o.extended_leg_toe_direction_3d != d.extended_leg_toe_direction_3d) e << YAML::Key << "extended_leg_toe_direction" << YAML::Value << o.extended_leg_toe_direction_3d;
+    if (o.extension_snap_enter_deg != d.extension_snap_enter_deg) e << YAML::Key << "extension_snap_enter_deg" << YAML::Value << o.extension_snap_enter_deg;
+    if (o.extension_snap_exit_deg != d.extension_snap_exit_deg) e << YAML::Key << "extension_snap_exit_deg" << YAML::Value << o.extension_snap_exit_deg;
     e << YAML::EndMap;
 
     // subject --------------------------------------------------------------
@@ -715,10 +850,22 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--subject-profile")   { out.subject_profile = need(i, "--subject-profile"); }
         else if (a == "--no-3d-kalman")      { out.kalman_3d = false; }
         else if (a == "--no-3d-ik")          { out.ik_3d = false; }
+        else if (a == "--floor-contact-stability")    { out.floor_contact_stability = true; }
+        else if (a == "--no-floor-contact-stability") { out.floor_contact_stability = false; }
+        else if (a == "--floor-z-m")                   { out.floor_z_m = std::stod(need(i, "--floor-z-m")); }
+        else if (a == "--floor-contact-reset-gap-s")   { out.floor_contact_reset_gap_s = std::stod(need(i, "--floor-contact-reset-gap-s")); }
+        else if (a == "--floor-contact-release-tau-s") { out.floor_contact_release_tau_s = std::stod(need(i, "--floor-contact-release-tau-s")); }
+        else if (a == "--floor-contact-exit-grace-s")  { out.floor_contact_exit_grace_s = std::stod(need(i, "--floor-contact-exit-grace-s")); }
         else if (a == "--vr-extract-event-driven") { out.vr_extract_event_driven = true; }
         else if (a == "--foot-tracker-pos")  { out.vr_foot_pos_mode = need(i, "--foot-tracker-pos"); }
         else if (a == "--chest-height-frac") { out.vr_chest_height_frac = std::stod(need(i, "--chest-height-frac")); }
         else if (a == "--waist-height-frac") { out.vr_waist_height_frac = std::stod(need(i, "--waist-height-frac")); }
+        else if (a == "--limb-extension-snap") { out.limb_extension_snap_3d = true; }
+        else if (a == "--no-limb-extension-snap") { out.limb_extension_snap_3d = false; }
+        else if (a == "--extended-leg-toe-direction") { out.extended_leg_toe_direction_3d = true; }
+        else if (a == "--no-extended-leg-toe-direction") { out.extended_leg_toe_direction_3d = false; }
+        else if (a == "--extension-snap-enter-deg") { out.extension_snap_enter_deg = std::stod(need(i, "--extension-snap-enter-deg")); }
+        else if (a == "--extension-snap-exit-deg") { out.extension_snap_exit_deg = std::stod(need(i, "--extension-snap-exit-deg")); }
         else if (a == "--vr-no-one-euro")    { out.vr_one_euro = false; }
         else if (a == "--vr-quat-smooth")    { out.vr_quat_smooth = std::stod(need(i, "--vr-quat-smooth")); }
         else if (a == "--vr-pos-mincutoff")  { out.vr_pos_mincutoff  = std::stod(need(i, "--vr-pos-mincutoff")); }
@@ -951,6 +1098,23 @@ bool precheck_mode_switch(const MainOptions& opts, RunMode target,
     return true;
 }
 
+lift::FloorContactOptions floor_contact_options(const MainOptions& opts) {
+    lift::FloorContactOptions out;
+    out.floor_z_m = opts.floor_z_m;
+    out.enter_height_m = opts.floor_contact_enter_height_m;
+    out.exit_height_m = opts.floor_contact_exit_height_m;
+    out.enter_speed_mps = opts.floor_contact_enter_speed_mps;
+    out.exit_speed_mps = opts.floor_contact_exit_speed_mps;
+    out.xy_anchor_tau_s = opts.floor_contact_xy_tau_s;
+    out.max_xy_correction_m = opts.floor_contact_max_xy_correction_m;
+    out.max_z_correction_m = opts.floor_contact_max_z_correction_m;
+    out.missing_grace_frames = opts.floor_contact_missing_grace_frames;
+    out.reset_dt_s = opts.floor_contact_reset_gap_s;
+    out.release_tau_s = opts.floor_contact_release_tau_s;
+    out.exit_grace_s = opts.floor_contact_exit_grace_s;
+    return out;
+}
+
 void validate_options(const MainOptions& opts) {
     const RunMode mode = run_mode(opts);
     if (mode == RunMode::Setup) {
@@ -1162,6 +1326,10 @@ void validate_options(const MainOptions& opts) {
         || opts.vr_quat_smooth < 0.0 || opts.vr_quat_smooth > 1.0) {
         fail("--vr-quat-smooth must be a finite value in [0, 1]");
     }
+    if (const char* error = lift::floor_contact_options_error(
+            floor_contact_options(opts))) {
+        fail(error);
+    }
     if (opts.vr_foot_pos_mode != "ankle" && opts.vr_foot_pos_mode != "midpoint") {
         fail("--foot-tracker-pos must be one of ankle|midpoint");
     }
@@ -1170,6 +1338,13 @@ void validate_options(const MainOptions& opts) {
     }
     if (opts.vr_waist_height_frac < 0.0 || opts.vr_waist_height_frac > 1.0) {
         fail("--waist-height-frac must be in [0, 1] (0 = hip_center, 1 = neck)");
+    }
+    if (!std::isfinite(opts.extension_snap_enter_deg) ||
+        !std::isfinite(opts.extension_snap_exit_deg) ||
+        opts.extension_snap_exit_deg < 0.0 ||
+        opts.extension_snap_exit_deg >= opts.extension_snap_enter_deg ||
+        opts.extension_snap_enter_deg >= 90.0) {
+        fail("--extension-snap-{enter,exit}-deg require 0 <= exit < enter < 90");
     }
     if (opts.calibrate && !opts.enable_3d) {
         fail("--calibrate requires --enable-3d");

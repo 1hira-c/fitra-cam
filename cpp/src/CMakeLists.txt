@@ -11,6 +11,7 @@ add_library(fitra_lift STATIC
     lift/floor_extrinsic_solver.cpp
     lift/floor_map_sfm.cpp
     lift/charuco_board.cpp
+    lift/floor_contact_stabilizer.cpp
     lift/kalman.cpp
     lift/ik.cpp
     lift/subject_profile.cpp

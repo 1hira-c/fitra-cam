@@ -135,6 +135,12 @@ export function build3dStatsText(
       `\ncont_updates   ${cont.updates ?? 0}/${cont.resolves ?? 0}`;
   }
 
+  const floorSide = (contact?: boolean, evidence?: boolean): string => {
+    if (!contact) return "air";
+    return evidence === false ? "grace" : "plant";
+  };
+  const floorFreshness = s.floor_contact_fresh === false ? "stale " : "";
+
   const text =
     `tri_fps         ${(s.tri_fps ?? 0).toFixed(2)}\n` +
     `reproj_med_px  ${(s.reproj_err_med_px ?? 0).toFixed(2)}\n` +
@@ -149,6 +155,10 @@ export function build3dStatsText(
     `processed      ${s.processed ?? 0}\n` +
     `sync_miss      ${s.sync_miss ?? 0}\n` +
     `ik_locked      ${s.ik_locked ? "true" : "false"}\n` +
+    `floor_contact  ${s.floor_stability_enabled
+      ? `${floorFreshness}L=${floorSide(s.floor_contact_left, s.floor_evidence_left)} R=${floorSide(s.floor_contact_right, s.floor_evidence_right)}`
+      : "off"}\n` +
+    `floor_corr_m   L=${(s.floor_correction_left_m ?? 0).toFixed(3)} R=${(s.floor_correction_right_m ?? 0).toFixed(3)}\n` +
     `bundle_seq     ${server3dSeq}` +
     vmtLine +
     discLine +

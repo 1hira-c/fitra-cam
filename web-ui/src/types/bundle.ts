@@ -171,6 +171,15 @@ export interface Stats3D {
   processed?: number;
   sync_miss?: number;
   ik_locked?: boolean;
+  floor_stability_enabled?: boolean;
+  floor_z_m?: number;
+  floor_contact_fresh?: boolean;
+  floor_contact_left?: boolean;
+  floor_contact_right?: boolean;
+  floor_evidence_left?: boolean;
+  floor_evidence_right?: boolean;
+  floor_correction_left_m?: number;
+  floor_correction_right_m?: number;
 }
 
 export interface Bundle3D {

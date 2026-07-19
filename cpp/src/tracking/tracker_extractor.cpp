@@ -174,9 +174,10 @@ void TrackerExtractor::run_loop() {
         // world-absolute hold (the legacy behavior).
         pos_ctx_.hip_valid = false;
         if (sk != nullptr && halpe) {
-            raw_trackers = extract_trackers(*sk, &extract_ctx_, opts_.foot_pos_mode,
-                                            opts_.chest_height_frac,
-                                            opts_.waist_height_frac);
+            raw_trackers = extract_trackers_with_floor_corrections(
+                *sk, snap.stats.floor_corrections_m, &extract_ctx_,
+                opts_.foot_pos_mode, opts_.chest_height_frac,
+                opts_.waist_height_frac, opts_.limb_extension);
             // Halpe26 idx 19 = hip_center. This is the anatomical pelvis anchor
             // for the hip-relative position hold; the waist tracker is built
             // from the same joint (offset up the spine by waist_height_frac), so

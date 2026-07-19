@@ -213,6 +213,36 @@ set_target_properties(fitra_test_triangulator PROPERTIES
 
 add_test(NAME test_triangulator COMMAND fitra_test_triangulator)
 
+add_executable(fitra_test_floor_contact_stabilizer
+    test_floor_contact_stabilizer.cpp
+)
+
+target_link_libraries(fitra_test_floor_contact_stabilizer PRIVATE
+    fitra_lift
+)
+
+set_target_properties(fitra_test_floor_contact_stabilizer PROPERTIES
+    OUTPUT_NAME "test_floor_contact_stabilizer"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_floor_contact_stabilizer COMMAND fitra_test_floor_contact_stabilizer)
+
+add_executable(fitra_test_snapshot_floor_stats
+    test_snapshot_floor_stats.cpp
+)
+
+target_link_libraries(fitra_test_snapshot_floor_stats PRIVATE
+    fitra_pipeline
+)
+
+set_target_properties(fitra_test_snapshot_floor_stats PROPERTIES
+    OUTPUT_NAME "test_snapshot_floor_stats"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_snapshot_floor_stats COMMAND fitra_test_snapshot_floor_stats)
+
 add_executable(fitra_test_pose_recognizer
     test_pose_recognizer.cpp
 )

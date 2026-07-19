@@ -23,6 +23,7 @@ namespace {
 using fitra::config::EarlyArgs;
 using fitra::config::MainOptions;
 using fitra::config::apply_cli_overrides;
+using fitra::config::floor_contact_options;
 using fitra::config::load_main_config;
 using fitra::config::scan_early_args;
 using fitra::config::validate_options;
@@ -592,6 +593,192 @@ void test_tracker_stream_vmt_settings_validate_without_vmt_output() {
         check_contains(e.what(), "--vmt-pos-smooth", "tracker pos smooth validation without VMT output");
     }
     check(threw, "invalid tracker position smoothing must fail even without VMT output");
+}
+
+void test_floor_contact_yaml_cli_emit_and_validate() {
+    MainOptions defaults;
+    check(defaults.floor_contact_stability, "floor contact defaults on");
+    check(std::abs(defaults.floor_contact_enter_height_m - 0.04) < 1e-9
+              && std::abs(defaults.floor_contact_exit_height_m - 0.08) < 1e-9,
+          "floor contact defaults leave a wider height hysteresis");
+    check(std::abs(defaults.floor_contact_enter_speed_mps - 0.35) < 1e-9
+              && std::abs(defaults.floor_contact_exit_speed_mps - 1.00) < 1e-9,
+          "floor contact defaults tolerate measured 3D speed jitter");
+    check(defaults.floor_contact_missing_grace_frames == 4
+              && std::abs(defaults.floor_contact_exit_grace_s - 0.05) < 1e-9,
+          "floor contact defaults debounce missing and transient exit evidence");
+    check(std::abs(defaults.floor_contact_reset_gap_s - 0.50) < 1e-9,
+          "floor contact reset gap supports low-rate input by default");
+
+    auto p = write_tmp("floor_contact.yaml", R"(schema: fitra_main_config_v1
+three_d:
+  floor_contact_stability: false
+  floor_z_m: 0.12
+  floor_contact_enter_height_m: 0.04
+  floor_contact_exit_height_m: 0.07
+  floor_contact_enter_speed_mps: 0.3
+  floor_contact_exit_speed_mps: 0.9
+  floor_contact_xy_tau_s: 0.4
+  floor_contact_max_xy_correction_m: 0.025
+  floor_contact_max_z_correction_m: 0.09
+  floor_contact_missing_grace_frames: 1
+  floor_contact_reset_gap_s: 0.7
+  floor_contact_release_tau_s: 0.08
+  floor_contact_exit_grace_s: 0.12
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(!opts.floor_contact_stability, "floor contact YAML bool loads");
+    check(std::abs(opts.floor_z_m - 0.12) < 1e-9, "floor_z_m loads");
+    check(std::abs(opts.floor_contact_enter_height_m - 0.04) < 1e-9,
+          "floor enter height loads");
+    check(std::abs(opts.floor_contact_exit_speed_mps - 0.9) < 1e-9,
+          "floor exit speed loads");
+    check(opts.floor_contact_missing_grace_frames == 1,
+          "floor missing grace loads");
+    check(std::abs(opts.floor_contact_reset_gap_s - 0.7) < 1e-9,
+          "floor reset gap loads");
+    check(std::abs(opts.floor_contact_release_tau_s - 0.08) < 1e-9,
+          "floor release tau loads");
+    check(std::abs(opts.floor_contact_exit_grace_s - 0.12) < 1e-9,
+          "floor exit grace loads");
+
+    const auto floor = floor_contact_options(opts);
+    check(std::abs(floor.reset_dt_s - 0.7) < 1e-9
+              && std::abs(floor.release_tau_s - 0.08) < 1e-9
+              && std::abs(floor.exit_grace_s - 0.12) < 1e-9,
+          "flat config maps once into typed floor options");
+
+    std::vector<std::string> argv_buf{
+        "--floor-contact-stability", "--floor-z-m", "0.2",
+        "--floor-contact-reset-gap-s", "0.8",
+        "--floor-contact-release-tau-s", "0.06",
+        "--floor-contact-exit-grace-s", "0.09",
+        "--no-floor-contact-stability"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(!opts.floor_contact_stability, "last floor CLI toggle wins");
+    check(std::abs(opts.floor_z_m - 0.2) < 1e-9, "floor-z CLI overrides YAML");
+    check(std::abs(opts.floor_contact_reset_gap_s - 0.8) < 1e-9,
+          "floor reset gap CLI overrides YAML");
+    check(std::abs(opts.floor_contact_exit_grace_s - 0.09) < 1e-9,
+          "floor exit grace CLI overrides YAML");
+
+    opts.cam_paths[0] = "/tmp/a";
+    opts.det_engine = "/tmp/y";
+    opts.pose_engine = "/tmp/r";
+    opts.floor_contact_exit_height_m = opts.floor_contact_enter_height_m;
+    bool threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "enter < exit", "floor height validation msg");
+    }
+    check(threw, "invalid floor contact hysteresis must throw");
+
+    opts.floor_contact_exit_height_m = 0.07;
+    opts.floor_contact_exit_grace_s = -0.01;
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), ">= 0", "floor exit grace validation msg");
+    }
+    check(threw, "negative floor exit grace must throw");
+
+    opts.floor_contact_exit_grace_s = 0.05;
+    opts.floor_z_m = std::nan("");
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "finite", "floor finite validation msg");
+    }
+    check(threw, "non-finite floor contact settings must throw");
+}
+
+void test_limb_extension_yaml_cli_round_trip_and_validate() {
+    MainOptions defaults;
+    check(defaults.limb_extension_snap_3d,
+          "limb_extension_snap product default is ON");
+    check(defaults.extended_leg_toe_direction_3d,
+          "extended_leg_toe_direction product default is ON");
+
+    auto p = write_tmp("limb_extension.yaml", R"(schema: fitra_main_config_v1
+three_d:
+  limb_extension_snap: false
+  extended_leg_toe_direction: false
+  extension_snap_enter_deg: 18.0
+  extension_snap_exit_deg: 10.0
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(!opts.limb_extension_snap_3d, "limb_extension_snap YAML false loads");
+    check(!opts.extended_leg_toe_direction_3d,
+          "extended_leg_toe_direction YAML false loads");
+    check(std::abs(opts.extension_snap_enter_deg - 18.0) < 1e-9,
+          "extension_snap_enter_deg YAML loads");
+    check(std::abs(opts.extension_snap_exit_deg - 10.0) < 1e-9,
+          "extension_snap_exit_deg YAML loads");
+
+    std::vector<std::string> argv_buf{
+        "--limb-extension-snap", "--extended-leg-toe-direction",
+        "--extension-snap-enter-deg", "21.0",
+        "--extension-snap-exit-deg", "11.0"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(opts.limb_extension_snap_3d, "--limb-extension-snap enables feature");
+    check(opts.extended_leg_toe_direction_3d,
+          "--extended-leg-toe-direction enables feature");
+    check(std::abs(opts.extension_snap_enter_deg - 21.0) < 1e-9,
+          "--extension-snap-enter-deg overrides YAML");
+    check(std::abs(opts.extension_snap_exit_deg - 11.0) < 1e-9,
+          "--extension-snap-exit-deg overrides YAML");
+
+    auto rt = write_tmp("limb_extension_round_trip.yaml", "");
+    save_main_config(rt.string(), opts);
+    MainOptions back;
+    load_main_config(rt.string(), back);
+    check(back.limb_extension_snap_3d && back.extended_leg_toe_direction_3d,
+          "limb extension feature flags round-trip");
+    check(std::abs(back.extension_snap_enter_deg - 21.0) < 1e-9 &&
+          std::abs(back.extension_snap_exit_deg - 11.0) < 1e-9,
+          "limb extension thresholds round-trip");
+
+    std::vector<std::string> off_argv_buf{
+        "--no-limb-extension-snap",
+        "--no-extended-leg-toe-direction"};
+    auto off_argv = make_argv(off_argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(off_argv.size()), off_argv.data());
+    check(!opts.limb_extension_snap_3d,
+          "--no-limb-extension-snap disables product default");
+    check(!opts.extended_leg_toe_direction_3d,
+          "--no-extended-leg-toe-direction disables product default");
+
+    auto off_rt = write_tmp("limb_extension_off_round_trip.yaml", "");
+    save_main_config(off_rt.string(), opts);
+    MainOptions off_back;
+    load_main_config(off_rt.string(), off_back);
+    check(!off_back.limb_extension_snap_3d &&
+          !off_back.extended_leg_toe_direction_3d,
+          "limb extension explicit OFF flags round-trip against ON defaults");
+
+    opts.cam_paths[0] = "/tmp/cam";
+    opts.det_engine = "/tmp/det.engine";
+    opts.pose_engine = "/tmp/pose.engine";
+    validate_options(opts);
+    opts.extension_snap_exit_deg = 21.0;
+    bool threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "extension-snap", "extension threshold validation msg");
+    }
+    check(threw, "extension exit >= enter must throw");
 }
 
 void test_early_args_extracts_config_and_probe() {
@@ -1168,6 +1355,19 @@ void test_emit_load_round_trip() {
     o.bone_calib_frames = 200;
     o.kalman_3d = false;   // -> no_3d_kalman: true
     o.ik_3d = false;       // -> no_3d_ik: true
+    o.floor_contact_stability = false;
+    o.floor_z_m = 0.12;
+    o.floor_contact_enter_height_m = 0.04;
+    o.floor_contact_exit_height_m = 0.07;
+    o.floor_contact_enter_speed_mps = 0.30;
+    o.floor_contact_exit_speed_mps = 0.90;
+    o.floor_contact_xy_tau_s = 0.40;
+    o.floor_contact_max_xy_correction_m = 0.025;
+    o.floor_contact_max_z_correction_m = 0.09;
+    o.floor_contact_missing_grace_frames = 1;
+    o.floor_contact_reset_gap_s = 0.7;
+    o.floor_contact_release_tau_s = 0.08;
+    o.floor_contact_exit_grace_s = 0.11;
     o.vr_extract_event_driven = true; o.vr_one_euro = false;
     o.vr_pos_mincutoff = 2.0; o.vr_pos_beta = 6.0; o.vr_quat_beta = 2.5;
     o.subjects_dir = "calibrations/subjects"; o.subject_id = "alice";
@@ -1246,6 +1446,34 @@ void test_emit_load_round_trip() {
     eq_i(o.bone_calib_frames, r.bone_calib_frames, "bone_calib_frames");
     eq_b(o.kalman_3d, r.kalman_3d, "kalman_3d (negated key)");
     eq_b(o.ik_3d, r.ik_3d, "ik_3d (negated key)");
+    eq_b(o.floor_contact_stability, r.floor_contact_stability,
+         "floor_contact_stability");
+    eq_f(o.floor_z_m, r.floor_z_m, "floor_z_m");
+    eq_f(o.floor_contact_enter_height_m, r.floor_contact_enter_height_m,
+         "floor_contact_enter_height_m");
+    eq_f(o.floor_contact_exit_height_m, r.floor_contact_exit_height_m,
+         "floor_contact_exit_height_m");
+    eq_f(o.floor_contact_enter_speed_mps, r.floor_contact_enter_speed_mps,
+         "floor_contact_enter_speed_mps");
+    eq_f(o.floor_contact_exit_speed_mps, r.floor_contact_exit_speed_mps,
+         "floor_contact_exit_speed_mps");
+    eq_f(o.floor_contact_xy_tau_s, r.floor_contact_xy_tau_s,
+         "floor_contact_xy_tau_s");
+    eq_f(o.floor_contact_max_xy_correction_m,
+         r.floor_contact_max_xy_correction_m,
+         "floor_contact_max_xy_correction_m");
+    eq_f(o.floor_contact_max_z_correction_m,
+         r.floor_contact_max_z_correction_m,
+         "floor_contact_max_z_correction_m");
+    eq_i(o.floor_contact_missing_grace_frames,
+         r.floor_contact_missing_grace_frames,
+         "floor_contact_missing_grace_frames");
+    eq_f(o.floor_contact_reset_gap_s, r.floor_contact_reset_gap_s,
+         "floor_contact_reset_gap_s");
+    eq_f(o.floor_contact_release_tau_s, r.floor_contact_release_tau_s,
+         "floor_contact_release_tau_s");
+    eq_f(o.floor_contact_exit_grace_s, r.floor_contact_exit_grace_s,
+         "floor_contact_exit_grace_s");
     eq_b(o.vr_extract_event_driven, r.vr_extract_event_driven, "vr_extract_event_driven");
     eq_b(o.vr_one_euro, r.vr_one_euro, "vr_one_euro");
     eq_f(o.vr_pos_mincutoff, r.vr_pos_mincutoff, "vr_pos_mincutoff");
@@ -1468,6 +1696,10 @@ const TestCase kTests[] = {
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
     {"tracker_stream_vmt_settings_validate_without_vmt_output",
                                                test_tracker_stream_vmt_settings_validate_without_vmt_output},
+    {"floor_contact_yaml_cli_emit_and_validate",
+                                               test_floor_contact_yaml_cli_emit_and_validate},
+    {"limb_extension_yaml_cli_round_trip_and_validate",
+                                               test_limb_extension_yaml_cli_round_trip_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},
     {"early_args_extracts_config_and_probe",   test_early_args_extracts_config_and_probe},

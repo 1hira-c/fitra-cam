@@ -19,6 +19,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "lift/floor_contact_options.hpp"
+
 namespace fitra::config {
 
 struct MainOptions {
@@ -92,6 +94,24 @@ struct MainOptions {
     // negated flags; the runtime predicate stays positive (kalman_3d / ik_3d).
     bool   kalman_3d = true;
     bool   ik_3d     = true;
+    // Output-stage Halpe26 foot stabilization. Contact is detected from the
+    // sole points and one bounded translation is applied to ankle + sole, so
+    // both the WebUI skeleton and the default ankle-based VR foot position use
+    // the same grounded result. Default on; --no-floor-contact-stability is
+    // the live kill switch. COCO17 is an automatic no-op.
+    bool   floor_contact_stability = true;
+    double floor_z_m = 0.0;
+    double floor_contact_enter_height_m = 0.04;
+    double floor_contact_exit_height_m = 0.08;
+    double floor_contact_enter_speed_mps = 0.35;
+    double floor_contact_exit_speed_mps = 1.00;
+    double floor_contact_xy_tau_s = 0.25;
+    double floor_contact_max_xy_correction_m = 0.04;
+    double floor_contact_max_z_correction_m = 0.08;
+    int    floor_contact_missing_grace_frames = 4;
+    double floor_contact_reset_gap_s = 0.50;
+    double floor_contact_release_tau_s = 0.05;
+    double floor_contact_exit_grace_s = 0.05;
     // VR tracker extraction: react to each new 3D frame (event-driven) instead
     // of resampling at a fixed cadence. Cuts the extractor's contribution to
     // capture->VR-send latency. Feeds VMT and the WebUI. Default off.
@@ -120,6 +140,16 @@ struct MainOptions {
     // Position only (VMT publish + WebUI viz); rotation is unchanged. [0, 1].
     double vr_chest_height_frac = 0.65;
     double vr_waist_height_frac = 0.15;
+    // Near-extension tracker reconstruction (product default ON).
+    // Snap straightens the tracker-facing arm/leg chain without mutating the
+    // published 3D skeleton; toe-direction supplies extended thigh/shin twist
+    // from ankle->big-toe. Thresholds are flexion away from straight. The
+    // directional hysteresis enters early while extending and exits early
+    // while flexing, hence exit < enter.
+    bool   limb_extension_snap_3d = true;
+    bool   extended_leg_toe_direction_3d = true;
+    double extension_snap_enter_deg = 20.0;
+    double extension_snap_exit_deg = 12.0;
 
     // subject — identity (used by both run and subject calibration). Lives in
     // the YAML `subject:` block; subject_id + subject_height_m are the single
@@ -385,6 +415,10 @@ void load_main_config(const std::string& path, MainOptions& out);
 //
 // Pass `argv + 1` (i.e. skip the program name) and the matching argc.
 void apply_cli_overrides(MainOptions& out, int argc, char** argv);
+
+// Translate the flat YAML/CLI schema once at the config boundary. Runtime and
+// offline consumers then share the same typed option validation.
+lift::FloorContactOptions floor_contact_options(const MainOptions& opts);
 
 // Convenience: report whether the user asked for --probe, --help, or supplied
 // a --config PATH, without otherwise mutating `out`. `config_path` is set to

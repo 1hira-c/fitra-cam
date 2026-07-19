@@ -7,6 +7,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
+  HALPE_ANKLE_INDICES,
   PERSON_3D_COLORS,
   KP_THR,
   TRACKER_COUNT,
@@ -35,6 +36,9 @@ const CAMERA_FRUSTUM_COLOR = 0xffc233;
 const CAMERA_FRUSTUM_DEPTH = 0.2; // metres from apex to opening
 const CAMERA_FRUSTUM_HALF_W = 0.13;
 const CAMERA_FRUSTUM_HALF_H = 0.1;
+const FLOOR_CONTACT_COLOR = 0x33ee77;
+const FLOOR_CONTACT_RING_INNER_M = 0.055;
+const FLOOR_CONTACT_RING_OUTER_M = 0.075;
 // World (Z-up, X-right, Y-forward) → Three.js (Y-up) basis change = Rx(-90°).
 const WORLD_TO_THREE_QUAT = (() => {
   const k = 0.7071067811865475; // 1/√2
@@ -98,6 +102,8 @@ export class SkeletonViewer {
   private renderer: THREE.WebGLRenderer | null = null;
   private controls!: OrbitControls;
   private peopleRoot!: THREE.Group;
+  private floorContactRoot!: THREE.Group;
+  private floorContactRings: THREE.Mesh[] = [];
   private trackersRoot!: THREE.Group;
   private trackersVisible = true;
   private trackerViews: TrackerView[] = [];
@@ -139,6 +145,29 @@ export class SkeletonViewer {
 
     this.peopleRoot = new THREE.Group();
     this.scene.add(this.peopleRoot);
+
+    this.floorContactRoot = new THREE.Group();
+    this.scene.add(this.floorContactRoot);
+    const contactGeometry = new THREE.RingGeometry(
+      FLOOR_CONTACT_RING_INNER_M,
+      FLOOR_CONTACT_RING_OUTER_M,
+      32,
+    );
+    const contactMaterial = new THREE.MeshBasicMaterial({
+      color: FLOOR_CONTACT_COLOR,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+    });
+    for (let side = 0; side < 2; side += 1) {
+      const ring = new THREE.Mesh(contactGeometry, contactMaterial);
+      ring.rotation.x = -Math.PI / 2;
+      ring.visible = false;
+      ring.frustumCulled = false;
+      this.floorContactRoot.add(ring);
+      this.floorContactRings.push(ring);
+    }
 
     this.trackersRoot = new THREE.Group();
     this.scene.add(this.trackersRoot);
@@ -261,6 +290,7 @@ export class SkeletonViewer {
     this.updateCameras(Array.isArray(bundle?.cameras) ? bundle.cameras : []);
     // HMD marker is likewise independent of the person/disabled branches.
     this.updateHmd(bundle?.hmd);
+    this.updateFloorContacts(bundle);
 
     if (!bundle || bundle.enabled === false) {
       this.setStatus(bundle && bundle.enabled === false ? "3D disabled" : "(no 3D data)");
@@ -296,6 +326,33 @@ export class SkeletonViewer {
   setCamerasVisible(visible: boolean): void {
     this.camerasVisible = !!visible;
     if (this.camerasRoot) this.camerasRoot.visible = this.camerasVisible;
+  }
+
+  private updateFloorContacts(bundle: Bundle3D | null): void {
+    const stats = bundle?.stats;
+    const person = Array.isArray(bundle?.persons_3d) ? bundle.persons_3d[0] : undefined;
+    const joints = Array.isArray(person?.joints) ? person.joints : [];
+    const floorZ = Number(stats?.floor_z_m ?? 0);
+    const active = [stats?.floor_contact_left === true, stats?.floor_contact_right === true];
+    const stale = stats?.floor_contact_fresh === false;
+
+    for (let side = 0; side < this.floorContactRings.length; side += 1) {
+      const ring = this.floorContactRings[side];
+      if (stale && active[side]
+          && performance.now() - this.lastDataAtMs < 3500) {
+        // Match the viewer's short last-person hold across sync misses so the
+        // ring does not flash plant -> air -> plant on a transport gap.
+        continue;
+      }
+      const ankle = joints[HALPE_ANKLE_INDICES[side]];
+      if (stats?.floor_stability_enabled !== true || !active[side]
+          || !Number.isFinite(floorZ) || !isVisible3DJoint(ankle)) {
+        ring.visible = false;
+        continue;
+      }
+      ring.position.set(Number(ankle[0]), floorZ + 0.002, -Number(ankle[1]));
+      ring.visible = true;
+    }
   }
 
   // Wireframe pyramid with the apex at the local origin (camera center) opening

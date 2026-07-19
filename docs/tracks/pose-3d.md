@@ -3,7 +3,7 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-06-12)
+## 現状 (2026-07-15)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
@@ -36,6 +36,10 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
 
 ### 設計原則 / live な制約
 
+- **伸展補正は tracker 専用・製品既定 ON**: `limb_extension_snap` は元の Skeleton3D を変更せず、
+  `extract_trackers` の private copy 上だけで腕/脚を直線化する。`extended_leg_toe_direction` は伸展脚の
+  thigh/shin twist を観測済み `ankle→big_toe` から作り、欠損時は既存 held roll へ戻る。両機能は
+  YAML の個別 `false` または `--no-limb-extension-snap` / `--no-extended-leg-toe-direction` で停止可能。
 - **degeneracy gate は相対しきい**: `quat_from_forward_up` の degeneracy 判定は `sin θ`
   ベース (`kRollSinLow=0.15` / `kRollSinHigh=0.30`)。絶対 norm しきいは使わない。
   primary が degenerate になる向き (水平腕・伸展脚) では **roll (twist) だけ**を hold する
@@ -77,6 +81,13 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
   world 6D state、それ以外は parent-relative offset 6D state。出力は `world = parent_world + offset`
   の FK 再構成。hip 移動が child の world に自然に伝播する (per-joint 独立は廃止)。
   Process noise は root と offset で分離 (`q_pos` / `q_pos_offset`)。
+- **床接地安定化は公開直前の有界足部平行移動**: Halpe26 の左右 sole から接地を独立判定し、
+  接地中だけ ankle + toe/heel を同じ XYZ だけ移動する。Kalman / IK / calibration tap へ
+  フィードバックしない。孤立した床下 sole は invalid 化し、深い貫通も Z 8cm まで fail-safe 補正、
+  高さ・速度・XYの離地候補は2回以上かつ50ms継続時だけ解除し、低fpsでも単発の3D跳ねを吸収する。離地時は補正を
+  連続減衰する。VR FootAnchor は補正前の脚形状で更新する。既定 ON だが
+  `--no-floor-contact-stability` を常設し、`/stats3d` の fresh/evidence と WebUI 接地リングで確認できる。
+  → [design/pose-3d-floor-contact-stability.md](../design/pose-3d-floor-contact-stability.md)
 - **subject profile schema は厳格分離**: `fitra_subject_profile_v1` (COCO17) と `v2` (Halpe26) は
   マイグレーションせず再キャリブを要求 (keypoint topology は core-pipeline トラック参照)。
 - **フル IK は backstop 設計のみ**: Tier A swing-twist + ROM clamp + 角速度 clamp + constrained
@@ -91,6 +102,71 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-07-20 — PR #54レビュー対応（速度精度・Z安全上限）
+
+足首速度は `elapsed_since_prev_s` をdoubleのまま除算してからfloatへ変換し、floatで表現できない
+極小dtでもゼロ除算やNaNを生まないよう修正。接地中のZ補正は離地高さを個別に広げた設定でも
+`floor_contact_max_z_correction_m` の正負上限へ必ずクランプし、WebUI / VRの足だけが安全境界を
+超えて引き下げられないことを回帰テストで固定した。
+
+### 2026-07-19 — 伸展スナップの静止時ラッチ遷移を修正
+
+逆向き方向ヒステリシスで、閾値を越えた直後に姿勢が静止すると毎フレームの方向差分が消え、
+snap の enter / exit 確認が完了しない問題を修正。最初の sample では遷移方向の移動を要求しつつ、
+2 sample 目は閾値外を維持していれば静止でも遷移を確定する。逆方向移動と欠損による reset は維持し、
+enter / exit の対称な回帰テストを追加した。
+
+### 2026-07-15 — 実機フィードバックに基づく接地判定の遊び拡大
+
+実機で静止接地中にも判定が外れやすかったため、接地/離地の高さを4/8cm、速度を0.35/1.00m/s、
+XY許容を4cmへ拡大し、sole欠測猶予を4フレームへ延長。高さ・速度・XYの離地候補は2回以上かつ50ms継続した
+場合だけ解除し、候補中は外れ値から新しい補正を作らず直前の有界補正を保持する。床下方向の
+Z補正要求が8cmを超えた場合だけ安全上即時解除し、候補中もZは床貫通防止範囲へ制約する。
+YAML/CLI/offline dump、単発跳ねと
+継続離地の回帰テスト、設計文書を同時更新。同じ240フレーム録画で静止 pooled ankle XY RMS は
+OFF 3.390→ON 1.903mm（43.9%低下）、sole床下率0%。歩行の接地率は L/R 47.1% / 48.8%へ増え、
+状態遷移8/6回とsole床下率0%を維持した。
+
+### 2026-07-15 — 四肢伸展スナップ / 足先方向推論を製品既定 ON 化
+
+`MainOptions` と直接構築時の `TrackerExtractorOptions` で `limb_extension_snap` /
+`extended_leg_toe_direction` を両方 ON に昇格した。既存 YAML の明示 `false` はそのまま尊重し、CLI
+から即時 A/B・切り戻しできる `--no-limb-extension-snap` / `--no-extended-leg-toe-direction` を追加。
+低レベル `extract_trackers()` の引数既定は旧出力との厳密比較用に OFF のまま維持し、製品経路との
+違いをテストで固定した。
+
+### 2026-07-14 — 床接地安定化のレビュー指摘対応（外れ値・離地・VR・指標）
+
+更新 gap の既定を 0.50s へ広げ YAML/CLI 設定化し、8 fps 相当でも latch を維持するテストを追加。
+孤立した床下 sole を外れ値として downstream から除外し、8cm 超の貫通にも上限まで補正を適用、
+離地補正は 0.05s の時定数で減衰して一フレーム snap と再接地 chatter を防ぐ。contact state と
+current evidence / actual correction / fresh snapshot を分離し、sync miss / idle は最後の接地状態を stale として
+保持する。VR extractor は補正前の tibia/foot 形状で FootAnchor と lower-leg を計算し、foot 位置だけ
+接地補正を戻す。offline dump に `--fps`、evidence 分母の接地率、input fps / observation frames を追加。
+`--fps 58.81` の静止 A/B で pooled ankle XY RMS 3.390→1.901mm（43.9%低下）、歩行録画でも
+valid sole の床下率 0% と接地/離地遷移を確認した。機能の既定 ON と kill switch は維持する。
+
+### 2026-07-13 — 床接地を利用した足部安定化（既定 ON・有界出力段）
+
+Halpe26 の ankle + sole を左右独立に扱う `FloorContactStabilizer` を追加。sole 2 点以上、床高、
+足首速度のヒステリシスで接地を判定し、接地中は足部全体を剛体平行移動して最下 sole を床へ置きつつ
+XY skating を時定数 0.25s で抑制する。XY 3cm / Z 8cm 上限、sole 欠損 2 フレーム猶予、長い dt / idle
+reset、非接地時の状態レス床貫通 clamp を備え、COCO17 は no-op。`three_d` 設定、CLI kill switch、
+`/stats3d`、WebUI 接地リング、`dump_keypoints_3d` ON/OFF と A/B summary 指標を同じ実装へ配線。
+`test_floor_contact_stabilizer` と `test_main_config` で状態遷移・剛体性・境界・設定往復を固定した。
+設計と実機受け入れ基準: [design/pose-3d-floor-contact-stability.md](../design/pose-3d-floor-contact-stability.md)。
+
+### 2026-07-13 — 四肢伸展スナップ + 伸展脚の足先方向推論（既定 OFF）
+
+ほぼ伸び切った腕・脚を tracker 専用の private skeleton copy 上で一直線へ射影し、VMT の位置と
+VMT/SlimeVR の回転を同じ幾何へ揃える `limb_extension_snap` を追加。伸ばす途中は flexion 20°で
+enter、曲げる途中は 12°で exit する逆向き per-limb hysteresis とし、移動量 + 連続 2 frame の
+方向確認で単純な閾値交換による再吸着と 1-frame spike を防ぐ。伸展脚では `ankle→big_toe` を脚軸へ
+直交射影し、thigh / shin の共通 twist 基準にできる `extended_leg_toe_direction` も追加した。
+toe 欠損・退化時は既存 held-roll + parent-yaw transport へ戻り、world-axis roll は作らない。
+両機能は個別・既定 OFF、閾値も YAML/CLI で A/B 調整可能。設計と検証手順は
+[design/pose-3d-limb-extension-snap.md](../design/pose-3d-limb-extension-snap.md)。
 
 ### 2026-06-27 — calib-latest 解決の堅牢化（レビュー指摘対応・コードレビュー / bot 指摘） (バグ修正)
 latest 解決 PR に対する自動/手動レビューの指摘をまとめて対応。
