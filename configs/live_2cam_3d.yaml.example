@@ -59,6 +59,13 @@ three_d:
   # floor_contact_release_tau_s: 0.05
   # floor_contact_exit_grace_s: 0.05
 
+  # 伸展補正は既定 ON。腕/脚の tracker-facing chain を直線化し、脚伸展中の
+  # thigh/shin twist を ankle→big-toe から推論する。A/B 時は個別に false へできる。
+  limb_extension_snap: true
+  extended_leg_toe_direction: true
+  # extension_snap_enter_deg: 20.0  # 伸ばす途中、flexion 20°以下で早めに入る
+  # extension_snap_exit_deg: 12.0   # 曲げる途中、flexion 12°以上で早めに抜ける
+
 subject:
   subjects_dir: calibrations/subjects
   # subject_id: subject01

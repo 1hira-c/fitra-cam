@@ -139,6 +139,16 @@ struct MainOptions {
     // Position only (VMT publish + WebUI viz); rotation is unchanged. [0, 1].
     double vr_chest_height_frac = 0.65;
     double vr_waist_height_frac = 0.15;
+    // Near-extension tracker reconstruction (product default ON).
+    // Snap straightens the tracker-facing arm/leg chain without mutating the
+    // published 3D skeleton; toe-direction supplies extended thigh/shin twist
+    // from ankle->big-toe. Thresholds are flexion away from straight. The
+    // directional hysteresis enters early while extending and exits early
+    // while flexing, hence exit < enter.
+    bool   limb_extension_snap_3d = true;
+    bool   extended_leg_toe_direction_3d = true;
+    double extension_snap_enter_deg = 20.0;
+    double extension_snap_exit_deg = 12.0;
 
     // subject — identity (used by both run and subject calibration). Lives in
     // the YAML `subject:` block; subject_id + subject_height_m are the single

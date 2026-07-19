@@ -664,6 +664,87 @@ three_d:
     check(threw, "non-finite floor contact settings must throw");
 }
 
+void test_limb_extension_yaml_cli_round_trip_and_validate() {
+    MainOptions defaults;
+    check(defaults.limb_extension_snap_3d,
+          "limb_extension_snap product default is ON");
+    check(defaults.extended_leg_toe_direction_3d,
+          "extended_leg_toe_direction product default is ON");
+
+    auto p = write_tmp("limb_extension.yaml", R"(schema: fitra_main_config_v1
+three_d:
+  limb_extension_snap: false
+  extended_leg_toe_direction: false
+  extension_snap_enter_deg: 18.0
+  extension_snap_exit_deg: 10.0
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(!opts.limb_extension_snap_3d, "limb_extension_snap YAML false loads");
+    check(!opts.extended_leg_toe_direction_3d,
+          "extended_leg_toe_direction YAML false loads");
+    check(std::abs(opts.extension_snap_enter_deg - 18.0) < 1e-9,
+          "extension_snap_enter_deg YAML loads");
+    check(std::abs(opts.extension_snap_exit_deg - 10.0) < 1e-9,
+          "extension_snap_exit_deg YAML loads");
+
+    std::vector<std::string> argv_buf{
+        "--limb-extension-snap", "--extended-leg-toe-direction",
+        "--extension-snap-enter-deg", "21.0",
+        "--extension-snap-exit-deg", "11.0"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(opts.limb_extension_snap_3d, "--limb-extension-snap enables feature");
+    check(opts.extended_leg_toe_direction_3d,
+          "--extended-leg-toe-direction enables feature");
+    check(std::abs(opts.extension_snap_enter_deg - 21.0) < 1e-9,
+          "--extension-snap-enter-deg overrides YAML");
+    check(std::abs(opts.extension_snap_exit_deg - 11.0) < 1e-9,
+          "--extension-snap-exit-deg overrides YAML");
+
+    auto rt = write_tmp("limb_extension_round_trip.yaml", "");
+    save_main_config(rt.string(), opts);
+    MainOptions back;
+    load_main_config(rt.string(), back);
+    check(back.limb_extension_snap_3d && back.extended_leg_toe_direction_3d,
+          "limb extension feature flags round-trip");
+    check(std::abs(back.extension_snap_enter_deg - 21.0) < 1e-9 &&
+          std::abs(back.extension_snap_exit_deg - 11.0) < 1e-9,
+          "limb extension thresholds round-trip");
+
+    std::vector<std::string> off_argv_buf{
+        "--no-limb-extension-snap",
+        "--no-extended-leg-toe-direction"};
+    auto off_argv = make_argv(off_argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(off_argv.size()), off_argv.data());
+    check(!opts.limb_extension_snap_3d,
+          "--no-limb-extension-snap disables product default");
+    check(!opts.extended_leg_toe_direction_3d,
+          "--no-extended-leg-toe-direction disables product default");
+
+    auto off_rt = write_tmp("limb_extension_off_round_trip.yaml", "");
+    save_main_config(off_rt.string(), opts);
+    MainOptions off_back;
+    load_main_config(off_rt.string(), off_back);
+    check(!off_back.limb_extension_snap_3d &&
+          !off_back.extended_leg_toe_direction_3d,
+          "limb extension explicit OFF flags round-trip against ON defaults");
+
+    opts.cam_paths[0] = "/tmp/cam";
+    opts.det_engine = "/tmp/det.engine";
+    opts.pose_engine = "/tmp/pose.engine";
+    validate_options(opts);
+    opts.extension_snap_exit_deg = 21.0;
+    bool threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "extension-snap", "extension threshold validation msg");
+    }
+    check(threw, "extension exit >= enter must throw");
+}
+
 void test_early_args_extracts_config_and_probe() {
     std::vector<std::string> argv_buf{"--config", "/tmp/x.yaml", "--probe"};
     auto argv = make_argv(argv_buf);
@@ -1599,6 +1680,8 @@ const TestCase kTests[] = {
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
     {"floor_contact_yaml_cli_emit_and_validate",
                                                test_floor_contact_yaml_cli_emit_and_validate},
+    {"limb_extension_yaml_cli_round_trip_and_validate",
+                                               test_limb_extension_yaml_cli_round_trip_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},
     {"validate_slimevr_requires_halpe26",      test_validate_slimevr_requires_halpe26},

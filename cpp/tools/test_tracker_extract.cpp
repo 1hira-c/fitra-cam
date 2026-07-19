@@ -24,6 +24,7 @@
 #include "lift/keypoint_format.hpp"
 #include "lift/skeleton_def.hpp"
 #include "slimevr/tracker_extract.hpp"
+#include "slimevr/tracker_extractor.hpp"
 #include "slimevr/firmware_protocol.hpp"
 
 namespace {
@@ -205,10 +206,15 @@ void test_floor_correction_preserves_anchor_geometry() {
         grounded.joints[joint].z += corrections[0][2];
     }
 
-    fitra::slimevr::ExtractContext ctx;
+    fitra::slimevr::ExtractContext ctx, raw_ctx;
+    const fitra::slimevr::LimbExtensionOptions extension{
+        true, true, 20.0f, 12.0f};
     const auto trackers = fitra::slimevr::extract_trackers_with_floor_corrections(
-        grounded, corrections, &ctx);
-    const auto raw_trackers = fitra::slimevr::extract_trackers(raw);
+        grounded, corrections, &ctx, fitra::slimevr::FootPosMode::Midpoint,
+        0.5f, 0.0f, extension);
+    const auto raw_trackers = fitra::slimevr::extract_trackers(
+        raw, &raw_ctx, fitra::slimevr::FootPosMode::Midpoint,
+        0.5f, 0.0f, extension);
     using R = fitra::slimevr::TrackerRole;
     const auto idx = [](R role) { return static_cast<std::size_t>(role); };
 
@@ -228,7 +234,7 @@ void test_floor_correction_preserves_anchor_geometry() {
                      "floor correction leaves lower-leg position raw");
     check_vec3_close(trackers[idx(R::LeftFoot)].pos,
                      raw_trackers[idx(R::LeftFoot)].pos + corrections[0],
-                     "floor correction is restored only to foot position");
+                     "floor correction composes with extension snap only at foot position");
 }
 
 // Chest / Waist height fracs slide the tracker POSITION up the spine without
@@ -1151,6 +1157,331 @@ void test_pelvis_yaw_transport_no_overshoot() {
                                "no-overshoot: up converges to waist yaw (not 2×)", 0.999f);
 }
 
+void set_left_arm_flex(fitra::infer::Skeleton3D& s, float flex_deg) {
+    constexpr float kPi = 3.14159265358979323846f;
+    const float a = flex_deg * kPi / 180.0f;
+    const cv::Vec3f shoulder{0.18f, 0.0f, 1.42f};
+    const cv::Vec3f elbow = shoulder + cv::Vec3f{0.0f, 0.30f, 0.0f};
+    const cv::Vec3f wrist = elbow + cv::Vec3f{0.28f * std::sin(a),
+                                              0.28f * std::cos(a), 0.0f};
+    set_joint(s, 5, shoulder[0], shoulder[1], shoulder[2]);
+    set_joint(s, 7, elbow[0], elbow[1], elbow[2]);
+    set_joint(s, 9, wrist[0], wrist[1], wrist[2]);
+}
+
+void set_left_leg_flex(fitra::infer::Skeleton3D& s, float flex_deg,
+                       const cv::Vec3f& toe_direction = cv::Vec3f{0.0f, 0.20f, 0.0f}) {
+    constexpr float kPi = 3.14159265358979323846f;
+    const float a = flex_deg * kPi / 180.0f;
+    const cv::Vec3f hip{0.10f, 0.0f, 0.90f};
+    const cv::Vec3f knee = hip + cv::Vec3f{0.0f, 0.0f, -0.45f};
+    const cv::Vec3f ankle = knee + cv::Vec3f{0.0f, -0.40f * std::sin(a),
+                                             -0.40f * std::cos(a)};
+    const cv::Vec3f toe = ankle + toe_direction;
+    set_joint(s, 11, hip[0], hip[1], hip[2]);
+    set_joint(s, 13, knee[0], knee[1], knee[2]);
+    set_joint(s, 15, ankle[0], ankle[1], ankle[2]);
+    set_joint(s, 20, toe[0], toe[1], toe[2]);
+    // These descendants are not orientation inputs, but keeping them near the
+    // measured foot makes the fixture realistic and exercises rigid translation.
+    set_joint(s, 22, toe[0] - 0.03f, toe[1], toe[2]);
+    set_joint(s, 24, ankle[0], ankle[1] - 0.05f, ankle[2]);
+}
+
+void test_limb_extension_product_and_low_level_defaults() {
+    namespace sv = fitra::slimevr;
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+
+    const sv::TrackerExtractorOptions product_defaults;
+    check(product_defaults.limb_extension.snap,
+          "TrackerExtractor product default enables extension snap");
+    check(product_defaults.limb_extension.toe_direction,
+          "TrackerExtractor product default enables toe direction");
+
+    auto skel = make_t_pose();
+    set_left_arm_flex(skel, 8.0f);
+    set_left_leg_flex(skel, 8.0f);
+
+    sv::ExtractContext legacy_ctx, explicit_off_ctx;
+    const auto legacy = sv::extract_trackers(skel, &legacy_ctx);
+    sv::LimbExtensionOptions off;
+    off.enter_flex_deg = 30.0f;
+    off.exit_flex_deg = 5.0f;
+    const auto explicit_off = sv::extract_trackers(
+        skel, &explicit_off_ctx, sv::FootPosMode::Midpoint, 0.5f, 0.0f, off);
+
+    for (std::size_t i = 0; i < sv::kTrackerCount; ++i) {
+        check(legacy[i].role == explicit_off[i].role &&
+              legacy[i].valid == explicit_off[i].valid &&
+              legacy[i].roll_confidence == explicit_off[i].roll_confidence &&
+              legacy[i].swing_confidence == explicit_off[i].swing_confidence,
+              "extension OFF: tracker scalar fields must be exact");
+        for (int k = 0; k < 3; ++k) {
+            check(legacy[i].pos[k] == explicit_off[i].pos[k],
+                  "extension OFF: tracker position must be exact");
+        }
+        for (int k = 0; k < 4; ++k) {
+            check(legacy[i].quat_wxyz[k] == explicit_off[i].quat_wxyz[k],
+                  "extension OFF: tracker quaternion must be exact");
+        }
+    }
+    for (std::size_t i = 0; i < explicit_off_ctx.extension_latched.size(); ++i) {
+        check(!explicit_off_ctx.extension_latched[i],
+              "extension OFF: hysteresis latch must remain untouched");
+        check(explicit_off_ctx.extension_flex_extreme_deg[i] < 0.0f,
+              "extension OFF: direction extremum must remain untouched");
+        check(explicit_off_ctx.extension_prev_flex_deg[i] < 0.0f,
+              "extension OFF: previous flexion must remain untouched");
+        check(explicit_off_ctx.extension_transition_frames[i] == 0,
+              "extension OFF: transition confirmation must remain untouched");
+    }
+}
+
+// Near-extension snapping reconstructs only the tracker-facing copy: both
+// segment lengths are preserved, upper/lower leg forwards become one axis,
+// and the input Skeleton3D remains byte-for-byte at its measured positions.
+void test_limb_extension_snap_reconstructs_private_chain() {
+    namespace sv = fitra::slimevr;
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_t_pose();
+    set_left_arm_flex(skel, 8.0f);
+    set_left_leg_flex(skel, 8.0f);
+
+    const cv::Vec3f shoulder = cv::Vec3f{skel.joints[5].x, skel.joints[5].y, skel.joints[5].z};
+    const cv::Vec3f elbow = cv::Vec3f{skel.joints[7].x, skel.joints[7].y, skel.joints[7].z};
+    const cv::Vec3f wrist = cv::Vec3f{skel.joints[9].x, skel.joints[9].y, skel.joints[9].z};
+    const cv::Vec3f hip = cv::Vec3f{skel.joints[11].x, skel.joints[11].y, skel.joints[11].z};
+    const cv::Vec3f knee = cv::Vec3f{skel.joints[13].x, skel.joints[13].y, skel.joints[13].z};
+    const cv::Vec3f ankle = cv::Vec3f{skel.joints[15].x, skel.joints[15].y, skel.joints[15].z};
+
+    sv::LimbExtensionOptions opts;
+    opts.snap = true;
+    sv::ExtractContext ctx;
+    auto trackers = sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle,
+                                         0.5f, 0.0f, opts);
+    check(ctx.extension_latched[0], "left arm should enter extension snap");
+    check(ctx.extension_latched[2], "left leg should enter extension snap");
+
+    const cv::Vec3f arm_axis = vec_normalize(wrist - shoulder);
+    const cv::Vec3f snapped_elbow = shoulder + arm_axis * cv::norm(elbow - shoulder);
+    check_tracker_forward(trackers[static_cast<std::size_t>(sv::TrackerRole::LeftUpperArm)],
+                          arm_axis, "extension snap: arm uses shoulder->wrist axis");
+    check_vec3_close(trackers[static_cast<std::size_t>(sv::TrackerRole::LeftUpperArm)].pos,
+                     (shoulder + snapped_elbow) * 0.5f,
+                     "extension snap: arm tracker position");
+
+    const cv::Vec3f leg_axis = vec_normalize(ankle - hip);
+    const cv::Vec3f snapped_knee = hip + leg_axis * cv::norm(knee - hip);
+    const cv::Vec3f snapped_ankle = snapped_knee + leg_axis * cv::norm(ankle - knee);
+    const auto upper_idx = static_cast<std::size_t>(sv::TrackerRole::LeftUpperLeg);
+    const auto lower_idx = static_cast<std::size_t>(sv::TrackerRole::LeftLowerLeg);
+    const auto foot_idx = static_cast<std::size_t>(sv::TrackerRole::LeftFoot);
+    check_tracker_forward(trackers[upper_idx], leg_axis,
+                          "extension snap: thigh uses hip->ankle axis");
+    check_tracker_forward(trackers[lower_idx], leg_axis,
+                          "extension snap: shin shares thigh axis");
+    check_vec3_close(trackers[upper_idx].pos, (hip + snapped_knee) * 0.5f,
+                     "extension snap: thigh tracker position");
+    check_vec3_close(trackers[lower_idx].pos, (snapped_knee + snapped_ankle) * 0.5f,
+                     "extension snap: shin tracker position");
+    check_vec3_close(trackers[foot_idx].pos, snapped_ankle,
+                     "extension snap: ankle foot position follows straight chain");
+    check_vec3_close(ctx.foot_anchors[0].knee_to_ankle_dir,
+                     vec_normalize(ankle - knee),
+                     "extension snap: FK anchor keeps measured tibia direction");
+
+    // The source bus payload is a const input and must not be rewritten.
+    check_vec3_close(cv::Vec3f{skel.joints[7].x, skel.joints[7].y, skel.joints[7].z},
+                     elbow, "extension snap: source elbow unchanged", 0.0f);
+    check_vec3_close(cv::Vec3f{skel.joints[15].x, skel.joints[15].y, skel.joints[15].z},
+                     ankle, "extension snap: source ankle unchanged", 0.0f);
+}
+
+void test_limb_extension_hysteresis() {
+    namespace sv = fitra::slimevr;
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    sv::LimbExtensionOptions opts;
+    opts.snap = true;
+    opts.enter_flex_deg = 20.0f;
+    opts.exit_flex_deg = 12.0f;
+    sv::ExtractContext ctx;
+
+    auto skel = make_t_pose();
+    set_left_leg_flex(skel, 30.0f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(!ctx.extension_latched[2], "reverse hysteresis starts free while bent");
+
+    // Enter early while extending. One valid sample is not enough, and an
+    // intervening missing sample must break the confirmation sequence.
+    set_left_leg_flex(skel, 19.0f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(!ctx.extension_latched[2],
+          "reverse hysteresis requires two enter-confirmation frames");
+    skel.joints[13].valid = false;
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    skel.joints[13].valid = true;
+    set_left_leg_flex(skel, 18.0f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(!ctx.extension_latched[2],
+          "missing sample resets enter confirmation");
+    set_left_leg_flex(skel, 17.0f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(!ctx.extension_latched[2],
+          "first post-missing direction sample only starts confirmation");
+    set_left_leg_flex(skel, 16.0f);
+    auto held = sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle,
+                                    0.5f, 0.0f, opts);
+    check(ctx.extension_latched[2],
+          "reverse hysteresis enters near 20 deg while extending");
+    const cv::Vec3f hip{skel.joints[11].x, skel.joints[11].y, skel.joints[11].z};
+    const cv::Vec3f ankle{skel.joints[15].x, skel.joints[15].y, skel.joints[15].z};
+    check_tracker_forward(held[static_cast<std::size_t>(sv::TrackerRole::LeftUpperLeg)],
+                          vec_normalize(ankle - hip),
+                          "reverse hysteresis: extending mid-band is snapped");
+
+    // A fresh mid-band sample has no motion direction and must not guess.
+    sv::ExtractContext fresh_ctx;
+    (void)sv::extract_trackers(skel, &fresh_ctx, sv::FootPosMode::Ankle,
+                               0.5f, 0.0f, opts);
+    check(!fresh_ctx.extension_latched[2],
+          "reverse hysteresis does not acquire from a fresh mid-band frame");
+
+    // Reach full extension, then begin flexing. A one-frame crossing of the
+    // tighter exit threshold is ignored; two deliberate samples release early.
+    set_left_leg_flex(skel, 8.0f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    set_left_leg_flex(skel, 13.0f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(ctx.extension_latched[2],
+          "one-frame exit-threshold crossing must not release");
+    set_left_leg_flex(skel, 12.5f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(ctx.extension_latched[2],
+          "opposite motion inside the overlap resets exit confirmation");
+    set_left_leg_flex(skel, 13.0f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    set_left_leg_flex(skel, 14.0f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(!ctx.extension_latched[2],
+          "reverse hysteresis exits near 12 deg while flexing");
+
+    // Once released, continued flexion cannot immediately reacquire merely
+    // because it remains below the wider enter threshold. A confirmed motion
+    // reversal can reacquire without first having to bend past 20 degrees.
+    set_left_leg_flex(skel, 17.0f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    set_left_leg_flex(skel, 14.0f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(!ctx.extension_latched[2],
+          "single extending sample does not reacquire");
+    set_left_leg_flex(skel, 15.0f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(!ctx.extension_latched[2],
+          "opposite motion inside the overlap resets enter confirmation");
+    set_left_leg_flex(skel, 14.0f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    set_left_leg_flex(skel, 13.0f);
+    (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(ctx.extension_latched[2],
+          "confirmed mid-band motion reversal reacquires snap");
+
+    // A low-rate or dropped stream may observe only the threshold-crossing
+    // motion sample followed by a stationary pose. Staying beyond the threshold
+    // must finish confirmation in both directions instead of leaving the latch
+    // stuck until another same-direction delta arrives.
+    auto stationary = make_t_pose();
+    sv::ExtractContext stationary_enter_ctx;
+    set_left_leg_flex(stationary, 30.0f);
+    (void)sv::extract_trackers(stationary, &stationary_enter_ctx,
+                               sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    set_left_leg_flex(stationary, 19.0f);
+    (void)sv::extract_trackers(stationary, &stationary_enter_ctx,
+                               sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(!stationary_enter_ctx.extension_latched[2],
+          "stationary enter: crossing sample only starts confirmation");
+    (void)sv::extract_trackers(stationary, &stationary_enter_ctx,
+                               sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(stationary_enter_ctx.extension_latched[2],
+          "stationary enter: held threshold crossing completes confirmation");
+
+    sv::ExtractContext stationary_exit_ctx;
+    set_left_leg_flex(stationary, 8.0f);
+    (void)sv::extract_trackers(stationary, &stationary_exit_ctx,
+                               sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    set_left_leg_flex(stationary, 13.0f);
+    (void)sv::extract_trackers(stationary, &stationary_exit_ctx,
+                               sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(stationary_exit_ctx.extension_latched[2],
+          "stationary exit: crossing sample only starts confirmation");
+    (void)sv::extract_trackers(stationary, &stationary_exit_ctx,
+                               sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(!stationary_exit_ctx.extension_latched[2],
+          "stationary exit: held threshold crossing completes confirmation");
+}
+
+void test_extended_leg_toe_direction_drives_thigh_and_shin_twist() {
+    namespace sv = fitra::slimevr;
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_t_pose();
+    set_left_leg_flex(skel, 4.0f);
+
+    sv::LimbExtensionOptions opts;
+    opts.toe_direction = true;
+    sv::ExtractContext ctx;
+    auto trackers = sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle,
+                                         0.5f, 0.0f, opts);
+    check(ctx.extension_latched[2], "toe direction activates in extension regime");
+
+    const auto upper_idx = static_cast<std::size_t>(sv::TrackerRole::LeftUpperLeg);
+    const auto lower_idx = static_cast<std::size_t>(sv::TrackerRole::LeftLowerLeg);
+    check_tracker_up_direction(trackers[upper_idx], cv::Vec3f{0, -1, 0},
+                               "toe direction: thigh twist follows toe", 0.99f);
+    check_tracker_up_direction(trackers[lower_idx], cv::Vec3f{0, -1, 0},
+                               "toe direction: shin twist follows toe", 0.99f);
+    check(std::abs(trackers[upper_idx].roll_confidence - 0.3f) < 1.0e-4f,
+          "toe direction: thigh uses foot jitter smoothing weight");
+    check(std::abs(trackers[lower_idx].roll_confidence - 0.3f) < 1.0e-4f,
+          "toe direction: shin uses foot jitter smoothing weight");
+
+    // A missing toe must not invent a world-axis roll. The chain stays valid
+    // through forward-only orientation, but roll returns to the held gate.
+    skel.joints[20].valid = false;
+    sv::ExtractContext missing_ctx;
+    auto missing = sv::extract_trackers(skel, &missing_ctx, sv::FootPosMode::Ankle,
+                                        0.5f, 0.0f, opts);
+    check(missing[upper_idx].valid && missing[lower_idx].valid,
+          "toe direction missing: leg swing remains valid");
+    check(missing[upper_idx].roll_confidence == 0.0f &&
+          missing[lower_idx].roll_confidence == 0.0f,
+          "toe direction missing: fall back to held roll");
+}
+
+void test_extended_leg_toe_direction_ignores_bent_leg() {
+    namespace sv = fitra::slimevr;
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto skel = make_t_pose();
+    set_left_leg_flex(skel, 35.0f, cv::Vec3f{0.20f, 0.0f, 0.0f});
+
+    sv::ExtractContext base_ctx, toe_ctx;
+    const auto base = sv::extract_trackers(skel, &base_ctx);
+    sv::LimbExtensionOptions opts;
+    opts.toe_direction = true;
+    const auto with_toe = sv::extract_trackers(skel, &toe_ctx,
+                                               sv::FootPosMode::Midpoint,
+                                               0.5f, 0.0f, opts);
+    check(!toe_ctx.extension_latched[2], "toe direction stays off for bent leg");
+    for (const auto role : {sv::TrackerRole::LeftUpperLeg,
+                            sv::TrackerRole::LeftLowerLeg}) {
+        const auto i = static_cast<std::size_t>(role);
+        float qdot = 0.0f;
+        for (int k = 0; k < 4; ++k) qdot += base[i].quat_wxyz[k] * with_toe[i].quat_wxyz[k];
+        check(std::abs(std::abs(qdot) - 1.0f) < 1.0e-6f,
+              "toe direction: bent-leg orientation must be unchanged");
+        check(base[i].roll_confidence == with_toe[i].roll_confidence,
+              "toe direction: bent-leg confidence must be unchanged");
+    }
+}
+
 void test_keypoint_format_assert() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Coco17);
     auto skel = make_t_pose();
@@ -1284,6 +1615,11 @@ int main() {
         test_thigh_seated_extended_straight_knee(); std::printf("[ok] thigh: 直座り — roll held, no world-Z rescue (swing tracks)\n");
         test_foot_fk_fallback_uses_last_anchor(); std::printf("[ok] foot: FK fallback synthesizes ankle/toe from last anchor\n");
         test_foot_fk_fallback_needs_seed();       std::printf("[ok] foot: FK fallback requires a seeded anchor\n");
+        test_limb_extension_product_and_low_level_defaults(); std::printf("[ok] extension features: product ON / low-level reference OFF\n");
+        test_limb_extension_snap_reconstructs_private_chain(); std::printf("[ok] extension snap: private arm/leg chain reconstruction\n");
+        test_limb_extension_hysteresis();         std::printf("[ok] extension snap: enter/exit hysteresis\n");
+        test_extended_leg_toe_direction_drives_thigh_and_shin_twist(); std::printf("[ok] extension toe direction: thigh/shin twist + missing fallback\n");
+        test_extended_leg_toe_direction_ignores_bent_leg(); std::printf("[ok] extension toe direction: bent leg unchanged\n");
         test_keypoint_format_assert();            std::printf("[ok] Halpe26 keypoint-format assertion\n");
         test_one_euro_quat_first_frame_snaps();   std::printf("[ok] One Euro rotation: first frame snaps\n");
         test_one_euro_quat_invalid_holds_prev();  std::printf("[ok] One Euro rotation: invalid holds prev, ctx untouched\n");
