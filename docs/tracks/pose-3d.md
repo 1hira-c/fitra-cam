@@ -36,6 +36,10 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
 
 ### 設計原則 / live な制約
 
+- **伸展補正は tracker 専用・製品既定 ON**: `limb_extension_snap` は元の Skeleton3D を変更せず、
+  `extract_trackers` の private copy 上だけで腕/脚を直線化する。`extended_leg_toe_direction` は伸展脚の
+  thigh/shin twist を観測済み `ankle→big_toe` から作り、欠損時は既存 held roll へ戻る。両機能は
+  YAML の個別 `false` または `--no-limb-extension-snap` / `--no-extended-leg-toe-direction` で停止可能。
 - **degeneracy gate は相対しきい**: `quat_from_forward_up` の degeneracy 判定は `sin θ`
   ベース (`kRollSinLow=0.15` / `kRollSinHigh=0.30`)。絶対 norm しきいは使わない。
   primary が degenerate になる向き (水平腕・伸展脚) では **roll (twist) だけ**を hold する
@@ -91,6 +95,32 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-07-19 — 伸展スナップの静止時ラッチ遷移を修正
+
+逆向き方向ヒステリシスで、閾値を越えた直後に姿勢が静止すると毎フレームの方向差分が消え、
+snap の enter / exit 確認が完了しない問題を修正。最初の sample では遷移方向の移動を要求しつつ、
+2 sample 目は閾値外を維持していれば静止でも遷移を確定する。逆方向移動と欠損による reset は維持し、
+enter / exit の対称な回帰テストを追加した。
+
+### 2026-07-15 — 四肢伸展スナップ / 足先方向推論を製品既定 ON 化
+
+`MainOptions` と直接構築時の `TrackerExtractorOptions` で `limb_extension_snap` /
+`extended_leg_toe_direction` を両方 ON に昇格した。既存 YAML の明示 `false` はそのまま尊重し、CLI
+から即時 A/B・切り戻しできる `--no-limb-extension-snap` / `--no-extended-leg-toe-direction` を追加。
+低レベル `extract_trackers()` の引数既定は旧出力との厳密比較用に OFF のまま維持し、製品経路との
+違いをテストで固定した。
+
+### 2026-07-13 — 四肢伸展スナップ + 伸展脚の足先方向推論（既定 OFF）
+
+ほぼ伸び切った腕・脚を tracker 専用の private skeleton copy 上で一直線へ射影し、VMT の位置と
+VMT/SlimeVR の回転を同じ幾何へ揃える `limb_extension_snap` を追加。伸ばす途中は flexion 20°で
+enter、曲げる途中は 12°で exit する逆向き per-limb hysteresis とし、移動量 + 連続 2 frame の
+方向確認で単純な閾値交換による再吸着と 1-frame spike を防ぐ。伸展脚では `ankle→big_toe` を脚軸へ
+直交射影し、thigh / shin の共通 twist 基準にできる `extended_leg_toe_direction` も追加した。
+toe 欠損・退化時は既存 held-roll + parent-yaw transport へ戻り、world-axis roll は作らない。
+両機能は個別・既定 OFF、閾値も YAML/CLI で A/B 調整可能。設計と検証手順は
+[design/pose-3d-limb-extension-snap.md](../design/pose-3d-limb-extension-snap.md)。
 
 ### 2026-06-27 — calib-latest 解決の堅牢化（レビュー指摘対応・コードレビュー / bot 指摘） (バグ修正)
 latest 解決 PR に対する自動/手動レビューの指摘をまとめて対応。

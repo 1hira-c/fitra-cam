@@ -117,11 +117,48 @@ struct FootAnchor {
     bool      valid = false;
 };
 
+// Optional near-extension reconstruction for arms and legs. Angles are the
+// flexion away from a straight chain (0 deg = fully extended). The directional
+// hysteresis intentionally acts in the "reverse" sense: while extending, a
+// limb enters the snapped state at/below the wider `enter_flex_deg`; while
+// flexing, it leaves at/above the tighter `exit_flex_deg` (`exit < enter`).
+// This makes straightening acquire early but releases as soon as a deliberate
+// bend starts. Two consecutive valid samples plus a small observed angle range
+// are required for either transition so a one-frame keypoint spike cannot
+// toggle the state. A fresh context starts snapped only at/below `exit`.
+//
+// `snap` reconstructs the tracker-facing chain on one straight parent->distal
+// axis while preserving the two current segment lengths (post-IK when IK is
+// enabled). It does not mutate the Skeleton3DBus source.
+//
+// `toe_direction` uses ankle->big-toe, projected perpendicular to the straight
+// leg axis (with the sign mapped to the existing adjacent-chain up convention),
+// as the upper/lower-leg twist reference while extended. This is an observed
+// anatomical direction, unlike a world-axis fallback. When the toe is missing
+// or degenerate the existing held-roll path remains in force.
+struct LimbExtensionOptions {
+    bool  snap = false;
+    bool  toe_direction = false;
+    float enter_flex_deg = 20.0f;
+    float exit_flex_deg = 12.0f;
+};
+
 // Carries inter-frame state for extract_trackers. Optional: passing nullptr
 // disables FK fallback (preserves the old early-return behavior).
 struct ExtractContext {
     // [0] = left foot, [1] = right foot.
     std::array<FootAnchor, 2> foot_anchors{};
+    // Directional hysteresis state: left arm, right arm, left leg, right leg.
+    // While inactive, flex_extreme is the largest recent flexion; while active,
+    // it is the smallest. A negative value means no valid observation yet.
+    // All fields clear with ExtractContext on idle/resume so a stale pre-idle
+    // regime is never carried into the first fresh pose.
+    std::array<bool, 4> extension_latched{};
+    std::array<float, 4> extension_flex_extreme_deg{
+        -1.0f, -1.0f, -1.0f, -1.0f};
+    std::array<float, 4> extension_prev_flex_deg{
+        -1.0f, -1.0f, -1.0f, -1.0f};
+    std::array<std::uint8_t, 4> extension_transition_frames{};
 };
 
 // Extract 10 trackers from a Halpe26 3D skeleton. A missing forward hint
@@ -151,12 +188,19 @@ struct ExtractContext {
 // (chest = spine midpoint 0.5, waist = hip_center 0.0) to preserve golden
 // tests; the runtime product defaults (TrackerExtractorOptions) sit higher so
 // the trackers land nearer the sternum / belt line for VRChat FBT.
+//
+// The low-level API keeps `extension` default-off as the exact legacy/reference
+// baseline used by geometry tests. The runtime product defaults in MainOptions
+// and TrackerExtractorOptions enable both features. Snap and toe-direction
+// inference remain independent A/B switches but share the same extension
+// hysteresis state.
 std::array<SlimeTracker, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel,
                  ExtractContext* ctx = nullptr,
                  FootPosMode foot_pos_mode = FootPosMode::Midpoint,
                  float chest_height_frac = 0.5f,
-                 float waist_height_frac = 0.0f);
+                 float waist_height_frac = 0.0f,
+                 LimbExtensionOptions extension = {});
 
 // ---- One Euro filter (speed-adaptive low-pass) ----------------------------
 //
