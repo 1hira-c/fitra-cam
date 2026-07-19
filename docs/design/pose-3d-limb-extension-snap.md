@@ -12,7 +12,8 @@ tracker 位置・回転と SlimeVR の回転が「わずかに曲がった肢」
 
 完了条件は、(1) ほぼ伸展した腕・脚の tracker-facing chain を一貫した直線へ射影できる、
 (2) 伸展脚の thigh / shin twist を足先方向から同じ基準で復元できる、(3) 欠損時に捏造 roll を
-作らず既存 hold へ戻る、(4) 既定 OFF で従来経路を不変に保ち実機 A/B できること。
+作らず既存 hold へ戻る、(4) 製品既定 ON としつつ、個別 kill switch と低レベルの旧挙動
+baseline を残して実機 A/B できること。
 
 ## 検討した案
 
@@ -48,9 +49,12 @@ tracker 位置・回転と SlimeVR の回転が「わずかに曲がった肢」
 5. toe が invalid、脚軸と平行、または長さが退化した場合は foot 推論を使わず、既存の
    forward-only quaternion + held roll + parent-yaw transport へ戻る。
 
-公開設定は `three_d.limb_extension_snap` と `three_d.extended_leg_toe_direction`（個別・既定 OFF）、
+公開設定は `three_d.limb_extension_snap` と `three_d.extended_leg_toe_direction`（個別・製品既定 ON）、
 および `extension_snap_enter_deg` / `extension_snap_exit_deg`。CLI は対応する
-`--limb-extension-snap`、`--extended-leg-toe-direction`、`--extension-snap-*-deg`。
+`--limb-extension-snap`、`--extended-leg-toe-direction`、OFF 用の
+`--no-limb-extension-snap` / `--no-extended-leg-toe-direction`、`--extension-snap-*-deg`。
+`extract_trackers()` の低レベル引数既定だけは旧出力との field-level 比較 baseline として両機能
+OFF を維持し、実行時は `MainOptions` / `TrackerExtractorOptions` から ON を明示的に渡す。
 `0 <= exit < enter < 90` を config validation と抽出 API の両方で守る。
 
 ## Milestone
@@ -61,10 +65,11 @@ tracker 位置・回転と SlimeVR の回転が「わずかに曲がった肢」
 
 ## 検証
 
-- `test_tracker_extract`: 両機能 OFF の field-level 完全一致、腕/脚の共通軸・位置・骨長保存、入力
-  skeleton 非変更、20° enter / 12° exit の方向確認、1-frame spike と欠損による確認中断、
+- `test_tracker_extract`: `TrackerExtractorOptions` の製品既定 ON と低レベル両機能 OFF の field-level
+  完全一致、腕/脚の共通軸・位置・骨長保存、入力 skeleton 非変更、20° enter / 12° exit の方向確認、
+  1-frame spike と欠損による確認中断、
   中間帯での動作反転、toe-based thigh/shin twist、toe 欠損 hold、屈曲脚の非介入。
-- `test_main_config`: YAML/CLI/emit-load round-trip、閾値順序の validation。
+- `test_main_config`: 製品既定 ON、YAML/CLI の個別 OFF、emit-load round-trip、閾値順序の validation。
 - 回帰: `ctest -R 'tracker_extract|firmware_protocol|vmt_protocol|main_config'` と full `ctest`。
 - 実機 A/B: 同一の立位、T-pose、腕前方伸展、足先内外旋、歩行、しゃがみを OFF / snap-only /
   toe-only / both の 4 条件で比較する。合格条件は、伸展中の上下脚 forward 一致、足先内外旋への
@@ -72,7 +77,7 @@ tracker 位置・回転と SlimeVR の回転が「わずかに曲がった肢」
 
 ## 残課題
 
-- `enter=20°` / `exit=12°`、方向確認最大 `2°`、toe roll weight `0.3` は初期値。実機クリップで
-  確定するまで既定 OFF を維持する。
+- `enter=20°` / `exit=12°`、方向確認最大 `2°`、toe roll weight `0.3` は初期値。製品既定は ON とし、
+  実機で問題が出た場合は YAML の個別 `false` または `--no-*` で即時切り戻す。
 - Halpe26 は手指方向を持たないため、伸展腕の twist は既存 held roll + chest yaw transport のまま。
   controller/hand orientation を入力できる場合だけ、腕にも観測ベースの twist source を追加検討する。

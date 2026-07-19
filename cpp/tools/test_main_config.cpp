@@ -559,6 +559,12 @@ three_d:
 }
 
 void test_limb_extension_yaml_cli_round_trip_and_validate() {
+    MainOptions defaults;
+    check(defaults.limb_extension_snap_3d,
+          "limb_extension_snap product default is ON");
+    check(defaults.extended_leg_toe_direction_3d,
+          "extended_leg_toe_direction product default is ON");
+
     auto p = write_tmp("limb_extension.yaml", R"(schema: fitra_main_config_v1
 three_d:
   limb_extension_snap: false
@@ -599,6 +605,24 @@ three_d:
     check(std::abs(back.extension_snap_enter_deg - 21.0) < 1e-9 &&
           std::abs(back.extension_snap_exit_deg - 11.0) < 1e-9,
           "limb extension thresholds round-trip");
+
+    std::vector<std::string> off_argv_buf{
+        "--no-limb-extension-snap",
+        "--no-extended-leg-toe-direction"};
+    auto off_argv = make_argv(off_argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(off_argv.size()), off_argv.data());
+    check(!opts.limb_extension_snap_3d,
+          "--no-limb-extension-snap disables product default");
+    check(!opts.extended_leg_toe_direction_3d,
+          "--no-extended-leg-toe-direction disables product default");
+
+    auto off_rt = write_tmp("limb_extension_off_round_trip.yaml", "");
+    save_main_config(off_rt.string(), opts);
+    MainOptions off_back;
+    load_main_config(off_rt.string(), off_back);
+    check(!off_back.limb_extension_snap_3d &&
+          !off_back.extended_leg_toe_direction_3d,
+          "limb extension explicit OFF flags round-trip against ON defaults");
 
     opts.cam_paths[0] = "/tmp/cam";
     opts.det_engine = "/tmp/det.engine";

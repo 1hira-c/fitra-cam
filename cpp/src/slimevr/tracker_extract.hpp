@@ -189,8 +189,11 @@ struct ExtractContext {
 // tests; the runtime product defaults (TrackerExtractorOptions) sit higher so
 // the trackers land nearer the sternum / belt line for VRChat FBT.
 //
-// `extension` is opt-in and default-off. Snap and toe-direction inference are
-// independent A/B switches but share the same extension hysteresis state.
+// The low-level API keeps `extension` default-off as the exact legacy/reference
+// baseline used by geometry tests. The runtime product defaults in MainOptions
+// and TrackerExtractorOptions enable both features. Snap and toe-direction
+// inference remain independent A/B switches but share the same extension
+// hysteresis state.
 std::array<SlimeTracker, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel,
                  ExtractContext* ctx = nullptr,

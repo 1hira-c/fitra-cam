@@ -769,7 +769,9 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--chest-height-frac") { out.vr_chest_height_frac = std::stod(need(i, "--chest-height-frac")); }
         else if (a == "--waist-height-frac") { out.vr_waist_height_frac = std::stod(need(i, "--waist-height-frac")); }
         else if (a == "--limb-extension-snap") { out.limb_extension_snap_3d = true; }
+        else if (a == "--no-limb-extension-snap") { out.limb_extension_snap_3d = false; }
         else if (a == "--extended-leg-toe-direction") { out.extended_leg_toe_direction_3d = true; }
+        else if (a == "--no-extended-leg-toe-direction") { out.extended_leg_toe_direction_3d = false; }
         else if (a == "--extension-snap-enter-deg") { out.extension_snap_enter_deg = std::stod(need(i, "--extension-snap-enter-deg")); }
         else if (a == "--extension-snap-exit-deg") { out.extension_snap_exit_deg = std::stod(need(i, "--extension-snap-exit-deg")); }
         else if (a == "--vr-no-one-euro")    { out.vr_one_euro = false; }

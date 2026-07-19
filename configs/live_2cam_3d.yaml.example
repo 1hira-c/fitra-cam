@@ -43,10 +43,10 @@ three_d:
   # 固定したい既存ファイルがあれば明示する（生成物の既定パスは焼かない）。
   # calib: calibrations/extrinsics/some_fixed_extrinsics.yaml
 
-  # 伸展補正は実機 A/B 用に既定 OFF。腕/脚の tracker-facing chain を直線化し、
-  # 脚伸展中の thigh/shin twist を ankle→big-toe から推論する。個別に有効化可能。
-  # limb_extension_snap: true
-  # extended_leg_toe_direction: true
+  # 伸展補正は既定 ON。腕/脚の tracker-facing chain を直線化し、脚伸展中の
+  # thigh/shin twist を ankle→big-toe から推論する。A/B 時は個別に false へできる。
+  limb_extension_snap: true
+  extended_leg_toe_direction: true
   # extension_snap_enter_deg: 20.0  # 伸ばす途中、flexion 20°以下で早めに入る
   # extension_snap_exit_deg: 12.0   # 曲げる途中、flexion 12°以上で早めに抜ける
 

@@ -23,6 +23,7 @@
 #include "infer/types.hpp"
 #include "lift/keypoint_format.hpp"
 #include "slimevr/tracker_extract.hpp"
+#include "slimevr/tracker_extractor.hpp"
 #include "slimevr/firmware_protocol.hpp"
 
 namespace {
@@ -1138,9 +1139,16 @@ void set_left_leg_flex(fitra::infer::Skeleton3D& s, float flex_deg,
     set_joint(s, 24, ankle[0], ankle[1] - 0.05f, ankle[2]);
 }
 
-void test_limb_extension_default_off_is_exact() {
+void test_limb_extension_product_and_low_level_defaults() {
     namespace sv = fitra::slimevr;
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+
+    const sv::TrackerExtractorOptions product_defaults;
+    check(product_defaults.limb_extension.snap,
+          "TrackerExtractor product default enables extension snap");
+    check(product_defaults.limb_extension.toe_direction,
+          "TrackerExtractor product default enables toe direction");
+
     auto skel = make_t_pose();
     set_left_arm_flex(skel, 8.0f);
     set_left_leg_flex(skel, 8.0f);
@@ -1524,7 +1532,7 @@ int main() {
         test_thigh_seated_extended_straight_knee(); std::printf("[ok] thigh: 直座り — roll held, no world-Z rescue (swing tracks)\n");
         test_foot_fk_fallback_uses_last_anchor(); std::printf("[ok] foot: FK fallback synthesizes ankle/toe from last anchor\n");
         test_foot_fk_fallback_needs_seed();       std::printf("[ok] foot: FK fallback requires a seeded anchor\n");
-        test_limb_extension_default_off_is_exact(); std::printf("[ok] extension features: default OFF is exact\n");
+        test_limb_extension_product_and_low_level_defaults(); std::printf("[ok] extension features: product ON / low-level reference OFF\n");
         test_limb_extension_snap_reconstructs_private_chain(); std::printf("[ok] extension snap: private arm/leg chain reconstruction\n");
         test_limb_extension_hysteresis();         std::printf("[ok] extension snap: enter/exit hysteresis\n");
         test_extended_leg_toe_direction_drives_thigh_and_shin_twist(); std::printf("[ok] extension toe direction: thigh/shin twist + missing fallback\n");

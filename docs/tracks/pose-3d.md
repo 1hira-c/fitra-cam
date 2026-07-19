@@ -36,9 +36,10 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
 
 ### 設計原則 / live な制約
 
-- **伸展補正は tracker 専用・既定 OFF**: `limb_extension_snap` は元の Skeleton3D を変更せず、
+- **伸展補正は tracker 専用・製品既定 ON**: `limb_extension_snap` は元の Skeleton3D を変更せず、
   `extract_trackers` の private copy 上だけで腕/脚を直線化する。`extended_leg_toe_direction` は伸展脚の
-  thigh/shin twist を観測済み `ankle→big_toe` から作り、欠損時は既存 held roll へ戻る。
+  thigh/shin twist を観測済み `ankle→big_toe` から作り、欠損時は既存 held roll へ戻る。両機能は
+  YAML の個別 `false` または `--no-limb-extension-snap` / `--no-extended-leg-toe-direction` で停止可能。
 - **degeneracy gate は相対しきい**: `quat_from_forward_up` の degeneracy 判定は `sin θ`
   ベース (`kRollSinLow=0.15` / `kRollSinHigh=0.30`)。絶対 norm しきいは使わない。
   primary が degenerate になる向き (水平腕・伸展脚) では **roll (twist) だけ**を hold する
@@ -94,6 +95,14 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-07-15 — 四肢伸展スナップ / 足先方向推論を製品既定 ON 化
+
+`MainOptions` と直接構築時の `TrackerExtractorOptions` で `limb_extension_snap` /
+`extended_leg_toe_direction` を両方 ON に昇格した。既存 YAML の明示 `false` はそのまま尊重し、CLI
+から即時 A/B・切り戻しできる `--no-limb-extension-snap` / `--no-extended-leg-toe-direction` を追加。
+低レベル `extract_trackers()` の引数既定は旧出力との厳密比較用に OFF のまま維持し、製品経路との
+違いをテストで固定した。
 
 ### 2026-07-13 — 四肢伸展スナップ + 伸展脚の足先方向推論（既定 OFF）
 
