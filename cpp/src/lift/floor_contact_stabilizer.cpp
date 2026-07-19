@@ -198,16 +198,21 @@ FloorContactReport FloorContactStabilizer::update(infer::Skeleton3D& skel,
         bool speed_known = st.has_prev_ankle && st.elapsed_since_prev_s > 0.0;
         float speed_mps = 0.0f;
         if (speed_known) {
-            speed_mps = static_cast<float>(cv::norm(raw_ankle - st.prev_raw_ankle))
-                      / static_cast<float>(st.elapsed_since_prev_s);
+            speed_mps = static_cast<float>(
+                cv::norm(raw_ankle - st.prev_raw_ankle)
+                / st.elapsed_since_prev_s);
         }
 
         const float support_height = support_z - floor_z;
         const float z_correction = floor_z - support_z;
+        const float max_z_correction =
+            static_cast<float>(opts_.max_z_correction_m);
+        const float bounded_z_correction = std::clamp(
+            z_correction, -max_z_correction, max_z_correction);
         const bool z_within_limit =
-            std::abs(z_correction) <= static_cast<float>(opts_.max_z_correction_m);
+            std::abs(z_correction) <= max_z_correction;
         const bool deep_penetration =
-            z_correction > static_cast<float>(opts_.max_z_correction_m);
+            z_correction > max_z_correction;
 
         bool released_this_frame = false;
         bool exit_pending = false;
@@ -261,14 +266,12 @@ FloorContactReport FloorContactStabilizer::update(infer::Skeleton3D& skel,
                 correction = st.last_correction;
                 if (z_correction >= 0.0f) {
                     correction[2] = std::max(
-                        correction[2],
-                        std::min(z_correction,
-                                 static_cast<float>(opts_.max_z_correction_m)));
+                        correction[2], bounded_z_correction);
                 } else {
                     // Do not carry an upward correction onto a sole that is
                     // already above the floor, or pull it through the floor.
                     correction[2] = std::clamp(
-                        correction[2], z_correction, 0.0f);
+                        correction[2], bounded_z_correction, 0.0f);
                 }
             } else {
                 const float alpha = static_cast<float>(1.0 - std::exp(
@@ -276,7 +279,8 @@ FloorContactReport FloorContactStabilizer::update(infer::Skeleton3D& skel,
                 const cv::Vec2f raw_xy{raw_ankle[0], raw_ankle[1]};
                 st.anchor_xy += alpha * (raw_xy - st.anchor_xy);
                 const cv::Vec2f xy_correction = st.anchor_xy - raw_xy;
-                correction = {xy_correction[0], xy_correction[1], z_correction};
+                correction = {
+                    xy_correction[0], xy_correction[1], bounded_z_correction};
                 st.last_correction = correction;
             }
             st.missing_frames = 0;
@@ -287,9 +291,7 @@ FloorContactReport FloorContactStabilizer::update(infer::Skeleton3D& skel,
             // release correction pull an otherwise-above-floor sole through
             // the floor. The requested lift remains bounded by max_z.
             correction[2] = std::max(
-                correction[2],
-                std::min(z_correction,
-                         static_cast<float>(opts_.max_z_correction_m)));
+                correction[2], bounded_z_correction);
         }
 
         apply_report(correction);

@@ -247,6 +247,36 @@ void test_low_rate_single_exit_sample_keeps_contact_latched() {
           "a second low-rate high support sample confirms release");
 }
 
+void test_velocity_division_keeps_double_dt_precision() {
+    FloorContactStabilizer st;
+
+    auto first = skeleton();
+    st.update(first, 1.0e-50);
+    auto second = skeleton();
+    auto report = st.update(second, 1.0e-50);
+
+    check(report.feet[0].contact,
+          "subnormal-for-float dt still produces finite zero speed");
+}
+
+void test_contact_z_correction_respects_configured_bound() {
+    FloorContactOptions opts;
+    opts.exit_height_m = 0.20;
+    opts.exit_speed_mps = 100.0;
+    FloorContactStabilizer st{opts};
+    enter_left_contact(st);
+
+    auto high = skeleton(0.0f, 0.12f);
+    auto report = st.update(high, kDt);
+
+    check(report.feet[0].contact,
+          "wide exit thresholds keep the configured contact latched");
+    close(report.feet[0].correction_m[2], -0.08f,
+          "contact downward Z correction is capped at max_z");
+    close(high.joints[kLBigToe].z, 0.04f,
+          "bounded contact correction cannot pull the sole to the floor");
+}
+
 void test_isolated_low_sole_outlier_is_rejected() {
     FloorContactStabilizer st;
     enter_left_contact(st);
@@ -423,6 +453,8 @@ int main() {
         test_transient_exit_signal_keeps_contact_latched();
         test_persistent_exit_signal_releases_after_grace();
         test_low_rate_single_exit_sample_keeps_contact_latched();
+        test_velocity_division_keeps_double_dt_precision();
+        test_contact_z_correction_respects_configured_bound();
         test_isolated_low_sole_outlier_is_rejected();
         test_release_correction_converges_to_zero();
         test_missing_grace_then_release();

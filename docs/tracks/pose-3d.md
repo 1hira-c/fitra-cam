@@ -99,6 +99,13 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-20 — PR #54レビュー対応（速度精度・Z安全上限）
+
+足首速度は `elapsed_since_prev_s` をdoubleのまま除算してからfloatへ変換し、floatで表現できない
+極小dtでもゼロ除算やNaNを生まないよう修正。接地中のZ補正は離地高さを個別に広げた設定でも
+`floor_contact_max_z_correction_m` の正負上限へ必ずクランプし、WebUI / VRの足だけが安全境界を
+超えて引き下げられないことを回帰テストで固定した。
+
 ### 2026-07-15 — 実機フィードバックに基づく接地判定の遊び拡大
 
 実機で静止接地中にも判定が外れやすかったため、接地/離地の高さを4/8cm、速度を0.35/1.00m/s、

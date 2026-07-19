@@ -86,11 +86,13 @@ idle 復帰と設定可能な更新 gap（既定 `dt > 0.50 s`）では履歴を
 ```text
 alpha = 1 - exp(-dt / 0.25 s)
 a     = a + alpha * (p.xy - a)
-delta = (a - p.xy, floor_z_m - robust_min(valid sole.z))
+delta_z = clamp(floor_z_m - robust_min(valid sole.z), -max_z, +max_z)
+delta   = (a - p.xy, delta_z)
 ```
 
 `delta` を ankle と valid な 3 sole 点へ同一適用する。これは接地足の XY を時定数 0.25 s で
-低域通過しながら、外れ値除外後の最下点を床面へ置く操作である。左右は state を共有しない。
+低域通過しながら、外れ値除外後の最下点をZ補正上限内で床面へ近づける操作である。離地高さを
+Z補正上限より広く設定しても、接地中を含む全経路でZ補正の絶対値上限は維持する。左右は state を共有しない。
 接地解除時は `delta_release = delta_prev * exp(-dt / release_tau)` として連続的に 0 へ戻す。
 
 ### 設定と観測性
@@ -105,7 +107,7 @@ delta = (a - p.xy, floor_z_m - robust_min(valid sole.z))
 | `floor_contact_enter_speed_mps` / `exit_speed_mps` | `0.35` / `1.00` | 速度ヒステリシス |
 | `floor_contact_xy_tau_s` | `0.25` | 接地 XY anchor の時定数 |
 | `floor_contact_max_xy_correction_m` | `0.04` | XY 補正要求の上限 |
-| `floor_contact_max_z_correction_m` | `0.08` | 床下方向のZ補正要求上限 |
+| `floor_contact_max_z_correction_m` | `0.08` | Z補正の絶対値上限 |
 | `floor_contact_missing_grace_frames` | `4` | sole 観測欠損の猶予 |
 | `floor_contact_reset_gap_s` | `0.50` | 更新不連続として履歴を捨てる gap |
 | `floor_contact_release_tau_s` | `0.05` | 離地時補正減衰の時定数 |
