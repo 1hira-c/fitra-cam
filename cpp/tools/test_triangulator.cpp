@@ -75,6 +75,7 @@ fitra::infer::Person project_person(const fitra::lift::CameraCalibration& cam,
 }
 
 void test_round_trip() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Coco17);
     auto calib = make_calibration({"cam0", "cam1"});
     fitra::lift::Triangulator triangulator{calib};
     triangulator.require_camera_ids({"cam0", "cam1"});
@@ -101,6 +102,47 @@ void test_round_trip() {
     }
 }
 
+void test_halpe_face_joints_are_excluded_from_3d() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto calib = make_calibration({"cam0", "cam1"});
+    fitra::lift::Triangulator triangulator{calib};
+
+    const auto points = make_points();
+    auto p0 = project_person(calib.cameras[0], points);
+    auto p1 = project_person(calib.cameras[1], points);
+
+    // Deliberately make the face disagree across cameras. These unreliable
+    // landmarks must not enter the 3D reprojection metric or body skeleton.
+    for (std::size_t k = 0; k <= 4; ++k) {
+        p1.kpts[k].x += 120.0f;
+        p1.kpts[k].y -= 80.0f;
+    }
+    std::vector<fitra::lift::PerCameraObservation> observations{
+        {0, &p0},
+        {1, &p1},
+    };
+
+    auto tri = triangulator.triangulate(observations);
+    check(tri.valid_joints == 21,
+          "Halpe26 3D lift should contain 21 non-facial joints");
+    check(tri.median_reproj_px < 1.0e-3,
+          "excluded face disagreement must not bias reprojection median");
+    for (std::size_t k = 0; k <= 4; ++k) {
+        check(!tri.skeleton.joints[k].valid,
+              "Halpe26 face joint must remain invalid in 3D skeleton");
+        check(tri.view_count[k] == 0,
+              "Halpe26 face joint must not consume triangulation views");
+    }
+    for (std::size_t k = 5; k < points.size(); ++k) {
+        check(tri.skeleton.joints[k].valid,
+              "non-facial Halpe26 joint must still triangulate");
+    }
+    check(tri.skeleton.joints[17].valid,
+          "head_top must stay available for HMD alignment");
+    check(tri.skeleton.joints[18].valid,
+          "neck must stay available for torso tracking");
+}
+
 void test_camera_id_validation() {
     auto calib = make_calibration({"left", "right"});
     fitra::lift::Triangulator triangulator{calib};
@@ -118,6 +160,7 @@ void test_camera_id_validation() {
 int main() {
     try {
         test_round_trip();
+        test_halpe_face_joints_are_excluded_from_3d();
         test_camera_id_validation();
         std::puts("test_triangulator ok");
         return 0;

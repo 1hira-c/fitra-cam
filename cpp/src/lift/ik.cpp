@@ -171,6 +171,7 @@ void IkSolver::observe_lengths_locked(const infer::Skeleton3D& skel) {
     const auto& def = active_skeleton_def();
     bool any = false;
     for (std::size_t child = 0; child < def.parents.size(); ++child) {
+        if (!participates_in_3d_lift(def.format, child)) continue;
         int parent = def.parents[child];
         if (parent < 0) continue;
         const auto& a = skel.joints[static_cast<std::size_t>(parent)];
@@ -196,6 +197,7 @@ void IkSolver::lock_lengths_locked() {
 void IkSolver::enforce_lengths(infer::Skeleton3D& skel) const {
     const auto& def = active_skeleton_def();
     for (std::size_t child = 0; child < def.parents.size(); ++child) {
+        if (!participates_in_3d_lift(def.format, child)) continue;
         int parent = def.parents[child];
         if (parent < 0) continue;
         double target = locked_parent_len_[child];
@@ -273,6 +275,7 @@ double IkSolver::bone_drift_pct_locked(const infer::Skeleton3D& skel) const {
     double sum = 0.0;
     int n = 0;
     for (std::size_t child = 0; child < def.parents.size(); ++child) {
+        if (!participates_in_3d_lift(def.format, child)) continue;
         int parent = def.parents[child];
         double target = locked_parent_len_[child];
         if (parent < 0 || target <= 1.0e-6) continue;

@@ -224,6 +224,30 @@ void test_chain_child_skipped_when_parent_never_seen() {
           "chain.root.no-meas: root stays invalid when never observed");
 }
 
+// ---------- Test 6: Halpe26 facial states are never initialized ----------
+void test_halpe_face_joints_are_excluded() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    fitra::lift::SkeletonKalman kf;
+
+    auto skel = make_skel(0.0f, 0.0f, 0.9f);
+    set_joint(skel, 17, 0.0f, 0.0f, 1.72f);  // head_top, retained
+    set_joint(skel, 0, 0.0f, 0.10f, 1.62f);  // nose
+    set_joint(skel, 1, -0.03f, 0.10f, 1.65f);
+    set_joint(skel, 2, 0.03f, 0.10f, 1.65f);
+    set_joint(skel, 3, -0.07f, 0.06f, 1.64f);
+    set_joint(skel, 4, 0.07f, 0.06f, 1.64f);
+
+    auto out = kf.update(skel, 1.0 / 60.0);
+    for (std::size_t k = 0; k <= 4; ++k) {
+        check(!out.joints[k].valid,
+              "Halpe26 face Kalman state must stay invalid");
+    }
+    check(out.joints[17].valid,
+          "head_top Kalman state must remain available");
+    check(out.joints[18].valid,
+          "neck Kalman state must remain available");
+}
+
 }  // namespace
 
 int main() {
@@ -238,6 +262,8 @@ int main() {
         std::printf("[ok] chain Kalman ages child while parent is unavailable\n");
         test_chain_child_skipped_when_parent_never_seen();
         std::printf("[ok] chain Kalman skips child whose parent never observed\n");
+        test_halpe_face_joints_are_excluded();
+        std::printf("[ok] chain Kalman excludes Halpe26 facial landmarks\n");
         std::puts("test_kalman_chain ok");
         return 0;
     } catch (const std::exception& e) {

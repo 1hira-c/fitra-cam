@@ -135,6 +135,12 @@ infer::Skeleton3D SkeletonKalman::update(const infer::Skeleton3D& measurement,
         // produce an out-of-bounds access.
         if (i < 0 || static_cast<std::size_t>(i) >= kp_count) continue;
 
+        // Halpe26 facial landmarks are intentionally outside the 3D body-lift
+        // contract. The output was initialized invalid above; skip all state
+        // prediction/correction work for these joints.
+        if (!participates_in_3d_lift(def.format,
+                                     static_cast<std::size_t>(i))) continue;
+
         const bool  is_root  = (i == root_idx_);
         const int   parent   = is_root ? -1 : parents[static_cast<std::size_t>(i)];
         auto&       s        = states_[static_cast<std::size_t>(i)];

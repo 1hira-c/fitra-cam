@@ -36,6 +36,11 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
 
 ### 設計原則 / live な制約
 
+- **Halpe26 顔5点は3D body-lift対象外**: RTMPose / 2D JSONは26点のまま維持するが、
+  nose / eyes / ears (0–4) は三角測量・Kalman・IK・subject profileから除外する。
+  `valid_joints` の最大は21で、subject calibrationの再投影中央値もbody 21点だけを集計する。
+  HMD alignment用 `head_top(17)` とtorso用 `neck(18)` は維持する。
+  → [design/pose-3d-face-joint-exclusion.md](../design/pose-3d-face-joint-exclusion.md)
 - **伸展補正は tracker 専用・製品既定 ON**: `limb_extension_snap` は元の Skeleton3D を変更せず、
   `extract_trackers` の private copy 上だけで腕/脚を直線化する。`extended_leg_toe_direction` は伸展脚の
   thigh/shin twist を観測済み `ankle→big_toe` から作り、欠損時は既存 held roll へ戻る。両機能は
@@ -102,6 +107,17 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-07-20 — Halpe26 顔5点を3D body-lift / subject calibrationから除外
+
+VR trackerに使わず、カメラ間誤差が大きいnose / eyes / ears (0–4) を三角測量、kinematic-tree
+Kalman、骨長IK、profile観測とdrift集計から除外した。RTMPoseと2D JSONの26点indexは維持し、
+`head_top(17)` / `neck(18)` は連続HMD alignmentとtorso tracker用に残す。これにより
+`reproj_err_med_px` と `valid_joints` はbody 21点だけを評価し、顔外れによるsubject calibrationの
+品質悪化と不要なper-joint CPU処理を防ぐ。設計と回帰条件:
+[design/pose-3d-face-joint-exclusion.md](../design/pose-3d-face-joint-exclusion.md)。
+保存済み300フレームsessionの再解析ではbody座標とmajor coverageを維持し、全体の再投影中央値は
+2.65774→2.54853px、valid中央値は26→21、quality statusはpassを維持した。
 
 ### 2026-07-20 — PR #54レビュー対応（速度精度・Z安全上限）
 

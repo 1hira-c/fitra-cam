@@ -55,6 +55,24 @@ inline std::size_t active_kp_count() {
     return active_skeleton_def().kp_count;
 }
 
+// Whether a model keypoint participates in the 3D body-lift path.
+//
+// Halpe26 facial landmarks 0..4 (nose, eyes, ears) remain in RTMPose output
+// and the 2D JSON contract, but are deliberately excluded from triangulation,
+// Kalman, IK and subject-profile bone observations. They are comparatively
+// noisy across views and have no downstream full-body tracker role; including
+// them wastes per-joint CPU work and can bias subject-calibration reprojection
+// quality. head_top (17) stays enabled for HMD alignment, and neck (18) stays
+// enabled for the torso/tracker chain.
+//
+// COCO17 retains its historical all-17 behavior. Its subject-calibration
+// quality threshold is defined against 17 joints and changing that contract is
+// outside the Halpe26/VR-specific policy introduced here.
+inline constexpr bool participates_in_3d_lift(KeypointFormat fmt,
+                                               std::size_t joint) {
+    return fmt != KeypointFormat::Halpe26 || joint > 4;
+}
+
 // String <-> enum helpers for CLI parsing. parse_keypoint_format() returns
 // false (and leaves `out` untouched) for unknown names.
 const char* keypoint_format_name(KeypointFormat fmt);

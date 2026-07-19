@@ -110,7 +110,8 @@ TriangulatedSkeleton Triangulator::triangulate(
     const std::vector<PerCameraObservation>& observations) const {
     TriangulatedSkeleton out;
     std::vector<double> valid_errors;
-    const std::size_t kp_count = active_kp_count();
+    const auto& def = active_skeleton_def();
+    const std::size_t kp_count = def.kp_count;
     out.skeleton.kp_count = static_cast<std::uint8_t>(kp_count);
 
     // Per-call scratch reused across keypoints/views to avoid per-keypoint and
@@ -123,6 +124,7 @@ TriangulatedSkeleton Triangulator::triangulate(
     static thread_local std::vector<cv::Point2f> undist_dst;
 
     for (std::size_t k = 0; k < kp_count; ++k) {
+        if (!participates_in_3d_lift(def.format, k)) continue;
         views.clear();
         for (const auto& obs : observations) {
             if (!obs.person || obs.cam_index < 0 ||
