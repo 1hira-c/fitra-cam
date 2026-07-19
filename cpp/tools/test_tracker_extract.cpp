@@ -1,6 +1,5 @@
-// test_tracker_extract — exercise Halpe26 → 10 SlimeVR tracker extraction +
-// quaternion smoothing. Output is in the WORLD frame (Z-up); the publisher
-// applies the Y-up conversion when serializing.
+// test_tracker_extract — exercise Halpe26 → 10 tracker extraction +
+// quaternion smoothing in the WORLD frame (Z-up).
 //
 // Synthetic T-pose verifies:
 //   - all 10 trackers (upper arms / chest / waist / upper legs / lower legs /
@@ -23,9 +22,8 @@
 #include "infer/types.hpp"
 #include "lift/keypoint_format.hpp"
 #include "lift/skeleton_def.hpp"
-#include "slimevr/tracker_extract.hpp"
-#include "slimevr/tracker_extractor.hpp"
-#include "slimevr/firmware_protocol.hpp"
+#include "tracking/tracker_extract.hpp"
+#include "tracking/tracker_extractor.hpp"
 
 namespace {
 
@@ -74,7 +72,7 @@ void quat_to_basis(const cv::Vec4f& q, cv::Vec3f& right, cv::Vec3f& up, cv::Vec3
 // Synthetic Halpe26 T-pose: subject standing at origin facing +Y, arms
 // outstretched, knees slightly forward (so the up/forward hints on knee /
 // elbow trackers are linearly independent — a perfectly straight limb makes
-// the rotation about the limb axis genuinely ambiguous, both for SlimeVR's
+// the rotation about the limb axis genuinely ambiguous, both for trackers'
 // solver and for any vector-based rotation reconstruction).
 fitra::infer::Skeleton3D make_t_pose() {
     fitra::infer::Skeleton3D s;
@@ -120,14 +118,14 @@ fitra::infer::Skeleton3D make_t_pose() {
 
 void test_quat_from_forward_up_degenerate() {
     cv::Vec4f q;
-    bool ok = fitra::slimevr::detail::quat_from_forward_up(
+    bool ok = fitra::tracking::detail::quat_from_forward_up(
         cv::Vec3f{0, 0, 1}, cv::Vec3f{0, 0, 1}, q);
     check(!ok, "quat_from_forward_up parallel inputs should be invalid");
     check_vec3_close(cv::Vec3f{q[0], q[1], q[2]}, cv::Vec3f{1, 0, 0},
                      "degenerate quat should be identity wxyz=(1,0,0,0)");
     check(std::abs(q[3]) < kEps, "degenerate quat z component");
 
-    ok = fitra::slimevr::detail::quat_from_forward_up(
+    ok = fitra::tracking::detail::quat_from_forward_up(
         cv::Vec3f{0, 0, 0}, cv::Vec3f{0, 0, 1}, q);
     check(!ok, "quat_from_forward_up zero forward should be invalid");
 }
@@ -135,7 +133,7 @@ void test_quat_from_forward_up_degenerate() {
 void test_t_pose_extracts_all_ten() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     auto skel = make_t_pose();
-    auto trackers = fitra::slimevr::extract_trackers(skel);
+    auto trackers = fitra::tracking::extract_trackers(skel);
 
     check(trackers.size() == 10, "must produce exactly 10 trackers");
 
@@ -147,7 +145,7 @@ void test_t_pose_extracts_all_ten() {
         }
     }
 
-    using R = fitra::slimevr::TrackerRole;
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
 
     // Spot-check positions in WORLD frame (Z-up, X-right, Y-forward).
@@ -206,16 +204,16 @@ void test_floor_correction_preserves_anchor_geometry() {
         grounded.joints[joint].z += corrections[0][2];
     }
 
-    fitra::slimevr::ExtractContext ctx, raw_ctx;
-    const fitra::slimevr::LimbExtensionOptions extension{
+    fitra::tracking::ExtractContext ctx, raw_ctx;
+    const fitra::tracking::LimbExtensionOptions extension{
         true, true, 20.0f, 12.0f};
-    const auto trackers = fitra::slimevr::extract_trackers_with_floor_corrections(
-        grounded, corrections, &ctx, fitra::slimevr::FootPosMode::Midpoint,
+    const auto trackers = fitra::tracking::extract_trackers_with_floor_corrections(
+        grounded, corrections, &ctx, fitra::tracking::FootPosMode::Midpoint,
         0.5f, 0.0f, extension);
-    const auto raw_trackers = fitra::slimevr::extract_trackers(
-        raw, &raw_ctx, fitra::slimevr::FootPosMode::Midpoint,
+    const auto raw_trackers = fitra::tracking::extract_trackers(
+        raw, &raw_ctx, fitra::tracking::FootPosMode::Midpoint,
         0.5f, 0.0f, extension);
-    using R = fitra::slimevr::TrackerRole;
+    using R = fitra::tracking::TrackerRole;
     const auto idx = [](R role) { return static_cast<std::size_t>(role); };
 
     const cv::Vec3f raw_knee{
@@ -243,19 +241,19 @@ void test_floor_correction_preserves_anchor_geometry() {
 void test_torso_tracker_height_frac() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     auto skel = make_t_pose();
-    using R = fitra::slimevr::TrackerRole;
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
 
     // Function defaults (0.5 / 0.0) reproduce the historical placement.
-    auto base = fitra::slimevr::extract_trackers(skel);
+    auto base = fitra::tracking::extract_trackers(skel);
     check_vec3_close(base[idx(R::Chest)].pos, cv::Vec3f{0, 0, 1.175f},
                      "Chest default frac 0.5 == midpoint");
     check_vec3_close(base[idx(R::Waist)].pos, cv::Vec3f{0, 0, 0.9f},
                      "Waist default frac 0.0 == hip_center");
 
     // Product defaults (raised): chest 0.65, waist 0.15.
-    auto raised = fitra::slimevr::extract_trackers(
-        skel, nullptr, fitra::slimevr::FootPosMode::Ankle, 0.65f, 0.15f);
+    auto raised = fitra::tracking::extract_trackers(
+        skel, nullptr, fitra::tracking::FootPosMode::Ankle, 0.65f, 0.15f);
     check_vec3_close(raised[idx(R::Chest)].pos, cv::Vec3f{0, 0, 1.2575f},
                      "Chest frac 0.65 slides up the spine");
     check_vec3_close(raised[idx(R::Waist)].pos, cv::Vec3f{0, 0, 0.9825f},
@@ -276,35 +274,16 @@ void test_torso_tracker_height_frac() {
           "waist orientation unchanged by height frac");
 }
 
-void test_role_to_position_mapping() {
-    using fitra::slimevr::position_for;
-    using R = fitra::slimevr::TrackerRole;
-    using P = fitra::slimevr::TrackerPosition;
-    check(position_for(R::LeftUpperArm)  == P::LeftUpperArm,  "LeftUpperArm");
-    check(position_for(R::RightUpperArm) == P::RightUpperArm, "RightUpperArm");
-    check(position_for(R::Chest)         == P::Chest,         "Chest");
-    check(position_for(R::Waist)         == P::Hip,           "Waist→Hip");
-    check(position_for(R::LeftUpperLeg)  == P::LeftUpperLeg,  "LeftUpperLeg");
-    check(position_for(R::RightUpperLeg) == P::RightUpperLeg, "RightUpperLeg");
-    check(position_for(R::LeftLowerLeg)  == P::LeftLowerLeg,  "LeftLowerLeg");
-    check(position_for(R::RightLowerLeg) == P::RightLowerLeg, "RightLowerLeg");
-    check(position_for(R::LeftFoot)      == P::LeftFoot,      "LeftFoot");
-    check(position_for(R::RightFoot)     == P::RightFoot,     "RightFoot");
-    // Sensor IDs are the enum ordinals 0..9.
-    check(fitra::slimevr::sensor_id_for(R::LeftUpperArm) == 0, "sensor id LUA");
-    check(fitra::slimevr::sensor_id_for(R::RightFoot)    == 9, "sensor id RF");
-}
-
 void test_missing_joints_yield_invalid() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
-    using R = fitra::slimevr::TrackerRole;
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
 
     {
         // Knock out l_elbow → only LeftUpperArm should fail.
         auto skel = make_t_pose();
         skel.joints[7].valid = false;
-        auto trackers = fitra::slimevr::extract_trackers(skel);
+        auto trackers = fitra::tracking::extract_trackers(skel);
         check(!trackers[idx(R::LeftUpperArm)].valid,
               "LeftUpperArm invalid without l_elbow");
         check( trackers[idx(R::RightUpperArm)].valid,
@@ -319,7 +298,7 @@ void test_missing_joints_yield_invalid() {
         // non-degenerate, which it is in the T-pose.
         auto skel = make_t_pose();
         skel.joints[19].valid = false;
-        auto trackers = fitra::slimevr::extract_trackers(skel);
+        auto trackers = fitra::tracking::extract_trackers(skel);
         check(!trackers[idx(R::Chest)].valid,         "Chest invalid w/o hip_center");
         check(!trackers[idx(R::Waist)].valid,         "Waist invalid w/o hip_center");
         check( trackers[idx(R::LeftUpperLeg)].valid,  "LUL still valid w/o hip_center");
@@ -334,7 +313,7 @@ void test_missing_joints_yield_invalid() {
         // invalidate LeftFoot. The required joints are now knee/ankle/toe.
         auto skel = make_t_pose();
         skel.joints[24].valid = false;
-        auto trackers = fitra::slimevr::extract_trackers(skel);
+        auto trackers = fitra::tracking::extract_trackers(skel);
         check( trackers[idx(R::LeftFoot)].valid, "LFoot still valid w/o l_heel");
         check( trackers[idx(R::RightFoot)].valid, "RFoot still valid");
     }
@@ -342,7 +321,7 @@ void test_missing_joints_yield_invalid() {
         // Knock out l_big_toe → LeftFoot invalid (toe is required for fwd).
         auto skel = make_t_pose();
         skel.joints[20].valid = false;
-        auto trackers = fitra::slimevr::extract_trackers(skel);
+        auto trackers = fitra::tracking::extract_trackers(skel);
         check(!trackers[idx(R::LeftFoot)].valid, "LFoot invalid w/o l_big_toe");
         check( trackers[idx(R::RightFoot)].valid, "RFoot still valid");
     }
@@ -350,15 +329,15 @@ void test_missing_joints_yield_invalid() {
 
 void test_smoothing_double_cover() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
-    std::array<fitra::slimevr::SlimeTracker, fitra::slimevr::kTrackerCount> curr{};
-    std::array<cv::Vec4f, fitra::slimevr::kTrackerCount> prev{};
+    std::array<fitra::tracking::TrackerPose, fitra::tracking::kTrackerCount> curr{};
+    std::array<cv::Vec4f, fitra::tracking::kTrackerCount> prev{};
     // Set up a single valid tracker with prev = identity and curr = -identity
     // (same rotation under double-cover). Smoothing should flip curr and
     // produce identity-ish.
     curr[0].valid = true;
     curr[0].quat_wxyz = cv::Vec4f{-1, 0, 0, 0};
     prev[0] = cv::Vec4f{1, 0, 0, 0};
-    fitra::slimevr::apply_quat_smoothing(curr, prev, 0.5f);
+    fitra::tracking::apply_quat_smoothing(curr, prev, 0.5f);
     cv::Vec4f r = curr[0].quat_wxyz;
     float n = std::sqrt(r[0]*r[0] + r[1]*r[1] + r[2]*r[2] + r[3]*r[3]);
     check(std::abs(n - 1.0f) < 1.0e-3f, "smoothed quat not unit");
@@ -374,12 +353,12 @@ void test_smoothing_double_cover() {
 // This avoids the identity-snap that the previous reset logic caused whenever
 // a tracker briefly dropped visibility.
 void test_smoothing_invalid_holds_prev() {
-    std::array<fitra::slimevr::SlimeTracker, fitra::slimevr::kTrackerCount> curr{};
-    std::array<cv::Vec4f, fitra::slimevr::kTrackerCount> prev{};
+    std::array<fitra::tracking::TrackerPose, fitra::tracking::kTrackerCount> curr{};
+    std::array<cv::Vec4f, fitra::tracking::kTrackerCount> prev{};
     curr[0].valid = false;
     curr[0].quat_wxyz = cv::Vec4f{1, 0, 0, 0};   // raw extract output on invalid
     prev[0] = cv::Vec4f{0, 1, 0, 0};             // last known good
-    fitra::slimevr::apply_quat_smoothing(curr, prev, 0.5f);
+    fitra::tracking::apply_quat_smoothing(curr, prev, 0.5f);
     // prev is unchanged.
     check_vec3_close(cv::Vec3f{prev[0][0], prev[0][1], prev[0][2]},
                      cv::Vec3f{0, 1, 0}, "invalid: prev_quat unchanged");
@@ -391,7 +370,7 @@ void test_smoothing_invalid_holds_prev() {
 
 // Verify the tracker's local +Z axis (the bone forward) matches the expected
 // world-frame bone direction within `eps`. Uses dot product to be sign-aware.
-void check_tracker_forward(const fitra::slimevr::SlimeTracker& t,
+void check_tracker_forward(const fitra::tracking::TrackerPose& t,
                             const cv::Vec3f& expected_fwd_unit,
                             const std::string& label,
                             float eps = 1e-3f) {
@@ -413,7 +392,7 @@ void check_tracker_forward(const fitra::slimevr::SlimeTracker& t,
 // in the half-space pointed to by `expected_up_dir`. We don't require exact
 // equality because the up is projected onto fwd⊥ — but its sign and dominant
 // component must match expectation for the chosen up source.
-void check_tracker_up_direction(const fitra::slimevr::SlimeTracker& t,
+void check_tracker_up_direction(const fitra::tracking::TrackerPose& t,
                                  const cv::Vec3f& expected_up_dir,
                                  const std::string& label,
                                  float min_dot = 0.3f) {
@@ -451,8 +430,8 @@ void test_upper_arm_forward_raised() {
         set_joint(s, 7, 0.18f, 0.30f, 1.42f);   // l_elbow (~30cm forward, same height)
         set_joint(s, 9, 0.18f, 0.55f, 1.35f);   // l_wrist (forward + slightly down)
     });
-    auto trackers = fitra::slimevr::extract_trackers(skel);
-    using R = fitra::slimevr::TrackerRole;
+    auto trackers = fitra::tracking::extract_trackers(skel);
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperArm)];
     check(t.valid, "forward-raised upper arm must be valid");
@@ -472,8 +451,8 @@ void test_upper_arm_overhead_bent_elbow() {
         set_joint(s, 7, 0.18f, 0.0f, 1.85f);    // l_elbow directly above shoulder
         set_joint(s, 9, 0.42f, 0.0f, 1.85f);    // l_wrist lateral 24cm (elbow flexed)
     });
-    auto trackers = fitra::slimevr::extract_trackers(skel);
-    using R = fitra::slimevr::TrackerRole;
+    auto trackers = fitra::tracking::extract_trackers(skel);
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperArm)];
     check(t.valid, "overhead-bent upper arm must be valid");
@@ -486,7 +465,7 @@ void test_upper_arm_overhead_bent_elbow() {
 // Confirms roll_confidence on the foot tracker is the fixed low-pass
 // smoothing weight (kFootSmoothingWeight = 0.3), not 1.0 like the rigid
 // anatomically-pinned bones.
-void check_foot_smoothing_weight(const fitra::slimevr::SlimeTracker& t,
+void check_foot_smoothing_weight(const fitra::tracking::TrackerPose& t,
                                   const std::string& label) {
     constexpr float kExpected = 0.3f;  // kFootSmoothingWeight in tracker_extract.cpp
     if (std::abs(t.roll_confidence - kExpected) > 1.0e-3f) {
@@ -514,8 +493,8 @@ void test_foot_toe_stance() {
         set_joint(s, 15, 0.1f,  0.07f, 0.18f);  // l_ankle pitched forward of knee
         // l_knee stays at T-pose (0.1, 0.01, 0.45).
     });
-    auto trackers = fitra::slimevr::extract_trackers(skel);
-    using R = fitra::slimevr::TrackerRole;
+    auto trackers = fitra::tracking::extract_trackers(skel);
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftFoot)];
     check(t.valid, "toe-stance foot must be valid");
@@ -537,8 +516,8 @@ void test_foot_heel_stance() {
         set_joint(s, 20, 0.1f,  0.17f, 0.08f);  // l_big_toe raised
         set_joint(s, 15, 0.1f,  0.04f, 0.15f);  // l_ankle above (would-be) heel
     });
-    auto trackers = fitra::slimevr::extract_trackers(skel);
-    using R = fitra::slimevr::TrackerRole;
+    auto trackers = fitra::tracking::extract_trackers(skel);
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftFoot)];
     check(t.valid, "heel-stance foot must be valid");
@@ -568,8 +547,8 @@ void test_foot_inversion_unobservable() {
         // ankle = (-0.08, -0.03, 0.35), perpendicular to the old +X direction.
         set_joint(s, 15, 0.18f, 0.04f, 0.10f);
     });
-    auto trackers = fitra::slimevr::extract_trackers(skel);
-    using R = fitra::slimevr::TrackerRole;
+    auto trackers = fitra::tracking::extract_trackers(skel);
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftFoot)];
     check(t.valid, "lateral-ankle foot must still be valid");
@@ -604,8 +583,8 @@ void test_thigh_seated_knee_bent() {
         set_joint(s, 13, 0.1f,  0.45f, 0.5f);   // l_knee 45cm forward
         set_joint(s, 15, 0.1f,  0.45f, 0.05f);  // l_ankle directly below knee
     });
-    auto trackers = fitra::slimevr::extract_trackers(skel);
-    using R = fitra::slimevr::TrackerRole;
+    auto trackers = fitra::tracking::extract_trackers(skel);
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperLeg)];
     check(t.valid, "seated thigh must be valid");
@@ -632,8 +611,8 @@ void test_thigh_walking_knee_60() {
         //         = (0.1, 0.15+0.390, 0.55-0.225) = (0.1, 0.54, 0.325)
         set_joint(s, 15, 0.1f,  0.54f, 0.325f);
     });
-    auto trackers = fitra::slimevr::extract_trackers(skel);
-    using R = fitra::slimevr::TrackerRole;
+    auto trackers = fitra::tracking::extract_trackers(skel);
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperLeg)];
     check(t.valid, "walking-knee-60 thigh must be valid");
@@ -656,8 +635,8 @@ void test_thigh_standing_knee_straight() {
         set_joint(s, 15, 0.1f, 0.0f, 0.05f);    // l_ankle (perfectly straight)
         set_joint(s, 19, 0.0f, 0.0f, 0.9f);     // hip_center
     });
-    auto trackers = fitra::slimevr::extract_trackers(skel);
-    using R = fitra::slimevr::TrackerRole;
+    auto trackers = fitra::tracking::extract_trackers(skel);
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperLeg)];
     check(t.valid, "standing-straight thigh stays valid (forward-only orientation)");
@@ -691,8 +670,8 @@ void test_thigh_lateral_ankle_uses_primary() {
         // lateral cue safely above the kRollSinLow (0.15) gate.
         set_joint(s, 15, 0.25f, 0.0f, 0.05f);
     });
-    auto trackers = fitra::slimevr::extract_trackers(skel_lateral);
-    using R = fitra::slimevr::TrackerRole;
+    auto trackers = fitra::tracking::extract_trackers(skel_lateral);
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperLeg)];
     check(t.valid, "lateral-ankle thigh must be valid (primary active)");
@@ -738,8 +717,8 @@ void test_thigh_seated_extended_straight_knee() {
         set_joint(s, 15, 0.1f, 0.8f, 0.1f);   // l_ankle (40 cm further, same z)
         set_joint(s, 19, 0.0f, 0.0f, 0.1f);   // hip_center
     });
-    auto trackers = fitra::slimevr::extract_trackers(skel);
-    using R = fitra::slimevr::TrackerRole;
+    auto trackers = fitra::tracking::extract_trackers(skel);
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperLeg)];
     check(t.valid,
@@ -763,8 +742,8 @@ void test_upper_arm_confidence_full_at_90deg_bend() {
         set_joint(s, 7, 0.18f, 0.0f, 1.85f);    // l_elbow directly above
         set_joint(s, 9, 0.42f, 0.0f, 1.85f);    // l_wrist lateral (90° flex)
     });
-    auto trackers = fitra::slimevr::extract_trackers(skel);
-    using R = fitra::slimevr::TrackerRole;
+    auto trackers = fitra::tracking::extract_trackers(skel);
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperArm)];
     check(t.valid, "90° elbow tracker must be valid");
@@ -787,8 +766,8 @@ void test_upper_arm_confidence_zero_all_degenerate() {
         set_joint(s,  7, 0.0f, 0.0f, 1.85f);    // l_elbow
         set_joint(s,  9, 0.0f, 0.0f, 2.10f);    // l_wrist
     });
-    auto trackers = fitra::slimevr::extract_trackers(skel);
-    using R = fitra::slimevr::TrackerRole;
+    auto trackers = fitra::tracking::extract_trackers(skel);
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperArm)];
     // up ∥ fwd → roll unobservable. Forward (elbow - shoulder = +Z) is still
@@ -817,8 +796,8 @@ void test_upper_arm_confidence_smoothstep_midrange() {
         set_joint(s,  9, 0.05625f, 0.0f, 2.0936f); // l_wrist 13.0° off-axis
         set_joint(s, 18, 0.0f,     0.0f, 1.55f);   // neck colinear → secondary degenerate
     });
-    auto trackers = fitra::slimevr::extract_trackers(skel);
-    using R = fitra::slimevr::TrackerRole;
+    auto trackers = fitra::tracking::extract_trackers(skel);
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
     auto& t = trackers[idx(R::LeftUpperArm)];
     check(t.valid, "midrange-sin tracker must be valid");
@@ -839,8 +818,8 @@ void test_upper_arm_confidence_smoothstep_midrange() {
 // whole orientation — swing tracks unless swing_confidence is also 0; see
 // test_roll_hold_keeps_swing for the roll-only-hold contract.)
 void test_smoothing_freezes_under_low_confidence() {
-    std::array<fitra::slimevr::SlimeTracker, fitra::slimevr::kTrackerCount> curr{};
-    std::array<cv::Vec4f, fitra::slimevr::kTrackerCount> prev{};
+    std::array<fitra::tracking::TrackerPose, fitra::tracking::kTrackerCount> curr{};
+    std::array<cv::Vec4f, fitra::tracking::kTrackerCount> prev{};
     // Tracker 0: valid but zero confidence; raw quat is wildly different from prev.
     curr[0].valid = true;
     curr[0].roll_confidence = 0.0f;
@@ -848,7 +827,7 @@ void test_smoothing_freezes_under_low_confidence() {
     curr[0].quat_wxyz = cv::Vec4f{0, 1, 0, 0};   // 180° about +X
     prev[0] = cv::Vec4f{1, 0, 0, 0};             // identity, last known good
     for (int i = 0; i < 5; ++i) {
-        fitra::slimevr::apply_quat_smoothing(curr, prev, 0.5f);
+        fitra::tracking::apply_quat_smoothing(curr, prev, 0.5f);
         // prev unchanged.
         check(std::abs(prev[0][0] - 1.0f) < kEps,
               "freeze: prev[0] held over multiple frames");
@@ -871,13 +850,13 @@ void test_smoothing_freezes_under_low_confidence() {
 // with no anchor) the same drop yields invalid (preserves old behavior).
 void test_foot_fk_fallback_uses_last_anchor() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
-    fitra::slimevr::ExtractContext ctx{};
-    using R = fitra::slimevr::TrackerRole;
+    fitra::tracking::ExtractContext ctx{};
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
 
     // Frame 1: fully measured T-pose seeds the anchor.
     auto skel1 = make_t_pose();
-    auto t1 = fitra::slimevr::extract_trackers(skel1, &ctx);
+    auto t1 = fitra::tracking::extract_trackers(skel1, &ctx);
     check(t1[idx(R::LeftFoot)].valid,  "fk-fallback.seed.left.valid");
     check(t1[idx(R::RightFoot)].valid, "fk-fallback.seed.right.valid");
     check(ctx.foot_anchors[0].valid,   "fk-fallback.seed.anchor[0]");
@@ -892,7 +871,7 @@ void test_foot_fk_fallback_uses_last_anchor() {
     // it would early-return.
     auto skel2 = make_t_pose();
     skel2.joints[15].valid = false;  // l_ankle dropped
-    auto t2 = fitra::slimevr::extract_trackers(skel2, &ctx);
+    auto t2 = fitra::tracking::extract_trackers(skel2, &ctx);
     check(t2[idx(R::LeftFoot)].valid,
           "fk-fallback.left foot valid via FK when ankle dropped");
     // Confidence weight drops to the FK-mode value (0.15) when synthesized.
@@ -911,7 +890,7 @@ void test_foot_fk_fallback_uses_last_anchor() {
           "fk-fallback.anchor.tibia_len unchanged on synth frame");
 
     // Without ctx the same drop yields invalid (old behavior preserved).
-    auto t2_noctx = fitra::slimevr::extract_trackers(skel2);
+    auto t2_noctx = fitra::tracking::extract_trackers(skel2);
     check(!t2_noctx[idx(R::LeftFoot)].valid,
           "fk-fallback.no-ctx: ankle drop must produce invalid foot");
 }
@@ -920,13 +899,13 @@ void test_foot_fk_fallback_uses_last_anchor() {
 // has no data to draw on → foot tracker invalid, matching the old behavior.
 void test_foot_fk_fallback_needs_seed() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
-    fitra::slimevr::ExtractContext ctx{};
-    using R = fitra::slimevr::TrackerRole;
+    fitra::tracking::ExtractContext ctx{};
+    using R = fitra::tracking::TrackerRole;
     auto idx = [](R r) { return static_cast<std::size_t>(r); };
 
     auto skel = make_t_pose();
     skel.joints[15].valid = false;  // l_ankle dropped on the very first frame
-    auto t = fitra::slimevr::extract_trackers(skel, &ctx);
+    auto t = fitra::tracking::extract_trackers(skel, &ctx);
     check(!t[idx(R::LeftFoot)].valid,
           "fk-fallback.unseeded: must not invent an anchor from nothing");
     check(!ctx.foot_anchors[0].valid,
@@ -940,8 +919,8 @@ void test_foot_fk_fallback_needs_seed() {
 // fix that keeps an extended limb's bone direction moving instead of freezing
 // the whole orientation when roll becomes unobservable.
 void test_roll_hold_keeps_swing() {
-    namespace sv = fitra::slimevr;
-    using sv::SlimeTracker;
+    namespace sv = fitra::tracking;
+    using sv::TrackerPose;
     using sv::kTrackerCount;
 
     // prev orientation: bone pointing +Z, canonical up +Y.
@@ -958,7 +937,7 @@ void test_roll_hold_keeps_swing() {
     check(sv::detail::quat_from_forward_up(f, cv::Vec3f{0, 1, 0.2f}, Qb), "roll-hold: curr_b");
 
     auto run = [&](const cv::Vec4f& Q, float roll_conf) {
-        std::array<SlimeTracker, kTrackerCount> curr{};
+        std::array<TrackerPose, kTrackerCount> curr{};
         std::array<cv::Vec4f, kTrackerCount> prev{};
         prev[0] = P;
         curr[0].valid = true;
@@ -973,8 +952,8 @@ void test_roll_hold_keeps_swing() {
     };
 
     // Roll held (roll_confidence=0): swing tracks forward, roll discarded.
-    SlimeTracker ra = run(Qa, 0.0f);
-    SlimeTracker rb = run(Qb, 0.0f);
+    TrackerPose ra = run(Qa, 0.0f);
+    TrackerPose rb = run(Qb, 0.0f);
     check_tracker_forward(ra, f, "roll-hold: swing tracks new forward (a)", 1e-3f);
     check_tracker_forward(rb, f, "roll-hold: swing tracks new forward (b)", 1e-3f);
     float dot_held = abs_dot(ra.quat_wxyz, rb.quat_wxyz);
@@ -1000,8 +979,8 @@ void test_roll_hold_keeps_swing() {
 // subject turns sideways. With the waist tracker yawing between frames, the
 // held roll must ride along; without an observable waist it must stay put.
 void test_pelvis_yaw_transport_held_roll() {
-    namespace sv = fitra::slimevr;
-    using sv::SlimeTracker;
+    namespace sv = fitra::tracking;
+    using sv::TrackerPose;
     using sv::kTrackerCount;
     constexpr std::size_t kWaist = static_cast<std::size_t>(sv::TrackerRole::Waist);
     constexpr std::size_t kLeg   = static_cast<std::size_t>(sv::TrackerRole::LeftUpperLeg);
@@ -1014,7 +993,7 @@ void test_pelvis_yaw_transport_held_roll() {
           "pelvis-yaw: build prev leg");
 
     auto run = [&](bool waist_valid) {
-        std::array<SlimeTracker, kTrackerCount> curr{};
+        std::array<TrackerPose, kTrackerCount> curr{};
         std::array<cv::Vec4f, kTrackerCount> prev{};
         prev[kLeg]   = Pleg;
         prev[kWaist] = cv::Vec4f{1, 0, 0, 0};  // waist faces world-forward last frame
@@ -1037,14 +1016,14 @@ void test_pelvis_yaw_transport_held_roll() {
 
     // Waist valid → held roll rides the +th pelvis yaw: prev up (+Y) rotates
     // about Z to (-sin th, cos th, 0). Forward stays vertical (Z unaffected).
-    SlimeTracker tr = run(/*waist_valid=*/true);
+    TrackerPose tr = run(/*waist_valid=*/true);
     check_tracker_forward(tr, cv::Vec3f{0, 0, -1},
                           "pelvis-yaw: forward still vertical", 1e-3f);
     check_tracker_up_direction(tr, cv::Vec3f{-std::sin(th), std::cos(th), 0.0f},
                                "pelvis-yaw: up rides pelvis yaw", 0.99f);
 
     // Control: waist invalid → no transport → held roll stays at prev up (+Y).
-    SlimeTracker tr0 = run(/*waist_valid=*/false);
+    TrackerPose tr0 = run(/*waist_valid=*/false);
     check_tracker_up_direction(tr0, cv::Vec3f{0, 1, 0},
                                "pelvis-yaw: no transport without waist (held)", 0.99f);
 }
@@ -1055,8 +1034,8 @@ void test_pelvis_yaw_transport_held_roll() {
 // one frame and confirm a held-roll arm follows the chest while a held-roll leg
 // follows the waist.
 void test_arm_chest_leg_waist_transport() {
-    namespace sv = fitra::slimevr;
-    using sv::SlimeTracker;
+    namespace sv = fitra::tracking;
+    using sv::TrackerPose;
     using sv::kTrackerCount;
     constexpr std::size_t kChest = static_cast<std::size_t>(sv::TrackerRole::Chest);
     constexpr std::size_t kWaist = static_cast<std::size_t>(sv::TrackerRole::Waist);
@@ -1074,7 +1053,7 @@ void test_arm_chest_leg_waist_transport() {
     check(sv::detail::quat_from_forward_up(cv::Vec3f{0, 0, -1}, cv::Vec3f{1, 0, 0}, Qlimb),
           "arm/leg: build curr limb");
 
-    std::array<SlimeTracker, kTrackerCount> curr{};
+    std::array<TrackerPose, kTrackerCount> curr{};
     std::array<cv::Vec4f, kTrackerCount> prev{};
     auto set_held_limb = [&](std::size_t i) {
         prev[i] = Plimb;
@@ -1114,8 +1093,8 @@ void test_arm_chest_leg_waist_transport() {
 // confirm the held leg lands at Θ (the M5 single-frame tests run at alpha=1, so
 // they cannot catch this).
 void test_pelvis_yaw_transport_no_overshoot() {
-    namespace sv = fitra::slimevr;
-    using sv::SlimeTracker;
+    namespace sv = fitra::tracking;
+    using sv::TrackerPose;
     using sv::kTrackerCount;
     constexpr std::size_t kWaist = static_cast<std::size_t>(sv::TrackerRole::Waist);
     constexpr std::size_t kLeg   = static_cast<std::size_t>(sv::TrackerRole::LeftUpperLeg);
@@ -1129,7 +1108,7 @@ void test_pelvis_yaw_transport_no_overshoot() {
     check(sv::detail::quat_from_forward_up(cv::Vec3f{0, 0, -1}, cv::Vec3f{1, 0, 0}, Qleg),
           "no-overshoot: build curr leg");
 
-    std::array<SlimeTracker, kTrackerCount> curr{};
+    std::array<TrackerPose, kTrackerCount> curr{};
     std::array<cv::Vec4f, kTrackerCount> prev{};
     prev[kLeg]   = Pleg;
     prev[kWaist] = cv::Vec4f{1, 0, 0, 0};  // waist starts facing world-forward
@@ -1189,7 +1168,7 @@ void set_left_leg_flex(fitra::infer::Skeleton3D& s, float flex_deg,
 }
 
 void test_limb_extension_product_and_low_level_defaults() {
-    namespace sv = fitra::slimevr;
+    namespace sv = fitra::tracking;
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
 
     const sv::TrackerExtractorOptions product_defaults;
@@ -1241,7 +1220,7 @@ void test_limb_extension_product_and_low_level_defaults() {
 // segment lengths are preserved, upper/lower leg forwards become one axis,
 // and the input Skeleton3D remains byte-for-byte at its measured positions.
 void test_limb_extension_snap_reconstructs_private_chain() {
-    namespace sv = fitra::slimevr;
+    namespace sv = fitra::tracking;
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     auto skel = make_t_pose();
     set_left_arm_flex(skel, 8.0f);
@@ -1298,7 +1277,7 @@ void test_limb_extension_snap_reconstructs_private_chain() {
 }
 
 void test_limb_extension_hysteresis() {
-    namespace sv = fitra::slimevr;
+    namespace sv = fitra::tracking;
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     sv::LimbExtensionOptions opts;
     opts.snap = true;
@@ -1420,7 +1399,7 @@ void test_limb_extension_hysteresis() {
 }
 
 void test_extended_leg_toe_direction_drives_thigh_and_shin_twist() {
-    namespace sv = fitra::slimevr;
+    namespace sv = fitra::tracking;
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     auto skel = make_t_pose();
     set_left_leg_flex(skel, 4.0f);
@@ -1457,7 +1436,7 @@ void test_extended_leg_toe_direction_drives_thigh_and_shin_twist() {
 }
 
 void test_extended_leg_toe_direction_ignores_bent_leg() {
-    namespace sv = fitra::slimevr;
+    namespace sv = fitra::tracking;
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
     auto skel = make_t_pose();
     set_left_leg_flex(skel, 35.0f, cv::Vec3f{0.20f, 0.0f, 0.0f});
@@ -1487,7 +1466,7 @@ void test_keypoint_format_assert() {
     auto skel = make_t_pose();
     bool threw = false;
     try {
-        (void)fitra::slimevr::extract_trackers(skel);
+        (void)fitra::tracking::extract_trackers(skel);
     } catch (const std::runtime_error&) {
         threw = true;
     }
@@ -1511,8 +1490,8 @@ float quat_angle(const cv::Vec4f& a, const cv::Vec4f& b) {
 // First valid frame snaps (prev <- raw), marks ctx.initialized, zeroes the
 // angular-speed estimate.
 void test_one_euro_quat_first_frame_snaps() {
-    using namespace fitra::slimevr;
-    std::array<SlimeTracker, kTrackerCount> curr{};
+    using namespace fitra::tracking;
+    std::array<TrackerPose, kTrackerCount> curr{};
     std::array<cv::Vec4f, kTrackerCount> prev{};
     QuatSmoothingContext ctx;
     const OneEuroParams p{1.0f, 0.3f, 1.0f};
@@ -1530,8 +1509,8 @@ void test_one_euro_quat_first_frame_snaps() {
 
 // Invalid input holds prev and leaves ctx untouched (curr follows prev).
 void test_one_euro_quat_invalid_holds_prev() {
-    using namespace fitra::slimevr;
-    std::array<SlimeTracker, kTrackerCount> curr{};
+    using namespace fitra::tracking;
+    std::array<TrackerPose, kTrackerCount> curr{};
     std::array<cv::Vec4f, kTrackerCount> prev{};
     QuatSmoothingContext ctx;
     ctx.initialized[0] = true;
@@ -1552,14 +1531,14 @@ void test_one_euro_quat_invalid_holds_prev() {
 // fixed-alpha EMA (base_alpha=0.5). Default swing/twist confidences are 1.0,
 // so both paths reduce to a single slerp gated by the per-step alpha.
 void test_one_euro_quat_static_below_ema() {
-    using namespace fitra::slimevr;
+    using namespace fitra::tracking;
     const OneEuroParams p{1.0f, 0.3f, 1.0f};
     const float dt = 1.0f / 60.0f;
     const cv::Vec4f settled = quat_yaw(0.0f);     // identity
     const cv::Vec4f jitter  = quat_yaw(0.01f);    // 0.01 rad yaw jitter
 
     // One Euro: snap to identity, settle (ang_vel_hat -> 0), then jitter once.
-    std::array<SlimeTracker, kTrackerCount> curr_oe{};
+    std::array<TrackerPose, kTrackerCount> curr_oe{};
     std::array<cv::Vec4f, kTrackerCount> prev_oe{};
     QuatSmoothingContext ctx;
     for (int f = 0; f < 50; ++f) {
@@ -1571,7 +1550,7 @@ void test_one_euro_quat_static_below_ema() {
     const float moved_oe = quat_angle(prev_oe[0], settled);
 
     // Fixed-alpha EMA on the same step: slerp by 0.5 → 0.005 rad.
-    std::array<SlimeTracker, kTrackerCount> curr_ema{};
+    std::array<TrackerPose, kTrackerCount> curr_ema{};
     std::array<cv::Vec4f, kTrackerCount> prev_ema{};
     prev_ema[0] = settled;
     curr_ema[0].valid = true; curr_ema[0].quat_wxyz = jitter;
@@ -1591,7 +1570,6 @@ int main() {
         test_t_pose_extracts_all_ten();           std::printf("[ok] T-pose extracts all 10 trackers\n");
         test_floor_correction_preserves_anchor_geometry(); std::printf("[ok] floor correction preserves FootAnchor geometry\n");
         test_torso_tracker_height_frac();         std::printf("[ok] chest/waist height frac slides position up the spine\n");
-        test_role_to_position_mapping();          std::printf("[ok] role → TrackerPosition / sensor_id\n");
         test_missing_joints_yield_invalid();      std::printf("[ok] missing joints → invalid trackers\n");
         test_smoothing_double_cover();            std::printf("[ok] slerp double-cover handling\n");
         test_smoothing_invalid_holds_prev();      std::printf("[ok] invalid tracker holds previous orientation\n");

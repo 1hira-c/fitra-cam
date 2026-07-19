@@ -15,8 +15,7 @@
 #include <crow.h>
 
 #include "pipeline/extrinsic_calib_session.hpp"
-#include "slimevr/native_publisher.hpp"
-#include "slimevr/slime_tracker_bus.hpp"
+#include "tracking/tracker_bus.hpp"
 #include "vmt/vmt_publisher.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
 #include "vmt/controller_pose_receiver.hpp"
@@ -199,10 +198,10 @@ std::string make_idle_status_fragment(const app::IdleState& st, bool enabled,
     return out.str();
 }
 
-// Convert a chest tracker (world Z-up RH frame, see SlimeTracker docs) into
+// Convert a chest tracker (world Z-up RH frame, see TrackerPose docs) into
 // VMT Driver frame (Y-up RH). Mirrors the per-tracker transform the VMT
 // publisher applies before sending /VMT/Room/Driver.
-void chest_in_vmt(const slimevr::SlimeTracker& chest,
+void chest_in_vmt(const tracking::TrackerPose& chest,
                   vmt::VmtPos&  out_pos,
                   vmt::VmtQuat& out_quat_xyzw) {
     out_pos       = vmt::world_pos_to_vmt(chest.pos[0],   chest.pos[1],   chest.pos[2]);
@@ -250,37 +249,6 @@ bool read_required_number(const crow::json::rvalue& body,
     }
     out = f;
     return true;
-}
-
-bool role_from_string(const std::string& name, slimevr::TrackerRole& out) {
-    for (std::size_t i = 0; i < slimevr::kTrackerCount; ++i) {
-        auto role = static_cast<slimevr::TrackerRole>(i);
-        if (name == slimevr::tracker_role_name(role)) {
-            out = role;
-            return true;
-        }
-    }
-    return false;
-}
-
-std::string slimevr_corrections_json(slimevr::NativePublisher& publisher) {
-    auto corrections = publisher.debug_corrections();
-    std::ostringstream o;
-    o << "{\"ok\":true,\"preview_no_reset\":"
-      << (publisher.options().preview_no_reset ? "true" : "false")
-      << ",\"roles\":[";
-    for (std::size_t i = 0; i < corrections.size(); ++i) {
-        if (i) o << ",";
-        auto role = static_cast<slimevr::TrackerRole>(i);
-        const auto& c = corrections[i];
-        o << "{\"role\":\"" << slimevr::tracker_role_name(role)
-          << "\",\"yaw_quarters\":" << c.yaw_quarters
-          << ",\"pitch_quarters\":" << c.pitch_quarters
-          << ",\"roll_quarters\":" << c.roll_quarters
-          << "}";
-    }
-    o << "]}";
-    return o.str();
 }
 
 }  // namespace
@@ -393,10 +361,6 @@ void CrowServer::set_flow_switch_handler(FlowSwitchFn fn) {
     flow_switch_ = std::move(fn);
 }
 
-void CrowServer::set_native_publisher(slimevr::NativePublisher* publisher) {
-    native_publisher_ = publisher;
-}
-
 void CrowServer::set_vmt_publisher(vmt::VmtPublisher* publisher) {
     vmt_publisher_ = publisher;
 }
@@ -418,7 +382,7 @@ void CrowServer::set_extrinsic_calib_pose_bus(vmt::ControllerPoseBus* bus,
     if (stale_threshold_ms > 0.0) excal_controller_stale_ms_ = stale_threshold_ms;
 }
 
-void CrowServer::set_tracker_bus(slimevr::SlimeTrackerBus* tracker_bus) {
+void CrowServer::set_tracker_bus(tracking::TrackerBus* tracker_bus) {
     tracker_bus_ = tracker_bus;
 }
 
@@ -540,39 +504,16 @@ void CrowServer::start() {
 
     CROW_ROUTE(app, "/stats3d")
     ([this]() {
-        // When a tracker bus is attached, embed the smoothed SlimeVR
-        // tracker snapshot (role/pos/quat/valid/roll_confidence) as a
+        // When a tracker bus is attached, embed the smoothed tracker snapshot
+        // (role/pos/quat/valid/roll_confidence) as a
         // top-level field of the bundle so the WebUI can render axes.
         std::string trackers_fragment;
         if (tracker_bus_) {
-            trackers_fragment = slimevr::make_tracker_bundle_fragment(*tracker_bus_);
+            trackers_fragment = tracking::make_tracker_bundle_fragment(*tracker_bus_);
         }
         std::string body = bus3d_ ? bus3d_->make_bundle_json(trackers_fragment)
                                   : pipeline::make_disabled_3d_json();
-        // When the native SlimeVR publisher is wired up, splice its send
-        // counters into the bundle JSON. The splice only relies on
-        // `body.back() == '}'` (the outer message close), so it stays
-        // correct even when `extra_fields_json` injects e.g. `]` before it.
-        if (native_publisher_) {
-            auto s = native_publisher_->stats();
-            std::ostringstream extra;
-            extra << ",\"slimevr\":{\"sent_handshakes\":"  << s.sent_handshakes
-                  << ",\"sent_sensor_info\":"              << s.sent_sensor_info
-                  << ",\"sent_rotations\":"                << s.sent_rotations
-                  << ",\"sent_heartbeats\":"               << s.sent_heartbeats
-                  << ",\"skipped_invalid\":"               << s.skipped_invalid
-                  << ",\"ping_count\":"                    << s.ping_count
-                  << ",\"last_send_ms\":"                  << s.last_send_ms
-                  << ",\"e2e_capture_to_send_ms\":"        << s.e2e_capture_to_send_ms
-                  << "}}";
-            if (!body.empty() && body.back() == '}') {
-                body.pop_back();
-                body += extra.str();
-            }
-        }
-        // Splice VMT publisher stats. Stacks on top of the slimevr splice
-        // (body now ends in `}` again after that), or applies fresh if
-        // slimevr is not attached.
+        // Splice VMT publisher stats.
         if (vmt_publisher_) {
             std::ostringstream extra;
             extra << "," << make_vmt_stats_fragment(*vmt_publisher_) << "}";
@@ -752,7 +693,7 @@ void CrowServer::start() {
                 "{\"ok\":false,\"err\":\"no tracker data yet\"}", 409);
         }
         const auto& chest = trk.trackers[static_cast<std::size_t>(
-            slimevr::TrackerRole::Chest)];
+            tracking::TrackerRole::Chest)];
         if (!chest.valid) {
             return json_response(
                 "{\"ok\":false,\"err\":\"chest tracker invalid\"}", 409);
@@ -852,7 +793,7 @@ void CrowServer::start() {
 
         vmt::HmdPoseBus*           hmd     = hmd_pose_bus_;
         const double               stale   = hmd_stale_ms_;
-        slimevr::SlimeTrackerBus*  tracker = tracker_bus_;
+        tracking::TrackerBus*  tracker = tracker_bus_;
         vmt::VmtPublisher*         pub     = vmt_publisher_;
         const float                fwd_off = align_hmd_forward_m_;
 
@@ -870,7 +811,7 @@ void CrowServer::start() {
                 if (h.have_any && !h.stale && h.pose.valid && tracker) {
                     auto trk = tracker->snapshot();
                     const auto& chest = trk.trackers[static_cast<std::size_t>(
-                        slimevr::TrackerRole::Chest)];
+                        tracking::TrackerRole::Chest)];
                     if (trk.has_data && chest.valid) {
                         vmt::VmtPos  cpos;
                         vmt::VmtQuat cquat;
@@ -998,58 +939,6 @@ void CrowServer::start() {
         std::ostringstream out;
         out << "{\"attached\":true," << make_continuous_align_fragment(*continuous_aligner_) << "}";
         return json_response(out.str());
-    });
-
-    CROW_ROUTE(app, "/api/slimevr/corrections")
-    ([this]() {
-        if (!native_publisher_) {
-            return json_response(
-                "{\"ok\":false,\"err\":\"slimevr publisher not attached\",\"roles\":[]}",
-                503);
-        }
-        return json_response(slimevr_corrections_json(*native_publisher_));
-    });
-
-    CROW_ROUTE(app, "/api/slimevr/corrections").methods(crow::HTTPMethod::POST)
-    ([this](const crow::request& req) {
-        if (!native_publisher_) {
-            return json_response(
-                "{\"ok\":false,\"err\":\"slimevr publisher not attached\",\"roles\":[]}",
-                503);
-        }
-        auto body = crow::json::load(req.body);
-        if (!body) {
-            return json_response("{\"ok\":false,\"err\":\"invalid json\"}", 400);
-        }
-        bool reset = body.has("reset") && body["reset"].b();
-        if (reset && !body.has("role")) {
-            native_publisher_->reset_debug_corrections();
-            return json_response(slimevr_corrections_json(*native_publisher_));
-        }
-        if (!body.has("role")) {
-            return json_response("{\"ok\":false,\"err\":\"missing role\"}", 400);
-        }
-        slimevr::TrackerRole role;
-        std::string role_name = body["role"].s();
-        if (!role_from_string(role_name, role)) {
-            return json_response("{\"ok\":false,\"err\":\"unknown role\"}", 400);
-        }
-        slimevr::NativePublisherDebugCorrection correction;
-        if (!reset) {
-            auto current = native_publisher_->debug_corrections();
-            correction = current[static_cast<std::size_t>(role)];
-            if (body.has("yaw_quarters")) {
-                correction.yaw_quarters = static_cast<int>(body["yaw_quarters"].i());
-            }
-            if (body.has("pitch_quarters")) {
-                correction.pitch_quarters = static_cast<int>(body["pitch_quarters"].i());
-            }
-            if (body.has("roll_quarters")) {
-                correction.roll_quarters = static_cast<int>(body["roll_quarters"].i());
-            }
-        }
-        native_publisher_->set_debug_correction(role, correction);
-        return json_response(slimevr_corrections_json(*native_publisher_));
     });
 
     // Subject calibration routes. Registered before the catch-all so /calib,
@@ -1228,7 +1117,7 @@ void CrowServer::publisher_loop() {
         // can keep AxesHelpers per tracker in sync at publish_hz.
         std::string trackers_fragment;
         if (tracker_bus_) {
-            trackers_fragment = slimevr::make_tracker_bundle_fragment(*tracker_bus_);
+            trackers_fragment = tracking::make_tracker_bundle_fragment(*tracker_bus_);
         }
         std::string extra3d = trackers_fragment;
         if (vmt_publisher_) {

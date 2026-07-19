@@ -152,21 +152,18 @@ target_link_libraries(fitra_pipeline PUBLIC
     opencv_videoio
 )
 
-# SlimeVR integration: tracker extraction (rotation synthesis) +
-# native Firmware UDP publisher (port 6969, 10-tracker layout).
-add_library(fitra_slimevr STATIC
-    slimevr/firmware_protocol.cpp
-    slimevr/native_publisher.cpp
-    slimevr/slime_tracker_bus.cpp
-    slimevr/tracker_extract.cpp
-    slimevr/tracker_extractor.cpp
+# Shared tracker extraction, smoothing, and WebUI snapshot publication.
+add_library(fitra_tracking STATIC
+    tracking/tracker_bus.cpp
+    tracking/tracker_extract.cpp
+    tracking/tracker_extractor.cpp
 )
 
-target_include_directories(fitra_slimevr PUBLIC
+target_include_directories(fitra_tracking PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-target_link_libraries(fitra_slimevr PUBLIC
+target_link_libraries(fitra_tracking PUBLIC
     fitra_lift          # active_keypoint_format() for Halpe26 assert + types
     fitra_pipeline      # Skeleton3DBus::snapshot()
     opencv_core
@@ -174,8 +171,8 @@ target_link_libraries(fitra_slimevr PUBLIC
 
 # VMT (Virtual Motion Tracker) integration: OSC 1.0 writer +
 # /VMT/Room/Driver wire encoder + world→Driver coordinate transform.
-# Bypasses SlimeVR Server (targets SteamVR Driver directly). Shares
-# TrackerRole / kTrackerCount / SlimeTracker via fitra_slimevr headers.
+# Targets the SteamVR Driver directly. Shares TrackerRole / kTrackerCount /
+# TrackerPose via fitra_tracking headers.
 add_library(fitra_vmt STATIC
     vmt/osc_writer.cpp
     vmt/vmt_protocol.cpp
@@ -195,7 +192,7 @@ target_include_directories(fitra_vmt PUBLIC
 )
 
 target_link_libraries(fitra_vmt PUBLIC
-    fitra_slimevr
+    fitra_tracking
 )
 
 # Crow HTTP+WebSocket server.
@@ -209,15 +206,15 @@ target_link_libraries(fitra_web PUBLIC
     fitra_config      # setup mode: SetupConfigStore + emit_main_config
     fitra_camera      # setup mode: V4L2 enumeration + preview
     fitra_pipeline
-    fitra_slimevr     # /stats3d reads NativePublisher::stats() when attached
-    fitra_vmt         # /stats3d also splices VmtPublisher::stats()
+    fitra_tracking
+    fitra_vmt         # /stats3d splices VmtPublisher::stats()
     Crow::Crow
 )
 
 # Composition root for cpp/build/main: per-mode runners (run / calib-subject /
 # calib-extrinsic) and the builders they share. Separate from fitra_pipeline
 # because the runners need fitra_vmt/fitra_web, and fitra_vmt already links
-# fitra_pipeline via fitra_slimevr — the dependency must point this way.
+# fitra_pipeline via fitra_tracking — the dependency must point this way.
 add_library(fitra_app STATIC
     app/camera_builder.cpp
     app/daemon.cpp

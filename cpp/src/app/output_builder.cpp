@@ -6,18 +6,16 @@
 
 namespace fitra::app {
 
-std::unique_ptr<slimevr::TrackerExtractor> make_tracker_extractor(
+std::unique_ptr<tracking::TrackerExtractor> make_tracker_extractor(
     const config::MainOptions& opts,
     pipeline::Skeleton3DBus& bus3d,
-    slimevr::SlimeTrackerBus& tracker_bus,
+    tracking::TrackerBus& tracker_bus,
     const std::atomic<bool>* idle_flag) {
-    slimevr::TrackerExtractorOptions tex_opts;
-    tex_opts.extract_rate_hz = opts.slimevr_rate_hz;
-    tex_opts.quat_smooth     = static_cast<float>(opts.slimevr_quat_smooth);
-    // pos EMA alpha is sourced from --vmt-pos-smooth. The WebUI viz also
-    // benefits from pos smoothing (AxesHelper jitter), so this runs
-    // regardless of --vmt-out / --slimevr-out toggles — same architecture
-    // as quat_smooth.
+    tracking::TrackerExtractorOptions tex_opts;
+    tex_opts.extract_rate_hz = opts.vmt_rate_hz;
+    tex_opts.quat_smooth     = static_cast<float>(opts.vr_quat_smooth);
+    // Fixed-EMA fallback alphas feed the WebUI viz as well as VMT, so they run
+    // regardless of --vmt-out. One Euro ignores both while enabled.
     tex_opts.pos_smooth      = static_cast<float>(opts.vmt_pos_smooth);
     tex_opts.event_driven    = opts.vr_extract_event_driven;
     // One Euro (speed-adaptive) smoothing — default path. When on,
@@ -33,8 +31,8 @@ std::unique_ptr<slimevr::TrackerExtractor> make_tracker_extractor(
     // Foot tracker position: "ankle" (default) | "midpoint". validate_options
     // already restricted the string to these two values.
     tex_opts.foot_pos_mode   = (opts.vr_foot_pos_mode == "midpoint")
-                                   ? slimevr::FootPosMode::Midpoint
-                                   : slimevr::FootPosMode::Ankle;
+                                   ? tracking::FootPosMode::Midpoint
+                                   : tracking::FootPosMode::Ankle;
     // Chest / Waist tracker height up the spine ([0,1], validated). Position
     // only — see extract_trackers().
     tex_opts.chest_height_frac = static_cast<float>(opts.vr_chest_height_frac);
@@ -45,7 +43,7 @@ std::unique_ptr<slimevr::TrackerExtractor> make_tracker_extractor(
         static_cast<float>(opts.extension_snap_enter_deg);
     tex_opts.limb_extension.exit_flex_deg =
         static_cast<float>(opts.extension_snap_exit_deg);
-    auto extractor = std::make_unique<slimevr::TrackerExtractor>(
+    auto extractor = std::make_unique<tracking::TrackerExtractor>(
         bus3d, tracker_bus, tex_opts);
     extractor->set_idle_gate(idle_flag);  // before start(); null = no idling
     extractor->start();
@@ -54,27 +52,11 @@ std::unique_ptr<slimevr::TrackerExtractor> make_tracker_extractor(
 
 RunOutputs make_run_outputs(const config::MainOptions& opts,
                             pipeline::Skeleton3DBus* bus3d,
-                            slimevr::SlimeTrackerBus* tracker_bus,
+                            tracking::TrackerBus* tracker_bus,
                             vmt::HmdPoseBus* hmd_bus,
                             const vmt::DiscoveryEndpointBus* disc_bus) {
     RunOutputs out;
     if (!bus3d || !tracker_bus) return out;  // 2D-only run: no outputs
-
-    if (opts.slimevr_out) {
-        slimevr::NativePublisherOptions sopts;
-        sopts.host         = opts.slimevr_host;
-        sopts.port         = static_cast<std::uint16_t>(opts.slimevr_port);
-        sopts.send_rate_hz = opts.slimevr_rate_hz;
-        sopts.quat_smooth  = static_cast<float>(opts.slimevr_quat_smooth);
-        sopts.preview_no_reset = opts.slimevr_preview_no_reset;
-        out.slime_pub = std::make_unique<slimevr::NativePublisher>(
-            *bus3d, *tracker_bus, sopts);
-        if (!out.slime_pub->start()) {
-            // Socket setup or handshake failed; warn and continue without
-            // publisher (pose pipeline is unaffected).
-            out.slime_pub.reset();
-        }
-    }
 
     if (opts.vmt_out) {
         vmt::VmtPublisherOptions vopts;

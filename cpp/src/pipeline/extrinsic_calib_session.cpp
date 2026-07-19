@@ -57,7 +57,7 @@ std::string json_escape(const std::string& s) {
 // the VMT/SteamVR world frame (Y-up RH, X-right, Z-back; see
 // controller_pose_receiver.hpp), so the solved T_cam<-world is in those axes
 // (typed geom::T_cam_vmtworld). Everything downstream -- floor calibration,
-// triangulation, IK, the WebUI 3D viewer, SlimeVR output -- assumes the fitra
+// triangulation, IK, the WebUI 3D viewer, and VMT output -- assume the fitra
 // world frame (Z-up RH, X-right, Y-forward). Re-express the *world* axes without
 // moving the cameras by right-composing the single basis change
 // geom::fitra_to_vmt_basis() (Vmt<-Fitra); the type system then enforces
@@ -240,7 +240,7 @@ bool ExtrinsicCalibSession::solve_and_write(std::string& err) {
     // cameras must stay in the same frame as the poses. Only the *persisted*
     // YAML is re-expressed into the fitra (Z-up) world frame below, since the
     // downstream pipeline (triangulation, IK, main ws3d viewer via the
-    // hot-swap that reloads the written file, SlimeVR output) assumes Z-up.
+    // hot-swap that reloads the written file, VMT output) assumes Z-up.
 
     // Build the output CalibrationSet: copy intrinsics, fill in extrinsics.
     lift::CalibrationSet result = cfg_.intrinsics;

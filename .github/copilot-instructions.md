@@ -35,7 +35,7 @@ latest.store(frame); /* drop-old */ // 正: 最新フレームで上書き
 ## リポジトリ前提（誤った前提でのレビューを避ける）
 
 - 主実装は **C++/TensorRT**（`cpp/`、CMake 3.22+ / g++11 / CUDA 12.6 / TensorRT 10.3）。`python/` は **数値参照・フォールバック**で新機能追加はしない。`web/dual_rtmpose/` は Canvas フロント（JSON スキーマ互換を保つ）。
-- `cpp/src/` 構成: `camera`（V4L2+nvjpeg）/ `infer`（TRT, YOLOX, RTMPose）/ `lift`（3D, Kalman, IK）/ `slimevr` / `vmt` / `pipeline` / `web`（Crow）/ `config` / `util`。
+- `cpp/src/` 構成: `camera`（V4L2+nvjpeg）/ `infer`（TRT, YOLOX, RTMPose）/ `lift`（3D, Kalman, IK）/ `tracking` / `vmt` / `pipeline` / `web`（Crow）/ `config` / `util`。
 - 守るべき不変条件（破る変更は指摘）:
   - **latest-frame-wins**: SPSC キューサイズ 1・drop-old。リアルタイム鮮度優先。
   - **single TRT context / single CUDA stream**（モデルごとに共有 1 つ。カメラ単位で複製しない）。

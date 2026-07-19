@@ -4,16 +4,16 @@
 //
 // Owns a UDP socket pointed at a VMT Manager (default 127.0.0.1:39570; usually
 // the Windows host running SteamVR + VMT Driver). Runs a single paced send
-// loop at `send_rate_hz` (default 60 Hz) that snapshots the SlimeTrackerBus,
+// loop at `send_rate_hz` (default 60 Hz) that snapshots the TrackerBus,
 // transforms each tracker into the SteamVR Driver Y-up RH frame, and emits
 // one `/VMT/Room/Driver` OSC message per tracker inside one `#bundle`
 // datagram.
 //
 // VMT does not ack on the wire (publisher → driver is one-way OSC over UDP),
-// so unlike NativePublisher there is no recv loop.
+// so the publisher has no receive loop.
 //
-// Architecture mirrors NativePublisher: read-only consumer of the shared
-// TrackerExtractor state (single producer), no I/O on the inference threads,
+// Read-only consumer of the shared TrackerExtractor state (single producer),
+// with no I/O on the inference threads,
 // gated by Skeleton3DStats::ik_locked.
 
 #include <atomic>
@@ -25,8 +25,8 @@
 #include <netinet/in.h>   // sockaddr_in (runtime-swappable destination)
 
 #include "pipeline/snapshot.hpp"
-#include "slimevr/slime_tracker_bus.hpp"
-#include "slimevr/tracker_extract.hpp"
+#include "tracking/tracker_bus.hpp"
+#include "tracking/tracker_extract.hpp"
 #include "vmt/discovery_endpoint.hpp"   // DiscoveryEndpointLatch
 #include "vmt/osc_writer.hpp"
 #include "vmt/peer_registry.hpp"   // DiscoveryEndpointBus
@@ -76,7 +76,7 @@ struct VmtPublisherStats {
 class VmtPublisher {
 public:
     VmtPublisher(pipeline::Skeleton3DBus&  skel_bus,
-                 slimevr::SlimeTrackerBus& tracker_bus,
+                 tracking::TrackerBus& tracker_bus,
                  VmtPublisherOptions       opts);
     ~VmtPublisher();
 
@@ -124,7 +124,7 @@ private:
     void apply_destination_(const sockaddr_in& dst);  // locks dst_mu_
 
     pipeline::Skeleton3DBus&    skel_bus_;
-    slimevr::SlimeTrackerBus&   tracker_bus_;
+    tracking::TrackerBus&   tracker_bus_;
     VmtPublisherOptions         opts_;
     int                         sock_fd_ = -1;
 
@@ -141,7 +141,7 @@ private:
     // static_cast<int>(TrackerRole)). Guarded together; set_preset updates both.
     mutable std::mutex          preset_mu_;
     VmtTrackerPreset            preset_       = VmtTrackerPreset::P8;
-    std::array<bool, slimevr::kTrackerCount> role_enabled_ =
+    std::array<bool, tracking::kTrackerCount> role_enabled_ =
         role_mask_for(VmtTrackerPreset::P8);
 
     // Runtime-swappable destination. In manual mode it is resolved once in

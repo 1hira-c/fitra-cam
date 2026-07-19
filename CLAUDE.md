@@ -65,7 +65,7 @@ cmake --build cpp/build -j
 
 The C++ tree uses CMake 3.22+, g++ 11, TensorRT 10.3 (apt), CUDA 12.6, and pulls header-only deps (Crow, spdlog, nlohmann_json, CLI11, readerwriterqueue) via `FetchContent`. The first cmake configure needs internet for FetchContent; subsequent builds use the populated cache under `cpp/build/_deps/`.
 
-The C++ migration (capture → TRT inference → Crow Web, FP16/INT8, multi-camera perf) is complete and lives on the `core-pipeline` track — its build/run state, architecture, and per-stage validation targets (correctness IoU > 0.99 / kpt L2 < 1px, aggregate 170 fps) are in `docs/tracks/core-pipeline.md` and the frozen `docs/cpp-migration-plan.md` 検証戦略 table. Pose lifting/IK and VR output (SlimeVR / VMT) are the active tracks — see `docs/tracks/pose-3d.md` and `docs/tracks/vr-output.md`.
+The C++ migration (capture → TRT inference → Crow Web, FP16/INT8, multi-camera perf) is complete and lives on the `core-pipeline` track — its build/run state, architecture, and per-stage validation targets (correctness IoU > 0.99 / kpt L2 < 1px, aggregate 170 fps) are in `docs/tracks/core-pipeline.md` and the frozen `docs/cpp-migration-plan.md` 検証戦略 table. Pose lifting/IK and VMT/SteamVR output are the active tracks — see `docs/tracks/pose-3d.md` and `docs/tracks/vr-output.md`.
 
 ### Docker から起動する場合
 

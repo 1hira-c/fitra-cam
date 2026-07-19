@@ -38,7 +38,7 @@ struct HmdPoseSnapshot {
     bool    stale    = true;    // age_ms > stale_threshold_ms
 };
 
-// Latest-wins single-slot HmdPose, mirroring SlimeTrackerBus's snapshot
+// Latest-wins single-slot HmdPose, mirroring TrackerBus's snapshot
 // pattern. Producer = HmdPoseReceiver thread; consumer = any number of
 // solver/Crow threads.
 class HmdPoseBus {

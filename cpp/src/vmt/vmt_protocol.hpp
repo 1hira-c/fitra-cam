@@ -5,7 +5,7 @@
 // VMT is a SteamVR Driver that listens on UDP for OSC 1.0 packets and
 // surfaces each tracker as a SteamVR virtual device. We send 10 trackers
 // (one per TrackerRole) on `/VMT/Room/Driver` at 60 Hz so VRChat FBT can
-// consume them directly, bypassing SlimeVR Server entirely.
+// consume them directly in SteamVR.
 //
 // Protocol reference (VMT v0.15, https://gpsnmeajp.github.io/VirtualMotionTrackerDocument/api/):
 //   /VMT/Room/Driver i:index i:enable f:timeoffset
@@ -17,14 +17,14 @@
 #include <cstdint>
 #include <string>
 
-#include "slimevr/tracker_extract.hpp"  // TrackerRole / kTrackerCount
+#include "tracking/tracker_extract.hpp"  // TrackerRole / kTrackerCount
 #include "vmt/osc_writer.hpp"
 
 namespace fitra::vmt {
 
 // Which TrackerRoles are published to VMT. VRChat FBT consumes at most 8
 // trackers (hip, chest, 2 feet, 2 knees, 2 elbows); the shin (LowerLeg) roles
-// have no VRChat role and are only included by `Full` (SlimeVR-compatible).
+// have no VRChat role and are only included by `Full`.
 // VRChat's own docs note fewer trackers can give a more stable IK solve, so the
 // count is selectable. Index assignment stays role-tied (vmt_index_for), so a
 // disabled role just leaves an index gap — the SteamVR "Manage Trackers" role
@@ -32,14 +32,14 @@ namespace fitra::vmt {
 //   P3   : Waist, LeftFoot, RightFoot
 //   P6   : P3 + Chest, LeftUpperLeg, RightUpperLeg
 //   P8   : P6 + LeftUpperArm, RightUpperArm  (VRChat standard FBT; default)
-//   Full : all 10 roles (adds LeftLowerLeg, RightLowerLeg; legacy / SlimeVR)
+//   Full : all 10 roles (adds LeftLowerLeg, RightLowerLeg)
 enum class VmtTrackerPreset : std::uint8_t { P3, P6, P8, Full };
 
 const char* vmt_preset_name(VmtTrackerPreset p);
 bool        parse_vmt_preset(const std::string& s, VmtTrackerPreset& out);
 
 // Per-role enable mask for a preset, indexed by static_cast<int>(TrackerRole).
-std::array<bool, slimevr::kTrackerCount> role_mask_for(VmtTrackerPreset p);
+std::array<bool, tracking::kTrackerCount> role_mask_for(VmtTrackerPreset p);
 
 struct VmtPos  { float x, y, z; };
 struct VmtQuat { float x, y, z, w; };  // wire order = xyzw
@@ -86,7 +86,7 @@ inline VmtQuat world_quat_to_vmt(float qw, float qx, float qy, float qz) {
 //   B+7 | RightLowerLeg     | (ditto)
 //   B+8 | LeftFoot          | LeftFoot
 //   B+9 | RightFoot         | RightFoot
-inline int vmt_index_for(slimevr::TrackerRole role, int index_base = 0) {
+inline int vmt_index_for(tracking::TrackerRole role, int index_base = 0) {
     return index_base + static_cast<int>(role);
 }
 

@@ -67,6 +67,6 @@
 
 ### Gemini Code Assist（PR・設計/アーキ）
 - 設計ドキュメント整合: 非自明な変更に design doc があるか、track changelog・完了定義を満たすか。
-- モジュール横断影響: `cpp/src/{camera,infer,lift,slimevr,vmt,pipeline,web,config,util}` 間の依存・契約破壊。
+- モジュール横断影響: `cpp/src/{camera,infer,lift,tracking,vmt,pipeline,web,config,util}` 間の依存・契約破壊。
 - 性能含意: ホットパスのアロケーション・コピー・同期、170 fps 目標への影響。
 - 互換性: `web/dual_rtmpose/` の **JSON スキーマ互換**（`dual_rtmpose_web.py` の publisher が定義）、subject profile v1/v2、固定 10 TrackerRole 順序。

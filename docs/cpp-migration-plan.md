@@ -4,12 +4,14 @@
 > 2026-05-27 に phase 番号制は廃止し、継続開発は**ドメイン別トラック制** ([`docs/tracks/`](tracks/)) に移行した。
 > 本 doc は **移行の歴史記録 + core-pipeline のアーキ仕様 (アーキ図・レイアウト・依存表・検証戦略表)** として残す。
 > 新しい作業は該当トラック doc の changelog に追記すること。phase 詳細設計 doc は [`docs/archive/`](archive/) に退避済。
+> **2026-07-14**: SlimeVR Firmware UDP は製品から廃止済み。下記の Phase 11–13 記述は当時の
+> 歴史記録として保持し、現行の VR 出力は VMT のみとする。
 >
 > | 旧 Phase | 移行先トラック |
 > |---|---|
 > | 0–6, 9 (capture / 推論 / Web / 性能 / keypoint) | [core-pipeline](tracks/core-pipeline.md) |
 > | 7, 8, 12-M1, 13 (lift / IK / roll 品質 / calibration) | [pose-3d](tracks/pose-3d.md) |
-> | 11, 12-bridge, 14, 15, 15.5 (SlimeVR / VMT / SteamVR) | [vr-output](tracks/vr-output.md) |
+> | 11, 12-bridge, 14, 15, 15.5 (VR output / VMT / SteamVR) | [vr-output](tracks/vr-output.md) |
 
 ## Context
 
@@ -99,7 +101,7 @@ USB cam 2 ┘                                 │
 ## リポジトリレイアウト
 
 > **2026-06-11 更新 (pose-3d トラック)**: 下のツリーは移行計画時点のもの。その後
-> `cpp/src/` には `lift/` (3D lifting / IK / calibration I/O)、`slimevr/`・`vmt/`
+> `cpp/src/` には `lift/` (3D lifting / IK / calibration I/O)、`tracking/`・`vmt/`
 > (VR 出力・pose 受信)、`config/` (YAML/CLI loader)、そして **`app/` (composition root)**
 > が増えた。main.cpp は config parse → validate → 排他 RunMode
 > (`run` / `calib-subject` / `calib-extrinsic`) の dispatch のみで、構築シーケンスは
@@ -227,7 +229,7 @@ fitra-cam/
 - 10 trackers に拡張: `LEFT_UPPER_ARM` / `RIGHT_UPPER_ARM` / `CHEST` / `HIP` / `LEFT_UPPER_LEG` / `RIGHT_UPPER_LEG` / `LEFT_LOWER_LEG` / `RIGHT_LOWER_LEG` / `LEFT_FOOT` / `RIGHT_FOOT` の SlimeVR `TrackerPosition` enum に完全一致 (骨盤は当初 `WAIST(5)` を指定していたが Server で auto-assign が走らなかったため `HIP(6)` に変更)
 - 起動シーケンス: Handshake (tag 3) → SensorInfo × 10 (tag 15、`trackerPosition` 指定で named display) → 60 Hz の RotationData (tag 17) + 1 Hz Heartbeat
 - recv ループで Ping (tag 10) を反射、SlimeVR 側の "disconnected" マークを回避
-- 位置は wire に乗らない (Firmware UDP は回転のみ)。位置は SlimeVR の IK が骨格 + HMD から再構築。カメラ由来の絶対位置を VR 側で活用したい場合は別途リレーが必要 → [`backlog-slimevr-bridge-relay.md`](backlog-slimevr-bridge-relay.md)
+- 位置は wire に乗らない (Firmware UDP は回転のみ)。位置は SlimeVR の IK が骨格 + HMD から再構築していた。後続の位置 relay 検討は [`phase12-slimevr-bridge-relay.md`](archive/phase12-slimevr-bridge-relay.md) に保存。
 - MAC は `gethostname()` → SHA-1 先頭 6 byte (locally-administered + unicast)。同じ Jetson 再起動後も同 MAC → SlimeVR 側の trackerPosition 設定が persistence される
 - 依存追加なし: `cpp/src/slimevr/firmware_protocol.{hpp,cpp}` で wire-format シリアライザを自前実装、`native_publisher.{hpp,cpp}` で UDP + threading を実装
 - `Skeleton3DBus::snapshot()` getter を流用 (M1)。publisher スレッドは値コピーのみで pose pipeline と非干渉

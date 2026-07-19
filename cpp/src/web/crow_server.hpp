@@ -30,10 +30,7 @@ class FloorCalibSession;       // fwd decl; full header included in crow_server.
 class IntrinsicCalibSession;   // fwd decl; full header included in crow_server.cpp
 }
 
-namespace fitra::slimevr {
-class NativePublisher;   // fwd decl; full header included only in crow_server.cpp
-class SlimeTrackerBus;   // tracker snapshot bus for /ws3d viz
-}
+namespace fitra::tracking { class TrackerBus; }
 
 namespace fitra::vmt {
 class VmtPublisher;      // fwd decl; full header in crow_server.cpp
@@ -151,22 +148,16 @@ public:
                                             std::string& err)>;
     void set_flow_switch_handler(FlowSwitchFn fn);
 
-    // Attach the SlimeVR native publisher so /stats3d includes its send
-    // counters. Caller retains ownership; the pointer must outlive the
-    // CrowServer or be cleared with set_native_publisher(nullptr) before
-    // the publisher dies. The crow server only calls const observers (stats()).
-    void set_native_publisher(slimevr::NativePublisher* publisher);
-
-    // Attach the SlimeVR tracker bus so /ws3d's bundle includes a `trackers`
+    // Attach the tracker bus so /ws3d's bundle includes a `trackers`
     // field with each tracker's role / pos / quat / valid / roll_confidence.
     // Caller retains ownership. Set to nullptr to disable (then the bundle
     // has no `trackers` field).
-    void set_tracker_bus(slimevr::SlimeTrackerBus* tracker_bus);
+    void set_tracker_bus(tracking::TrackerBus* tracker_bus);
 
     // Attach the VMT publisher so /stats3d (and the /ws3d bundle splice)
     // include its send counters under a top-level "vmt" key. Same ownership
-    // rules as set_native_publisher. Setting nullptr removes the splice
-    // (and the "vmt" key disappears from the JSON).
+    // rules as set_tracker_bus. Setting nullptr removes the splice (and the
+    // "vmt" key disappears from the JSON).
     void set_vmt_publisher(vmt::VmtPublisher* publisher);
 
     // Attach the HMD pose bus so the /api/vmt/alignment/auto/*
@@ -241,8 +232,7 @@ private:
     std::function<bool(std::string&, std::string&)> setup_on_proceed_;
     std::function<bool(std::string&)>               setup_on_validate_;
     FlowSwitchFn                   flow_switch_;
-    slimevr::NativePublisher*      native_publisher_ = nullptr;
-    slimevr::SlimeTrackerBus*      tracker_bus_     = nullptr;
+    tracking::TrackerBus*      tracker_bus_     = nullptr;
     vmt::VmtPublisher*             vmt_publisher_   = nullptr;
     vmt::HmdPoseBus*               hmd_pose_bus_    = nullptr;
     vmt::ControllerPoseBus*        excal_controller_pose_bus_ = nullptr;

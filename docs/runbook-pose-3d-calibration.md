@@ -107,7 +107,7 @@ vmt:
 ```
 
 - (1) の extrinsics YAML が**必須** (2 カメラ限定)。VR publisher は構築されない
-  (`--slimevr-out`/`--vmt-out` は validate で拒否)。
+  (`--vmt-out` は validate で拒否)。
 - `http://<jetson>:8000/subject-calib` の wizard で pose hold → 録画 → approve。
   `--calib-auto-approve` / `--calib-auto-exit` で無人化可。
 - approve 後はプロファイル YAML が書かれ、run モード再起動のガイダンスがログに出る。
@@ -121,7 +121,7 @@ vmt:
   --keypoint-format halpe26 \
   --calib calibrations/extrinsics.yaml \
   --subject-id <ID> \
-  --vmt-out --hmd-listen-enabled   # または --slimevr-out
+  --vmt-out --hmd-listen-enabled
 ```
 
 - run モードは calibration を一切構築しない。`/api/calib/*` `/api/excal/*` と
@@ -159,7 +159,7 @@ vmt:
 
 ## トラブルシュート
 
-- `--extrinsic-calib` と `--calibrate` の同時指定、setup 系での `--slimevr-out`/`--vmt-out`
+- `--extrinsic-calib` と `--calibrate` の同時指定、setup 系での `--vmt-out`
   は validate でエラー (排他モード)。`--daemon` とモードフラグの併用も同様
   (初段は `--daemon-initial` で指定する)。
 - ビューワに「↺ … calib」切替ボタンが出ない → daemon 配下でない (手動起動)。

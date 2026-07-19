@@ -238,20 +238,6 @@ export interface AutoAlignResponse {
   result?: AutoAlignResult;
 }
 
-export interface CorrectionRole {
-  role: string;
-  yaw_quarters?: number;
-  pitch_quarters?: number;
-  roll_quarters?: number;
-}
-
-export interface CorrectionsResponse {
-  ok?: boolean;
-  err?: string;
-  roles?: CorrectionRole[];
-  preview_no_reset?: boolean;
-}
-
 // ---- Intrinsic calibration (/api/incal/*) ----------------------------------
 
 export interface IncalCamera {
@@ -437,12 +423,6 @@ export interface ConfigVmt {
   hmd_listen_enabled: boolean;
 }
 
-export interface ConfigSlimevr {
-  slimevr_out: boolean;
-  host: string;
-  port: number;
-}
-
 export interface ConfigIntrinsicCalib {
   enabled: boolean;
   out: string;   // where the intrinsic step writes (= the extrinsic step's intrinsics input)
@@ -464,7 +444,6 @@ export interface ConfigDraft {
   web: ConfigWeb;
   three_d: ConfigThreeD;
   vmt: ConfigVmt;
-  slimevr: ConfigSlimevr;
   intrinsic_calib: ConfigIntrinsicCalib;
   extrinsic_calib: ConfigExtrinsicCalib;
 }

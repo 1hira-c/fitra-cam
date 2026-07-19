@@ -582,7 +582,7 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         snap.ts = std::chrono::system_clock::now();
         snap.stats.enabled = true;
         // ik_locked=false (even when the subject is calibrated) so both the VMT
-        // and SlimeVR publishers' `!ik_locked` gate skips this frame: otherwise
+        // and the VMT publisher's `!ik_locked` gate skips this frame: otherwise
         // VMT's degeneracy "hold" mode would keep re-sending the frozen pose for
         // the whole idle period instead of dropping it.
         snap.stats.ik_locked = false;

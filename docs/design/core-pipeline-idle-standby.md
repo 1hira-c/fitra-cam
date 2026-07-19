@@ -125,7 +125,7 @@ idle→active 遷移で Kalman を明示リセット (`has_last_3d_update_=false
 ### 6. 不変条件 / エッジケース
 
 - **VMT 出力 ON だが HMD-listen OFF** (VR 戻り信号無し): VR プレゼンス観測不能 → 安全側で
-  **VR 軸では idle に入れない**。評価器で `(vmt_out||slimevr_out) && !hmd_listen_enabled` なら
+  **VR 軸では idle に入れない**。評価器で `vmt_out && !hmd_listen_enabled` なら
   present=true 固定。`vr_observable=false` を WebUI に出して理由を可視化。
 - **calib モード**: idle させない → そのモードでは `IdleState` を null 共有 (null → idle 常に false)。
 - **WebUI タブ開きっぱなし**: WS 接続が生きている限り「視聴中」= active (仕様どおり)。

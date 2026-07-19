@@ -12,7 +12,6 @@ import type {
   ConfigLoadResponse,
   ConfigOkResponse,
   ConfigResponse,
-  CorrectionsResponse,
   ExcalState,
   FlowMode,
   FlowState,
@@ -112,25 +111,6 @@ export async function postContinuousAlign(enabled: boolean): Promise<string | nu
     return data?.err || `HTTP ${res.status}`;
   }
   return null;
-}
-
-// ---- SlimeVR corrections ---------------------------------------------------
-
-export function fetchCorrections(): Promise<CorrectionsResponse> {
-  return getJson<CorrectionsResponse>("/api/slimevr/corrections");
-}
-
-export async function postCorrection(
-  body: Record<string, unknown>,
-): Promise<CorrectionsResponse> {
-  const { res, data } = await postJson<CorrectionsResponse>(
-    "/api/slimevr/corrections",
-    body,
-  );
-  if (!res.ok || !data || data.ok === false) {
-    return { ok: false, err: data?.err || `HTTP ${res.status}` };
-  }
-  return data;
 }
 
 // ---- Subject calibration ---------------------------------------------------

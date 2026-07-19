@@ -76,10 +76,10 @@ daemon の他の CLI override は転送しない (help / runbook に明記、起
 
 - run: `--config X --flow-managed` (+ profile YAML 存在時のみ
   `--subject-id <calibration.calib_subject_id>`)
-- calib-subject: `+ --calibrate --calib-auto-exit --no-vmt-out --no-slimevr-out`
-- calib-extrinsic: `+ --extrinsic-calib --no-vmt-out --no-slimevr-out`
+- calib-subject: `+ --calibrate --calib-auto-exit --no-vmt-out`
+- calib-extrinsic: `+ --extrinsic-calib --no-vmt-out`
 
-このために **負方向 CLI フラグ `--no-vmt-out` / `--no-slimevr-out` を新設**
+このために **負方向 CLI フラグ `--no-vmt-out` を用いる**
 (union YAML の `vmt.vmt_out: true` 等が calib spawn の publisher 排他 validate に
 当たるのを argv で打ち消す。前例: `--no-3d-kalman`)。
 

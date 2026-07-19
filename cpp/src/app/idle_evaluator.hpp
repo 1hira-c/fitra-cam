@@ -66,7 +66,7 @@ public:
         double enter_after_s      = 10.0;
         double tick_hz            = 2.0;    // informational (driver throttle)
         double hmd_stale_ms       = 200.0;
-        bool   has_vr_output      = false;  // vmt_out || slimevr_out
+        bool   has_vr_output      = false;  // vmt_out
         bool   hmd_listen_enabled = false;
     };
 

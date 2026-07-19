@@ -28,7 +28,6 @@ import type {
   ConfigDraft,
   ConfigExtrinsicCalib,
   ConfigInference,
-  ConfigSlimevr,
   ConfigThreeD,
   ConfigVmt,
   ConfigWeb,
@@ -335,8 +334,6 @@ export function SetupPage() {
     setDraft((d) => (d ? { ...d, three_d: { ...d.three_d, ...patch } } : d));
   const setVmt = (patch: Partial<ConfigVmt>) =>
     setDraft((d) => (d ? { ...d, vmt: { ...d.vmt, ...patch } } : d));
-  const setSlimevr = (patch: Partial<ConfigSlimevr>) =>
-    setDraft((d) => (d ? { ...d, slimevr: { ...d.slimevr, ...patch } } : d));
   const setExtrinsic = (patch: Partial<ConfigExtrinsicCalib>) =>
     setDraft((d) => (d ? { ...d, extrinsic_calib: { ...d.extrinsic_calib, ...patch } } : d));
   // Whether the intrinsic (ChArUco) calibration STEP runs. Calibration output
@@ -887,33 +884,6 @@ export function SetupPage() {
                   )}
                 </div>
               )}
-              <h3>SlimeVR</h3>
-              <div className="row">
-                <label className="inline">
-                  <input
-                    type="checkbox"
-                    checked={draft.slimevr.slimevr_out}
-                    onChange={(e) => setSlimevr({ slimevr_out: e.target.checked })}
-                  />
-                  enable
-                </label>
-                <label>
-                  host
-                  <input
-                    type="text"
-                    value={draft.slimevr.host}
-                    onChange={(e) => setSlimevr({ host: e.target.value })}
-                  />
-                </label>
-                <label>
-                  port
-                  <input
-                    type="number"
-                    value={draft.slimevr.port}
-                    onChange={(e) => setSlimevr({ port: numOr(e.target.value, draft.slimevr.port) })}
-                  />
-                </label>
-              </div>
             </section>
             );
           })()}

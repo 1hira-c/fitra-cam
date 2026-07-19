@@ -12,7 +12,7 @@
 // Decoupled from fitra_vmt: the controller pose is handed in as a plain
 // ControllerObservation (built by main from the ControllerPoseBus snapshot) so
 // fitra_pipeline does not need to depend on fitra_vmt (which would be circular —
-// fitra_vmt → fitra_slimevr → fitra_pipeline).
+// fitra_vmt → fitra_tracking → fitra_pipeline).
 //
 // Threading: on_frame() is called from the pipeline thread; the public read
 // methods (state/state_json/sample_count) and solve_and_write() may be called

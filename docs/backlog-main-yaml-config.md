@@ -98,17 +98,6 @@ calibration:
 logging:
   log_every_s: 2.0
 
-# Phase 11 — SlimeVR ネイティブ Firmware UDP publisher。`slimevr_out: true`
-# のとき `three_d.enable_3d` と `inference.keypoint_format: halpe26` が必須
-# (validate_options で同じチェックが走る)。
-slimevr:
-  slimevr_out: false
-  host: 127.0.0.1
-  port: 6969
-  rate_hz: 60.0
-  quat_smooth: 0.5
-  preview_no_reset: false
-
 # コントローラ固定 AprilTag による多カメラ extrinsic キャリブ。
 # `enabled: true` のとき `--calibrate` と排他、かつ `intrinsics`
 # (または `three_d.calib`) が必須 (validate_options で同じチェック)。

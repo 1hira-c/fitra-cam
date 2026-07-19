@@ -1,19 +1,17 @@
 #pragma once
 //
-// Extract 10 SlimeVR full-body trackers from a Halpe26 3D skeleton.
-// Output is in the WORLD frame (Z-up, X-right, Y-forward, meters); the
-// publisher applies the SlimeVR Y-up coordinate transform when serializing
-// (see firmware_protocol::world_quat_to_slime).
+// Extract 10 full-body tracker poses from a Halpe26 3D skeleton.
+// Output stays in the WORLD frame (Z-up, X-right, Y-forward, meters). Output
+// publishers perform any consumer-specific coordinate conversion.
 //
-// 10 tracker layout (matches the SlimeVR TrackerPosition enum exactly):
+// 10 tracker layout:
 //   LEFT_UPPER_ARM, RIGHT_UPPER_ARM,
 //   CHEST, WAIST,
 //   LEFT_UPPER_LEG, RIGHT_UPPER_LEG,        (thigh)
 //   LEFT_LOWER_LEG, RIGHT_LOWER_LEG,        (shin / 脛)
 //   LEFT_FOOT, RIGHT_FOOT.
 // HEAD is intentionally omitted (HMD provides it). Forearms/hands are
-// omitted (lower-body FBT is SlimeVR's primary use case; controllers cover
-// the arms).
+// omitted (the HMD and controllers cover those roles).
 //
 // Halpe26-only: this module asserts the active keypoint format. COCO17 lacks
 // the neck (18), hip-center (19), heel (24/25), and big-toe (20/21) joints
@@ -25,9 +23,8 @@
 #include <opencv2/core.hpp>
 
 #include "infer/types.hpp"
-#include "slimevr/firmware_protocol.hpp"   // TrackerPosition enum
 
-namespace fitra::slimevr {
+namespace fitra::tracking {
 
 enum class TrackerRole : std::uint8_t {
     LeftUpperArm = 0,
@@ -45,16 +42,6 @@ enum class TrackerRole : std::uint8_t {
 
 inline constexpr std::size_t kTrackerCount = static_cast<std::size_t>(TrackerRole::Count);
 
-// Stable sensor id 0..9 for the native UDP SensorInfo packet. The enum order
-// of TrackerRole IS the sensor id (cast directly).
-inline constexpr std::uint8_t sensor_id_for(TrackerRole r) {
-    return static_cast<std::uint8_t>(r);
-}
-
-// Map TrackerRole → SlimeVR firmware-protocol TrackerPosition. The publisher
-// calls this once per sensor when sending SensorInfo packets.
-TrackerPosition position_for(TrackerRole role);
-
 // Where to place the foot tracker's POSITION (rotation is unchanged either
 // way: forward = ankle→toe, so the foot's yaw/pitch always tracks the toe).
 //   Ankle    : pos = ankle joint. Matches how a SteamVR/VRChat "foot" tracker
@@ -63,16 +50,13 @@ TrackerPosition position_for(TrackerRole role);
 //   Midpoint : pos = midpoint(ankle, toe). The historical behavior; kept for
 //              A/B comparison and as the golden-test default of extract_trackers.
 // Only consumers of tracker POSITION are affected (VMT publish + WebUI viz).
-// The SlimeVR Firmware UDP path sends rotation only, so it is identical.
 enum class FootPosMode : std::uint8_t { Ankle, Midpoint };
 
-struct SlimeTracker {
+struct TrackerPose {
     TrackerRole role  = TrackerRole::LeftUpperArm;
-    // World frame: Z-up, X-right, Y-forward, meters. Position is informational
-    // only — Firmware UDP does not transmit per-tracker positions; SlimeVR's
-    // skeleton solver reconstructs positions from rotations and avatar bones.
+    // World frame: Z-up, X-right, Y-forward, meters.
     cv::Vec3f   pos   = {0.0f, 0.0f, 0.0f};
-    // wxyz storage; the publisher converts to SlimeVR's xyzw Y-up wire frame.
+    // wxyz storage; publishers convert this to their output frame as needed.
     cv::Vec4f   quat_wxyz = {1.0f, 0.0f, 0.0f, 0.0f};
     bool        valid = false;
     // [0, 1] per-tracker gate for the TWIST (roll, rotation about the bone's
@@ -183,8 +167,7 @@ struct ExtractContext {
 // frac ∈ [0, 1] (0 = hip_center, 1 = neck). Sliding along the spine (not world
 // up) keeps the tracker on the torso when the subject leans. Only POSITION is
 // affected — orientation (forward/up) is unchanged — so this is a VMT-publish +
-// WebUI-viz concern only; the rotation-only SlimeVR Firmware UDP path is
-// identical. The function defaults reproduce the historical placement
+// WebUI-viz concern only. The function defaults reproduce the historical placement
 // (chest = spine midpoint 0.5, waist = hip_center 0.0) to preserve golden
 // tests; the runtime product defaults (TrackerExtractorOptions) sit higher so
 // the trackers land nearer the sternum / belt line for VRChat FBT.
@@ -194,7 +177,7 @@ struct ExtractContext {
 // and TrackerExtractorOptions enable both features. Snap and toe-direction
 // inference remain independent A/B switches but share the same extension
 // hysteresis state.
-std::array<SlimeTracker, kTrackerCount>
+std::array<TrackerPose, kTrackerCount>
 extract_trackers(const infer::Skeleton3D& skel,
                  ExtractContext* ctx = nullptr,
                  FootPosMode foot_pos_mode = FootPosMode::Midpoint,
@@ -206,7 +189,7 @@ extract_trackers(const infer::Skeleton3D& skel,
 // FloorContactStabilizer. The base extraction (including FootAnchor learning
 // and lower-leg orientation) runs on de-grounded geometry; only the two foot
 // tracker positions receive the reported rigid translations afterwards.
-std::array<SlimeTracker, kTrackerCount>
+std::array<TrackerPose, kTrackerCount>
 extract_trackers_with_floor_corrections(
     const infer::Skeleton3D& grounded_skel,
     const std::array<cv::Vec3f, 2>& corrections_m,
@@ -280,7 +263,7 @@ struct QuatSmoothingContext {
 // behavior is unchanged. Invalid trackers keep prev unchanged (curr is replaced
 // by prev so the publisher can still see a stable quat). Updates `prev_quat` in
 // place with the smoothed values.
-void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+void apply_quat_smoothing(std::array<TrackerPose, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           float base_alpha,
                           float dt_s = 0.0f, float nominal_dt_s = 0.0f);
@@ -292,7 +275,7 @@ void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
 // estimate across frames. dt_s is the real step; nominal_dt_s is still used by
 // the (alpha-independent) parent-yaw transport gate. Held (invalid) trackers
 // keep prev and their ctx state untouched, same as the fixed-alpha form.
-void apply_quat_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+void apply_quat_smoothing(std::array<TrackerPose, kTrackerCount>& curr,
                           std::array<cv::Vec4f, kTrackerCount>& prev_quat,
                           QuatSmoothingContext& ctx,
                           const OneEuroParams& params,
@@ -374,7 +357,7 @@ struct PosSmoothingContext {
 // so the VMT publisher (which sends pos on the wire) and the WebUI viz
 // (which renders pos via AxesHelper) both see one shared smoothed history —
 // same architectural invariant as the quat path.
-void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+void apply_pos_smoothing(std::array<TrackerPose, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          PosSmoothingContext& ctx,
                          float base_alpha,
@@ -388,7 +371,7 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
 // speed-opened cutoff. ctx.pos_dx_hat carries the per-axis speed estimate;
 // the first valid frame per tracker snaps (prev ← curr, dx_hat ← 0). nominal
 // is accepted for signature parity but unused (One Euro reads ctx.dt_s).
-void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+void apply_pos_smoothing(std::array<TrackerPose, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          PosSmoothingContext& ctx,
                          const OneEuroParams& params,
@@ -397,7 +380,7 @@ void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
 // World-absolute hold form: no hip re-anchor, no velocity gate. Frame-rate
 // independent via dt_s/nominal_dt_s (defaults <=0 reduce to plain base_alpha).
 // Kept for existing tests and callers that don't track hip context.
-void apply_pos_smoothing(std::array<SlimeTracker, kTrackerCount>& curr,
+void apply_pos_smoothing(std::array<TrackerPose, kTrackerCount>& curr,
                          std::array<cv::Vec3f, kTrackerCount>& prev_pos,
                          float base_alpha,
                          float dt_s = 0.0f, float nominal_dt_s = 0.0f);
@@ -411,4 +394,4 @@ bool quat_from_forward_up(const cv::Vec3f& forward,
                           cv::Vec4f& out_wxyz);
 }  // namespace detail
 
-}  // namespace fitra::slimevr
+}  // namespace fitra::tracking

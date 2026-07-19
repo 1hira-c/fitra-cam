@@ -4,17 +4,15 @@
 //
 // Reads the Skeleton3DBus on a paced loop, runs extract_trackers +
 // apply_quat_smoothing (owning the prev_quat state), and publishes the
-// smoothed `SlimeTracker[]` to a SlimeTrackerBus.
+// smoothed `TrackerPose[]` to a TrackerBus.
 //
-// Architecturally this is the single producer of `SlimeTracker` snapshots.
-// Both the SlimeVR Firmware UDP publisher (NativePublisher) and the Three.js
-// WebUI viewer (via Skeleton3DBus::make_bundle_json picking up the trackers
-// snapshot) consume from the same bus, so they always see the same smoothed
-// values — no double-extract, no divergent prev_quat history.
+// Architecturally this is the single producer of `TrackerPose` snapshots.
+// The VMT publisher and the Three.js WebUI viewer consume the same bus, so
+// they always see the same smoothed values — no double-extract or divergent
+// prev_quat history.
 //
-// Runs whenever there is a 3D skeleton in the Skeleton3DBus (regardless of
-// --slimevr-out): the WebUI orientation viz needs trackers even when the
-// Firmware UDP publisher is disabled.
+// Runs whenever there is a 3D skeleton in the Skeleton3DBus: the WebUI
+// orientation viz needs trackers even when VMT output is disabled.
 
 #include <array>
 #include <atomic>
@@ -24,10 +22,10 @@
 #include <opencv2/core.hpp>
 
 #include "pipeline/snapshot.hpp"
-#include "slimevr/slime_tracker_bus.hpp"
-#include "slimevr/tracker_extract.hpp"
+#include "tracking/tracker_bus.hpp"
+#include "tracking/tracker_extract.hpp"
 
-namespace fitra::slimevr {
+namespace fitra::tracking {
 
 struct TrackerExtractorOptions {
     double extract_rate_hz   = 60.0;   // produce snapshots at this cadence
@@ -66,15 +64,14 @@ struct TrackerExtractorOptions {
 
     // Foot tracker position (see FootPosMode). Product default Ankle: the foot
     // bone sits at the ankle for VRChat FBT calibration. Rotation is unchanged.
-    // Only affects position consumers (VMT publish + WebUI viz), not the
-    // rotation-only SlimeVR Firmware UDP path.
+    // Only affects position consumers (VMT publish + WebUI viz).
     FootPosMode foot_pos_mode = FootPosMode::Ankle;
 
     // Chest / Waist tracker height as a fraction of the spine measured up from
     // hip_center (0 = hip_center, 1 = neck); see extract_trackers(). Product
     // defaults sit higher than the historical 0.5 / 0.0 so the trackers land
-    // near the sternum / belt line for VRChat FBT. Position only — orientation
-    // and the rotation-only SlimeVR Firmware UDP path are unchanged.
+    // near the sternum / belt line for VRChat FBT. Position only; orientation
+    // is unchanged.
     float chest_height_frac = 0.65f;
     float waist_height_frac = 0.15f;
 
@@ -89,7 +86,7 @@ struct TrackerExtractorOptions {
 class TrackerExtractor {
 public:
     TrackerExtractor(pipeline::Skeleton3DBus&    skeleton_bus,
-                     SlimeTrackerBus&            tracker_bus,
+                     TrackerBus&            tracker_bus,
                      TrackerExtractorOptions     opts);
     ~TrackerExtractor();
 
@@ -106,8 +103,7 @@ public:
     // On the idle->active edge the run loop drops its smoothing history so the
     // first post-idle frame re-anchors instead of lerping from the frozen pose
     // (the One Euro does NOT self-heal: fixed-rate dt is always nominal). Set
-    // before start(). A plain atomic pointer keeps the slimevr layer
-    // app/-independent.
+    // before start(). A plain atomic pointer keeps this layer app-independent.
     void set_idle_gate(const std::atomic<bool>* idle_flag) { idle_flag_ = idle_flag; }
 
 private:
@@ -116,7 +112,7 @@ private:
     void reset_smoothing();
 
     pipeline::Skeleton3DBus&            skel_bus_;
-    SlimeTrackerBus&                    tracker_bus_;
+    TrackerBus&                    tracker_bus_;
     TrackerExtractorOptions             opts_;
 
     std::thread                         thread_;
@@ -196,4 +192,4 @@ private:
     bool                                  have_last_emitted_ = false;
 };
 
-}  // namespace fitra::slimevr
+}  // namespace fitra::tracking

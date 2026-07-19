@@ -1,7 +1,7 @@
 // test_main_config — unit tests for fitra::config::MainOptions YAML loader,
 // CLI overlay, and validation. No TensorRT / CUDA dependencies.
 //
-// Style follows the other tests in this dir (test_firmware_protocol.cpp etc.):
+// Style follows the other C++ tool tests:
 // hand-rolled assertions that throw std::runtime_error on failure; main()
 // catches and reports.
 
@@ -201,22 +201,33 @@ three_d:
     check(opts.ik_3d     == false, "no_3d_ik=true     -> ik_3d=false");
 }
 
-void test_slimevr_preview_no_reset_yaml_and_cli() {
-    auto p = write_tmp("slimevr_preview_no_reset.yaml", R"(schema: fitra_main_config_v1
+void test_removed_slimevr_yaml_and_cli_fail() {
+    auto p = write_tmp("removed_slimevr.yaml", R"(schema: fitra_main_config_v1
 slimevr:
   preview_no_reset: true
 )");
     MainOptions opts;
-    load_main_config(p.string(), opts);
-    check(opts.slimevr_preview_no_reset == true,
-          "slimevr.preview_no_reset loads");
+    bool threw = false;
+    try {
+        load_main_config(p.string(), opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "SlimeVR output has been removed", "removed YAML message");
+    }
+    check(threw, "slimevr YAML block must fail");
 
-    opts.slimevr_preview_no_reset = false;
-    std::vector<std::string> argv_buf{"--slimevr-preview-no-reset"};
-    auto argv = make_argv(argv_buf);
-    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
-    check(opts.slimevr_preview_no_reset == true,
-          "--slimevr-preview-no-reset CLI sets option");
+    for (const char* flag : {"--slimevr-preview-no-reset", "--no-slimevr-out"}) {
+        std::vector<std::string> argv_buf{flag};
+        auto argv = make_argv(argv_buf);
+        threw = false;
+        try {
+            apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+        } catch (const std::exception& e) {
+            threw = true;
+            check_contains(e.what(), "SlimeVR output has been removed", "removed CLI message");
+        }
+        check(threw, std::string(flag) + " must fail with a migration message");
+    }
 }
 
 void test_vmt_index_base_yaml_cli_and_validate() {
@@ -502,29 +513,11 @@ void test_validate_enable_3d_needs_calib() {
     check(!threw, "enable_3d without explicit calib must NOT throw (calib is generated)");
 }
 
-void test_validate_slimevr_requires_halpe26() {
-    MainOptions opts;
-    opts.cam_paths[0] = "/tmp/a";
-    opts.det_engine   = "/tmp/y";
-    opts.pose_engine  = "/tmp/r";
-    opts.enable_3d    = true;
-    opts.calib        = "/tmp/cam.yaml";
-    opts.slimevr_out  = true;
-    opts.keypoint_format = "coco17";   // wrong topology for slimevr
-    bool threw = false;
-    try {
-        validate_options(opts);
-    } catch (const std::exception& e) {
-        threw = true;
-        check_contains(e.what(), "halpe26", "slimevr halpe26 msg");
-    }
-    check(threw, "slimevr_out + coco17 must throw");
-}
-
 void test_one_euro_yaml_cli_and_validate() {
     auto p = write_tmp("one_euro.yaml", R"(schema: fitra_main_config_v1
 three_d:
   vr_one_euro: false
+  vr_quat_smooth: 0.3
   vr_pos_mincutoff: 0.5
   vr_pos_beta: 0.2
   vr_quat_mincutoff: 1.5
@@ -532,15 +525,17 @@ three_d:
     MainOptions opts;
     load_main_config(p.string(), opts);
     check(opts.vr_one_euro == false,        "three_d.vr_one_euro loads");
+    check(opts.vr_quat_smooth == 0.3,       "three_d.vr_quat_smooth loads");
     check(opts.vr_pos_mincutoff == 0.5,     "three_d.vr_pos_mincutoff loads");
     check(opts.vr_pos_beta == 0.2,          "three_d.vr_pos_beta loads");
     check(opts.vr_quat_mincutoff == 1.5,    "three_d.vr_quat_mincutoff loads");
 
     // CLI numeric overrides take precedence over the YAML-loaded values.
     std::vector<std::string> argv_buf{
-        "--vr-pos-mincutoff", "0.9", "--vr-quat-beta", "0.4"};
+        "--vr-quat-smooth", "0.7", "--vr-pos-mincutoff", "0.9", "--vr-quat-beta", "0.4"};
     auto argv = make_argv(argv_buf);
     apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(opts.vr_quat_smooth == 0.7,   "--vr-quat-smooth CLI overrides YAML");
     check(opts.vr_pos_mincutoff == 0.9, "--vr-pos-mincutoff CLI overrides YAML");
     check(opts.vr_quat_beta == 0.4,     "--vr-quat-beta CLI sets value");
 
@@ -557,6 +552,47 @@ three_d:
         check_contains(e.what(), "dcutoff", "dcutoff validation msg");
     }
     check(threw, "vr_pos_dcutoff <= 0 must throw");
+
+    opts.vr_pos_dcutoff = 1.0;
+    opts.vr_quat_smooth = 1.1;
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--vr-quat-smooth", "quat smooth validation msg");
+    }
+    check(threw, "vr_quat_smooth > 1 must throw");
+}
+
+void test_tracker_stream_vmt_settings_validate_without_vmt_output() {
+    MainOptions opts;
+    opts.cam_paths[0] = "/tmp/a";
+    opts.det_engine   = "/tmp/y";
+    opts.pose_engine  = "/tmp/r";
+    opts.enable_3d    = true;
+    opts.vmt_out      = false;
+
+    opts.vmt_rate_hz = 0.0;
+    bool threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--vmt-rate-hz", "tracker rate validation without VMT output");
+    }
+    check(threw, "invalid tracker rate must fail even without VMT output");
+
+    opts.vmt_rate_hz = 60.0;
+    opts.vmt_pos_smooth = -0.1;
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--vmt-pos-smooth", "tracker pos smooth validation without VMT output");
+    }
+    check(threw, "invalid tracker position smoothing must fail even without VMT output");
 }
 
 void test_floor_contact_yaml_cli_emit_and_validate() {
@@ -866,22 +902,12 @@ void test_run_mode_derivation_and_publisher_exclusivity() {
     check(std::string(run_mode_name(RunMode::CalibExtrinsic)) == "calib-extrinsic",
           "calib-extrinsic label");
 
-    // Setup modes never construct publishers; validate rejects the combos.
+    // Setup modes never construct publishers; validate rejects VMT output.
     MainOptions bad = excal;
     bad.enable_3d = true;
     bad.calib = "/tmp/cam.yaml";
     bad.keypoint_format = "halpe26";
-    bad.slimevr_out = true;
     bool threw = false;
-    try { validate_options(bad); }
-    catch (const std::exception& e) {
-        threw = true;
-        check_contains(e.what(), "--slimevr-out cannot be combined with a calibration mode",
-                       "slimevr+excal exclusivity msg");
-    }
-    check(threw, "--slimevr-out + --extrinsic-calib must throw");
-
-    bad.slimevr_out = false;
     bad.vmt_out = true;
     threw = false;
     try { validate_options(bad); }
@@ -1166,21 +1192,18 @@ three_d:
   calib: /tmp/extrinsics.yaml
 vmt:
   vmt_out: true
-slimevr:
-  slimevr_out: true
 )");
     MainOptions opts;
     load_main_config(p.string(), opts);
     std::vector<std::string> argv_buf{
         "--flow-managed", "--calibrate", "--calib-auto-exit",
-        "--no-vmt-out", "--no-slimevr-out",
+        "--no-vmt-out",
         "--calib-subject-id", "subj", "--calib-subject-height-m", "1.7",
     };
     auto argv = make_argv(argv_buf);
     apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
     check(opts.flow_managed,  "--flow-managed sets flow_managed");
     check(!opts.vmt_out,      "--no-vmt-out negates vmt.vmt_out from YAML");
-    check(!opts.slimevr_out,  "--no-slimevr-out negates slimevr.slimevr_out from YAML");
     validate_options(opts);   // must not throw (publishers negated)
     check(fitra::config::run_mode(opts) == RunMode::CalibSubject,
           "union YAML + --calibrate -> calib-subject mode");
@@ -1309,7 +1332,7 @@ void test_emit_load_round_trip() {
     using fitra::config::save_main_config;
 
     // A representative union config: varied non-default values across every
-    // section, including the tricky ones (negated kalman/ik, bare slimevr/vmt
+    // section, including the tricky ones (negated kalman/ik, bare VMT
     // host/port, excal_method, intrinsic step selector, per-camera arrays).
     // excal_enabled / replay dirs stay at defaults — those are deliberately not
     // emitted (run-mode-deriving). calibrate is set true below to prove it is
@@ -1350,8 +1373,6 @@ void test_emit_load_round_trip() {
     o.subjects_dir = "calibrations/subjects"; o.subject_id = "alice";
     o.subject_height_m = 1.72;
     o.log_every_s = 1.0;
-    o.slimevr_out = true; o.slimevr_host = "172.34.1.9"; o.slimevr_port = 6970;
-    o.slimevr_rate_hz = 75.0; o.slimevr_quat_smooth = 0.4;
     o.vmt_out = true; o.vmt_host = "172.34.1.9"; o.vmt_port = 39571;
     o.vmt_index_base = 12; o.vmt_degeneracy_mode = "disable";
     o.vmt_discovery = false; o.vmt_pair_id = "rig-A"; o.vmt_pairing_token = "tok9";
@@ -1462,11 +1483,6 @@ void test_emit_load_round_trip() {
     eq_s(o.subject_id, r.subject_id, "subject_id");
     eq_f(o.subject_height_m, r.subject_height_m, "subject_height_m");
     eq_f(o.log_every_s, r.log_every_s, "log_every_s");
-    eq_b(o.slimevr_out, r.slimevr_out, "slimevr_out");
-    eq_s(o.slimevr_host, r.slimevr_host, "slimevr_host");
-    eq_i(o.slimevr_port, r.slimevr_port, "slimevr_port");
-    eq_f(o.slimevr_rate_hz, r.slimevr_rate_hz, "slimevr_rate_hz");
-    eq_f(o.slimevr_quat_smooth, r.slimevr_quat_smooth, "slimevr_quat_smooth");
     eq_b(o.vmt_out, r.vmt_out, "vmt_out");
     eq_s(o.vmt_host, r.vmt_host, "vmt_host");
     eq_i(o.vmt_port, r.vmt_port, "vmt_port");
@@ -1653,7 +1669,7 @@ const TestCase kTests[] = {
     {"wrong_schema_fails",                     test_wrong_schema_fails},
     {"cli_overrides_yaml",                     test_cli_overrides_yaml},
     {"negated_three_d_keys_invert_bools",      test_negated_three_d_keys_invert_runtime_bools},
-    {"slimevr_preview_no_reset_yaml_and_cli",  test_slimevr_preview_no_reset_yaml_and_cli},
+    {"removed_slimevr_yaml_and_cli_fail",      test_removed_slimevr_yaml_and_cli_fail},
     {"vmt_index_base_yaml_cli_and_validate",   test_vmt_index_base_yaml_cli_and_validate},
     {"vmt_preset_and_foot_pos_yaml_cli_and_validate",
                                                test_vmt_preset_and_foot_pos_yaml_cli_and_validate},
@@ -1678,13 +1694,14 @@ const TestCase kTests[] = {
     {"setup_store_refuses_example_path",       test_setup_store_refuses_example_path},
     {"subject_calib_schema",                   test_subject_calib_schema},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
+    {"tracker_stream_vmt_settings_validate_without_vmt_output",
+                                               test_tracker_stream_vmt_settings_validate_without_vmt_output},
     {"floor_contact_yaml_cli_emit_and_validate",
                                                test_floor_contact_yaml_cli_emit_and_validate},
     {"limb_extension_yaml_cli_round_trip_and_validate",
                                                test_limb_extension_yaml_cli_round_trip_and_validate},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},
-    {"validate_slimevr_requires_halpe26",      test_validate_slimevr_requires_halpe26},
     {"early_args_extracts_config_and_probe",   test_early_args_extracts_config_and_probe},
     {"early_args_missing_config_value_throws", test_early_args_missing_config_value_throws},
     {"apply_unknown_flag_throws",              test_apply_unknown_flag_throws},

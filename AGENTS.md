@@ -1,7 +1,8 @@
 # AGENTS.md — Codex 作業ガイド
 
-`fitra-cam` は Jetson Orin Nano Super 上で複数 USB カメラの人物検出・2D pose を
-C++/TensorRT で処理し、3D lift / IK と VR トラッカー出力へつなぐプロジェクトである。
+`fitra-cam` は Jetson Orin Nano Super 上で YOLOX 人物検出 + RTMPose 17/26 keypoint 2D pose を
+複数 USB カメラで動かし、3D lift / IK を経て VMT→SteamVR の VR トラッカー出力
+する C++/TensorRT プロジェクト。Python (ONNX Runtime) 実装は**数値参照・フォールバック**として保持。
 Codex は調査、実装、検証、必要なドキュメント更新までを一貫して行う。
 
 ## 最初に使うコマンド
@@ -13,12 +14,15 @@ Codex は調査、実装、検証、必要なドキュメント更新までを�
 # C++: 構成、ビルド、基本確認、全テスト
 cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
 cmake --build cpp/build -j
+ctest --test-dir cpp/build                       # 全テスト
+ctest --test-dir cpp/build -R 'tracker_extract|kalman'   # pose-3d 系
+ctest --test-dir cpp/build -R 'vmt|hmd_pose|auto_alignment|continuous_aligner'  # vr-output 系
 ./cpp/build/main --help
-ctest --test-dir cpp/build
+ctest --test-dir cpp/build                       # 全テスト
 
 # C++: 代表的な focused test
 ctest --test-dir cpp/build -N
-ctest --test-dir cpp/build -R 'tracker_extract|firmware_protocol|kalman'
+ctest --test-dir cpp/build -R 'tracker_extract|kalman'
 ctest --test-dir cpp/build -R 'vmt|hmd_pose|auto_alignment|continuous_aligner'
 
 # Web UI

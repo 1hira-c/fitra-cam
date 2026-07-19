@@ -1,4 +1,4 @@
-// Imperative Three.js skeleton + SlimeVR tracker viewer. Ported from the
+// Imperative Three.js skeleton + tracker viewer. Ported from the
 // ThreeDViewer class in the legacy web/dual_rtmpose/app.js with minimal
 // changes: the COCO17/Halpe26 topology constants come from lib/skeleton, the
 // active keypoint format is held on the instance (set from the bundle) instead

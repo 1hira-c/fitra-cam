@@ -1,4 +1,4 @@
-#include "slimevr/tracker_extractor.hpp"
+#include "tracking/tracker_extractor.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -6,7 +6,7 @@
 
 #include "lift/keypoint_format.hpp"
 
-namespace fitra::slimevr {
+namespace fitra::tracking {
 
 namespace {
 
@@ -38,7 +38,7 @@ float percentile_inplace(std::vector<float>& samples, float pct) {
 }  // namespace
 
 TrackerExtractor::TrackerExtractor(pipeline::Skeleton3DBus& skeleton_bus,
-                                   SlimeTrackerBus&         tracker_bus,
+                                   TrackerBus&         tracker_bus,
                                    TrackerExtractorOptions  opts)
     : skel_bus_(skeleton_bus), tracker_bus_(tracker_bus), opts_(opts) {
     for (auto& q : prev_quat_) q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
@@ -156,7 +156,7 @@ void TrackerExtractor::run_loop() {
         // / disabled / in the wrong KP format — so the bus does not retain
         // stale `has_data=true` trackers from a previous successful frame.
         // Without this, /ws3d would keep rendering old AxesHelpers and
-        // NativePublisher would keep sending last-known rotations while
+        // VMT can keep sending last-known tracker poses while
         // the actual subject is out of view.
         //
         // The "no data" case is signalled by marking every tracker
@@ -165,7 +165,7 @@ void TrackerExtractor::run_loop() {
         // subject reappears), the publisher skips them all (no rotations
         // on the wire), and the WebUI fades the axes via the existing
         // valid→opacity mapping.
-        std::array<SlimeTracker, kTrackerCount> raw_trackers{};
+        std::array<TrackerPose, kTrackerCount> raw_trackers{};
         for (std::size_t i = 0; i < kTrackerCount; ++i) {
             raw_trackers[i].role = static_cast<TrackerRole>(i);
         }
@@ -217,7 +217,7 @@ void TrackerExtractor::run_loop() {
         }
 
         // ------ Per-tracker rolling stats ------------------------------
-        SlimeTrackerStats stats_out{};
+        TrackerStats stats_out{};
         stats_out.window_frames = opts_.stats_window;
 
         for (std::size_t i = 0; i < kTrackerCount; ++i) {
@@ -312,4 +312,4 @@ void TrackerExtractor::run_loop() {
     }
 }
 
-}  // namespace fitra::slimevr
+}  // namespace fitra::tracking

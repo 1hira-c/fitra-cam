@@ -77,12 +77,10 @@ std::vector<std::string> module_argv(config::RunMode mode,
             args.push_back("--calibrate");
             args.push_back("--calib-auto-exit");
             args.push_back("--no-vmt-out");
-            args.push_back("--no-slimevr-out");
             break;
         case config::RunMode::CalibExtrinsic:
             args.push_back("--extrinsic-calib");
             args.push_back("--no-vmt-out");
-            args.push_back("--no-slimevr-out");
             break;
         case config::RunMode::CalibExtrinsicFloor:
             // VR-free floor path: --floor-map / --floor-intrinsics come from
@@ -91,14 +89,12 @@ std::vector<std::string> module_argv(config::RunMode mode,
             // floor works even when the file selects controller.
             args.push_back("--floor-calib");
             args.push_back("--no-vmt-out");
-            args.push_back("--no-slimevr-out");
             break;
         case config::RunMode::CalibIntrinsic:
             // Intrinsic (ChArUco) calibration: board params + out come from
             // --config (intrinsic_calib.*). --calib-intrinsic forces the mode.
             args.push_back("--calib-intrinsic");
             args.push_back("--no-vmt-out");
-            args.push_back("--no-slimevr-out");
             break;
     }
     return args;

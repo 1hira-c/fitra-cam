@@ -159,7 +159,7 @@ int run_mode_calib_subject(const config::MainOptions& opts_in, FlowControl& flow
     auto tracker_extractor =
         make_tracker_extractor(opts, *threed.bus3d, *threed.tracker_bus);
     struct ExtractorStop {
-        slimevr::TrackerExtractor* tex;
+        tracking::TrackerExtractor* tex;
         ~ExtractorStop() { if (tex) tex->stop(); }
     } extractor_stop{tracker_extractor.get()};
 

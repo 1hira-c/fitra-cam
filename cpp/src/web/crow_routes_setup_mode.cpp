@@ -121,12 +121,6 @@ void merge_config(MainOptions& d, const crow::json::rvalue& cfg) {
         //     ignores anyway (a non-empty host always wins and disables the beacon).
         d.vmt_discovery = d.vmt_host.empty();
     }
-    if (cfg.has("slimevr")) {
-        const auto c = cfg["slimevr"];
-        jbool(c, "slimevr_out", d.slimevr_out);
-        jstr(c, "host", d.slimevr_host);
-        jint(c, "port", d.slimevr_port);
-    }
     if (cfg.has("intrinsic_calib")) {
         const auto c = cfg["intrinsic_calib"];
         jbool(c, "enabled", d.intrinsic_step_enabled);  // daemon STEP selector
@@ -190,8 +184,6 @@ std::string draft_to_json(const MainOptions& d) {
       << ",\"discovery\":" << b(d.vmt_discovery)
       << ",\"host\":\"" << json_escape(d.vmt_host) << "\",\"port\":" << d.vmt_port
       << ",\"hmd_listen_enabled\":" << b(d.hmd_listen_enabled) << "},"
-      << "\"slimevr\":{\"slimevr_out\":" << b(d.slimevr_out)
-      << ",\"host\":\"" << json_escape(d.slimevr_host) << "\",\"port\":" << d.slimevr_port << "},"
       << "\"intrinsic_calib\":{\"enabled\":" << b(d.intrinsic_step_enabled)
       << ",\"out\":\"" << json_escape(d.intrinsic_out) << "\""
       << ",\"model\":\"" << json_escape(d.intrinsic_model) << "\"},"
