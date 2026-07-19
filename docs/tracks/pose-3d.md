@@ -96,6 +96,13 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-07-19 — 伸展スナップの静止時ラッチ遷移を修正
+
+逆向き方向ヒステリシスで、閾値を越えた直後に姿勢が静止すると毎フレームの方向差分が消え、
+snap の enter / exit 確認が完了しない問題を修正。最初の sample では遷移方向の移動を要求しつつ、
+2 sample 目は閾値外を維持していれば静止でも遷移を確定する。逆方向移動と欠損による reset は維持し、
+enter / exit の対称な回帰テストを追加した。
+
 ### 2026-07-15 — 四肢伸展スナップ / 足先方向推論を製品既定 ON 化
 
 `MainOptions` と直接構築時の `TrackerExtractorOptions` で `limb_extension_snap` /

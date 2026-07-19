@@ -98,9 +98,11 @@ constexpr float kPelvisYawGateLow_rps  = 8.0f;
 constexpr float kPelvisYawGateHigh_rps = 16.0f;
 
 // Reverse directional hysteresis needs motion evidence in addition to the
-// overlapping enter/exit band. Require two consecutive valid observations and
-// up to 2 degrees of accumulated travel from the current regime's extremum.
-// For a deliberately narrow configured band, half the band remains reachable.
+// overlapping enter/exit band. Require one observation moving toward the new
+// regime, then a second valid observation that stays there; stationary input
+// may finish confirmation, while opposite motion cancels it. Also require up to
+// 2 degrees of accumulated travel from the current regime's extremum. For a
+// deliberately narrow configured band, half the band remains reachable.
 constexpr std::uint8_t kExtensionTransitionConfirmFrames = 2;
 constexpr float kExtensionMotionConfirmMaxDeg = 2.0f;
 constexpr float kExtensionDirectionMinDeg = 0.05f;
@@ -208,21 +210,25 @@ ExtensionState update_extension_state(const infer::Skeleton3D& skel,
         flex <= prev_flex - kExtensionDirectionMinDeg;
     const bool flexing_now =
         flex >= prev_flex + kExtensionDirectionMinDeg;
+    const bool transition_pending = transition_frames > 0;
     bool wants_transition = false;
     if (latched) {
         // The minimum flexion reached while snapped is evidence of how far the
-        // user has subsequently bent the limb.
+        // user has subsequently bent the limb. Once flexing starts a pending
+        // confirmation, a stationary sample may complete it; renewed extension
+        // still cancels the transition.
         extreme = std::min(extreme, flex);
         wants_transition =
-            flexing_now &&
+            (flexing_now || (transition_pending && !extending_now)) &&
             flex >= opts.exit_flex_deg &&
             flex - extreme >= motion_confirm_deg;
     } else {
         // The maximum flexion reached while free is evidence of how far the
-        // user has subsequently extended the limb.
+        // user has subsequently extended the limb. Apply the same stationary
+        // confirmation rule symmetrically while entering snap.
         extreme = std::max(extreme, flex);
         wants_transition =
-            extending_now &&
+            (extending_now || (transition_pending && !flexing_now)) &&
             flex <= opts.enter_flex_deg &&
             extreme - flex >= motion_confirm_deg;
     }

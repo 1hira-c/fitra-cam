@@ -36,9 +36,10 @@ baseline を残して実機 A/B できること。
 2. 屈伸方向つきの「逆向き」per-limb hysteresis を `ExtractContext` が保持する。伸ばす途中は
    `enter=20°` 以下で早めに入り、曲げる途中は `exit=12°` 以上で早めに抜ける。中間帯で単純な
    閾値交換をすると毎フレーム再吸着し得るため、非 snap 中は直近の最大 flexion、snap 中は最小
-   flexion を保持し、最大 2°の移動量と連続 2 valid frame で方向を確認してから遷移する。初回は
-   方向不明なので `exit=12°` 以下だけを snap とする。idle→resume では他の smoothing/anchor と
-   一緒にこの状態も clear する。
+   flexion を保持し、最大 2°の移動量と連続 2 valid frame で方向を確認してから遷移する。最初の
+   sample は遷移方向への移動を必須とし、次の sample は閾値外を維持していれば静止でも確認を
+   完了する。逆方向へ戻った場合と欠損時は確認を reset する。初回は方向不明なので `exit=12°`
+   以下だけを snap とする。idle→resume では他の smoothing/anchor と一緒にこの状態も clear する。
 3. snap ON の伸展肢だけ skeleton を私有コピーし、parent を固定したまま
    `parent→distal` 軸上へ hinge / distal を配置する。2 本の現行ボーン長は保存し、脚では toe / heel
    を ankle の移動量だけ剛体平行移動して足部方向を保存する。
@@ -67,7 +68,7 @@ OFF を維持し、実行時は `MainOptions` / `TrackerExtractorOptions` から
 
 - `test_tracker_extract`: `TrackerExtractorOptions` の製品既定 ON と低レベル両機能 OFF の field-level
   完全一致、腕/脚の共通軸・位置・骨長保存、入力 skeleton 非変更、20° enter / 12° exit の方向確認、
-  1-frame spike と欠損による確認中断、
+  1-frame spike と欠損による確認中断、閾値越え後の静止による enter / exit 確認完了、
   中間帯での動作反転、toe-based thigh/shin twist、toe 欠損 hold、屈曲脚の非介入。
 - `test_main_config`: 製品既定 ON、YAML/CLI の個別 OFF、emit-load round-trip、閾値順序の validation。
 - 回帰: `ctest -R 'tracker_extract|firmware_protocol|vmt_protocol|main_config'` と full `ctest`。

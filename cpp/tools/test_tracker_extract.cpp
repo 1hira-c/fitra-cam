@@ -1335,6 +1335,39 @@ void test_limb_extension_hysteresis() {
     (void)sv::extract_trackers(skel, &ctx, sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
     check(ctx.extension_latched[2],
           "confirmed mid-band motion reversal reacquires snap");
+
+    // A low-rate or dropped stream may observe only the threshold-crossing
+    // motion sample followed by a stationary pose. Staying beyond the threshold
+    // must finish confirmation in both directions instead of leaving the latch
+    // stuck until another same-direction delta arrives.
+    auto stationary = make_t_pose();
+    sv::ExtractContext stationary_enter_ctx;
+    set_left_leg_flex(stationary, 30.0f);
+    (void)sv::extract_trackers(stationary, &stationary_enter_ctx,
+                               sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    set_left_leg_flex(stationary, 19.0f);
+    (void)sv::extract_trackers(stationary, &stationary_enter_ctx,
+                               sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(!stationary_enter_ctx.extension_latched[2],
+          "stationary enter: crossing sample only starts confirmation");
+    (void)sv::extract_trackers(stationary, &stationary_enter_ctx,
+                               sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(stationary_enter_ctx.extension_latched[2],
+          "stationary enter: held threshold crossing completes confirmation");
+
+    sv::ExtractContext stationary_exit_ctx;
+    set_left_leg_flex(stationary, 8.0f);
+    (void)sv::extract_trackers(stationary, &stationary_exit_ctx,
+                               sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    set_left_leg_flex(stationary, 13.0f);
+    (void)sv::extract_trackers(stationary, &stationary_exit_ctx,
+                               sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(stationary_exit_ctx.extension_latched[2],
+          "stationary exit: crossing sample only starts confirmation");
+    (void)sv::extract_trackers(stationary, &stationary_exit_ctx,
+                               sv::FootPosMode::Ankle, 0.5f, 0.0f, opts);
+    check(!stationary_exit_ctx.extension_latched[2],
+          "stationary exit: held threshold crossing completes confirmation");
 }
 
 void test_extended_leg_toe_direction_drives_thigh_and_shin_twist() {
