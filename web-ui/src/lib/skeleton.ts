@@ -6,6 +6,7 @@ import type { KpFormat } from "../types/bundle";
 export const CAM_COLORS = ["#00dc00", "#ffb400", "#48aaff", "#ff6f6f"];
 export const PERSON_3D_COLORS = ["#ff4cff", "#48aaff", "#ffd166", "#5cff8d"];
 export const KP_THR = 0.3;
+export const HALPE_ANKLE_INDICES = [15, 16] as const;
 
 // COCO17 edge table — the original Phase 6 viewer expected exactly these
 // keypoints.

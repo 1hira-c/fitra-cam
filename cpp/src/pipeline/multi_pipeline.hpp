@@ -23,6 +23,7 @@
 
 #include "camera/frame_source.hpp"
 #include "infer/rtmpose.hpp"
+#include "lift/floor_contact_stabilizer.hpp"
 #include "lift/ik.hpp"
 #include "lift/kalman.hpp"
 #include "lift/triangulator.hpp"
@@ -39,6 +40,8 @@ public:
         double sync_window_ms = 15.0;
         bool kalman_enabled = true;
         bool ik_enabled = true;
+        bool floor_contact_stability = true;
+        lift::FloorContactOptions floor_contact;
         int bone_calib_frames = 150;
         double subject_height_m = 0.0;
         bool has_subject_profile = false;
@@ -128,6 +131,8 @@ private:
     ThreeDConfig         threed_;
     lift::SkeletonKalman kalman_;
     lift::IkSolver       ik_;
+    lift::FloorContactStabilizer floor_contact_;
+    lift::FloorContactReport     last_floor_report_;
     std::mutex           threed_mu_;
 
     // Tap callbacks. Loop reads these via a local snapshot to avoid holding

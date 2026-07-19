@@ -236,6 +236,23 @@ std::string Skeleton3DBus::make_bundle_json(const std::string& extra_fields_json
     out += ",\"processed\":"; out += std::to_string(static_cast<long long>(s.stats.processed));
     out += ",\"sync_miss\":"; out += std::to_string(static_cast<long long>(s.stats.sync_miss));
     out += ",\"ik_locked\":"; out += (s.stats.ik_locked ? "true" : "false");
+    out += ",\"floor_stability_enabled\":";
+    out += (s.stats.floor_stability_enabled ? "true" : "false");
+    out += ",\"floor_z_m\":"; append_float(out, s.stats.floor_z_m, 4);
+    out += ",\"floor_contact_fresh\":";
+    out += (s.stats.floor_contact_fresh ? "true" : "false");
+    out += ",\"floor_contact_left\":";
+    out += (s.stats.floor_contact_left ? "true" : "false");
+    out += ",\"floor_contact_right\":";
+    out += (s.stats.floor_contact_right ? "true" : "false");
+    out += ",\"floor_evidence_left\":";
+    out += (s.stats.floor_evidence_left ? "true" : "false");
+    out += ",\"floor_evidence_right\":";
+    out += (s.stats.floor_evidence_right ? "true" : "false");
+    out += ",\"floor_correction_left_m\":";
+    append_float(out, s.stats.floor_correction_left_m, 4);
+    out += ",\"floor_correction_right_m\":";
+    append_float(out, s.stats.floor_correction_right_m, 4);
     out += "}";   // close stats
     if (!extra_fields_json.empty()) {
         out += ",";

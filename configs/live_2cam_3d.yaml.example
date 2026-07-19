@@ -42,6 +42,22 @@ three_d:
   # calibrations/extrinsics/latest.yaml を自動解決（無ければ校正へ routing）。
   # 固定したい既存ファイルがあれば明示する（生成物の既定パスは焼かない）。
   # calib: calibrations/extrinsics/some_fixed_extrinsics.yaml
+  # 接地足の ankle + toe/heel を床面へ安定化（既定 ON、Halpe26 のみ）。
+  # controller-marker 等で床が Z=0 でない場合だけ floor_z_m を実測値へ変更する。
+  # floor_contact_stability: true
+  # floor_z_m: 0.0
+  # 実機チューニングが必要な場合のみ以下を変更する。
+  # floor_contact_enter_height_m: 0.04
+  # floor_contact_exit_height_m: 0.08
+  # floor_contact_enter_speed_mps: 0.35
+  # floor_contact_exit_speed_mps: 1.00
+  # floor_contact_xy_tau_s: 0.25
+  # floor_contact_max_xy_correction_m: 0.04
+  # floor_contact_max_z_correction_m: 0.08
+  # floor_contact_missing_grace_frames: 4
+  # floor_contact_reset_gap_s: 0.50
+  # floor_contact_release_tau_s: 0.05
+  # floor_contact_exit_grace_s: 0.05
 
   # 伸展補正は既定 ON。腕/脚の tracker-facing chain を直線化し、脚伸展中の
   # thigh/shin twist を ankle→big-toe から推論する。A/B 時は個別に false へできる。
