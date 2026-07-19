@@ -99,10 +99,11 @@ struct MainOptions {
     // One Euro (speed-adaptive) tracker smoothing. Feeds VMT and the WebUI
     // (single producer). Default on: kills at-rest jitter that a fixed-alpha
     // EMA cannot, staying lag-free in motion. When off, the fixed-alpha EMA
-    // (fixed quaternion alpha / vmt.pos_smooth) is used. Position params are
+    // (vr_quat_smooth / vmt.pos_smooth) is used. Position params are
     // per-axis (m/s); rotation params on geodesic angular speed (rad/s). beta=0
     // → fixed-cutoff low-pass without leaving the One Euro path.
     bool   vr_one_euro       = true;
+    double vr_quat_smooth    = 0.5;   // fixed-EMA fallback alpha, [0, 1]
     double vr_pos_mincutoff  = 1.0;   // Hz, at-rest smoothness (lower = smoother)
     double vr_pos_beta       = 4.0;   // motion responsiveness (higher = less lag)
     double vr_pos_dcutoff    = 1.0;   // Hz, speed-estimate low-pass

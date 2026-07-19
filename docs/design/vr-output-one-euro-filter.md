@@ -90,8 +90,11 @@ x_hat   = lowpass(x, alpha(cutoff, te))        // 出力
 - `TrackerExtractorOptions`: `bool one_euro=true` + `OneEuroParams pos_one_euro{0.8,0.4,1.0}` /
   `quat_one_euro{1.0,0.3,1.0}`。`run_loop` は `one_euro` で新旧オーバーロードを分岐(既定 One Euro)。
 - `MainConfig`(`three_d` セクション、`vr_extract_event_driven` の隣)に
-  `vr_one_euro` / `vr_{pos,quat}_{mincutoff,beta,dcutoff}` を追加。YAML パース + CLI
-  (`--vr-no-one-euro` / `--vr-{pos,quat}-{mincutoff,beta,dcutoff}`) + validation(dcutoff>0 等)。
+  `vr_one_euro` / `vr_quat_smooth` / `vr_{pos,quat}_{mincutoff,beta,dcutoff}` を追加。YAML パース + CLI
+  (`--vr-no-one-euro` / `--vr-quat-smooth` / `--vr-{pos,quat}-{mincutoff,beta,dcutoff}`) + validation(dcutoff>0 等)。
+  One Euro を無効化したときは `vr_quat_smooth` (既定 0.5) と `vmt.pos_smooth` が固定 EMA の
+  回転・位置 alpha になる。両者は VMT 出力の有無にかかわらず WebUI tracker stream も使うため、
+  3D 有効時に検証する。
 
 ### しきい値の根拠
 

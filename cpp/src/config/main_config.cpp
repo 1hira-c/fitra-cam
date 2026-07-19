@@ -136,7 +136,7 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
         "enable_3d", "calib", "kp_conf_thresh", "max_reproj_px",
         "sync_window_ms", "bone_calib_frames", "no_3d_kalman", "no_3d_ik",
         "vr_extract_event_driven",
-        "vr_one_euro", "vr_pos_mincutoff", "vr_pos_beta", "vr_pos_dcutoff",
+        "vr_one_euro", "vr_quat_smooth", "vr_pos_mincutoff", "vr_pos_beta", "vr_pos_dcutoff",
         "vr_quat_mincutoff", "vr_quat_beta", "vr_quat_dcutoff",
         "vr_foot_pos_mode", "vr_chest_height_frac", "vr_waist_height_frac",
     };
@@ -160,6 +160,7 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
             section["vr_extract_event_driven"], "three_d.vr_extract_event_driven");
     }
     if (section["vr_one_euro"])       out.vr_one_euro       = parse_scalar<bool>(section["vr_one_euro"],         "three_d.vr_one_euro");
+    if (section["vr_quat_smooth"])    out.vr_quat_smooth    = parse_scalar<double>(section["vr_quat_smooth"],    "three_d.vr_quat_smooth");
     if (section["vr_pos_mincutoff"])  out.vr_pos_mincutoff  = parse_scalar<double>(section["vr_pos_mincutoff"],  "three_d.vr_pos_mincutoff");
     if (section["vr_pos_beta"])       out.vr_pos_beta       = parse_scalar<double>(section["vr_pos_beta"],       "three_d.vr_pos_beta");
     if (section["vr_pos_dcutoff"])    out.vr_pos_dcutoff    = parse_scalar<double>(section["vr_pos_dcutoff"],    "three_d.vr_pos_dcutoff");
@@ -482,6 +483,7 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.ik_3d     != d.ik_3d)     e << YAML::Key << "no_3d_ik"     << YAML::Value << !o.ik_3d;
     if (o.vr_extract_event_driven != d.vr_extract_event_driven) e << YAML::Key << "vr_extract_event_driven" << YAML::Value << o.vr_extract_event_driven;
     if (o.vr_one_euro       != d.vr_one_euro)       e << YAML::Key << "vr_one_euro"       << YAML::Value << o.vr_one_euro;
+    if (o.vr_quat_smooth    != d.vr_quat_smooth)    e << YAML::Key << "vr_quat_smooth"    << YAML::Value << o.vr_quat_smooth;
     if (o.vr_pos_mincutoff  != d.vr_pos_mincutoff)  e << YAML::Key << "vr_pos_mincutoff"  << YAML::Value << o.vr_pos_mincutoff;
     if (o.vr_pos_beta       != d.vr_pos_beta)       e << YAML::Key << "vr_pos_beta"       << YAML::Value << o.vr_pos_beta;
     if (o.vr_pos_dcutoff    != d.vr_pos_dcutoff)    e << YAML::Key << "vr_pos_dcutoff"    << YAML::Value << o.vr_pos_dcutoff;
@@ -718,6 +720,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--chest-height-frac") { out.vr_chest_height_frac = std::stod(need(i, "--chest-height-frac")); }
         else if (a == "--waist-height-frac") { out.vr_waist_height_frac = std::stod(need(i, "--waist-height-frac")); }
         else if (a == "--vr-no-one-euro")    { out.vr_one_euro = false; }
+        else if (a == "--vr-quat-smooth")    { out.vr_quat_smooth = std::stod(need(i, "--vr-quat-smooth")); }
         else if (a == "--vr-pos-mincutoff")  { out.vr_pos_mincutoff  = std::stod(need(i, "--vr-pos-mincutoff")); }
         else if (a == "--vr-pos-beta")       { out.vr_pos_beta       = std::stod(need(i, "--vr-pos-beta")); }
         else if (a == "--vr-pos-dcutoff")    { out.vr_pos_dcutoff    = std::stod(need(i, "--vr-pos-dcutoff")); }
@@ -1070,9 +1073,6 @@ void validate_options(const MainOptions& opts) {
         if (opts.vmt_port <= 0 || opts.vmt_port > 65535) {
             fail("--vmt-port must be in [1, 65535]");
         }
-        if (opts.vmt_rate_hz <= 0.0 || opts.vmt_rate_hz > 240.0) {
-            fail("--vmt-rate-hz must be in (0, 240]");
-        }
         if (opts.vmt_index_base < 0 || opts.vmt_index_base > 48) {
             fail("--vmt-index-base must be in [0, 48] so all roles (max index 9) fit VMT index 0..57");
         }
@@ -1081,9 +1081,6 @@ void validate_options(const MainOptions& opts) {
             && opts.vmt_tracker_preset != "p8"
             && opts.vmt_tracker_preset != "full") {
             fail("--vmt-preset must be one of p3|p6|p8|full");
-        }
-        if (opts.vmt_pos_smooth < 0.0 || opts.vmt_pos_smooth > 1.0) {
-            fail("--vmt-pos-smooth must be in [0, 1]");
         }
         if (opts.vmt_degeneracy_mode != "hold"
             && opts.vmt_degeneracy_mode != "disable"
@@ -1103,6 +1100,19 @@ void validate_options(const MainOptions& opts) {
         }
         if (opts.vmt_peer_timeout_s <= 0.0 || opts.vmt_peer_timeout_s > 120.0) {
             fail("--vmt-peer-timeout-s must be in (0, 120]");
+        }
+    }
+    // These settings feed TrackerExtractor and the WebUI tracker stream even
+    // when VMT publishing is off, so their validity cannot be gated on
+    // --vmt-out. Keep the VMT-facing names for configuration compatibility.
+    if (opts.enable_3d) {
+        if (!std::isfinite(opts.vmt_rate_hz)
+            || opts.vmt_rate_hz <= 0.0 || opts.vmt_rate_hz > 240.0) {
+            fail("--vmt-rate-hz must be a finite value in (0, 240]");
+        }
+        if (!std::isfinite(opts.vmt_pos_smooth)
+            || opts.vmt_pos_smooth < 0.0 || opts.vmt_pos_smooth > 1.0) {
+            fail("--vmt-pos-smooth must be a finite value in [0, 1]");
         }
     }
     // hmd_listen_port is bound by the receiver (when hmd_listen_enabled) AND
@@ -1147,6 +1157,10 @@ void validate_options(const MainOptions& opts) {
     }
     if (opts.vr_pos_dcutoff <= 0.0 || opts.vr_quat_dcutoff <= 0.0) {
         fail("--vr-{pos,quat}-dcutoff must be > 0");
+    }
+    if (!std::isfinite(opts.vr_quat_smooth)
+        || opts.vr_quat_smooth < 0.0 || opts.vr_quat_smooth > 1.0) {
+        fail("--vr-quat-smooth must be a finite value in [0, 1]");
     }
     if (opts.vr_foot_pos_mode != "ankle" && opts.vr_foot_pos_mode != "midpoint") {
         fail("--foot-tracker-pos must be one of ankle|midpoint");

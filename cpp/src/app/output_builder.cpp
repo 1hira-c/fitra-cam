@@ -13,11 +13,9 @@ std::unique_ptr<tracking::TrackerExtractor> make_tracker_extractor(
     const std::atomic<bool>* idle_flag) {
     tracking::TrackerExtractorOptions tex_opts;
     tex_opts.extract_rate_hz = opts.vmt_rate_hz;
-    tex_opts.quat_smooth     = 0.5f;
-    // pos EMA alpha is sourced from --vmt-pos-smooth. The WebUI viz also
-    // benefits from pos smoothing (AxesHelper jitter), so this runs
-    // regardless of --vmt-out — same architecture
-    // as quat_smooth.
+    tex_opts.quat_smooth     = static_cast<float>(opts.vr_quat_smooth);
+    // Fixed-EMA fallback alphas feed the WebUI viz as well as VMT, so they run
+    // regardless of --vmt-out. One Euro ignores both while enabled.
     tex_opts.pos_smooth      = static_cast<float>(opts.vmt_pos_smooth);
     tex_opts.event_driven    = opts.vr_extract_event_driven;
     // One Euro (speed-adaptive) smoothing — default path. When on,

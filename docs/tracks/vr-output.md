@@ -41,6 +41,14 @@ Windows 実機 (SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-07-20 — PR #56 の tracker stream 設定レビューを反映 (バグ修正)
+
+SlimeVR 廃止後も `TrackerExtractor` は VMT 出力 OFF の WebUI / subject calibration 経路で起動する。
+このため `vmt.rate_hz` と `vmt.pos_smooth` の範囲検証を `vmt_out` 条件から 3D tracker stream 条件へ
+移し、異常値による極端な更新周期・EMA を防いだ。One Euro OFF 時の回転 EMA alpha もハードコードせず
+`three_d.vr_quat_smooth` / `--vr-quat-smooth` (既定 0.5、[0,1]) で調整可能にした。
+→ [design/vr-output-one-euro-filter.md](../design/vr-output-one-euro-filter.md)
+
 ### 2026-07-14 — SlimeVR Firmware UDP 出力を廃止し、VMT 専用化
 
 SlimeVR Firmware UDP publisher・wire protocol・設定・補正 API/UI を削除。共有していた tracker

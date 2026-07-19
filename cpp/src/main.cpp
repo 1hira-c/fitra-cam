@@ -88,6 +88,7 @@ void print_help() {
         "  --no-3d-ik                disable 3D IK projection\n"
         "  --vr-extract-event-driven react to each 3D frame (lower VR latency)\n"
         "  --vr-no-one-euro          use fixed-alpha EMA instead of One Euro smoothing\n"
+        "  --vr-quat-smooth F        fixed-EMA rotation alpha 0..1 when One Euro is off (default 0.5)\n"
         "  --vr-pos-mincutoff F      One Euro position at-rest cutoff Hz (default 1.0; lower=smoother)\n"
         "  --vr-pos-beta F           One Euro position motion responsiveness (default 4.0)\n"
         "  --vr-pos-dcutoff F        One Euro position speed-estimate cutoff Hz (default 1.0)\n"

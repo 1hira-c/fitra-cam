@@ -516,6 +516,7 @@ void test_one_euro_yaml_cli_and_validate() {
     auto p = write_tmp("one_euro.yaml", R"(schema: fitra_main_config_v1
 three_d:
   vr_one_euro: false
+  vr_quat_smooth: 0.3
   vr_pos_mincutoff: 0.5
   vr_pos_beta: 0.2
   vr_quat_mincutoff: 1.5
@@ -523,15 +524,17 @@ three_d:
     MainOptions opts;
     load_main_config(p.string(), opts);
     check(opts.vr_one_euro == false,        "three_d.vr_one_euro loads");
+    check(opts.vr_quat_smooth == 0.3,       "three_d.vr_quat_smooth loads");
     check(opts.vr_pos_mincutoff == 0.5,     "three_d.vr_pos_mincutoff loads");
     check(opts.vr_pos_beta == 0.2,          "three_d.vr_pos_beta loads");
     check(opts.vr_quat_mincutoff == 1.5,    "three_d.vr_quat_mincutoff loads");
 
     // CLI numeric overrides take precedence over the YAML-loaded values.
     std::vector<std::string> argv_buf{
-        "--vr-pos-mincutoff", "0.9", "--vr-quat-beta", "0.4"};
+        "--vr-quat-smooth", "0.7", "--vr-pos-mincutoff", "0.9", "--vr-quat-beta", "0.4"};
     auto argv = make_argv(argv_buf);
     apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(opts.vr_quat_smooth == 0.7,   "--vr-quat-smooth CLI overrides YAML");
     check(opts.vr_pos_mincutoff == 0.9, "--vr-pos-mincutoff CLI overrides YAML");
     check(opts.vr_quat_beta == 0.4,     "--vr-quat-beta CLI sets value");
 
@@ -548,6 +551,47 @@ three_d:
         check_contains(e.what(), "dcutoff", "dcutoff validation msg");
     }
     check(threw, "vr_pos_dcutoff <= 0 must throw");
+
+    opts.vr_pos_dcutoff = 1.0;
+    opts.vr_quat_smooth = 1.1;
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--vr-quat-smooth", "quat smooth validation msg");
+    }
+    check(threw, "vr_quat_smooth > 1 must throw");
+}
+
+void test_tracker_stream_vmt_settings_validate_without_vmt_output() {
+    MainOptions opts;
+    opts.cam_paths[0] = "/tmp/a";
+    opts.det_engine   = "/tmp/y";
+    opts.pose_engine  = "/tmp/r";
+    opts.enable_3d    = true;
+    opts.vmt_out      = false;
+
+    opts.vmt_rate_hz = 0.0;
+    bool threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--vmt-rate-hz", "tracker rate validation without VMT output");
+    }
+    check(threw, "invalid tracker rate must fail even without VMT output");
+
+    opts.vmt_rate_hz = 60.0;
+    opts.vmt_pos_smooth = -0.1;
+    threw = false;
+    try {
+        validate_options(opts);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--vmt-pos-smooth", "tracker pos smooth validation without VMT output");
+    }
+    check(threw, "invalid tracker position smoothing must fail even without VMT output");
 }
 
 void test_early_args_extracts_config_and_probe() {
@@ -1422,6 +1466,8 @@ const TestCase kTests[] = {
     {"setup_store_refuses_example_path",       test_setup_store_refuses_example_path},
     {"subject_calib_schema",                   test_subject_calib_schema},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
+    {"tracker_stream_vmt_settings_validate_without_vmt_output",
+                                               test_tracker_stream_vmt_settings_validate_without_vmt_output},
     {"validate_required_missing",              test_validate_required_missing},
     {"validate_enable_3d_needs_calib",         test_validate_enable_3d_needs_calib},
     {"early_args_extracts_config_and_probe",   test_early_args_extracts_config_and_probe},
