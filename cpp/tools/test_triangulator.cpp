@@ -9,6 +9,7 @@
 #include <opencv2/calib3d.hpp>
 
 #include "lift/keypoint_format.hpp"
+#include "lift/head_direction.hpp"
 #include "lift/triangulator.hpp"
 
 namespace {
@@ -127,19 +128,37 @@ void test_halpe_face_joints_are_excluded_from_3d() {
           "Halpe26 3D lift should contain 21 non-facial joints");
     check(tri.median_reproj_px < 1.0e-3,
           "excluded face disagreement must not bias reprojection median");
-    for (std::size_t k = 0; k <= 4; ++k) {
+    const auto& nose = tri.skeleton.joints[0];
+    const auto& head_top = tri.skeleton.joints[17];
+    const auto& neck = tri.skeleton.joints[18];
+    check(nose.valid,
+          "nose direction source must produce a synthetic endpoint");
+    const double rx = static_cast<double>(nose.x) - head_top.x;
+    const double ry = static_cast<double>(nose.y) - head_top.y;
+    const double rz = static_cast<double>(nose.z) - head_top.z;
+    const double ray_len = std::sqrt(rx * rx + ry * ry + rz * rz);
+    check(std::abs(ray_len - fitra::lift::kHeadDirectionLengthM) < 1.0e-4,
+          "synthetic head direction must have fixed length");
+    const double ax = static_cast<double>(head_top.x) - neck.x;
+    const double ay = static_cast<double>(head_top.y) - neck.y;
+    const double az = static_cast<double>(head_top.z) - neck.z;
+    check(std::abs(rx * ax + ry * ay + rz * az) < 1.0e-5,
+          "synthetic head direction must be perpendicular to head axis");
+    check(tri.view_count[0] == 0 && tri.reproj_error_px[0] == 0.0f,
+          "synthetic nose must not publish reprojection diagnostics");
+    for (std::size_t k = 1; k <= 4; ++k) {
         check(!tri.skeleton.joints[k].valid,
-              "Halpe26 face joint must remain invalid in 3D skeleton");
+              "Halpe26 eye/ear joint must remain invalid in 3D skeleton");
         check(tri.view_count[k] == 0,
-              "Halpe26 face joint must not consume triangulation views");
+              "Halpe26 eye/ear joint must not consume triangulation views");
     }
     for (std::size_t k = 5; k < points.size(); ++k) {
         check(tri.skeleton.joints[k].valid,
               "non-facial Halpe26 joint must still triangulate");
     }
-    check(tri.skeleton.joints[17].valid,
+    check(head_top.valid,
           "head_top must stay available for HMD alignment");
-    check(tri.skeleton.joints[18].valid,
+    check(neck.valid,
           "neck must stay available for torso tracking");
 }
 

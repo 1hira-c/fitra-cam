@@ -1,7 +1,10 @@
 #include "lift/kalman.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
+
+#include "lift/head_direction.hpp"
 
 namespace fitra::lift {
 
@@ -46,6 +49,12 @@ void SkeletonKalman::correct(JointState& s, const cv::Vec3d& z) const {
 void SkeletonKalman::ensure_topology() {
     const auto tag = static_cast<unsigned char>(active_keypoint_format());
     if (root_idx_ >= 0 && topo_format_tag_ == tag) return;
+
+    // Direction evidence is expressed in the active skeleton's world frame;
+    // never carry it across a runtime/test keypoint-format switch.
+    head_direction_initialized_ = false;
+    head_direction_missing_ = 0;
+    head_direction_ema_ = {0, 0, 0};
 
     const auto& def     = active_skeleton_def();
     const auto& parents = def.parents;
@@ -104,6 +113,9 @@ void SkeletonKalman::reset() {
     // topology cache (topo_order_/root_idx_/topo_format_tag_) is left intact —
     // it is rebuilt lazily only when the keypoint format changes.
     states_.fill(JointState{});
+    head_direction_initialized_ = false;
+    head_direction_missing_ = 0;
+    head_direction_ema_ = {0, 0, 0};
 }
 
 infer::Skeleton3D SkeletonKalman::update(const infer::Skeleton3D& measurement,
@@ -219,6 +231,58 @@ infer::Skeleton3D SkeletonKalman::update(const infer::Skeleton3D& measurement,
         out_j.z = static_cast<float>(s.world_pos[2]);
         out_j.score = z.valid ? z.score : 0.05f;
         out_j.valid = s.initialized;
+    }
+
+    if (def.format == KeypointFormat::Halpe26) {
+        auto direction = observe_halpe_head_direction(measurement);
+        if (direction.valid) {
+            const double n = std::sqrt(
+                static_cast<double>(direction.x) * direction.x +
+                static_cast<double>(direction.y) * direction.y +
+                static_cast<double>(direction.z) * direction.z);
+            if (std::isfinite(n) && n >= 1.0e-5) {
+                const cv::Vec3d observed{direction.x / n,
+                                         direction.y / n,
+                                         direction.z / n};
+                if (!head_direction_initialized_) {
+                    head_direction_ema_ = observed;
+                    head_direction_initialized_ = true;
+                } else {
+                    const double safe_dt = std::clamp(dt_s, 1.0e-4, 0.2);
+                    const double tau = std::max(opts_.head_direction_tau_s,
+                                                1.0e-4);
+                    const double alpha = 1.0 - std::exp(-safe_dt / tau);
+                    head_direction_ema_ =
+                        head_direction_ema_ * (1.0 - alpha) + observed * alpha;
+                    // An exact antipodal transition can cancel the EMA. Use
+                    // the current observation only at that degenerate point;
+                    // ordinary one-frame flips retain the prior direction.
+                    if (cv::norm(head_direction_ema_) < 1.0e-5) {
+                        head_direction_ema_ = observed;
+                    }
+                }
+                head_direction_missing_ = 0;
+            } else {
+                direction.valid = false;
+            }
+        }
+
+        if (!direction.valid && head_direction_initialized_) {
+            ++head_direction_missing_;
+            if (head_direction_missing_ > opts_.reset_after_missing) {
+                head_direction_initialized_ = false;
+                head_direction_ema_ = {0, 0, 0};
+            }
+        }
+
+        if (head_direction_initialized_) {
+            direction.x = static_cast<float>(head_direction_ema_[0]);
+            direction.y = static_cast<float>(head_direction_ema_[1]);
+            direction.z = static_cast<float>(head_direction_ema_[2]);
+            direction.score = direction.valid ? direction.score : 0.05f;
+            direction.valid = true;
+        }
+        synthesize_halpe_head_direction(out, direction);
     }
 
     return out;

@@ -17,6 +17,7 @@ namespace fitra::lift {
 // Named Halpe26 landmarks shared by the stabilizer, offline analyzer and VR
 // extractor. Keeping these in the topology header prevents each consumer from
 // silently inventing its own numeric foot layout.
+inline constexpr std::size_t kHalpeNose          = 0;
 inline constexpr std::size_t kHalpeLeftShoulder  = 5;
 inline constexpr std::size_t kHalpeRightShoulder = 6;
 inline constexpr std::size_t kHalpeLeftElbow     = 7;

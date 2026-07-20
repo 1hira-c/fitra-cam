@@ -5,6 +5,7 @@
 
 #include <opencv2/core.hpp>
 
+#include "lift/head_direction.hpp"
 #include "lift/keypoint_format.hpp"
 #include "lift/skeleton_def.hpp"
 
@@ -158,11 +159,19 @@ infer::Skeleton3D IkSolver::update(const infer::Skeleton3D& input) {
         }
     }
     infer::Skeleton3D out = input;
-    if (!locked_) return out;
+    if (!locked_) {
+        if (active_keypoint_format() == KeypointFormat::Halpe26) {
+            synthesize_halpe_head_direction(out, input);
+        }
+        return out;
+    }
     for (int i = 0; i < std::max(1, opts_.iterations); ++i) {
         enforce_lengths(out);
         enforce_pair_lengths(out);
         enforce_hinges(out);
+    }
+    if (active_keypoint_format() == KeypointFormat::Halpe26) {
+        synthesize_halpe_head_direction(out, input);
     }
     return out;
 }

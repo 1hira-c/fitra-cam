@@ -45,6 +45,10 @@ public:
         double q_pos_offset = 1.0e-4;
         double q_vel_offset = 1.0e-2;
         double r_meas = 2.5e-3;  // m^2
+        // Direction-only nose evidence uses a three-float EMA instead of a
+        // full 6D joint Kalman. This suppresses one-frame front/back flips
+        // without putting the nose back into body quality or bone state.
+        double head_direction_tau_s = 0.10;
         int reset_after_missing = 30;
     };
 
@@ -89,6 +93,9 @@ private:
     // Sentinel: 0xFF means "not built yet". rebuild on first update and
     // whenever active_keypoint_format() changes (e.g., between tests).
     unsigned char                                topo_format_tag_ = 0xFF;
+    bool                                         head_direction_initialized_ = false;
+    int                                          head_direction_missing_ = 0;
+    cv::Vec3d                                    head_direction_ema_{0, 0, 0};
 };
 
 }  // namespace fitra::lift

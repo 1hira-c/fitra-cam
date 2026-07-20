@@ -23,6 +23,8 @@ struct TriangulatedSkeleton {
     std::array<float, infer::kMaxKeypoints> reproj_error_px{};
     std::array<int, infer::kMaxKeypoints> view_count{};
     double median_reproj_px = 0.0;
+    // Number of triangulated body joints contributing to quality metrics.
+    // Halpe26's synthetic nose direction endpoint is deliberately not counted.
     int valid_joints = 0;
 };
 
@@ -78,6 +80,11 @@ private:
                            infer::Joint3D& joint,
                            float& mean_reproj,
                            int& used_views) const;
+    // Position-only DLT for the raw nose direction source. No reprojection
+    // calculation/outlier pass: the result is normalized into a fixed-length
+    // synthetic endpoint and never enters 3D quality metrics.
+    bool triangulate_position_only(const std::vector<JointView>& views,
+                                   infer::Joint3D& joint) const;
     bool solve_dlt(const std::vector<JointView>& views,
                    const std::vector<int>& indices,
                    cv::Point3d& out) const;

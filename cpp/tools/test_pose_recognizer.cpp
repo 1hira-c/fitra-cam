@@ -4,6 +4,7 @@
 #include <string>
 
 #include "infer/types.hpp"
+#include "lift/head_direction.hpp"
 #include "lift/ik.hpp"
 #include "lift/keypoint_format.hpp"
 #include "lift/pose_recognizer.hpp"
@@ -115,10 +116,19 @@ void test_halpe_face_joints_are_ignored_by_ik() {
     bad_face.joints[0].y = 10.0f;
     bad_face.joints[1].x = -8.0f;
     const auto face_out = ik.update(bad_face);
-    check(std::abs(face_out.joints[0].y - 10.0f) < 1.0e-6f,
-          "IK must not constrain Halpe26 nose length");
-    check(std::abs(face_out.joints[1].x + 8.0f) < 1.0e-6f,
-          "IK must not constrain Halpe26 eye length");
+    check(face_out.joints[0].valid,
+          "IK output must retain the direction-only nose endpoint");
+    const double ndx = static_cast<double>(face_out.joints[0].x)
+                     - face_out.joints[17].x;
+    const double ndy = static_cast<double>(face_out.joints[0].y)
+                     - face_out.joints[17].y;
+    const double ndz = static_cast<double>(face_out.joints[0].z)
+                     - face_out.joints[17].z;
+    const double nose_len = std::sqrt(ndx * ndx + ndy * ndy + ndz * ndz);
+    check(std::abs(nose_len - fitra::lift::kHeadDirectionLengthM) < 1.0e-4,
+          "IK output nose must be fixed-length direction only");
+    check(!face_out.joints[1].valid,
+          "IK must drop Halpe26 eye observations");
     check(ik.bone_drift_pct(face_out) < 0.01,
           "facial outliers must not inflate subject-calibration bone drift");
 

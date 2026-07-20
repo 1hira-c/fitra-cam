@@ -37,7 +37,9 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
 ### 設計原則 / live な制約
 
 - **Halpe26 顔5点は3D body-lift対象外**: RTMPose / 2D JSONは26点のまま維持するが、
-  nose / eyes / ears (0–4) は三角測量・Kalman・IK・subject profileから除外する。
+  nose / eyes / ears (0–4) はreprojection品質・6D joint Kalman state・IK・subject profileから除外する。
+  noseだけはposition-only DLTした方向を頭軸へ直交射影し、`head_top`起点の0.15m固定長endpointとして
+  3成分EMAで平滑化して3D viewerへ戻す（`view_count/reproj=0`、valid count対象外）。eyes / earsはinvalid。
   `valid_joints` の最大は21で、subject calibrationの再投影中央値もbody 21点だけを集計する。
   HMD alignment用 `head_top(17)` とtorso用 `neck(18)` は維持する。
   → [design/pose-3d-face-joint-exclusion.md](../design/pose-3d-face-joint-exclusion.md)
@@ -108,16 +110,22 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
-### 2026-07-20 — Halpe26 顔5点を3D body-lift / subject calibrationから除外
+### 2026-07-20 — Halpe26 顔5点を3D品質から除外 + 固定長head-direction endpoint
 
-VR trackerに使わず、カメラ間誤差が大きいnose / eyes / ears (0–4) を三角測量、kinematic-tree
-Kalman、骨長IK、profile観測とdrift集計から除外した。RTMPoseと2D JSONの26点indexは維持し、
+VR trackerに使わず、カメラ間誤差が大きいeyes / ears (1–4) を三角測量から除外し、顔5点
+(0–4)をreprojection品質、kinematic-tree Kalman、骨長IK、profile観測とdrift集計から除外した。
+RTMPoseと2D JSONの26点indexは維持し、
 `head_top(17)` / `neck(18)` は連続HMD alignmentとtorso tracker用に残す。これにより
 `reproj_err_med_px` と `valid_joints` はbody 21点だけを評価し、顔外れによるsubject calibrationの
-品質悪化と不要なper-joint CPU処理を防ぐ。設計と回帰条件:
+品質悪化と不要なper-joint CPU処理を防ぐ。追補としてnoseだけはposition-only DLTからfront/back
+方向を取り、頭軸に直交する0.15m固定長endpointを`head_top`へ付加する。方向のみ3成分EMA（時定数
+0.10秒）で平滑化するが、reprojection、6D joint Kalman state、IK骨長、profile、valid countには
+入れない。設計と回帰条件:
 [design/pose-3d-face-joint-exclusion.md](../design/pose-3d-face-joint-exclusion.md)。
 保存済み300フレームsessionの再解析ではbody座標とmajor coverageを維持し、全体の再投影中央値は
 2.65774→2.54853px、valid中央値は26→21、quality statusはpassを維持した。
+M2再解析ではendpoint長0.149991871–0.150004748m、連続方向変化は平均3.363°・最大15.145°で、
+45°超とfront/back反転は0だった。
 
 ### 2026-07-20 — PR #54レビュー対応（速度精度・Z安全上限）
 
