@@ -236,10 +236,10 @@ infer::Skeleton3D SkeletonKalman::update(const infer::Skeleton3D& measurement,
     if (def.format == KeypointFormat::Halpe26) {
         auto direction = observe_halpe_head_direction(measurement);
         if (direction.valid) {
-            const double n = std::sqrt(
-                static_cast<double>(direction.x) * direction.x +
-                static_cast<double>(direction.y) * direction.y +
-                static_cast<double>(direction.z) * direction.z);
+            const double dx = direction.x;
+            const double dy = direction.y;
+            const double dz = direction.z;
+            const double n = std::sqrt(dx * dx + dy * dy + dz * dz);
             if (std::isfinite(n) && n >= 1.0e-5) {
                 const cv::Vec3d observed{direction.x / n,
                                          direction.y / n,
@@ -257,7 +257,7 @@ infer::Skeleton3D SkeletonKalman::update(const infer::Skeleton3D& measurement,
                     // An exact antipodal transition can cancel the EMA. Use
                     // the current observation only at that degenerate point;
                     // ordinary one-frame flips retain the prior direction.
-                    if (cv::norm(head_direction_ema_) < 1.0e-5) {
+                    if (head_direction_ema_.dot(head_direction_ema_) < 1.0e-10) {
                         head_direction_ema_ = observed;
                     }
                 }
