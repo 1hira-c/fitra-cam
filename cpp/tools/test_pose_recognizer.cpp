@@ -4,6 +4,7 @@
 #include <string>
 
 #include "infer/types.hpp"
+#include "lift/head_direction.hpp"
 #include "lift/ik.hpp"
 #include "lift/keypoint_format.hpp"
 #include "lift/pose_recognizer.hpp"
@@ -95,12 +96,58 @@ void test_drift_gate_decoupled_from_angles() {
           "rejection must be on the bone_drift axis, not an angle");
 }
 
+void test_halpe_face_joints_are_ignored_by_ik() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto measured = make_extended_t_pose();
+    set_joint(measured, 17, 0.0f, 0.0f, 1.72f);  // head_top, retained
+    set_joint(measured, 0, 0.0f, 0.10f, 1.62f);  // nose
+    set_joint(measured, 1, -0.03f, 0.10f, 1.65f);
+    set_joint(measured, 2, 0.03f, 0.10f, 1.65f);
+    set_joint(measured, 3, -0.07f, 0.06f, 1.64f);
+    set_joint(measured, 4, 0.07f, 0.06f, 1.64f);
+
+    fitra::lift::IkSolver::Options opts;
+    opts.bone_calib_frames = 1;
+    opts.iterations = 1;
+    fitra::lift::IkSolver ik{opts};
+    (void)ik.update(measured);  // observe and lock the body lengths
+
+    auto bad_face = measured;
+    bad_face.joints[0].y = 10.0f;
+    bad_face.joints[1].x = -8.0f;
+    const auto face_out = ik.update(bad_face);
+    check(face_out.joints[0].valid,
+          "IK output must retain the direction-only nose endpoint");
+    const double ndx = static_cast<double>(face_out.joints[0].x)
+                     - face_out.joints[17].x;
+    const double ndy = static_cast<double>(face_out.joints[0].y)
+                     - face_out.joints[17].y;
+    const double ndz = static_cast<double>(face_out.joints[0].z)
+                     - face_out.joints[17].z;
+    const double nose_len = std::sqrt(ndx * ndx + ndy * ndy + ndz * ndz);
+    check(std::abs(nose_len - fitra::lift::kHeadDirectionLengthM) < 1.0e-4,
+          "IK output nose must be fixed-length direction only");
+    check(!face_out.joints[1].valid,
+          "IK must drop Halpe26 eye observations");
+    check(ik.bone_drift_pct(face_out) < 0.01,
+          "facial outliers must not inflate subject-calibration bone drift");
+
+    auto bad_head_top = measured;
+    bad_head_top.joints[17].z = 2.50f;
+    const auto head_out = ik.update(bad_head_top);
+    const double dz = static_cast<double>(head_out.joints[17].z)
+                    - head_out.joints[18].z;
+    check(std::abs(std::abs(dz) - 0.27) < 1.0e-4,
+          "head_top-to-neck length must remain constrained");
+}
+
 }  // namespace
 
 int main() {
     try {
         test_extended_elbow_angles_are_measured_pre_ik();
         test_drift_gate_decoupled_from_angles();
+        test_halpe_face_joints_are_ignored_by_ik();
         std::printf("test_pose_recognizer: OK\n");
         return 0;
     } catch (const std::exception& e) {

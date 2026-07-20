@@ -461,6 +461,7 @@ struct ProfileAccumulator {
 
         const auto& def = fitra::lift::active_skeleton_def();
         for (std::size_t child = 0; child < def.parents.size(); ++child) {
+            if (!fitra::lift::participates_in_3d_lift(def.format, child)) continue;
             int parent = def.parents[child];
             if (parent < 0) continue;
             const auto& a = skel.joints[static_cast<std::size_t>(parent)];

@@ -9,7 +9,9 @@
 #include <opencv2/calib3d.hpp>
 
 #include "geom/frames.hpp"
+#include "lift/head_direction.hpp"
 #include "lift/keypoint_format.hpp"
+#include "lift/skeleton_def.hpp"
 
 namespace fitra::lift {
 
@@ -110,7 +112,8 @@ TriangulatedSkeleton Triangulator::triangulate(
     const std::vector<PerCameraObservation>& observations) const {
     TriangulatedSkeleton out;
     std::vector<double> valid_errors;
-    const std::size_t kp_count = active_kp_count();
+    const auto& def = active_skeleton_def();
+    const std::size_t kp_count = def.kp_count;
     out.skeleton.kp_count = static_cast<std::uint8_t>(kp_count);
 
     // Per-call scratch reused across keypoints/views to avoid per-keypoint and
@@ -123,6 +126,10 @@ TriangulatedSkeleton Triangulator::triangulate(
     static thread_local std::vector<cv::Point2f> undist_dst;
 
     for (std::size_t k = 0; k < kp_count; ++k) {
+        const bool body_joint = participates_in_3d_lift(def.format, k);
+        const bool head_direction_source =
+            def.format == KeypointFormat::Halpe26 && k == kHalpeNose;
+        if (!body_joint && !head_direction_source) continue;
         views.clear();
         for (const auto& obs : observations) {
             if (!obs.person || obs.cam_index < 0 ||
@@ -149,6 +156,11 @@ TriangulatedSkeleton Triangulator::triangulate(
             views.push_back(v);
         }
 
+        if (head_direction_source) {
+            (void)triangulate_position_only(views, out.skeleton.joints[k]);
+            continue;
+        }
+
         float err = 0.0f;
         int used = 0;
         if (triangulate_joint(views, out.skeleton.joints[k], err, used)) {
@@ -159,8 +171,34 @@ TriangulatedSkeleton Triangulator::triangulate(
         }
     }
 
+    if (def.format == KeypointFormat::Halpe26) {
+        synthesize_halpe_head_direction(out.skeleton, out.skeleton);
+    }
+
     out.median_reproj_px = median(valid_errors);
     return out;
+}
+
+bool Triangulator::triangulate_position_only(
+    const std::vector<JointView>& views,
+    infer::Joint3D& joint) const {
+    if (views.size() < 2) return false;
+
+    static thread_local std::vector<int> indices;
+    indices.resize(views.size());
+    std::iota(indices.begin(), indices.end(), 0);
+
+    cv::Point3d point;
+    if (!solve_dlt(views, indices, point)) return false;
+
+    double score_sum = 0.0;
+    for (const auto& view : views) score_sum += view.score;
+    joint.x = static_cast<float>(point.x);
+    joint.y = static_cast<float>(point.y);
+    joint.z = static_cast<float>(point.z);
+    joint.score = static_cast<float>(score_sum / views.size());
+    joint.valid = true;
+    return true;
 }
 
 bool Triangulator::triangulate_joint(const std::vector<JointView>& views,

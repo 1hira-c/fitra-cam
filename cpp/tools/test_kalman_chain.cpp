@@ -24,6 +24,7 @@
 #include <string>
 
 #include "infer/types.hpp"
+#include "lift/head_direction.hpp"
 #include "lift/kalman.hpp"
 #include "lift/keypoint_format.hpp"
 
@@ -224,6 +225,50 @@ void test_chain_child_skipped_when_parent_never_seen() {
           "chain.root.no-meas: root stays invalid when never observed");
 }
 
+// ---------- Test 6: face state is excluded, direction endpoint retained ----
+void test_halpe_face_joints_are_excluded() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    fitra::lift::SkeletonKalman kf;
+
+    auto skel = make_skel(0.0f, 0.0f, 0.9f);
+    set_joint(skel, 17, 0.0f, 0.0f, 1.72f);  // head_top, retained
+    set_joint(skel, 0, 0.0f, 0.10f, 1.62f);  // nose
+    set_joint(skel, 1, -0.03f, 0.10f, 1.65f);
+    set_joint(skel, 2, 0.03f, 0.10f, 1.65f);
+    set_joint(skel, 3, -0.07f, 0.06f, 1.64f);
+    set_joint(skel, 4, 0.07f, 0.06f, 1.64f);
+
+    auto out = kf.update(skel, 1.0 / 60.0);
+    check(out.joints[0].valid,
+          "nose must survive only as a synthetic direction endpoint");
+    const double dx = static_cast<double>(out.joints[0].x) - out.joints[17].x;
+    const double dy = static_cast<double>(out.joints[0].y) - out.joints[17].y;
+    const double dz = static_cast<double>(out.joints[0].z) - out.joints[17].z;
+    check_close(std::sqrt(dx * dx + dy * dy + dz * dz),
+                fitra::lift::kHeadDirectionLengthM,
+                "head direction fixed length", 1.0e-4);
+    for (std::size_t k = 1; k <= 4; ++k) {
+        check(!out.joints[k].valid,
+              "Halpe26 eye/ear Kalman state must stay invalid");
+    }
+    check(out.joints[17].valid,
+          "head_top Kalman state must remain available");
+    check(out.joints[18].valid,
+          "neck Kalman state must remain available");
+
+    // A single bad nose observation must not reverse the display ray. The
+    // direction-only EMA is deliberately much cheaper than reviving a 6D
+    // per-joint Kalman state for the nose.
+    auto flipped = skel;
+    set_joint(flipped, 0, 0.0f, -0.10f, 1.62f);
+    auto after_flip = kf.update(flipped, 1.0 / 60.0);
+    const double first_y = out.joints[0].y - out.joints[17].y;
+    const double flipped_y =
+        after_flip.joints[0].y - after_flip.joints[17].y;
+    check(first_y * flipped_y > 0.0,
+          "one-frame nose flip must not reverse smoothed head direction");
+}
+
 }  // namespace
 
 int main() {
@@ -238,6 +283,8 @@ int main() {
         std::printf("[ok] chain Kalman ages child while parent is unavailable\n");
         test_chain_child_skipped_when_parent_never_seen();
         std::printf("[ok] chain Kalman skips child whose parent never observed\n");
+        test_halpe_face_joints_are_excluded();
+        std::printf("[ok] chain Kalman retains direction-only nose endpoint\n");
         std::puts("test_kalman_chain ok");
         return 0;
     } catch (const std::exception& e) {

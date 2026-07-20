@@ -9,6 +9,7 @@
 #include <opencv2/calib3d.hpp>
 
 #include "lift/keypoint_format.hpp"
+#include "lift/head_direction.hpp"
 #include "lift/triangulator.hpp"
 
 namespace {
@@ -75,6 +76,7 @@ fitra::infer::Person project_person(const fitra::lift::CameraCalibration& cam,
 }
 
 void test_round_trip() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Coco17);
     auto calib = make_calibration({"cam0", "cam1"});
     fitra::lift::Triangulator triangulator{calib};
     triangulator.require_camera_ids({"cam0", "cam1"});
@@ -101,6 +103,65 @@ void test_round_trip() {
     }
 }
 
+void test_halpe_face_joints_are_excluded_from_3d() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    auto calib = make_calibration({"cam0", "cam1"});
+    fitra::lift::Triangulator triangulator{calib};
+
+    const auto points = make_points();
+    auto p0 = project_person(calib.cameras[0], points);
+    auto p1 = project_person(calib.cameras[1], points);
+
+    // Deliberately make the face disagree across cameras. These unreliable
+    // landmarks must not enter the 3D reprojection metric or body skeleton.
+    for (std::size_t k = 0; k <= 4; ++k) {
+        p1.kpts[k].x += 120.0f;
+        p1.kpts[k].y -= 80.0f;
+    }
+    std::vector<fitra::lift::PerCameraObservation> observations{
+        {0, &p0},
+        {1, &p1},
+    };
+
+    auto tri = triangulator.triangulate(observations);
+    check(tri.valid_joints == 21,
+          "Halpe26 3D lift should contain 21 non-facial joints");
+    check(tri.median_reproj_px < 1.0e-3,
+          "excluded face disagreement must not bias reprojection median");
+    const auto& nose = tri.skeleton.joints[0];
+    const auto& head_top = tri.skeleton.joints[17];
+    const auto& neck = tri.skeleton.joints[18];
+    check(nose.valid,
+          "nose direction source must produce a synthetic endpoint");
+    const double rx = static_cast<double>(nose.x) - head_top.x;
+    const double ry = static_cast<double>(nose.y) - head_top.y;
+    const double rz = static_cast<double>(nose.z) - head_top.z;
+    const double ray_len = std::sqrt(rx * rx + ry * ry + rz * rz);
+    check(std::abs(ray_len - fitra::lift::kHeadDirectionLengthM) < 1.0e-4,
+          "synthetic head direction must have fixed length");
+    const double ax = static_cast<double>(head_top.x) - neck.x;
+    const double ay = static_cast<double>(head_top.y) - neck.y;
+    const double az = static_cast<double>(head_top.z) - neck.z;
+    check(std::abs(rx * ax + ry * ay + rz * az) < 1.0e-5,
+          "synthetic head direction must be perpendicular to head axis");
+    check(tri.view_count[0] == 0 && tri.reproj_error_px[0] == 0.0f,
+          "synthetic nose must not publish reprojection diagnostics");
+    for (std::size_t k = 1; k <= 4; ++k) {
+        check(!tri.skeleton.joints[k].valid,
+              "Halpe26 eye/ear joint must remain invalid in 3D skeleton");
+        check(tri.view_count[k] == 0,
+              "Halpe26 eye/ear joint must not consume triangulation views");
+    }
+    for (std::size_t k = 5; k < points.size(); ++k) {
+        check(tri.skeleton.joints[k].valid,
+              "non-facial Halpe26 joint must still triangulate");
+    }
+    check(head_top.valid,
+          "head_top must stay available for HMD alignment");
+    check(neck.valid,
+          "neck must stay available for torso tracking");
+}
+
 void test_camera_id_validation() {
     auto calib = make_calibration({"left", "right"});
     fitra::lift::Triangulator triangulator{calib};
@@ -118,6 +179,7 @@ void test_camera_id_validation() {
 int main() {
     try {
         test_round_trip();
+        test_halpe_face_joints_are_excluded_from_3d();
         test_camera_id_validation();
         std::puts("test_triangulator ok");
         return 0;
