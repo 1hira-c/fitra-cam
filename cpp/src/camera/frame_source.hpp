@@ -20,7 +20,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -32,6 +31,7 @@
 #include <opencv2/core.hpp>
 
 #include "camera/jpeg_decoder.hpp"
+#include "camera/latest_slot.hpp"
 #include "camera/nvjpeg_decoder.hpp"
 #include "camera/v4l2_capture.hpp"
 #include "infer/rtmpose.hpp"
@@ -159,6 +159,12 @@ public:
 
     bool try_pop_latest_decoded(DecodedFrame& out);
 
+    // Join this source to an aggregate "any camera ready" signal. Configure
+    // before start(); the signal must outlive this FrameSource.
+    void set_ready_signal(FrameReadySignal* signal) {
+        decoded_slot_.set_aggregate_signal(signal);
+    }
+
     // Block until a new decoded frame is available (without consuming it),
     // `consumer_stop` is set, or `timeout` elapses. Returns true if a fresh
     // frame is waiting. The caller then consumes it via try_pop_latest_decoded
@@ -228,10 +234,7 @@ private:
     bool ae_gain_avail_   = true;
     bool ae_exp_avail_    = true;
 
-    mutable std::mutex          slot_mu_;
-    std::condition_variable     slot_cv_;
-    std::optional<DecodedFrame> latest_;
-    std::uint64_t               last_returned_seq_ = 0;
+    LatestSlot<DecodedFrame> decoded_slot_;
 };
 
 }  // namespace fitra::camera

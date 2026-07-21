@@ -63,7 +63,9 @@ USB cam 2 ┘                                 │
 > **2026-05-29 更新 (E2E レイテンシ作業)**: 上図の capture / SPSC は実装後に一部進化している。
 > (1) ピクセル形式は MJPEG 固定ではなく `--pixel-format {mjpeg,yuyv,nvjpeg}` で切替可 (YUYV は decode を
 > `cv::cvtColor` に分岐、nvjpeg は Jetson HW NVJPEG)。(2) per-cam SPSC slot (size 1, drop-old は不変) の
-> ハンドオフは 2ms poll sleep から condition_variable 通知 (単一カメラ) に変更。(3) ステージ別レイテンシ
+> ハンドオフは 2ms poll sleep から condition_variable 通知に変更 (2026-07-21 に多カメラも共有世代
+> CVへ統一)。`DecodedFrame` は deep copyせずownership exchangeし、producer/consumer間でCHW/BGR
+> storageを循環再利用する。(3) ステージ別レイテンシ
 > 計測 + VR `e2e_capture_to_send_ms` を追加。(4) TrackerExtractor をイベント駆動にする opt-in
 > (`--vr-extract-event-driven`)。詳細・実機数値は
 > [`design/core-pipeline-e2e-latency.md`](design/core-pipeline-e2e-latency.md)。

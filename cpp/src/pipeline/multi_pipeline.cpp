@@ -66,6 +66,7 @@ MultiCameraDriver::MultiCameraDriver(
                 "MultiCameraDriver requires FrameSource with RTMPose prebaking enabled");
         }
     }
+    for (auto& source : sources_) source->set_ready_signal(&ready_signal_);
     if ((threed_.triangulator || threed_.bus) && (!threed_.triangulator || !threed_.bus)) {
         throw std::invalid_argument("3D pipeline requires both triangulator and Skeleton3DBus");
     }
@@ -115,9 +116,9 @@ void MultiCameraDriver::set_idle_gate(const std::atomic<bool>* idle_flag,
 void MultiCameraDriver::stop() {
     if (!worker_.joinable() && sources_.empty()) return;
     stop_.store(true);
-    // The loop may be parked in sources_[0]->wait_available; wake it so stop_
-    // is observed without waiting out the timeout. Order: flag -> wake -> join.
-    for (auto& s : sources_) if (s) s->wake();
+    // The loop may be parked on the aggregate ready signal; wake it so stop_ is
+    // observed without waiting out the timeout. Order: flag -> wake -> join.
+    ready_signal_.wake();
     if (worker_.joinable()) worker_.join();
     for (auto& s : sources_) s->stop();
 }
@@ -145,11 +146,28 @@ void MultiCameraDriver::loop() {
     std::vector<bool> warned_missing_prebake(sources_.size(), false);
     const std::size_t rtmpose_per_item =
         infer::RtmPose::blob_floats_per_item(rtmpose_.options());
+    camera::FrameReadySignal::Ticket ready_ticket = 0;
 
     while (!stop_.load()) {
+        // Block for any camera before scanning all slots. Publications that
+        // accumulated while RTMPose/3D was busy advance the shared generation,
+        // so the next wait returns immediately and active operation needs one
+        // scan per batch rather than an extra empty scan before every wait.
+        ready_ticket = ready_signal_.wait(
+            ready_ticket, stop_, std::chrono::milliseconds(100));
+        if (stop_.load()) break;
         pending.clear();
         reqs.clear();
         auto iter_start = std::chrono::steady_clock::now();
+
+        // One callback snapshot per batch. The old code locked/copy-constructed
+        // the same std::function once per ready camera (three mutex round-trips
+        // for a typical synchronized batch) even when the tap was empty.
+        FrameTapFn frame_tap_local;
+        {
+            std::lock_guard<std::mutex> g(tap_mu_);
+            frame_tap_local = frame_tap_;
+        }
 
         // Idle/standby gate (issue #37). While idle the heavy 3D update is
         // skipped and the loop throttles to idle_tick_hz; cameras + decode stay
@@ -166,21 +184,11 @@ void MultiCameraDriver::loop() {
         // Decode + YOLOX already ran in the per-camera worker thread.
         for (std::size_t i = 0; i < sources_.size(); ++i) {
             if (stop_.load()) break;
-            camera::DecodedFrame df;
-            if (!sources_[i]->try_pop_latest_decoded(df)) continue;
+            if (!sources_[i]->try_pop_latest_decoded(latest_per_cam_[i])) continue;
 
-            latest_per_cam_[i] = std::move(df);
-
-            // Frame tap. Read the callback into a local std::function under
-            // the lock, then invoke without the lock held -- the user callback
-            // may take its own mutex and we must not let it back into tap_mu_
-            // via a re-entrant set_frame_tap.
-            FrameTapFn tap_local;
-            {
-                std::lock_guard<std::mutex> g(tap_mu_);
-                tap_local = frame_tap_;
-            }
-            if (tap_local) {
+            // Invoke without the lock held -- the user callback may take its
+            // own mutex or re-enter set_frame_tap().
+            if (frame_tap_local) {
                 auto now_tap = std::chrono::steady_clock::now();
                 if (!loop_t0_set_) {
                     loop_t0_ = now_tap;
@@ -188,7 +196,7 @@ void MultiCameraDriver::loop() {
                 }
                 double ts_ms = std::chrono::duration<double, std::milli>(
                                   latest_per_cam_[i].captured_at - loop_t0_).count();
-                tap_local(i, latest_per_cam_[i].bgr, ts_ms);
+                frame_tap_local(i, latest_per_cam_[i].bgr, ts_ms);
             }
 
             PendingCam pc;
@@ -227,17 +235,8 @@ void MultiCameraDriver::loop() {
         }
 
         if (pending.empty()) {
-            // Single-camera: block until the sole source publishes a new
-            // decoded frame (event-driven; removes the fixed 2ms poll tax and
-            // its jitter). wait_available doesn't consume -- the next Pass-1
-            // iteration picks it up via try_pop_latest_decoded.
-            // Multi-camera keeps the short poll: a shared wakeup across N
-            // sources is left as a follow-up (see design doc).
-            if (sources_.size() == 1) {
-                sources_[0]->wait_available(stop_, std::chrono::milliseconds(100));
-            } else {
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            }
+            // A timeout/spurious wake can legitimately find no work. Return to
+            // the aggregate wait without a fixed polling sleep.
             continue;
         }
         auto t_after_poll = std::chrono::steady_clock::now();

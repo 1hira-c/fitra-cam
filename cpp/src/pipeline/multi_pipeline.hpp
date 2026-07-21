@@ -4,7 +4,7 @@
 //
 // Each camera has its own FrameSource (own V4L2 thread + own decode/YOLOX
 // thread with its own TRT execution context). This central driver only
-// polls the per-camera ready slots, batches the resulting (frame, bbox)
+// waits for any per-camera ready slot, batches the resulting (frame, bbox)
 // requests into one RTMPose call, and distributes the persons back to
 // per-camera snapshots.
 //
@@ -125,6 +125,7 @@ private:
     // so consumers drop the frozen pose; on resume reset the smoothers (M4).
     void handle_idle_transition(bool now_idle);
 
+    camera::FrameReadySignal ready_signal_;
     std::vector<std::unique_ptr<camera::FrameSource>> sources_;
     infer::RtmPose&      rtmpose_;
     SnapshotBus&         bus_;

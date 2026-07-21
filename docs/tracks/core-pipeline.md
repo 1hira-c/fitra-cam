@@ -36,6 +36,15 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-07-21 — 多カメラcentral loopのpoll撤廃 + frame handoff zero-copy化
+3台構成に残っていた2ms pollingを、全`FrameSource`共有の世代番号付きcondition_variableへ置換。
+central loopは通知ごとに全slotを1回だけ走査し、模擬3cam×60fpsでconsumer CPUを13–22%削減、
+通知→pop平均を約1.03ms→0.013–0.014msへ短縮。`DecodedFrame`のpopもdeep copyからownership
+exchangeへ変更し、producer/consumer間でRTMPose CHW/BGR storageを循環再利用。0.562MiB handoffは
+41.908us→0.028us、3cam×60fps×1人で約101MiB/sのcopyを除去。semaphore/`atomic::wait`はJetsonで
+CPUがCV版の約3–4倍へ増えたため不採用。単体testと再計測用microbenchを追加。
+→ [design/core-pipeline-e2e-latency.md](../design/core-pipeline-e2e-latency.md)
+
 ### 2026-06-21 — Setup モード コードレビュー (2巡目)
 PR #42 全体に `/code-review xhigh` を再実行し、確認できた指摘を修正。**security/routing が主**:
 静的配信の containment が bare-prefix で `<root>-secret` 兄弟ディレクトリへ脱出可能だったのを
