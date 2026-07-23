@@ -44,7 +44,17 @@ opt-in にして既存デプロイを壊さない。形式は `enum class PixFmt
 `wait_for(timeout, predicate)`。spin は CPU を焼き、sleep 短縮は jitter を残す。lost-wakeup は
 `wait_for` の述語再評価で回避 (notify をロック外に出さない)。shutdown は flag→wake→join 順で、
 コンシューマの stop flag を述語に含め timeout (100ms) を belt-and-suspenders に。
-**多カメラの共有 CV wakeup は未実装** (単一カメラスコープのため。multi-cam は従来の 2ms poll を維持)。
+初回実装は単一カメラのみで、多カメラは 2ms poll を維持していた。2026-07-21 の M5 で、全
+`FrameSource` が共有する世代番号付き CV を追加し、1台/複数台ともイベント駆動へ統一した。
+
+### 多カメラ wakeup: CV vs semaphore / atomic::wait
+採用 = **condition_variable + 世代番号**。consumer は前回観測した generation を持ったまま wait し、
+通知が RTMPose/3D 処理中に来ていれば次の wait は即時 return する。この順序を
+`wait → 全 slot を1回 scan` とすることで lost-wakeup を防ぎつつ空 scan を除去する。
+
+C++20 `counting_semaphore::try_acquire_for` と `atomic::wait/notify` も同一ベンチで比較したが、Jetson の
+libstdc++ では待機前 spin が高くつき、consumer CPU は CV 約14ms/10秒に対し semaphore 約65ms、
+atomic wait 約42msまで増えたため不採用。レイテンシだけなら僅かに短いが、CPU削減という目的に反する。
 
 ### VR ペーシング: レート引き上げ vs イベント駆動
 レート引き上げ (Option A) は `apply_quat_smoothing` の EMA alpha が dt 非依存の固定値のため、
@@ -92,11 +102,23 @@ timeout fallback tick で維持。VR 挙動は実機検証が要るため**デ�
 - config `three_d.vr_extract_event_driven` / `--vr-extract-event-driven` (default off)、
   `main.cpp` で `tex_opts.event_driven` に配線。
 
+### M5 多カメラ wakeup + decoded-frame zero-copy handoff
+- `FrameReadySignal`: 全 `FrameSource` の publish を世代番号付き共有 CV へ集約。central loop は
+  2ms polling を廃止し、通知を待ってから全 slot を1回だけ走査。stop は flag→lock付き wake→join。
+- `LatestSlot<DecodedFrame>`: size-1/drop-old を保ったまま、consumer の `out = *latest_` deep copy を
+  ownership exchange に変更。consumer の前フレーム storage を producer に返し、`chw_concat` /
+  `M_invs` / 必要時 BGR (`copyTo`) の capacity を定常再利用する。
+- frame tap のmutex/std::function snapshotをready cameraごとではなくbatchごと1回に集約する。
+- `frame_handoff_bench` と `frame_ready_bench` を追加し、カメラ/GPUなしでもhandoff CPUと通知遅延を
+  再計測可能にした。`test_latest_slot` はmove-only payload、latest-wins、storage recycle、
+  scan→wait race、stop wakeを回帰確認する。
+
 ## Milestone
 - **M1**: 計測基盤 (TS + breakdown 拡張 + VR e2e stat)。挙動変更なし。
 - **M2**: pixel_format/n_buffers config + YUYV 経路。default MJPEG。
 - **M3**: 2ms poll sleep → CV (単一カメラ)。
 - **M4**: イベント駆動 extractor (opt-in)。
+- **M5**: 多カメラ central loop を共有通知化し、decoded-frame handoff の copy/allocation を除去。
 
 ## 検証
 - ビルド: `cmake --build cpp/build -j` クリーン、ctest 9/9 pass、`--help` に新フラグ表示。
@@ -123,9 +145,15 @@ timeout fallback tick で維持。VR 挙動は実機検証が要るため**デ�
   - **M4 `e2e_capture_to_send_ms`**: `ik_locked` (=被写体が映って 3D が成立) が必要なため、
     人なしの本計測では未取得。被写体ありで `--enable-3d` + カメラ 2 台 + `--vr-extract-event-driven`
     の有無で要比較 (残課題)。
+  - **M5 handoff microbench (2026-07-21, Jetson)**: RTMPose-M 1人分 CHW 0.562MiB、20,000回で
+    deep-copy 41.908us/frame → exchange 0.028us/frame (**約1494x**)。3人分 1.688MiB は
+    140.765us/frame → 0.029us/frame (**約4838x**)。3cam×60fps×1人なら少なくとも約101MiB/sの
+    memcpyと約7.5ms CPU time/sを除去 (旧pathの毎フレームheap確保分はこの比較に含めず)。
+  - **M5 ready microbench (3cam×60fps模擬、1,800 frame、3回)**: 2ms poll → 共有CVで slot scan
+    19,992–19,995 → 5,403、consumer CPU 16.2–17.5ms → 13.6–14.2ms (**13–22%減**)、通知→pop
+    平均 1.02–1.04ms → 0.013–0.014ms、p95 1.95–1.97ms → 0.017ms。全frame処理数は1,800維持。
 
 ## 残課題
-- 多カメラ central loop の共有 CV wakeup (現状 multi-cam は 2ms poll 維持)。
 - GPU 前処理 / NVJPEG decode (migration-plan の Phase 6 残課題) — decode を CPU から剥がす。
 - イベント駆動 extractor の実機チューニング後、デフォルト化を検討。
 - pose-side TRT FP16 drift は本作業のスコープ外 (migration-plan 参照)。

@@ -119,6 +119,42 @@ set_target_properties(fitra_pose_bench PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
 )
 
+# Decoded-frame SPSC handoff microbenchmark (deep copy vs ownership exchange).
+add_executable(fitra_frame_handoff_bench
+    frame_handoff_bench.cpp
+)
+
+target_link_libraries(fitra_frame_handoff_bench PRIVATE
+    Threads::Threads
+)
+
+target_include_directories(fitra_frame_handoff_bench PRIVATE
+    "${CMAKE_SOURCE_DIR}/src"
+)
+
+set_target_properties(fitra_frame_handoff_bench PROPERTIES
+    OUTPUT_NAME "frame_handoff_bench"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+# Synthetic 3x60fps readiness benchmark (2ms polling vs aggregate CV wakeup).
+add_executable(fitra_frame_ready_bench
+    frame_ready_bench.cpp
+)
+
+target_link_libraries(fitra_frame_ready_bench PRIVATE
+    Threads::Threads
+)
+
+target_include_directories(fitra_frame_ready_bench PRIVATE
+    "${CMAKE_SOURCE_DIR}/src"
+)
+
+set_target_properties(fitra_frame_ready_bench PROPERTIES
+    OUTPUT_NAME "frame_ready_bench"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
 # Calibration YAML validator for measured/ChArUco camera parameters.
 add_executable(fitra_check_calibration
     check_calibration.cpp
@@ -700,6 +736,27 @@ set_target_properties(fitra_test_idle_evaluator PROPERTIES
 )
 
 add_test(NAME test_idle_evaluator COMMAND fitra_test_idle_evaluator)
+
+# Latest-frame handoff: move-only ownership transfer + aggregate multi-camera
+# wakeup generation (no lost edge between scan and wait).
+add_executable(fitra_test_latest_slot
+    test_latest_slot.cpp
+)
+
+target_link_libraries(fitra_test_latest_slot PRIVATE
+    Threads::Threads
+)
+
+target_include_directories(fitra_test_latest_slot PRIVATE
+    "${CMAKE_SOURCE_DIR}/src"
+)
+
+set_target_properties(fitra_test_latest_slot PROPERTIES
+    OUTPUT_NAME "test_latest_slot"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_latest_slot COMMAND fitra_test_latest_slot)
 
 # Flow daemon: module_argv / next_action / initial_mode decision helpers and
 # the run_daemon() spawn loop against a stub module script. Links fitra_app

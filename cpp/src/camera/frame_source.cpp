@@ -182,6 +182,11 @@ void FrameSource::decode_loop() {
     // (glibc mmap path), mirroring the capture-thread cap fixed in
     // v4l2_capture.cpp -- it would otherwise cap the decode thread at ~53fps.
     Frame raw;
+    // Exchanged with decoded_slot_ instead of reconstructed every iteration.
+    // Once the central consumer returns its previous frame, the large host CHW
+    // vector and optional BGR Mat are reused by this producer (no steady-state
+    // allocation/copy in the decoded-frame handoff).
+    DecodedFrame df;
     bool was_idle = false;   // idle/standby edge tracker (force re-detect on resume)
     while (!stop_.load()) {
         // Event-driven: block until the capture worker publishes a new frame
@@ -399,7 +404,12 @@ void FrameSource::decode_loop() {
             cached_bboxes_.push_back(fake);
         }
 
-        DecodedFrame df;
+        // `df` may contain the consumer's previous frame after publish_exchange.
+        // Clear logical contents while retaining reusable allocations.
+        df.bboxes.clear();
+        df.chw_concat.clear();
+        df.chw_dev.reset();
+        df.M_invs.clear();
         df.seq         = raw.seq;
         df.captured_at = raw.captured_at;
         df.t_decode    = t_decode;
@@ -471,14 +481,12 @@ void FrameSource::decode_loop() {
         // det->bake delta is 0 rather than a garbage epoch-based value.
         df.t_prebake = std::chrono::steady_clock::now();
         if ((!rtmpose_enabled_ || opts_.retain_bgr || calib_recording) && scratch_valid) {
-            df.bgr = scratch.clone();
+            scratch.copyTo(df.bgr);
+        } else {
+            df.bgr.release();
         }
 
-        {
-            std::lock_guard<std::mutex> lk{slot_mu_};
-            latest_ = std::move(df);
-            slot_cv_.notify_one();  // wake the central loop if parked in wait_available
-        }
+        decoded_slot_.publish_exchange(df);
         ++frame_idx_;
     }
     // NOTE: the HW decoder is deliberately NOT reset here. Tearing it down on
@@ -490,27 +498,16 @@ void FrameSource::decode_loop() {
 }
 
 bool FrameSource::try_pop_latest_decoded(DecodedFrame& out) {
-    std::lock_guard<std::mutex> lk{slot_mu_};
-    if (!latest_) return false;
-    if (latest_->seq == last_returned_seq_) return false;
-    last_returned_seq_ = latest_->seq;
-    out = *latest_;
-    return true;
+    return decoded_slot_.try_pop(out);
 }
 
 bool FrameSource::wait_available(std::atomic<bool>& consumer_stop,
                                  std::chrono::milliseconds timeout) {
-    std::unique_lock<std::mutex> lk{slot_mu_};
-    slot_cv_.wait_for(lk, timeout, [&] {
-        return consumer_stop.load(std::memory_order_relaxed)
-            || (latest_ && latest_->seq != last_returned_seq_);
-    });
-    return latest_ && latest_->seq != last_returned_seq_;
+    return decoded_slot_.wait_available(consumer_stop, timeout);
 }
 
 void FrameSource::wake() {
-    std::lock_guard<std::mutex> lk{slot_mu_};
-    slot_cv_.notify_all();
+    decoded_slot_.wake();
 }
 
 }  // namespace fitra::camera
