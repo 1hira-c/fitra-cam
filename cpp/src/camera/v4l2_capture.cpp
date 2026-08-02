@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "util/clock.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::camera {
@@ -240,6 +241,7 @@ void V4l2Capture::worker_loop() {
             return;
         }
         auto now = std::chrono::steady_clock::now();
+        const std::uint64_t captured_mono_ns = fitra::util::monotonic_ns();
         std::uint64_t seq = total_received_.fetch_add(1) + 1;
 
         // Driver-side drop detection: a jump in buf.sequence > 1 means the
@@ -286,6 +288,7 @@ void V4l2Capture::worker_loop() {
             std::swap(latest_->data, spare_data_);
             latest_->seq         = seq;
             latest_->captured_at = now;
+            latest_->captured_mono_ns = captured_mono_ns;
             slot_cv_.notify_one();  // wake a consumer parked in wait_pop_latest
         }
         update_recv_fps(now);

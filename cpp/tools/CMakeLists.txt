@@ -279,6 +279,23 @@ set_target_properties(fitra_test_snapshot_floor_stats PROPERTIES
 
 add_test(NAME test_snapshot_floor_stats COMMAND fitra_test_snapshot_floor_stats)
 
+# Fusion-facing raw tri.skeleton position-only gate: freshness, lifecycle
+# boundaries, coordinate epochs, and the no-quaternion JSON contract.
+add_executable(fitra_test_pose_gate
+    test_pose_gate.cpp
+)
+
+target_link_libraries(fitra_test_pose_gate PRIVATE
+    fitra_pipeline
+)
+
+set_target_properties(fitra_test_pose_gate PROPERTIES
+    OUTPUT_NAME "test_pose_gate"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_pose_gate COMMAND fitra_test_pose_gate)
+
 add_executable(fitra_test_pose_recognizer
     test_pose_recognizer.cpp
 )

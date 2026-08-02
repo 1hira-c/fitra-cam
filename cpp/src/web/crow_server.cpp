@@ -15,6 +15,7 @@
 #include <crow.h>
 
 #include "pipeline/extrinsic_calib_session.hpp"
+#include "pipeline/pose_gate.hpp"
 #include "tracking/tracker_bus.hpp"
 #include "vmt/vmt_publisher.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
@@ -295,6 +296,7 @@ struct CrowServer::Impl {
     crow::SimpleApp     app;
     WsClients           clients2d;
     WsClients           clients3d;
+    WsClients           clients_pose_gate;
     AutoAlignSession    auto_align;
 };
 
@@ -386,6 +388,10 @@ void CrowServer::set_tracker_bus(tracking::TrackerBus* tracker_bus) {
     tracker_bus_ = tracker_bus;
 }
 
+void CrowServer::set_pose_gate_bus(pipeline::PoseGateBus* pose_gate_bus) {
+    pose_gate_bus_ = pose_gate_bus;
+}
+
 void CrowServer::set_continuous_aligner(vmt::ContinuousAligner* aligner) {
     continuous_aligner_ = aligner;
 }
@@ -406,6 +412,7 @@ void CrowServer::start() {
     auto& app     = impl_->app;
     auto& clients2d = impl_->clients2d;
     auto& clients3d = impl_->clients3d;
+    auto& clients_pose_gate = impl_->clients_pose_gate;
 
     // WS /ws — register first so the catch-all HTTP route below does not
     // shadow upgrade requests (Crow's BaseRule::handle_upgrade returns
@@ -440,6 +447,28 @@ void CrowServer::start() {
                        uint16_t /*code*/) {
         std::lock_guard<std::mutex> lk{clients3d.mu};
         if (clients3d.conns.erase(&c) && idle_state_)
+            idle_state_->ws_client_count.fetch_sub(1, std::memory_order_relaxed);
+    })
+    .onmessage([](crow::websocket::connection& /*c*/,
+                  const std::string& /*data*/,
+                  bool /*is_binary*/) {
+        // ignore client messages (ping etc.)
+    });
+
+    // Fusion-facing raw position stream. It is intentionally a separate
+    // endpoint: `/ws3d` remains the post-Kalman/IK WebUI/VMT compatibility
+    // surface, while this stream contains only tri.skeleton observations.
+    CROW_WEBSOCKET_ROUTE(app, "/ws/pose-gate")
+    .onopen([this, &clients_pose_gate](crow::websocket::connection& c) {
+        std::lock_guard<std::mutex> lk{clients_pose_gate.mu};
+        clients_pose_gate.conns.insert(&c);
+        if (idle_state_) idle_state_->ws_client_count.fetch_add(1, std::memory_order_relaxed);
+    })
+    .onclose([this, &clients_pose_gate](crow::websocket::connection& c,
+                                        const std::string& /*reason*/,
+                                        uint16_t /*code*/) {
+        std::lock_guard<std::mutex> lk{clients_pose_gate.mu};
+        if (clients_pose_gate.conns.erase(&c) && idle_state_)
             idle_state_->ws_client_count.fetch_sub(1, std::memory_order_relaxed);
     })
     .onmessage([](crow::websocket::connection& /*c*/,
@@ -563,6 +592,23 @@ void CrowServer::start() {
             }
         }
         crow::response resp{std::move(body)};
+        resp.set_header("Content-Type", "application/json; charset=utf-8");
+        return resp;
+    });
+
+    CROW_ROUTE(app, "/api/pose-gate")
+    ([this]() {
+        if (!pose_gate_bus_) {
+            pipeline::PoseGateBus disabled_gate{"disabled"};
+            disabled_gate.publish_unavailable(
+                std::nullopt, pipeline::PoseGateSourceState::Unavailable,
+                "3d_disabled");
+            crow::response resp{disabled_gate.make_json()};
+            resp.code = 409;
+            resp.set_header("Content-Type", "application/json; charset=utf-8");
+            return resp;
+        }
+        crow::response resp{pose_gate_bus_->make_json()};
         resp.set_header("Content-Type", "application/json; charset=utf-8");
         return resp;
     });
@@ -1107,6 +1153,7 @@ void CrowServer::publisher_loop() {
     using clock = std::chrono::steady_clock;
     auto period = std::chrono::duration<double>(1.0 / std::max(opts_.publish_hz, 1.0));
     auto next = clock::now();
+    std::uint64_t pose_gate_sent_seq = 0;
     while (!stop_.load()) {
         next += std::chrono::duration_cast<clock::duration>(period);
         std::this_thread::sleep_until(next);
@@ -1155,6 +1202,10 @@ void CrowServer::publisher_loop() {
         }
         auto msg3d = bus3d_ ? bus3d_->make_bundle_json(extra3d)
                             : pipeline::make_disabled_3d_json();
+        std::string pose_gate_msg;
+        const bool have_new_pose_gate =
+            pose_gate_bus_ && pose_gate_bus_->make_json_if_new(
+                pose_gate_sent_seq, pose_gate_msg);
         {
             std::lock_guard<std::mutex> lk{impl_->clients2d.mu};
             for (auto* c : impl_->clients2d.conns) {
@@ -1170,6 +1221,16 @@ void CrowServer::publisher_loop() {
             for (auto* c : impl_->clients3d.conns) {
                 try {
                     c->send_text(msg3d);
+                } catch (...) {
+                    // best-effort; client will be reaped on close
+                }
+            }
+        }
+        if (have_new_pose_gate) {
+            std::lock_guard<std::mutex> lk{impl_->clients_pose_gate.mu};
+            for (auto* c : impl_->clients_pose_gate.conns) {
+                try {
+                    c->send_text(pose_gate_msg);
                 } catch (...) {
                     // best-effort; client will be reaped on close
                 }

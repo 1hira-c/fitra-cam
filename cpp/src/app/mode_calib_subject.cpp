@@ -174,6 +174,7 @@ int run_mode_calib_subject(const config::MainOptions& opts_in, FlowControl& flow
               " --calib " + config::effective_extrinsics_path(opts)
               + " --subject-id " + opts.subject_id + " ...");
         server->set_tracker_bus(threed.tracker_bus.get());
+        if (threed.pose_gate_bus) server->set_pose_gate_bus(threed.pose_gate_bus.get());
         server->start();
     }
 

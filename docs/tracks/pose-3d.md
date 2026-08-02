@@ -36,6 +36,14 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
 
 ### 設計原則 / live な制約
 
+- **fusion向け観測は tracker 経路から分離**: `fitra_pose_gate_v1` は
+  `triangulator->triangulate()` の直後に raw `tri.skeleton` から position-only で生成し、
+  `/ws3d` の Kalman / IK / floor-contact / quaternion 出力を入力にしない。8関節を固定名で
+  出し、関節単位の `Fresh | Unavailable`、品質値、Jetson `CLOCK_MONOTONIC` の
+  `content_mono_ns` を公開する。消失・同期失敗・再接続・人物切替・epoch変更で hold を
+  継続させず、専用の `WS /ws/pose-gate` と `GET /api/pose-gate` を使う。M0 は Halpe26
+  の単一人物だけを対象にし、配列 index を subject identity に変換しない。
+  → [design/pose-3d-fitra-pose-gate-v1.md](../design/pose-3d-fitra-pose-gate-v1.md)
 - **Halpe26 顔5点は3D body-lift対象外**: RTMPose / 2D JSONは26点のまま維持するが、
   nose / eyes / ears (0–4) はreprojection品質・6D joint Kalman state・IK・subject profileから除外する。
   noseだけはposition-only DLTした方向を頭軸へ直交射影し、`head_top`起点の0.15m固定長endpointとして
@@ -109,6 +117,18 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-08-02 — `fitra_pose_gate_v1` raw position-only 出力
+
+fitra-fusion の M0 入力契約として、`tri.skeleton` を Kalman / IK / floor-contact より前に
+読み取る独立 `PoseGateBus` と `WS /ws/pose-gate`、`GET /api/pose-gate` を追加した。
+`stream_id` / opaque `subject_track_id` / `coordinate_epoch` / `content_mono_ns`、8関節の
+availability と品質値、固定 provenance を公開し、欠損値の hold・tracker quaternion・wall-clock
+content time を経路から排除した。読み込んだ calibration artifact の fingerprint を
+`coordinate_epoch` に使い、消失・再接続・人物切替・epoch変更の lifecycle 境界を専用テストと
+JSONL fixture に固定した。実機 I/Ski の8関節 Fresh とサンプル保存は未実施で、残りの検収項目である。
+設計: [design/pose-3d-fitra-pose-gate-v1.md](../design/pose-3d-fitra-pose-gate-v1.md)、
+fixture: [samples/fitra_pose_gate_v1](../samples/fitra_pose_gate_v1)。
 
 ### 2026-07-20 — Halpe26 顔5点を3D品質から除外 + 固定長head-direction endpoint
 

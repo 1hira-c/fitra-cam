@@ -9,6 +9,7 @@
 #include "web/crow_server.hpp"
 #include "config/main_config.hpp"
 #include "pipeline/extrinsic_calib_session.hpp"
+#include "pipeline/pose_gate.hpp"
 #include "pipeline/snapshot.hpp"
 #include "lift/calib_io.hpp"
 #include "lift/extrinsic_solver.hpp"
@@ -133,6 +134,10 @@ int main() {
     session.set_on_solved([&solved_calls]() { ++solved_calls; });
 
     fitra::pipeline::SnapshotBus bus{1};
+    fitra::pipeline::PoseGateBus pose_gate{"crow-route"};
+    pose_gate.publish_unavailable(
+        123'000'000, fitra::pipeline::PoseGateSourceState::Unavailable,
+        "test_boundary");
     fitra::vmt::HmdPoseBus hmd_bus;
     fitra::vmt::ControllerPoseBus controller_bus;
 
@@ -178,6 +183,7 @@ int main() {
     // CrowServer gone. Across processes (the flow daemon's module handover)
     // the fd closes with the process — no issue there.
     auto server = std::make_unique<fitra::web::CrowServer>(bus, nullptr, opts);
+    server->set_pose_gate_bus(&pose_gate);
     server->set_extrinsic_calib_session(&session);
     server->set_extrinsic_calib_next_step(
         "restart: ./main --calibrate --enable-3d --calib /tmp/fitra_excal_route_test.yaml ...");
@@ -234,6 +240,19 @@ int main() {
         CHECK(body.find("\"mode\":\"calib-extrinsic\"") != std::string::npos);
         CHECK(body.find("\"managed\":false") != std::string::npos);
         CHECK(body.find("\"enable_3d\":false") != std::string::npos);
+
+        // Fusion-facing endpoint is a separate raw position-only contract.
+        CHECK(http("GET", "/api/pose-gate", status, body));
+        CHECK(status == 200);
+        CHECK(body.find("\"protocol_version\":\"fitra_pose_gate_v1\"") !=
+              std::string::npos);
+        CHECK(body.find("\"stream_id\":\"crow-route\"") !=
+              std::string::npos);
+        CHECK(body.find("\"content_mono_ns\":123000000") !=
+              std::string::npos);
+        CHECK(body.find("\"joints\":{") != std::string::npos);
+        CHECK(body.find("\"hips\":{") != std::string::npos);
+        CHECK(body.find("quat") == std::string::npos);
 
         // /api/flow/switch only exists on daemon-managed modules. Standalone
         // runs never attach the handler, so the POST falls through to the

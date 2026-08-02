@@ -74,6 +74,7 @@ struct DecodedFrame {
     cv::Mat                              bgr;
     std::uint64_t                        seq{0};
     std::chrono::steady_clock::time_point captured_at{};  // t_capture (V4L2 DQBUF)
+    std::uint64_t                        captured_mono_ns{0};
     // Per-stage latency timestamps (steady_clock), set on the per-camera
     // worker as each stage completes. Skipped stages are filled with the
     // previous stage's value so deltas stay 0 (never default/epoch, which

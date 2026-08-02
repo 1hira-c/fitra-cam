@@ -275,6 +275,7 @@ void MultiCameraDriver::loop() {
             snap.h   = sources_[pc.idx]->options().height;
             snap.seq = df.seq;
             snap.captured_at = df.captured_at;
+            snap.captured_mono_ns = df.captured_mono_ns;
             auto lag = std::chrono::duration_cast<std::chrono::milliseconds>(
                           now - df.captured_at);
             snap.captured_wall = wall_now - lag;
@@ -381,10 +382,14 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
                                         std::chrono::system_clock::time_point wall_now) {
     std::shared_ptr<lift::Triangulator> triangulator;
     Skeleton3DBus* bus = nullptr;
+    PoseGateBus* pose_gate = nullptr;
+    bool pose_gate_single_subject = true;
     {
         std::lock_guard<std::mutex> g(threed_mu_);
         triangulator = threed_.triangulator;
         bus = threed_.bus;
+        pose_gate = threed_.pose_gate;
+        pose_gate_single_subject = threed_.pose_gate_single_subject;
     }
     if (!triangulator || !bus) return;
     if (latest_snapshots_.size() < 2) return;
@@ -411,6 +416,8 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
 
     std::chrono::steady_clock::time_point min_ts{};
     std::chrono::steady_clock::time_point max_ts{};
+    std::optional<std::uint64_t> content_mono_ns;
+    bool all_have_content_mono_ns = true;
     bool first = true;
     for (const auto& snap : latest_snapshots_) {
         if (snap.processed == 0) return;
@@ -421,7 +428,13 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
             min_ts = std::min(min_ts, snap.captured_at);
             max_ts = std::max(max_ts, snap.captured_at);
         }
+        if (snap.captured_mono_ns == 0) {
+            all_have_content_mono_ns = false;
+        } else if (!content_mono_ns || snap.captured_mono_ns < *content_mono_ns) {
+            content_mono_ns = snap.captured_mono_ns;
+        }
     }
+    if (!all_have_content_mono_ns) content_mono_ns.reset();
     bool has_new_input = false;
     for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
         if (latest_snapshots_[i].seq != last_3d_input_seqs_[i]) {
@@ -451,6 +464,11 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
                              last_floor_report_, false);
         miss.cameras = camera_poses;
         bus->update(miss);
+        if (pose_gate) {
+            pose_gate->publish_unavailable(content_mono_ns,
+                                           PoseGateSourceState::Unavailable,
+                                           "sync_miss");
+        }
         for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
             last_3d_input_seqs_[i] = latest_snapshots_[i].seq;
         }
@@ -468,6 +486,12 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     }
 
     auto tri = triangulator->triangulate(observations);
+    // Fusion-facing output is deliberately produced from tri.skeleton before
+    // any Kalman, IK, or floor-contact mutation below. It never reads the
+    // Skeleton3DBus snapshot or TrackerBus.
+    if (pose_gate) {
+        pose_gate->observe(tri, content_mono_ns, pose_gate_single_subject);
+    }
     infer::Skeleton3D skel = tri.skeleton;
     double dt_s = 1.0 / 30.0;
     if (has_last_3d_update_) {
@@ -572,9 +596,16 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         // last live pose instead of holding a frozen skeleton for the whole
         // idle period. 2D-only runs have no 3D bus → nothing to emit.
         Skeleton3DBus* bus = nullptr;
+        PoseGateBus* pose_gate = nullptr;
         {
             std::lock_guard<std::mutex> g(threed_mu_);
             bus = threed_.bus;
+            pose_gate = threed_.pose_gate;
+        }
+        if (pose_gate) {
+            pose_gate->publish_unavailable(std::nullopt,
+                                           PoseGateSourceState::Unavailable,
+                                           "idle");
         }
         if (!bus) return;
         Skeleton3DSnapshot snap;

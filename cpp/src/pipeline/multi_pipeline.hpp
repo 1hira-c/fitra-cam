@@ -27,6 +27,7 @@
 #include "lift/ik.hpp"
 #include "lift/kalman.hpp"
 #include "lift/triangulator.hpp"
+#include "pipeline/pose_gate.hpp"
 #include "pipeline/pose_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
 
@@ -37,6 +38,11 @@ public:
     struct ThreeDConfig {
         std::shared_ptr<lift::Triangulator> triangulator;
         Skeleton3DBus* bus = nullptr;
+        PoseGateBus* pose_gate = nullptr;
+        // M0 has no cross-camera multi-person association. Keep the gate
+        // explicitly single-subject rather than deriving identity from an
+        // array index when the general multi-person path is enabled.
+        bool pose_gate_single_subject = true;
         double sync_window_ms = 15.0;
         bool kalman_enabled = true;
         bool ik_enabled = true;

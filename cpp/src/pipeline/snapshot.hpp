@@ -26,6 +26,7 @@ struct CameraSnapshot {
     int                                    h  = 0;
     std::uint64_t                          seq = 0;
     std::chrono::steady_clock::time_point  captured_at{};
+    std::uint64_t                          captured_mono_ns = 0;
     std::chrono::system_clock::time_point  captured_wall{};  // wall-clock for ts_ms
     std::vector<infer::Person>             persons;
     std::vector<infer::Bbox>               bboxes;

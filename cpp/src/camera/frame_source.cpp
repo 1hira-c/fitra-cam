@@ -412,6 +412,7 @@ void FrameSource::decode_loop() {
         df.M_invs.clear();
         df.seq         = raw.seq;
         df.captured_at = raw.captured_at;
+        df.captured_mono_ns = raw.captured_mono_ns;
         df.t_decode    = t_decode;
         df.t_detect    = t_detect;
         // During calib recording (and idle/standby) we drop bboxes too — the

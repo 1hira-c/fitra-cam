@@ -115,6 +115,7 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
         if (outputs.vmt_pub)   server->set_vmt_publisher(outputs.vmt_pub.get());
         if (relay.beacon)      server->set_discovery_beacon(relay.beacon.get());
         if (threed.tracker_bus) server->set_tracker_bus(threed.tracker_bus.get());
+        if (threed.pose_gate_bus) server->set_pose_gate_bus(threed.pose_gate_bus.get());
         if (opts.hmd_listen_enabled) {
             server->set_hmd_pose_bus(relay.hmd_bus.get(), opts.hmd_stale_ms);
         }

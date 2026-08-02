@@ -40,6 +40,9 @@ struct Frame {
     std::vector<std::uint8_t> data;  // raw payload (JPEG bytes or packed YUYV)
     std::uint64_t seq{0};
     std::chrono::steady_clock::time_point captured_at{};
+    // Exact host observation timestamp from CLOCK_MONOTONIC at DQBUF return.
+    // This is the content time for fusion-facing samples; it is not wall-clock.
+    std::uint64_t captured_mono_ns{0};
 };
 
 struct V4l2Options {
