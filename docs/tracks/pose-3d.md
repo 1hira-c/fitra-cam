@@ -88,6 +88,12 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
   world 6D state、それ以外は parent-relative offset 6D state。出力は `world = parent_world + offset`
   の FK 再構成。hip 移動が child の world に自然に伝播する (per-joint 独立は廃止)。
   Process noise は root と offset で分離 (`q_pos` / `q_pos_offset`)。
+- **raw 3D source mode は実効 stage を明示する**: `--no-3d-postprocess` /
+  `three_d.no_3d_postprocess: true` は `/ws3d` を triangulator 直後の skeleton に切り替え、
+  Kalman / IK / floor-contact の状態を更新しない。個別 kill switch の設定値は保存したまま
+  umbrella flag が優先する。`stats.raw_3d_source` と `kalman_enabled` / `ik_enabled` /
+  `floor_stability_enabled` は実効値であり、`ik_locked` の既存の lock 意味は変えない。
+  → [design/pose-3d-raw-3d-source.md](../design/pose-3d-raw-3d-source.md)
 - **床接地安定化は公開直前の有界足部平行移動**: Halpe26 の左右 sole から接地を独立判定し、
   接地中だけ ankle + toe/heel を同じ XYZ だけ移動する。Kalman / IK / calibration tap へ
   フィードバックしない。孤立した床下 sole は invalid 化し、深い貫通も Z 8cm まで fail-safe 補正、
@@ -109,6 +115,16 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-08-07 — 外部 consumer 向け raw 3D source mode
+
+`--no-3d-postprocess` / `three_d.no_3d_postprocess: true` を追加し、opt-in 時は
+triangulation 後の `Skeleton3D` を Kalman / IK / floor-contact を通さず `/ws3d` へ公開する。
+個別 stage の設定値は normal mode 用に保持し、raw flag が実効判定だけを上書きする。
+`/ws3d.stats` と WebUI に raw / Kalman / IK / floor の実効状態を追加し、`ik_locked` の既存意味を
+維持した。config round-trip、stage gate、JSON serialization の回帰テストを追加。実機比較は
+同一入力の `dump_keypoints_3d --no-kalman --no-ik --no-floor-contact-stability` と行う。
+設計: [design/pose-3d-raw-3d-source.md](../design/pose-3d-raw-3d-source.md)。
 
 ### 2026-07-20 — Halpe26 顔5点を3D品質から除外 + 固定長head-direction endpoint
 

@@ -94,6 +94,13 @@ struct MainOptions {
     // negated flags; the runtime predicate stays positive (kalman_3d / ik_3d).
     bool   kalman_3d = true;
     bool   ik_3d     = true;
+    // External consumers that own their own temporal filtering / constraints
+    // can publish the triangulator result directly. This umbrella kill switch
+    // wins over the individual stage preferences at runtime, but deliberately
+    // leaves them intact so a config round-trip does not lose its normal-mode
+    // tuning. CLI/YAML: --no-3d-postprocess /
+    // three_d.no_3d_postprocess: true.
+    bool   no_3d_postprocess = false;
     // Output-stage Halpe26 foot stabilization. Contact is detected from the
     // sole points and one bounded translation is applied to ankle + sole, so
     // both the WebUI skeleton and the default ankle-based VR foot position use

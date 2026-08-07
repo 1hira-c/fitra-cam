@@ -97,6 +97,7 @@ std::unique_ptr<pipeline::MultiCameraDriver> make_driver(
     cfg.kalman_enabled      = opts.kalman_3d;
     cfg.ik_enabled          = opts.ik_3d;
     cfg.floor_contact_stability = opts.floor_contact_stability;
+    cfg.raw_3d_source      = opts.no_3d_postprocess;
     cfg.floor_contact       = config::floor_contact_options(opts);
     cfg.bone_calib_frames   = opts.bone_calib_frames;
     cfg.subject_height_m    = threed->subject_height_m;

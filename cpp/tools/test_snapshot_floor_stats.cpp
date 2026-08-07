@@ -28,6 +28,9 @@ int main() {
         snapshot.stats.floor_evidence_right = false;
         snapshot.stats.floor_correction_left_m = 0.0125;
         snapshot.stats.floor_correction_right_m = 0.025;
+        snapshot.stats.raw_3d_source = true;
+        snapshot.stats.kalman_enabled = false;
+        snapshot.stats.ik_enabled = false;
         bus.update(snapshot);
 
         const std::string json = bus.make_bundle_json();
@@ -40,6 +43,9 @@ int main() {
         require_field(json, "\"floor_evidence_right\":false");
         require_field(json, "\"floor_correction_left_m\":0.0125");
         require_field(json, "\"floor_correction_right_m\":0.025");
+        require_field(json, "\"raw_3d_source\":true");
+        require_field(json, "\"kalman_enabled\":false");
+        require_field(json, "\"ik_enabled\":false");
 
         std::puts("test_snapshot_floor_stats ok");
         return 0;

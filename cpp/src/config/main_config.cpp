@@ -135,6 +135,7 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
     static const std::set<std::string> allowed{
         "enable_3d", "calib", "kp_conf_thresh", "max_reproj_px",
         "sync_window_ms", "bone_calib_frames", "no_3d_kalman", "no_3d_ik",
+        "no_3d_postprocess",
         "floor_contact_stability", "floor_z_m",
         "floor_contact_enter_height_m", "floor_contact_exit_height_m",
         "floor_contact_enter_speed_mps", "floor_contact_exit_speed_mps",
@@ -163,6 +164,10 @@ void load_three_d(const YAML::Node& section, MainOptions& out) {
     }
     if (section["no_3d_ik"]) {
         out.ik_3d = !parse_scalar<bool>(section["no_3d_ik"], "three_d.no_3d_ik");
+    }
+    if (section["no_3d_postprocess"]) {
+        out.no_3d_postprocess = parse_scalar<bool>(
+            section["no_3d_postprocess"], "three_d.no_3d_postprocess");
     }
     if (section["floor_contact_stability"]) {
         out.floor_contact_stability = parse_scalar<bool>(
@@ -558,6 +563,9 @@ std::string emit_main_config(const MainOptions& o) {
     // Negated CLI-equivalent keys: emit the inverse of the positive predicate.
     if (o.kalman_3d != d.kalman_3d) e << YAML::Key << "no_3d_kalman" << YAML::Value << !o.kalman_3d;
     if (o.ik_3d     != d.ik_3d)     e << YAML::Key << "no_3d_ik"     << YAML::Value << !o.ik_3d;
+    if (o.no_3d_postprocess != d.no_3d_postprocess) {
+        e << YAML::Key << "no_3d_postprocess" << YAML::Value << o.no_3d_postprocess;
+    }
     if (o.floor_contact_stability != d.floor_contact_stability) {
         e << YAML::Key << "floor_contact_stability"
           << YAML::Value << o.floor_contact_stability;
@@ -850,6 +858,7 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--subject-profile")   { out.subject_profile = need(i, "--subject-profile"); }
         else if (a == "--no-3d-kalman")      { out.kalman_3d = false; }
         else if (a == "--no-3d-ik")          { out.ik_3d = false; }
+        else if (a == "--no-3d-postprocess") { out.no_3d_postprocess = true; }
         else if (a == "--floor-contact-stability")    { out.floor_contact_stability = true; }
         else if (a == "--no-floor-contact-stability") { out.floor_contact_stability = false; }
         else if (a == "--floor-z-m")                   { out.floor_z_m = std::stod(need(i, "--floor-z-m")); }

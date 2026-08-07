@@ -171,6 +171,9 @@ export interface Stats3D {
   processed?: number;
   sync_miss?: number;
   ik_locked?: boolean;
+  raw_3d_source?: boolean;
+  kalman_enabled?: boolean;
+  ik_enabled?: boolean;
   floor_stability_enabled?: boolean;
   floor_z_m?: number;
   floor_contact_fresh?: boolean;

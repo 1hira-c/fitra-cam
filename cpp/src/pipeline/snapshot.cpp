@@ -236,6 +236,12 @@ std::string Skeleton3DBus::make_bundle_json(const std::string& extra_fields_json
     out += ",\"processed\":"; out += std::to_string(static_cast<long long>(s.stats.processed));
     out += ",\"sync_miss\":"; out += std::to_string(static_cast<long long>(s.stats.sync_miss));
     out += ",\"ik_locked\":"; out += (s.stats.ik_locked ? "true" : "false");
+    out += ",\"raw_3d_source\":";
+    out += (s.stats.raw_3d_source ? "true" : "false");
+    out += ",\"kalman_enabled\":";
+    out += (s.stats.kalman_enabled ? "true" : "false");
+    out += ",\"ik_enabled\":";
+    out += (s.stats.ik_enabled ? "true" : "false");
     out += ",\"floor_stability_enabled\":";
     out += (s.stats.floor_stability_enabled ? "true" : "false");
     out += ",\"floor_z_m\":"; append_float(out, s.stats.floor_z_m, 4);

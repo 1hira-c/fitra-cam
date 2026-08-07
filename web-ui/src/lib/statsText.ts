@@ -140,6 +140,12 @@ export function build3dStatsText(
     return evidence === false ? "grace" : "plant";
   };
   const floorFreshness = s.floor_contact_fresh === false ? "stale " : "";
+  // Older C++ and Python fallback publishers do not have the additive
+  // effective-stage fields. Do not display missing telemetry as disabled.
+  const stageState = (enabled: boolean | undefined): string =>
+    enabled === undefined ? "-" : enabled ? "on" : "off";
+  const postprocessSource =
+    s.raw_3d_source === undefined ? "legacy" : s.raw_3d_source ? "raw" : "normal";
 
   const text =
     `tri_fps         ${(s.tri_fps ?? 0).toFixed(2)}\n` +
@@ -155,6 +161,7 @@ export function build3dStatsText(
     `processed      ${s.processed ?? 0}\n` +
     `sync_miss      ${s.sync_miss ?? 0}\n` +
     `ik_locked      ${s.ik_locked ? "true" : "false"}\n` +
+    `postprocess    ${postprocessSource} (kalman=${stageState(s.kalman_enabled)} ik=${stageState(s.ik_enabled)})\n` +
     `floor_contact  ${s.floor_stability_enabled
       ? `${floorFreshness}L=${floorSide(s.floor_contact_left, s.floor_evidence_left)} R=${floorSide(s.floor_contact_right, s.floor_evidence_right)}`
       : "off"}\n` +
