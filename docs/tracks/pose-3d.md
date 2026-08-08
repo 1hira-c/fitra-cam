@@ -91,8 +91,10 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
 - **raw 3D source mode は実効 stage を明示する**: `--no-3d-postprocess` /
   `three_d.no_3d_postprocess: true` は `/ws3d` を triangulator 直後の skeleton に切り替え、
   Kalman / IK / floor-contact の状態を更新しない。個別 kill switch の設定値は保存したまま
-  umbrella flag が優先する。`stats.raw_3d_source` と `kalman_enabled` / `ik_enabled` /
-  `floor_stability_enabled` は実効値であり、`ik_locked` の既存の lock 意味は変えない。
+  umbrella flag が優先する。適用は run mode のみで、subject calibration は共有 YAML の raw flag を
+  無効化して post-IK drift gate を保つ。`stats.raw_3d_source` と `kalman_enabled` / `ik_enabled` /
+  `floor_stability_enabled` は実効値であり、`ik_locked` の既存の lock 意味は変えない。VMT は通常 source
+  では `ik_locked`、raw source では `raw_3d_source` を readiness とする。
   → [design/pose-3d-raw-3d-source.md](../design/pose-3d-raw-3d-source.md)
 - **床接地安定化は公開直前の有界足部平行移動**: Halpe26 の左右 sole から接地を独立判定し、
   接地中だけ ankle + toe/heel を同じ XYZ だけ移動する。Kalman / IK / calibration tap へ
@@ -115,6 +117,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-08-08 — raw 3D source の VMT / subject calibration 境界を修正
+
+raw `/ws3d` は IK を呼ばないため、VMT publisher は `ik_locked` だけでなく
+`stats.raw_3d_source` を readiness として受け入れ、profile 未指定の opt-in raw run でも
+tracker bundle を送れるようにした。通常 mode の `ik_locked` gate は維持する。共有 YAML で
+`--calibrate` / daemon の CalibSubject を起動した場合は raw umbrella を無効化し、既存の
+post-IK drift gate で pose-hold 判定を行う。両方の境界を `test_vmt_protocol` と
+`test_main_config` に固定した。
 
 ### 2026-08-07 — 外部 consumer 向け raw 3D source mode
 

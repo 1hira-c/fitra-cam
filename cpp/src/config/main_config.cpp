@@ -985,6 +985,10 @@ RunMode run_mode(const MainOptions& opts) {
     return RunMode::Run;
 }
 
+bool raw_3d_source_enabled(const MainOptions& opts) {
+    return opts.no_3d_postprocess && run_mode(opts) == RunMode::Run;
+}
+
 std::string effective_extrinsics_path(const MainOptions& opts) {
     // Read resolves to the write target (= latest) when not explicitly set.
     return opts.calib.empty() ? opts.excal_out : opts.calib;

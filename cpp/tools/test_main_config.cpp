@@ -25,6 +25,7 @@ using fitra::config::MainOptions;
 using fitra::config::apply_cli_overrides;
 using fitra::config::floor_contact_options;
 using fitra::config::load_main_config;
+using fitra::config::raw_3d_source_enabled;
 using fitra::config::scan_early_args;
 using fitra::config::validate_options;
 
@@ -215,6 +216,13 @@ three_d:
           "no_3d_postprocess=true enables the raw source umbrella");
     check(opts.kalman_3d && opts.ik_3d && opts.floor_contact_stability,
           "raw source keeps individual normal-mode preferences intact");
+    check(raw_3d_source_enabled(opts),
+          "raw source is effective for the normal run mode");
+
+    MainOptions calib_subject = opts;
+    calib_subject.calibrate = true;
+    check(!raw_3d_source_enabled(calib_subject),
+          "raw source is inactive in subject calibration so its post-IK drift gate remains valid");
 
     MainOptions cli;
     std::vector<std::string> argv_buf{"--no-3d-postprocess"};

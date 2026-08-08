@@ -30,6 +30,10 @@ bool parse_degen_mode(const std::string& s, DegenMode& out) {
     return false;
 }
 
+bool vmt_skeleton_ready(const pipeline::Skeleton3DStats& stats) {
+    return stats.enabled && (stats.ik_locked || stats.raw_3d_source);
+}
+
 namespace {
 
 bool sendto_buf(int fd, const std::uint8_t* data, std::size_t n,
@@ -196,7 +200,7 @@ void VmtPublisher::send_loop() {
         refresh_discovery_destination_();
 
         auto skel_snap = skel_bus_.snapshot();
-        if (!skel_snap.stats.enabled || !skel_snap.stats.ik_locked) {
+        if (!vmt_skeleton_ready(skel_snap.stats)) {
             std::lock_guard<std::mutex> lk{stats_mu_};
             ++stats_.skipped_invalid_bundles;
             continue;

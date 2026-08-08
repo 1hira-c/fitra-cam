@@ -48,6 +48,10 @@ triangulate -> SkeletonKalman -> IkSolver -> FloorContactStabilizer -> Skeleton3
 emit/load round-trip は個別設定と umbrella flag の両方を保存する。raw mode を false に
 戻せば、保存していた個別設定が再びそのまま有効になる。
 
+適用範囲は `RunMode::Run` に限る。flow daemon の共有 YAML にこの設定があっても、
+`CalibSubject` child は umbrella flag を無効化する。subject calibration の pose-hold 判定は
+測定 skeleton と post-IK drift の組を前提にするためであり、個別 stage の既存設定値は変更しない。
+
 ### 実行経路と不変条件
 
 `MultiCameraDriver::ThreeDConfig::effective_stages()` を唯一の実効 stage 判定にする。
@@ -68,6 +72,11 @@ triangulation stage の契約として残る。
 subject profile は任意入力のままであり、profile が無くても raw `/ws3d` は配信する。
 `ik_locked` は従来どおり「solver/profile が lock されているか」を表す。raw mode によって
 値の意味を変えず、IK 適用の判定には使わない。
+
+VMT の通常 source は従来どおり `ik_locked` を readiness gate にする。一方 raw mode は
+IK を意図的に bypass するので、`stats.raw_3d_source=true` を VMT readiness とし、profile /
+IK lock が無くても tracker extractor の共有 source を送信できる。これは raw mode を opt-in
+した場合だけであり、VMT 側の tracker extraction / smoothing や通常 mode の品質 gate は変えない。
 
 ### 診断と互換性
 
@@ -98,12 +107,14 @@ tracker extractor も読むため、通常の VR 出力品質を期待する用�
 ## 検証
 
 - `ctest -N` で `test_main_config`、`test_raw_3d_source`、
-  `test_snapshot_floor_stats` を確認し、focused test と full `ctest` を実行する。
+  `test_snapshot_floor_stats`、`test_vmt_protocol` を確認し、focused test と full `ctest` を実行する。
 - `./cpp/build/main --help` に `--no-3d-postprocess` が出ることを確認する。
 - 実機では同一の calibration / input で raw `/ws3d.persons_3d` と
   `dump_keypoints_3d --no-kalman --no-ik --no-floor-contact-stability` を比較する。
   position / valid / score が許容差内で一致し、`stats` の実効 stage がすべて false であることを
-  確認する。raw mode で VMT を使う検証は別にし、通常 mode の VRChat 挙動を回帰させない。
+  確認する。raw + VMT は profile 未指定でも bundle が送信されることを別に確認し、通常 mode の
+  `ik_locked` gate と VRChat 挙動を回帰させない。subject calibration は同じ YAML でも raw flag が
+  無効化され、通常の pose-hold drift gate で開始できることを確認する。
 
 ## 残課題
 

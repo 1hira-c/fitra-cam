@@ -9,6 +9,7 @@
 #include <string>
 
 #include "vmt/vmt_protocol.hpp"
+#include "vmt/vmt_publisher.hpp"
 #include "tracking/tracker_extract.hpp"
 #include "geom/world_convention.hpp"
 
@@ -284,6 +285,37 @@ void test_pose_to_world_roundtrip() {
     }
 }
 
+void test_raw_source_vmt_readiness() {
+    using fitra::pipeline::Skeleton3DStats;
+    using fitra::vmt::vmt_skeleton_ready;
+
+    Skeleton3DStats stats;
+    if (vmt_skeleton_ready(stats)) {
+        throw std::runtime_error("disabled 3D source must not be VMT-ready");
+    }
+
+    stats.enabled = true;
+    if (vmt_skeleton_ready(stats)) {
+        throw std::runtime_error("unlocked postprocessed source must remain VMT-gated");
+    }
+
+    stats.ik_locked = true;
+    if (!vmt_skeleton_ready(stats)) {
+        throw std::runtime_error("locked postprocessed source must be VMT-ready");
+    }
+
+    stats.ik_locked = false;
+    stats.raw_3d_source = true;
+    if (!vmt_skeleton_ready(stats)) {
+        throw std::runtime_error("raw source must be VMT-ready without an IK lock");
+    }
+
+    stats.enabled = false;
+    if (vmt_skeleton_ready(stats)) {
+        throw std::runtime_error("disabled raw source must not be VMT-ready");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -300,6 +332,7 @@ int main() {
         test_alignment_yaw_position();
         test_alignment_yaw_quat_left_multiply();
         test_pose_to_world_roundtrip();
+        test_raw_source_vmt_readiness();
         std::puts("test_vmt_protocol ok");
         return 0;
     } catch (const std::exception& e) {
