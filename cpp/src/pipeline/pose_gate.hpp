@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -51,6 +52,17 @@ struct PoseGateJointValue {
     std::optional<double> reproj_error;
 };
 
+struct PoseGateDiagnostics {
+    std::uint64_t sync_miss_count = 0;
+    std::uint64_t matched_3d_frame_count = 0;
+    std::uint64_t unavailable_count = 0;
+    std::uint64_t reacquired_count = 0;
+    std::uint64_t sync_dt_sample_count = 0;
+    std::optional<double> sync_dt_min_ms;
+    std::optional<double> sync_dt_median_ms;
+    std::optional<double> sync_dt_max_ms;
+};
+
 struct PoseGateFrame {
     std::uint64_t sample_seq = 0;
     std::string protocol_version = kPoseGateProtocolVersion;
@@ -64,6 +76,7 @@ struct PoseGateFrame {
     std::string source_reason = "not_started";
     std::array<PoseGateJointValue,
                static_cast<std::size_t>(PoseGateJoint::Count)> joints{};
+    PoseGateDiagnostics diagnostics{};
 };
 
 // Owns the latest fusion-facing sample and the small amount of lifecycle state
@@ -80,14 +93,16 @@ public:
     // reachable from this method.
     PoseGateFrame observe(const lift::TriangulatedSkeleton& tri,
                           std::optional<std::uint64_t> content_mono_ns,
-                          bool single_subject = true);
+                          bool single_subject = true,
+                          std::optional<double> sync_dt_ms = std::nullopt);
 
     // Publish a boundary/transport sample with every joint unavailable. In
     // particular, this is used for sync misses, idle, and reacquisition gaps.
     PoseGateFrame publish_unavailable(
         std::optional<std::uint64_t> content_mono_ns,
         PoseGateSourceState state = PoseGateSourceState::Unavailable,
-        std::string reason = {});
+        std::string reason = {},
+        std::optional<double> sync_dt_ms = std::nullopt);
 
     // A coordinate change invalidates the current subject lifecycle. The next
     // observe() first publishes an EpochChanged/all-Unavailable boundary frame,
@@ -97,6 +112,7 @@ public:
     std::string stream_id() const;
 
     PoseGateFrame snapshot() const;
+    PoseGateDiagnostics diagnostics() const;
     std::string make_json() const;
 
     // Used by the WS publisher to avoid repeatedly sending one Fresh sample
@@ -112,7 +128,8 @@ private:
         std::optional<std::uint64_t> content_mono_ns,
         PoseGateSourceState state,
         const std::string& reason);
-    void commit_locked(PoseGateFrame frame);
+    void commit_locked(PoseGateFrame& frame);
+    void record_sync_dt_locked(std::optional<double> sync_dt_ms);
     std::string make_track_id_locked();
     bool looks_like_person_switch_locked(
         const PoseGateFrame& current,
@@ -133,6 +150,8 @@ private:
     std::optional<Point> previous_hips_;
     std::optional<double> previous_torso_length_m_;
     std::optional<std::uint64_t> previous_content_mono_ns_;
+    PoseGateDiagnostics diagnostics_;
+    std::deque<double> sync_dt_samples_;
 };
 
 }  // namespace fitra::pipeline

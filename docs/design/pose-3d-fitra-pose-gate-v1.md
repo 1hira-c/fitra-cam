@@ -33,6 +33,13 @@ M0 では既存の `/ws3d` 契約を変更せず、`triangulator->triangulate()`
     "floor_contact": false
   },
   "source_state": "Fresh",
+  "diagnostics": {
+    "sync_miss_count": 0,
+    "matched_3d_frame_count": 1,
+    "unavailable_count": 0,
+    "reacquired_count": 0,
+    "sync_dt_ms": {"sample_count": 1, "min": 4.2, "median": 4.2, "max": 4.2}
+  },
   "position_space": "fitra_world_z_up_m",
   "joints": {
     "hips": {
@@ -82,13 +89,29 @@ wall-clock を content time として使わない。送信の重複を防ぐた�
 `Reacquired`/`PersonSwitched` でも、そのフレームで実際に三角測量できた joint だけが
 `Fresh` になる。state 名が Fresh でないことを理由に観測値を hold 値へ変換してはならない。
 
+## カメラ同期と診断
+
+中央の3D入力にはカメラごとの深さ6の有界キューを置き、`sync_window_ms` 内で
+同期差分が最小になる組を選ぶ。したがって、カメラの位相差がフレーム周期をまたぐ場合も
+同じフレーム番号同士ではなく隣接フレームを組み合わせる。カメラ停止や継続的な不一致は
+100ms（30fpsの約3周期）待ってから初めて `Unavailable` 境界を1回発行し、その時点で
+キューを破棄する。復旧後の最初の同期組は PoseGate の `Reacquired` になる。
+短い同期待ちは前回の Fresh を再送せず、タイムアウト前に組めた場合はライフサイクルを
+切断しない。
+
+`diagnostics` は生画像・関節列・IDを保存せず、`sync_miss_count`（同期喪失境界）、
+`matched_3d_frame_count`、`unavailable_count`、`reacquired_count` と、直近256件の
+同期組および同期喪失境界に対する `sync_dt_ms` の最小・中央値・最大を公開する。`/stats3d.stats.pose_gate`
+にも同じ値を追加し、Jetson上で `/api/pose-gate` または `/ws/pose-gate` の JSONLだけで
+確認できる。
+
 ## 配信境界
 
 - `GET /api/pose-gate`: 最新の `fitra_pose_gate_v1` JSON。診断・curl用。3D が無効な場合も
   必須フィールドを揃えた全 `Unavailable` を HTTP 409 で返す。
 - `WS /ws/pose-gate`: 新しい `sample_seq` が生成されたときだけ JSON を送る。
-- `/ws3d` と `/stats3d` は既存 WebUI/VMT 契約のまま。pose gate は tracker quaternion
-  を含まず、既存 tracker bus からも生成しない。
+- `/ws3d` の既存フィールドは維持する。`/stats3d.stats.pose_gate` は診断値を加算的に
+  公開する。pose gate 自体は tracker quaternion を含まず、既存 tracker bus からも生成しない。
 - pose-gate WS の接続は idle の consumer count に含める。fusion だけを接続した状態で
   3D producer が standby に入らないようにする。
 
@@ -102,7 +125,9 @@ wall-clock を content time として使わない。送信の重複を防ぐた�
 
 ## 検証
 
-`test_pose_gate` で正常、関節欠損、消失→再取得、人物切替、epoch変更、JSON禁止事項を
-固定する。実機では Halpe26 + 2台以上の camera で `/ws/pose-gate` を JSONL 保存し、
+`test_sync_matcher` で10–25msの位相差、カメラ停止時の一回限りの境界、復旧を固定し、
+`test_pose_gate` で正常、関節欠損、消失→再取得、人物切替、epoch変更、JSON禁止事項と
+診断カウンタを固定する。実機では Halpe26 + 2台以上の camera で `/ws/pose-gate` を JSONL 保存し、
 I/Ski の8 joint が `Fresh` になること、再接続/再校正で ID/epoch と全Unavailable境界が
-記録されることを確認する。
+記録されることを確認する。併せて `diagnostics` の各カウンタと `sync_dt_ms` の分布を
+保存し、`sync_miss_count` と `reacquired_count` が短い位相差だけで増えないことを確認する。

@@ -140,6 +140,20 @@ export function build3dStatsText(
     return evidence === false ? "grace" : "plant";
   };
   const floorFreshness = s.floor_contact_fresh === false ? "stale " : "";
+  const poseGate = s.pose_gate;
+  const poseGateLine = poseGate
+    ? `\npose_gate      miss=${poseGate.sync_miss_count ?? 0} ` +
+      `matched=${poseGate.matched_3d_frame_count ?? 0} ` +
+      `unavail=${poseGate.unavailable_count ?? 0} ` +
+      `reacq=${poseGate.reacquired_count ?? 0}`
+    : "";
+  const syncDistribution = poseGate?.sync_dt_ms;
+  const syncDistributionLine = syncDistribution
+    ? `\nsync_dt_dist   min=${(syncDistribution.min ?? 0).toFixed(1)} ` +
+      `med=${(syncDistribution.median ?? 0).toFixed(1)} ` +
+      `max=${(syncDistribution.max ?? 0).toFixed(1)} ` +
+      `n=${syncDistribution.sample_count ?? 0}`
+    : "";
 
   const text =
     `tri_fps         ${(s.tri_fps ?? 0).toFixed(2)}\n` +
@@ -160,6 +174,8 @@ export function build3dStatsText(
       : "off"}\n` +
     `floor_corr_m   L=${(s.floor_correction_left_m ?? 0).toFixed(3)} R=${(s.floor_correction_right_m ?? 0).toFixed(3)}\n` +
     `bundle_seq     ${server3dSeq}` +
+    poseGateLine +
+    syncDistributionLine +
     vmtLine +
     discLine +
     hmdLine +

@@ -10,6 +10,12 @@ namespace fitra::pipeline {
 
 namespace {
 
+constexpr std::size_t kSyncQueueDepth = 6;
+// This is a lifecycle debounce, not a synchronization tolerance. At 30 fps it
+// allows roughly three missing cross-camera opportunities before invalidating a
+// track, while the configured sync_window_ms remains the quality gate.
+constexpr double kSyncLossTimeoutMs = 100.0;
+
 void populate_floor_stats(Skeleton3DStats& stats,
                           bool enabled,
                           double floor_z_m,
@@ -57,8 +63,7 @@ MultiCameraDriver::MultiCameraDriver(
       }()},
       floor_contact_{threed_.floor_contact},
       latest_per_cam_(sources_.size()),
-      latest_snapshots_(sources_.size()),
-      last_3d_input_seqs_(sources_.size(), 0),
+      sync_queue_(sources_.size(), kSyncQueueDepth),
       per_cam_(sources_.size()) {
     for (const auto& source : sources_) {
         if (!source || !source->prebakes_pose()) {
@@ -80,9 +85,6 @@ MultiCameraDriver::MultiCameraDriver(
             threed_.floor_contact.exit_height_m,
             threed_.floor_contact.exit_speed_mps,
             threed_.floor_contact.exit_grace_s);
-    }
-    for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
-        latest_snapshots_[i].id = static_cast<int>(i);
     }
 }
 
@@ -236,7 +238,13 @@ void MultiCameraDriver::loop() {
 
         if (pending.empty()) {
             // A timeout/spurious wake can legitimately find no work. Return to
-            // the aggregate wait without a fixed polling sleep.
+            // the aggregate wait without a fixed polling sleep. The 3D matcher
+            // is also given this timer tick so a fully stopped camera can cross
+            // its one-shot loss boundary even when no new frame arrives.
+            if (!idle) {
+                maybe_update_3d(std::chrono::steady_clock::now(),
+                                std::chrono::system_clock::now());
+            }
             continue;
         }
         auto t_after_poll = std::chrono::steady_clock::now();
@@ -297,7 +305,10 @@ void MultiCameraDriver::loop() {
             snap.pending         = recv > snap.processed ? recv - snap.processed : 0;
             snap.stage_ms        = cs.stats.last_stage_ms;
             bus_.update(snap);
-            latest_snapshots_[pc.idx] = std::move(snap);
+            if (threed_.triangulator && threed_.bus) {
+                last_sync_input_at_ = now;
+                sync_queue_.push(pc.idx, snap.captured_at, std::move(snap));
+            }
         }
         if (!idle) maybe_update_3d(now, wall_now);
         auto t_after_snap = std::chrono::steady_clock::now();
@@ -392,10 +403,15 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         pose_gate_single_subject = threed_.pose_gate_single_subject;
     }
     if (!triangulator || !bus) return;
-    if (latest_snapshots_.size() < 2) return;
+    if (sync_queue_.camera_count() < 2) return;
+
+    const auto sync_event = sync_queue_.poll(
+        now, threed_.sync_window_ms, kSyncLossTimeoutMs, last_sync_input_at_);
+    if (sync_event.kind == SynchronizedFrameEventKind::None) return;
 
     // Static camera placements (world frame) for the 3D viewer's frustums.
-    // Resent on every snapshot (incl. sync-miss) so the markers stay visible.
+    // Resent on every snapshot (including the one-shot sync-loss boundary) so
+    // the markers stay visible.
     std::vector<CameraPose3D> camera_poses;
     {
         const auto& poses = triangulator->camera_poses();
@@ -414,83 +430,75 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         }
     }
 
+    auto populate_common_stats = [&](Skeleton3DStats& stats) {
+        stats.enabled = true;
+        stats.subject_height_m = threed_.subject_height_m;
+        stats.profile_loaded = ik_.profile_loaded();
+        stats.subject_id = ik_.subject_id();
+        stats.profile_quality_status = ik_.profile_quality_status();
+        stats.processed = tri_processed_;
+        stats.sync_miss = tri_sync_miss_;
+        stats.ik_locked = ik_.locked();
+        if (pose_gate) stats.pose_gate = pose_gate->diagnostics();
+        populate_floor_stats(stats, threed_.floor_contact_stability,
+                             threed_.floor_contact.floor_z_m,
+                             last_floor_report_, false);
+    };
+
+    if (sync_event.kind == SynchronizedFrameEventKind::UnavailableBoundary) {
+        // Keep a short skew in the waiting state. Only this timeout crossing
+        // invalidates the downstream lifecycle, and it is emitted once until
+        // a fresh synchronized match is acquired.
+        ++tri_sync_miss_;
+        Skeleton3DSnapshot miss;
+        miss.ts = wall_now;
+        miss.stats.sync_dt_ms = sync_event.sync_dt_ms.value_or(0.0);
+        populate_common_stats(miss.stats);
+        miss.cameras = camera_poses;
+        if (pose_gate) {
+            pose_gate->publish_unavailable(std::nullopt,
+                                           PoseGateSourceState::Unavailable,
+                                           "sync_miss", sync_event.sync_dt_ms);
+            miss.stats.pose_gate = pose_gate->diagnostics();
+        }
+        bus->update(miss);
+        return;
+    }
+
+    if (sync_event.frames.size() != sync_queue_.camera_count()) return;
     std::chrono::steady_clock::time_point min_ts{};
-    std::chrono::steady_clock::time_point max_ts{};
     std::optional<std::uint64_t> content_mono_ns;
     bool all_have_content_mono_ns = true;
     bool first = true;
-    for (const auto& snap : latest_snapshots_) {
-        if (snap.processed == 0) return;
+    auto t0 = std::chrono::steady_clock::now();
+    std::vector<lift::PerCameraObservation> observations;
+    observations.reserve(sync_event.frames.size());
+    for (std::size_t i = 0; i < sync_event.frames.size(); ++i) {
+        const auto& snap = sync_event.frames[i];
         if (first) {
-            min_ts = max_ts = snap.captured_at;
+            min_ts = snap.captured_at;
             first = false;
         } else {
             min_ts = std::min(min_ts, snap.captured_at);
-            max_ts = std::max(max_ts, snap.captured_at);
         }
         if (snap.captured_mono_ns == 0) {
             all_have_content_mono_ns = false;
         } else if (!content_mono_ns || snap.captured_mono_ns < *content_mono_ns) {
             content_mono_ns = snap.captured_mono_ns;
         }
-    }
-    if (!all_have_content_mono_ns) content_mono_ns.reset();
-    bool has_new_input = false;
-    for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
-        if (latest_snapshots_[i].seq != last_3d_input_seqs_[i]) {
-            has_new_input = true;
-            break;
-        }
-    }
-    if (!has_new_input) return;
-
-    const double sync_dt_ms = std::chrono::duration<double, std::milli>(max_ts - min_ts).count();
-    const double sync_window = std::max(0.0, threed_.sync_window_ms);
-    if (sync_dt_ms > sync_window) {
-        ++tri_sync_miss_;
-        Skeleton3DSnapshot miss;
-        miss.ts = wall_now;
-        miss.stats.enabled = true;
-        miss.stats.sync_dt_ms = sync_dt_ms;
-        miss.stats.subject_height_m = threed_.subject_height_m;
-        miss.stats.profile_loaded = ik_.profile_loaded();
-        miss.stats.subject_id = ik_.subject_id();
-        miss.stats.profile_quality_status = ik_.profile_quality_status();
-        miss.stats.sync_miss = tri_sync_miss_;
-        miss.stats.processed = tri_processed_;
-        miss.stats.ik_locked = ik_.locked();
-        populate_floor_stats(miss.stats, threed_.floor_contact_stability,
-                             threed_.floor_contact.floor_z_m,
-                             last_floor_report_, false);
-        miss.cameras = camera_poses;
-        bus->update(miss);
-        if (pose_gate) {
-            pose_gate->publish_unavailable(content_mono_ns,
-                                           PoseGateSourceState::Unavailable,
-                                           "sync_miss");
-        }
-        for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
-            last_3d_input_seqs_[i] = latest_snapshots_[i].seq;
-        }
-        return;
-    }
-
-    auto t0 = std::chrono::steady_clock::now();
-    std::vector<lift::PerCameraObservation> observations;
-    observations.reserve(latest_snapshots_.size());
-    for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
-        const auto& snap = latest_snapshots_[i];
         if (snap.persons.empty()) continue;
         observations.push_back(lift::PerCameraObservation{
             static_cast<int>(i), &snap.persons[0]});
     }
+    if (!all_have_content_mono_ns) content_mono_ns.reset();
 
     auto tri = triangulator->triangulate(observations);
     // Fusion-facing output is deliberately produced from tri.skeleton before
     // any Kalman, IK, or floor-contact mutation below. It never reads the
     // Skeleton3DBus snapshot or TrackerBus.
     if (pose_gate) {
-        pose_gate->observe(tri, content_mono_ns, pose_gate_single_subject);
+        pose_gate->observe(tri, content_mono_ns, pose_gate_single_subject,
+                           sync_event.sync_dt_ms);
     }
     infer::Skeleton3D skel = tri.skeleton;
     double dt_s = 1.0 / 30.0;
@@ -569,7 +577,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     out.stats.tri_fps = tri_fps;
     out.stats.reproj_err_med_px = tri.median_reproj_px;
     out.stats.bone_len_drift_pct = drift;
-    out.stats.sync_dt_ms = sync_dt_ms;
+    out.stats.sync_dt_ms = sync_event.sync_dt_ms.value_or(0.0);
     out.stats.stage_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     out.stats.subject_height_m = threed_.subject_height_m;
     out.stats.profile_loaded = ik_.profile_loaded();
@@ -577,19 +585,19 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     out.stats.profile_quality_status = ik_.profile_quality_status();
     out.stats.processed = tri_processed_;
     out.stats.sync_miss = tri_sync_miss_;
+    if (pose_gate) out.stats.pose_gate = pose_gate->diagnostics();
     populate_floor_stats(out.stats, threed_.floor_contact_stability,
                          threed_.floor_contact.floor_z_m,
                          floor_report, true);
     out.cameras = std::move(camera_poses);
     bus->update(out);
-    for (std::size_t i = 0; i < latest_snapshots_.size(); ++i) {
-        last_3d_input_seqs_[i] = latest_snapshots_[i].seq;
-    }
     last_3d_update_ = now;
     has_last_3d_update_ = true;
 }
 
 void MultiCameraDriver::handle_idle_transition(bool now_idle) {
+    sync_queue_.clear();
+    last_sync_input_at_.reset();
     if (now_idle) {
         // Entering standby: push one "no fresh data" 3D snapshot (enabled, no
         // persons) so the tracker extractor + publishers + WS viewer drop the
@@ -622,6 +630,7 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         snap.stats.profile_quality_status = ik_.profile_quality_status();
         snap.stats.processed = tri_processed_;
         snap.stats.sync_miss = tri_sync_miss_;
+        if (pose_gate) snap.stats.pose_gate = pose_gate->diagnostics();
         populate_floor_stats(snap.stats, threed_.floor_contact_stability,
                              threed_.floor_contact.floor_z_m,
                              last_floor_report_, false);

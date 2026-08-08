@@ -42,7 +42,10 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
   出し、関節単位の `Fresh | Unavailable`、品質値、Jetson `CLOCK_MONOTONIC` の
   `content_mono_ns` を公開する。消失・同期失敗・再接続・人物切替・epoch変更で hold を
   継続させず、専用の `WS /ws/pose-gate` と `GET /api/pose-gate` を使う。M0 は Halpe26
-  の単一人物だけを対象にし、配列 index を subject identity に変換しない。
+  の単一人物だけを対象にし、配列 index を subject identity に変換しない。同期はカメラ別
+  有界キューの最近傍マッチングで行い、短い同期待ちを1回ごとの Unavailable に変換しない。
+  100msの継続不成立時だけ1境界を出し、`diagnostics` に同期ミス・復帰回数と
+  `sync_dt_ms` の直近分布を公開する。
   → [design/pose-3d-fitra-pose-gate-v1.md](../design/pose-3d-fitra-pose-gate-v1.md)
 - **Halpe26 顔5点は3D body-lift対象外**: RTMPose / 2D JSONは26点のまま維持するが、
   nose / eyes / ears (0–4) はreprojection品質・6D joint Kalman state・IK・subject profileから除外する。
@@ -117,6 +120,16 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-08-09 — PoseGate同期待ちと診断カウンタ
+
+カメラ別の深さ6キューから `sync_window_ms` 内の最近傍フレームを選ぶ同期マッチャを追加し、
+10–25msの位相差を隣接フレームの組み合わせで吸収するようにした。同期組が100ms継続して
+成立しない場合だけキューを破棄して `Unavailable` 境界を1回発行し、復旧後の最初の
+`Fresh` を `Reacquired` とする。PoseGate JSON と `/stats3d.stats.pose_gate` に
+`sync_miss_count`、`matched_3d_frame_count`、`unavailable_count`、`reacquired_count`、
+直近256件の `sync_dt_ms` min/median/max を追加し、合成マッチング／境界／診断テストを追加した。
+実機 I/Ski の Fresh 連続性と分布は未取得であり、Jetson上の JSONL 記録が残検証である。
 
 ### 2026-08-02 — `fitra_pose_gate_v1` raw position-only 出力
 

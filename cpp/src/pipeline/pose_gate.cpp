@@ -8,6 +8,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 #include "lift/skeleton_def.hpp"
 #include "util/clock.hpp"
@@ -125,6 +126,23 @@ std::string serialize(const PoseGateFrame& frame) {
     append_json_string(out, pose_gate_source_state_name(frame.source_state));
     out += ",\"source_reason\":";
     append_json_string(out, frame.source_reason);
+    out += ",\"diagnostics\":{\"sync_miss_count\":";
+    out += std::to_string(frame.diagnostics.sync_miss_count);
+    out += ",\"matched_3d_frame_count\":";
+    out += std::to_string(frame.diagnostics.matched_3d_frame_count);
+    out += ",\"unavailable_count\":";
+    out += std::to_string(frame.diagnostics.unavailable_count);
+    out += ",\"reacquired_count\":";
+    out += std::to_string(frame.diagnostics.reacquired_count);
+    out += ",\"sync_dt_ms\":{\"sample_count\":";
+    out += std::to_string(frame.diagnostics.sync_dt_sample_count);
+    out += ",\"min\":";
+    append_optional_number(out, frame.diagnostics.sync_dt_min_ms);
+    out += ",\"median\":";
+    append_optional_number(out, frame.diagnostics.sync_dt_median_ms);
+    out += ",\"max\":";
+    append_optional_number(out, frame.diagnostics.sync_dt_max_ms);
+    out += "}}";
     out += ",\"position_space\":";
     append_json_string(out, kPoseGatePositionSpace);
     out += ",\"joints\":{";
@@ -235,6 +253,7 @@ PoseGateFrame PoseGateBus::unavailable_locked(
     for (auto& joint : frame.joints) {
         joint = PoseGateJointValue{};
     }
+    ++diagnostics_.unavailable_count;
     track_active_ = false;
     track_id_.clear();
     previous_hips_.reset();
@@ -245,9 +264,32 @@ PoseGateFrame PoseGateBus::unavailable_locked(
     return frame;
 }
 
-void PoseGateBus::commit_locked(PoseGateFrame frame) {
+void PoseGateBus::commit_locked(PoseGateFrame& frame) {
     frame.sample_seq = ++sample_seq_;
-    snapshot_ = std::move(frame);
+    frame.diagnostics = diagnostics_;
+    snapshot_ = frame;
+}
+
+void PoseGateBus::record_sync_dt_locked(std::optional<double> sync_dt_ms) {
+    if (!sync_dt_ms || !std::isfinite(*sync_dt_ms) || *sync_dt_ms < 0.0) return;
+    constexpr std::size_t kSyncSampleWindow = 256;
+    sync_dt_samples_.push_back(*sync_dt_ms);
+    while (sync_dt_samples_.size() > kSyncSampleWindow) {
+        sync_dt_samples_.pop_front();
+    }
+
+    diagnostics_.sync_dt_sample_count = sync_dt_samples_.size();
+    std::vector<double> sorted(sync_dt_samples_.begin(), sync_dt_samples_.end());
+    std::sort(sorted.begin(), sorted.end());
+    diagnostics_.sync_dt_min_ms = sorted.front();
+    diagnostics_.sync_dt_max_ms = sorted.back();
+    const std::size_t middle = sorted.size() / 2;
+    if (sorted.size() % 2 == 0) {
+        diagnostics_.sync_dt_median_ms =
+            (sorted[middle - 1] + sorted[middle]) * 0.5;
+    } else {
+        diagnostics_.sync_dt_median_ms = sorted[middle];
+    }
 }
 
 bool PoseGateBus::looks_like_person_switch_locked(
@@ -279,8 +321,11 @@ bool PoseGateBus::looks_like_person_switch_locked(
 PoseGateFrame PoseGateBus::observe(
     const lift::TriangulatedSkeleton& tri,
     std::optional<std::uint64_t> content_mono_ns,
-    bool single_subject) {
+    bool single_subject,
+    std::optional<double> sync_dt_ms) {
     std::lock_guard<std::mutex> lock{mu_};
+    ++diagnostics_.matched_3d_frame_count;
+    record_sync_dt_locked(sync_dt_ms);
 
     if (epoch_boundary_pending_) {
         epoch_boundary_pending_ = false;
@@ -353,6 +398,7 @@ PoseGateFrame PoseGateBus::observe(
         if (state != PoseGateSourceState::PersonSwitched &&
             ever_observed_ && had_unavailable_) {
             state = PoseGateSourceState::Reacquired;
+            ++diagnostics_.reacquired_count;
         }
         ever_observed_ = true;
         had_unavailable_ = false;
@@ -377,8 +423,11 @@ PoseGateFrame PoseGateBus::observe(
 PoseGateFrame PoseGateBus::publish_unavailable(
     std::optional<std::uint64_t> content_mono_ns,
     PoseGateSourceState state,
-    std::string reason) {
+    std::string reason,
+    std::optional<double> sync_dt_ms) {
     std::lock_guard<std::mutex> lock{mu_};
+    if (reason == "sync_miss") ++diagnostics_.sync_miss_count;
+    record_sync_dt_locked(sync_dt_ms);
     return unavailable_locked(content_mono_ns, state, reason);
 }
 
@@ -408,6 +457,11 @@ std::string PoseGateBus::stream_id() const {
 PoseGateFrame PoseGateBus::snapshot() const {
     std::lock_guard<std::mutex> lock{mu_};
     return snapshot_;
+}
+
+PoseGateDiagnostics PoseGateBus::diagnostics() const {
+    std::lock_guard<std::mutex> lock{mu_};
+    return diagnostics_;
 }
 
 std::string PoseGateBus::make_json() const {

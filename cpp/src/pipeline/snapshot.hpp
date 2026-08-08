@@ -17,6 +17,7 @@
 #include <opencv2/core.hpp>
 
 #include "infer/types.hpp"
+#include "pipeline/pose_gate.hpp"
 
 namespace fitra::pipeline {
 
@@ -75,6 +76,9 @@ struct Skeleton3DStats {
     std::string profile_quality_status;
     std::uint64_t processed = 0;
     std::uint64_t sync_miss = 0;
+    // Additive diagnostics for the fusion-facing raw pose gate. The legacy
+    // fields above remain available to the existing /ws3d consumers.
+    PoseGateDiagnostics pose_gate;
     bool floor_stability_enabled = false;
     double floor_z_m = 0.0;
     // False on sync-miss/idle snapshots. Contact booleans retain the last

@@ -170,6 +170,7 @@ export interface Stats3D {
   quality_status?: string;
   processed?: number;
   sync_miss?: number;
+  pose_gate?: PoseGateDiagnostics;
   ik_locked?: boolean;
   floor_stability_enabled?: boolean;
   floor_z_m?: number;
@@ -180,6 +181,19 @@ export interface Stats3D {
   floor_evidence_right?: boolean;
   floor_correction_left_m?: number;
   floor_correction_right_m?: number;
+}
+
+export interface PoseGateDiagnostics {
+  sync_miss_count?: number;
+  matched_3d_frame_count?: number;
+  unavailable_count?: number;
+  reacquired_count?: number;
+  sync_dt_ms?: {
+    sample_count?: number;
+    min?: number | null;
+    median?: number | null;
+    max?: number | null;
+  };
 }
 
 export interface Bundle3D {

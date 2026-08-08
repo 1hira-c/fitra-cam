@@ -218,6 +218,38 @@ void test_unsupported_inputs_are_explicit() {
     check_all_unavailable(topology);
 }
 
+void test_sync_diagnostics_are_bounded_and_serialized() {
+    fitra::pipeline::PoseGateBus bus{"diagnostics-test"};
+    (void)bus.observe(make_tri(), 7'000'000'000, true, 8.0);
+    const auto boundary = bus.publish_unavailable(
+        std::nullopt, PoseGateSourceState::Unavailable, "sync_miss", 22.0);
+    check(boundary.diagnostics.sync_miss_count == 1,
+          "sync miss must increment the diagnostic boundary counter once");
+    check(boundary.diagnostics.unavailable_count == 1,
+          "sync miss must increment unavailable_count once");
+
+    const auto reacquired = bus.observe(make_tri(), 7'033'000'000, true, 7.0);
+    check(reacquired.diagnostics.matched_3d_frame_count == 2,
+          "diagnostics must count matched 3D frames, including recovery");
+    check(reacquired.diagnostics.reacquired_count == 1,
+          "the first frame after sync loss must count as Reacquired");
+    check(reacquired.diagnostics.sync_dt_sample_count == 3,
+          "sync distribution must include matched and boundary samples");
+    check(reacquired.diagnostics.sync_dt_min_ms == 7.0
+              && reacquired.diagnostics.sync_dt_median_ms == 8.0
+              && reacquired.diagnostics.sync_dt_max_ms == 22.0,
+          "sync min/median/max diagnostics are incorrect");
+
+    const auto json = bus.make_json();
+    for (const char* field : {
+             "\"diagnostics\"", "\"sync_miss_count\":1",
+             "\"matched_3d_frame_count\":2", "\"unavailable_count\":1",
+             "\"reacquired_count\":1", "\"sync_dt_ms\""}) {
+        check(json.find(field) != std::string::npos,
+              std::string{"missing pose-gate diagnostic JSON field: "} + field);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -228,6 +260,7 @@ int main() {
         test_person_switch_gets_new_track();
         test_epoch_change_has_boundary();
         test_unsupported_inputs_are_explicit();
+        test_sync_diagnostics_are_bounded_and_serialized();
         std::puts("test_pose_gate ok");
         return 0;
     } catch (const std::exception& e) {

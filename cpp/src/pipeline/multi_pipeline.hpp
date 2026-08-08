@@ -18,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -30,6 +31,7 @@
 #include "pipeline/pose_gate.hpp"
 #include "pipeline/pose_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
+#include "pipeline/sync_matcher.hpp"
 
 namespace fitra::pipeline {
 
@@ -153,8 +155,10 @@ private:
     // Latest decoded frame + bboxes per camera, kept alive across the
     // RTMPose batched call so we can hand cv::Mat pointers into reqs.
     std::vector<camera::DecodedFrame> latest_per_cam_;
-    std::vector<CameraSnapshot>        latest_snapshots_;
-    std::vector<std::uint64_t>         last_3d_input_seqs_;
+    // Short post-inference queues used only for nearest cross-camera matching.
+    // The camera capture/inference slots remain latest-frame-wins.
+    SynchronizedFrameQueue<CameraSnapshot> sync_queue_;
+    std::optional<std::chrono::steady_clock::time_point> last_sync_input_at_;
     std::vector<CamState>             per_cam_;
     std::deque<std::chrono::steady_clock::time_point> tri_recent_;
     std::chrono::steady_clock::time_point last_3d_update_{};
