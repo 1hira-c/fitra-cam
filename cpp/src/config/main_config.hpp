@@ -94,6 +94,14 @@ struct MainOptions {
     // negated flags; the runtime predicate stays positive (kalman_3d / ik_3d).
     bool   kalman_3d = true;
     bool   ik_3d     = true;
+    // Run-mode external consumers that own their own temporal filtering /
+    // constraints can publish the triangulator result directly. The positive
+    // runtime predicate follows kalman_3d / ik_3d; the external kill switch wins
+    // over individual stage preferences without changing them, so config
+    // round-trips preserve normal-mode tuning. Subject calibration ignores the
+    // umbrella and keeps its post-IK pose-hold drift contract. CLI/YAML negate
+    // this field: --no-3d-postprocess / three_d.no_3d_postprocess: true.
+    bool   postprocess_3d = true;
     // Output-stage Halpe26 foot stabilization. Contact is detected from the
     // sole points and one bounded translation is applied to ankle + sole, so
     // both the WebUI skeleton and the default ankle-based VR foot position use
@@ -341,6 +349,13 @@ enum class RunMode {
 };
 
 RunMode run_mode(const MainOptions& opts);
+
+// The external no_3d_postprocess switch is a run-mode output contract. A shared
+// daemon YAML may carry it into the subject-calibration child, but that mode
+// needs its existing post-IK drift path for pose-hold quality gating, so the
+// umbrella is inactive outside RunMode::Run. Individual stage options retain
+// their own semantics.
+bool raw_3d_source_enabled(const MainOptions& opts);
 
 // Calibration read-path resolution (docs/design/pose-3d-calib-latest-resolution.md).
 // Calibration files are GENERATED, so the run-side read path is not a required

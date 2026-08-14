@@ -279,6 +279,21 @@ set_target_properties(fitra_test_snapshot_floor_stats PROPERTIES
 
 add_test(NAME test_snapshot_floor_stats COMMAND fitra_test_snapshot_floor_stats)
 
+add_executable(fitra_test_raw_3d_source
+    test_raw_3d_source.cpp
+)
+
+target_link_libraries(fitra_test_raw_3d_source PRIVATE
+    fitra_pipeline
+)
+
+set_target_properties(fitra_test_raw_3d_source PROPERTIES
+    OUTPUT_NAME "test_raw_3d_source"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_raw_3d_source COMMAND fitra_test_raw_3d_source)
+
 add_executable(fitra_test_pose_recognizer
     test_pose_recognizer.cpp
 )

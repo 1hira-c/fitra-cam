@@ -25,6 +25,7 @@ using fitra::config::MainOptions;
 using fitra::config::apply_cli_overrides;
 using fitra::config::floor_contact_options;
 using fitra::config::load_main_config;
+using fitra::config::raw_3d_source_enabled;
 using fitra::config::scan_early_args;
 using fitra::config::validate_options;
 
@@ -199,6 +200,61 @@ three_d:
     load_main_config(p.string(), opts);
     check(opts.kalman_3d == false, "no_3d_kalman=true -> kalman_3d=false");
     check(opts.ik_3d     == false, "no_3d_ik=true     -> ik_3d=false");
+}
+
+void test_no_3d_postprocess_yaml_cli_and_round_trip() {
+    auto p = write_tmp("no_3d_postprocess.yaml", R"(schema: fitra_main_config_v1
+three_d:
+  enable_3d: true
+  no_3d_postprocess: true
+  no_3d_kalman: false
+  no_3d_ik: false
+  floor_contact_stability: true
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(!opts.postprocess_3d,
+          "no_3d_postprocess=true disables the positive runtime predicate");
+    check(opts.kalman_3d && opts.ik_3d && opts.floor_contact_stability,
+          "raw source keeps individual normal-mode preferences intact");
+    check(raw_3d_source_enabled(opts),
+          "raw source is effective for the normal run mode");
+
+    MainOptions calib_subject = opts;
+    calib_subject.calibrate = true;
+    check(!raw_3d_source_enabled(calib_subject),
+          "raw source is inactive in subject calibration so its post-IK drift gate remains valid");
+
+    MainOptions cli;
+    std::vector<std::string> argv_buf{"--no-3d-postprocess"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(cli, static_cast<int>(argv.size()), argv.data());
+    check(!cli.postprocess_3d,
+          "--no-3d-postprocess disables the positive runtime predicate");
+
+    auto rt = write_tmp("no_3d_postprocess_round_trip.yaml", "");
+    save_main_config(rt.string(), opts);
+    MainOptions back;
+    load_main_config(rt.string(), back);
+    check(!back.postprocess_3d,
+          "no_3d_postprocess round-trips through emitted YAML");
+    check(back.kalman_3d && back.ik_3d && back.floor_contact_stability,
+          "raw source round-trip preserves individual preferences");
+
+    MainOptions no_3d = opts;
+    no_3d.enable_3d = false;
+    no_3d.cam_paths[0] = "/dev/null";
+    no_3d.det_engine = "/tmp/d.engine";
+    no_3d.pose_engine = "/tmp/p.engine";
+    bool threw = false;
+    try {
+        validate_options(no_3d);
+    } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "--no-3d-postprocess requires --enable-3d",
+                       "raw source without 3D validation");
+    }
+    check(threw, "raw source must not be silently ignored in a 2D-only run");
 }
 
 void test_removed_slimevr_yaml_and_cli_fail() {
@@ -1355,6 +1411,7 @@ void test_emit_load_round_trip() {
     o.bone_calib_frames = 200;
     o.kalman_3d = false;   // -> no_3d_kalman: true
     o.ik_3d = false;       // -> no_3d_ik: true
+    o.postprocess_3d = false;
     o.floor_contact_stability = false;
     o.floor_z_m = 0.12;
     o.floor_contact_enter_height_m = 0.04;
@@ -1446,6 +1503,7 @@ void test_emit_load_round_trip() {
     eq_i(o.bone_calib_frames, r.bone_calib_frames, "bone_calib_frames");
     eq_b(o.kalman_3d, r.kalman_3d, "kalman_3d (negated key)");
     eq_b(o.ik_3d, r.ik_3d, "ik_3d (negated key)");
+    eq_b(o.postprocess_3d, r.postprocess_3d, "postprocess_3d (negated key)");
     eq_b(o.floor_contact_stability, r.floor_contact_stability,
          "floor_contact_stability");
     eq_f(o.floor_z_m, r.floor_z_m, "floor_z_m");
@@ -1669,6 +1727,8 @@ const TestCase kTests[] = {
     {"wrong_schema_fails",                     test_wrong_schema_fails},
     {"cli_overrides_yaml",                     test_cli_overrides_yaml},
     {"negated_three_d_keys_invert_bools",      test_negated_three_d_keys_invert_runtime_bools},
+    {"no_3d_postprocess_yaml_cli_and_round_trip",
+                                               test_no_3d_postprocess_yaml_cli_and_round_trip},
     {"removed_slimevr_yaml_and_cli_fail",      test_removed_slimevr_yaml_and_cli_fail},
     {"vmt_index_base_yaml_cli_and_validate",   test_vmt_index_base_yaml_cli_and_validate},
     {"vmt_preset_and_foot_pos_yaml_cli_and_validate",

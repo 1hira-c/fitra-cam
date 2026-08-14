@@ -77,6 +77,7 @@ three_d:
   bone_calib_frames: 150
   no_3d_kalman: false
   no_3d_ik: false
+  no_3d_postprocess: false
 
 subject:
   subjects_dir: calibrations/subjects
@@ -127,7 +128,7 @@ extrinsic_calib:
 - `schema` は必須で、値は `fitra_main_config_v1` に固定する。
 - 任意のパス項目で空文字列を指定した場合は、現行 CLI の既定値と同じく「未指定」として扱う。
 - 相対パスは現行 CLI 引数と同じく、config ファイルの場所ではなくプロセスの作業ディレクトリ基準で解決する。
-- 真偽値は既存の肯定 / 否定フラグに対応させる。たとえば `three_d.no_3d_ik: true` は `--no-3d-ik` と同じ効果を持つ。
+- 真偽値は既存の肯定 / 否定フラグに対応させる。たとえば `three_d.no_3d_ik: true` は `--no-3d-ik` と同じ効果を持つ。`three_d.no_3d_postprocess: true` は `--no-3d-postprocess` と同じで、**run mode だけ**で Kalman / IK / floor-contact を一括 bypass する。共有 YAML から起動した subject calibration ではこの umbrella を無効化し、既存の post-IK drift gate を保つ。
 
 ## 実装方針
 

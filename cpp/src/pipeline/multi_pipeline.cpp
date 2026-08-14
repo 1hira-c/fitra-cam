@@ -10,6 +10,14 @@ namespace fitra::pipeline {
 
 namespace {
 
+using EffectiveStages = MultiCameraDriver::ThreeDConfig::EffectiveStages;
+
+void populate_stage_stats(Skeleton3DStats& stats, const EffectiveStages& stages) {
+    stats.raw_3d_source = stages.raw_3d_source;
+    stats.kalman_enabled = stages.kalman_enabled;
+    stats.ik_enabled = stages.ik_enabled;
+}
+
 void populate_floor_stats(Skeleton3DStats& stats,
                           bool enabled,
                           double floor_z_m,
@@ -71,9 +79,13 @@ MultiCameraDriver::MultiCameraDriver(
         throw std::invalid_argument("3D pipeline requires both triangulator and Skeleton3DBus");
     }
     if (threed_.triangulator && threed_.bus) {
+        const auto stages = threed_.effective_stages();
         FITRA_LOG_INFO(
-            "3D floor-contact stability {} (floor_z={}m enter={}m/{}mps exit={}m/{}mps grace={}s)",
-            threed_.floor_contact_stability ? "ENABLED" : "disabled",
+            "3D source={} (Kalman={} IK={} floor={} floor_z={}m enter={}m/{}mps exit={}m/{}mps grace={}s)",
+            stages.raw_3d_source ? "raw" : "postprocessed",
+            stages.kalman_enabled ? "ENABLED" : "disabled",
+            stages.ik_enabled ? "ENABLED" : "disabled",
+            stages.floor_contact_stability ? "ENABLED" : "disabled",
             threed_.floor_contact.floor_z_m,
             threed_.floor_contact.enter_height_m,
             threed_.floor_contact.enter_speed_mps,
@@ -388,6 +400,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     }
     if (!triangulator || !bus) return;
     if (latest_snapshots_.size() < 2) return;
+    const auto stages = threed_.effective_stages();
 
     // Static camera placements (world frame) for the 3D viewer's frustums.
     // Resent on every snapshot (incl. sync-miss) so the markers stay visible.
@@ -446,7 +459,8 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         miss.stats.sync_miss = tri_sync_miss_;
         miss.stats.processed = tri_processed_;
         miss.stats.ik_locked = ik_.locked();
-        populate_floor_stats(miss.stats, threed_.floor_contact_stability,
+        populate_stage_stats(miss.stats, stages);
+        populate_floor_stats(miss.stats, stages.floor_contact_stability,
                              threed_.floor_contact.floor_z_m,
                              last_floor_report_, false);
         miss.cameras = camera_poses;
@@ -473,7 +487,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     if (has_last_3d_update_) {
         dt_s = std::chrono::duration<double>(now - last_3d_update_).count();
     }
-    if (threed_.kalman_enabled) {
+    if (stages.kalman_enabled) {
         skel = kalman_.update(skel, dt_s);
     }
     // Subject calibration classifies the pose from anatomical joint *angles* on
@@ -499,10 +513,13 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     if (tap_active) measured_skel = skel;
 
     double drift = 0.0;
-    if (threed_.ik_enabled) {
+    if (stages.ik_enabled) {
         skel = ik_.update(skel);
         drift = ik_.bone_drift_pct(skel);
     } else if (ik_.locked()) {
+        // Keep the existing diagnostic for a preloaded profile, but this is a
+        // const/read-only calculation: raw source mode never calls ik_.update()
+        // and therefore never advances or changes IK state.
         drift = ik_.bone_drift_pct(skel);
     }
 
@@ -513,7 +530,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     }
 
     lift::FloorContactReport floor_report;
-    if (threed_.floor_contact_stability) {
+    if (stages.floor_contact_stability) {
         // Final 3D stage: keep subject-calibration measurements and IK state
         // untouched while publishing one grounded skeleton to both WebUI and
         // the shared VR tracker extractor.
@@ -553,7 +570,8 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     out.stats.profile_quality_status = ik_.profile_quality_status();
     out.stats.processed = tri_processed_;
     out.stats.sync_miss = tri_sync_miss_;
-    populate_floor_stats(out.stats, threed_.floor_contact_stability,
+    populate_stage_stats(out.stats, stages);
+    populate_floor_stats(out.stats, stages.floor_contact_stability,
                          threed_.floor_contact.floor_z_m,
                          floor_report, true);
     out.cameras = std::move(camera_poses);
@@ -580,10 +598,10 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         Skeleton3DSnapshot snap;
         snap.ts = std::chrono::system_clock::now();
         snap.stats.enabled = true;
-        // ik_locked=false (even when the subject is calibrated) so both the VMT
-        // and the VMT publisher's `!ik_locked` gate skips this frame: otherwise
-        // VMT's degeneracy "hold" mode would keep re-sending the frozen pose for
-        // the whole idle period instead of dropping it.
+        // VMT readiness must reject this empty frame in both source modes:
+        // postprocessed mode sees ik_locked=false, while raw mode sees the
+        // default valid_joints=0. Otherwise degeneracy "hold" would keep
+        // re-sending the frozen pose for the whole idle period.
         snap.stats.ik_locked = false;
         snap.stats.subject_height_m = threed_.subject_height_m;
         snap.stats.profile_loaded = ik_.profile_loaded();
@@ -591,7 +609,9 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         snap.stats.profile_quality_status = ik_.profile_quality_status();
         snap.stats.processed = tri_processed_;
         snap.stats.sync_miss = tri_sync_miss_;
-        populate_floor_stats(snap.stats, threed_.floor_contact_stability,
+        const auto stages = threed_.effective_stages();
+        populate_stage_stats(snap.stats, stages);
+        populate_floor_stats(snap.stats, stages.floor_contact_stability,
                              threed_.floor_contact.floor_z_m,
                              last_floor_report_, false);
         bus->update(snap);

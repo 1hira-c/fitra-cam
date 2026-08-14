@@ -35,17 +35,38 @@ namespace fitra::pipeline {
 class MultiCameraDriver {
 public:
     struct ThreeDConfig {
+        struct EffectiveStages {
+            bool raw_3d_source = false;
+            bool kalman_enabled = false;
+            bool ik_enabled = false;
+            bool floor_contact_stability = false;
+        };
+
         std::shared_ptr<lift::Triangulator> triangulator;
         Skeleton3DBus* bus = nullptr;
         double sync_window_ms = 15.0;
         bool kalman_enabled = true;
         bool ik_enabled = true;
         bool floor_contact_stability = true;
+        // Raw source mode bypasses all mutable post-triangulation stages.
+        // The individual preferences above remain stored for a later normal
+        // run/config round-trip; effective_stages() is the sole runtime gate.
+        bool raw_3d_source = false;
         lift::FloorContactOptions floor_contact;
         int bone_calib_frames = 150;
         double subject_height_m = 0.0;
         bool has_subject_profile = false;
         lift::SubjectProfile subject_profile;
+
+        EffectiveStages effective_stages() const {
+            const bool postprocess = !raw_3d_source;
+            return {
+                .raw_3d_source = raw_3d_source,
+                .kalman_enabled = postprocess && kalman_enabled,
+                .ik_enabled = postprocess && ik_enabled,
+                .floor_contact_stability = postprocess && floor_contact_stability,
+            };
+        }
     };
 
     MultiCameraDriver(std::vector<std::unique_ptr<camera::FrameSource>> sources,

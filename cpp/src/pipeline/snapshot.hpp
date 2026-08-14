@@ -74,6 +74,13 @@ struct Skeleton3DStats {
     std::string profile_quality_status;
     std::uint64_t processed = 0;
     std::uint64_t sync_miss = 0;
+    // Effective runtime source/stages, not merely the requested config. In raw
+    // source mode the marker is true and the three postprocess stages are false,
+    // while ik_locked retains its legacy meaning (whether the solver/profile
+    // has locked), so downstream consumers never infer provenance from it.
+    bool raw_3d_source = false;
+    bool kalman_enabled = false;
+    bool ik_enabled = false;
     bool floor_stability_enabled = false;
     double floor_z_m = 0.0;
     // False on sync-miss/idle snapshots. Contact booleans retain the last

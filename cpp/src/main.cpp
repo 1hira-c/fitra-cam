@@ -86,6 +86,7 @@ void print_help() {
         "  --subject-profile PATH    direct subject profile YAML path for IK\n"
         "  --no-3d-kalman            disable 3D Kalman smoothing\n"
         "  --no-3d-ik                disable 3D IK projection\n"
+        "  --no-3d-postprocess       publish triangulator output without Kalman, IK, or floor stabilization (run mode only)\n"
         "  --floor-contact-stability enable floor-contact foot stabilization (default on)\n"
         "  --no-floor-contact-stability  disable it for live A/B or emergency fallback\n"
         "  --floor-z-m F             floor height in fitra Z-up world metres (default 0)\n"

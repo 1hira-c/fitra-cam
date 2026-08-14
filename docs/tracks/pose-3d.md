@@ -88,6 +88,15 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
   world 6D state、それ以外は parent-relative offset 6D state。出力は `world = parent_world + offset`
   の FK 再構成。hip 移動が child の world に自然に伝播する (per-joint 独立は廃止)。
   Process noise は root と offset で分離 (`q_pos` / `q_pos_offset`)。
+- **raw 3D source mode は実効 stage を明示する**: `--no-3d-postprocess` /
+  `three_d.no_3d_postprocess: true` は `/ws3d` を triangulator 直後の skeleton に切り替え、
+  Kalman / IK / floor-contact の状態を更新しない。個別 kill switch の設定値は保存したまま
+  umbrella flag が優先する。適用は run mode のみで、subject calibration は共有 YAML の raw flag を
+  無効化して post-IK drift gate を保つ。`stats.raw_3d_source` と `kalman_enabled` / `ik_enabled` /
+  `floor_stability_enabled` は実効値であり、`ik_locked` の既存の lock 意味は変えない。VMT は通常 source
+  では `ik_locked`、raw source では `raw_3d_source && valid_joints>0` を readiness とし、空 snapshot
+  の出自 marker だけでは送信しない。
+  → [design/pose-3d-raw-3d-source.md](../design/pose-3d-raw-3d-source.md)
 - **床接地安定化は公開直前の有界足部平行移動**: Halpe26 の左右 sole から接地を独立判定し、
   接地中だけ ankle + toe/heel を同じ XYZ だけ移動する。Kalman / IK / calibration tap へ
   フィードバックしない。孤立した床下 sole は invalid 化し、深い貫通も Z 8cm まで fail-safe 補正、
@@ -109,6 +118,34 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-08-14 — PR #63 の raw VMT readiness レビュー修正
+
+raw source の VMT gate を出自 marker 単独から `raw_3d_source && valid_joints>0` へ変更し、
+profile 未指定の起動直後、sync miss、idle standby で原点 / 凍結 tracker を送らないようにした。
+通常 source の `ik_locked` gate は維持する。内部 config predicate は `postprocess_3d` の肯定形へ揃え、
+2D-only run で `--no-3d-postprocess` を黙って無視せず validation error にする。VMT readiness、config
+round-trip、raw stage selection の回帰テストを更新した。
+
+### 2026-08-08 — raw 3D source の VMT / subject calibration 境界を修正
+
+raw `/ws3d` は IK を呼ばないため、VMT publisher は `ik_locked` だけでなく
+`stats.raw_3d_source && valid_joints>0` を readiness として受け入れ、profile 未指定の opt-in raw run
+でも有効な triangulation 後に tracker bundle を送れるようにした。通常 mode の `ik_locked` gate は
+維持する。共有 YAML で
+`--calibrate` / daemon の CalibSubject を起動した場合は raw umbrella を無効化し、既存の
+post-IK drift gate で pose-hold 判定を行う。両方の境界を `test_vmt_protocol` と
+`test_main_config` に固定した。
+
+### 2026-08-07 — 外部 consumer 向け raw 3D source mode
+
+`--no-3d-postprocess` / `three_d.no_3d_postprocess: true` を追加し、opt-in 時は
+triangulation 後の `Skeleton3D` を Kalman / IK / floor-contact を通さず `/ws3d` へ公開する。
+個別 stage の設定値は normal mode 用に保持し、raw flag が実効判定だけを上書きする。
+`/ws3d.stats` と WebUI に raw / Kalman / IK / floor の実効状態を追加し、`ik_locked` の既存意味を
+維持した。config round-trip、stage gate、JSON serialization の回帰テストを追加。実機比較は
+同一入力の `dump_keypoints_3d --no-kalman --no-ik --no-floor-contact-stability` と行う。
+設計: [design/pose-3d-raw-3d-source.md](../design/pose-3d-raw-3d-source.md)。
 
 ### 2026-07-20 — Halpe26 顔5点を3D品質から除外 + 固定長head-direction endpoint
 

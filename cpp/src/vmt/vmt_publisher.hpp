@@ -13,8 +13,9 @@
 // so the publisher has no receive loop.
 //
 // Read-only consumer of the shared TrackerExtractor state (single producer),
-// with no I/O on the inference threads,
-// gated by Skeleton3DStats::ik_locked.
+// with no I/O on the inference threads. The normal source remains gated by
+// Skeleton3DStats::ik_locked; an explicit raw source is intentionally ready
+// without an IK lock.
 
 #include <atomic>
 #include <cstdint>
@@ -45,6 +46,12 @@ enum class DegenMode {
 const char* degen_mode_name(DegenMode m);
 bool        parse_degen_mode(const std::string& s, DegenMode& out);
 
+// The legacy postprocessed path requires a locked IK solver before VMT sends.
+// Raw source mode deliberately bypasses that solver, so it instead requires at
+// least one valid triangulated joint. The data check rejects startup, sync-miss,
+// and idle snapshots even though they retain the raw-source provenance marker.
+bool vmt_skeleton_ready(const pipeline::Skeleton3DStats& stats);
+
 struct VmtPublisherOptions {
     std::string   host         = "127.0.0.1";
     std::uint16_t port         = 39570;       // VMT receive port
@@ -65,7 +72,7 @@ struct VmtPublisherStats {
     std::uint64_t sent_bundles            = 0; // one bundle per send-loop tick
     std::uint64_t sent_trackers           = 0; // total /VMT/Room/Driver messages
     std::uint64_t disabled_count          = 0; // messages sent with enable=0
-    std::uint64_t skipped_invalid_bundles = 0; // bundle skipped: !ik_locked or no data
+    std::uint64_t skipped_invalid_bundles = 0; // source not ready or no tracker data
     std::uint64_t skipped_no_endpoint     = 0; // discovery: no peer resolved yet
     double        last_send_ms            = 0.0;
     // End-to-end latency: age (ms) of the freshest 3D skeleton at the moment
