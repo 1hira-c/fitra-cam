@@ -97,10 +97,10 @@ std::unique_ptr<pipeline::MultiCameraDriver> make_driver(
     cfg.kalman_enabled      = opts.kalman_3d;
     cfg.ik_enabled          = opts.ik_3d;
     cfg.floor_contact_stability = opts.floor_contact_stability;
-    cfg.raw_3d_source      = config::raw_3d_source_enabled(opts);
-    if (opts.no_3d_postprocess
+    cfg.raw_3d_source       = config::raw_3d_source_enabled(opts);
+    if (!opts.postprocess_3d
         && config::run_mode(opts) == config::RunMode::CalibSubject) {
-        FITRA_LOG_INFO("raw 3D source is inactive in subject calibration; "
+        FITRA_LOG_WARN("raw 3D source is inactive in subject calibration; "
                        "keeping the existing post-IK drift path");
     }
     cfg.floor_contact       = config::floor_contact_options(opts);

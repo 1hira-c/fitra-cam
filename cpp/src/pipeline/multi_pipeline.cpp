@@ -598,10 +598,10 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         Skeleton3DSnapshot snap;
         snap.ts = std::chrono::system_clock::now();
         snap.stats.enabled = true;
-        // ik_locked=false (even when the subject is calibrated) so both the VMT
-        // and the VMT publisher's `!ik_locked` gate skips this frame: otherwise
-        // VMT's degeneracy "hold" mode would keep re-sending the frozen pose for
-        // the whole idle period instead of dropping it.
+        // VMT readiness must reject this empty frame in both source modes:
+        // postprocessed mode sees ik_locked=false, while raw mode sees the
+        // default valid_joints=0. Otherwise degeneracy "hold" would keep
+        // re-sending the frozen pose for the whole idle period.
         snap.stats.ik_locked = false;
         snap.stats.subject_height_m = threed_.subject_height_m;
         snap.stats.profile_loaded = ik_.profile_loaded();

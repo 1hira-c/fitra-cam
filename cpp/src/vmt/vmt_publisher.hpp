@@ -47,9 +47,9 @@ const char* degen_mode_name(DegenMode m);
 bool        parse_degen_mode(const std::string& s, DegenMode& out);
 
 // The legacy postprocessed path requires a locked IK solver before VMT sends.
-// Raw source mode deliberately bypasses that solver, so its explicit
-// provenance marker is the readiness contract instead. This does not make an
-// empty/disabled 3D pipeline sendable; tracker data is gated separately.
+// Raw source mode deliberately bypasses that solver, so it instead requires at
+// least one valid triangulated joint. The data check rejects startup, sync-miss,
+// and idle snapshots even though they retain the raw-source provenance marker.
 bool vmt_skeleton_ready(const pipeline::Skeleton3DStats& stats);
 
 struct VmtPublisherOptions {

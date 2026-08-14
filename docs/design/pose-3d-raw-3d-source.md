@@ -74,9 +74,11 @@ subject profile は任意入力のままであり、profile が無くても raw 
 値の意味を変えず、IK 適用の判定には使わない。
 
 VMT の通常 source は従来どおり `ik_locked` を readiness gate にする。一方 raw mode は
-IK を意図的に bypass するので、`stats.raw_3d_source=true` を VMT readiness とし、profile /
-IK lock が無くても tracker extractor の共有 source を送信できる。これは raw mode を opt-in
-した場合だけであり、VMT 側の tracker extraction / smoothing や通常 mode の品質 gate は変えない。
+IK を意図的に bypass するので、`stats.raw_3d_source=true && valid_joints>0` を VMT readiness
+とし、profile / IK lock が無くても有効な triangulation が得られた後は tracker extractor の
+共有 source を送信できる。`raw_3d_source` は出自であってデータ妥当性ではないため、同じ marker を
+持つ起動直後 / sync miss / idle の空 snapshot は送信しない。これは raw mode を opt-in した場合
+だけであり、VMT 側の tracker extraction / smoothing や通常 mode の品質 gate は変えない。
 
 ### 診断と互換性
 
@@ -91,10 +93,12 @@ IK lock が無くても tracker extractor の共有 source を送信できる。
 }
 ```
 
-これらは設定希望ではなく実効 stage を表し、sync miss / idle の空 snapshot にも載せる。
-WebUI は `postprocess` 行で同じ状態を表示する。既存 field、joint 配列、VMT の既定経路は
-変更しない。raw mode は opt-in であり、VMT を有効にした場合はその共有 bus の raw skeleton を
-tracker extractor も読むため、通常の VR 出力品質を期待する用途では既定 mode を使う。
+これらは設定希望ではなく実効 source / stage を表し、sync miss / idle の空 snapshot にも載せる。
+ただし空 snapshot は `valid_joints=0` のため VMT readiness にはならない。WebUI は `postprocess`
+行で同じ状態を表示する。raw mode の `bone_len_drift_pct` は profile がある場合の pre-IK skeleton
+診断であり、postprocessed mode の post-IK 値とは provenance が異なる。既存 field、joint 配列、
+VMT の既定経路は変更しない。raw mode は opt-in であり、VMT を有効にした場合はその共有 bus の
+raw skeleton を tracker extractor も読むため、通常の VR 出力品質を期待する用途では既定 mode を使う。
 
 ## Milestone
 
@@ -111,10 +115,11 @@ tracker extractor も読むため、通常の VR 出力品質を期待する用�
 - `./cpp/build/main --help` に `--no-3d-postprocess` が出ることを確認する。
 - 実機では同一の calibration / input で raw `/ws3d.persons_3d` と
   `dump_keypoints_3d --no-kalman --no-ik --no-floor-contact-stability` を比較する。
-  position / valid / score が許容差内で一致し、`stats` の実効 stage がすべて false であることを
-  確認する。raw + VMT は profile 未指定でも bundle が送信されることを別に確認し、通常 mode の
-  `ik_locked` gate と VRChat 挙動を回帰させない。subject calibration は同じ YAML でも raw flag が
-  無効化され、通常の pose-hold drift gate で開始できることを確認する。
+  position / valid / score が許容差内で一致し、3 つの postprocess stage がすべて false かつ
+  `raw_3d_source=true` であることを確認する。raw + VMT は profile 未指定でも有効 joint が得られた後に
+  bundle が送信され、起動直後 / sync miss / idle の `valid_joints=0` では停止することを別に確認する。
+  通常 mode の `ik_locked` gate と VRChat 挙動を回帰させない。subject calibration は同じ YAML でも
+  raw flag が無効化され、通常の pose-hold drift gate で開始できることを確認する。
 
 ## 残課題
 

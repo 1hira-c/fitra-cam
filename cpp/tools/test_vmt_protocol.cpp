@@ -306,8 +306,14 @@ void test_raw_source_vmt_readiness() {
 
     stats.ik_locked = false;
     stats.raw_3d_source = true;
+    if (vmt_skeleton_ready(stats)) {
+        throw std::runtime_error("empty raw source must not be VMT-ready");
+    }
+
+    stats.valid_joints = 1;
     if (!vmt_skeleton_ready(stats)) {
-        throw std::runtime_error("raw source must be VMT-ready without an IK lock");
+        throw std::runtime_error(
+            "raw source with valid triangulated data must be VMT-ready without an IK lock");
     }
 
     stats.enabled = false;

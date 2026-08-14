@@ -15,32 +15,34 @@ int main() {
     try {
         using Config = fitra::pipeline::MultiCameraDriver::ThreeDConfig;
 
-        Config normal;
-        normal.kalman_enabled = true;
-        normal.ik_enabled = false;
-        normal.floor_contact_stability = true;
-        const auto normal_stages = normal.effective_stages();
-        check(!normal_stages.raw_3d_source, "normal mode must not report raw source");
-        check(normal_stages.kalman_enabled, "normal mode must retain Kalman");
-        check(!normal_stages.ik_enabled, "normal mode must retain individual IK off");
-        check(normal_stages.floor_contact_stability,
-              "normal mode must retain individual floor on");
+        for (unsigned mask = 0; mask < 8; ++mask) {
+            Config cfg;
+            cfg.kalman_enabled = (mask & 1U) != 0;
+            cfg.ik_enabled = (mask & 2U) != 0;
+            cfg.floor_contact_stability = (mask & 4U) != 0;
 
-        Config raw;
-        raw.kalman_enabled = true;
-        raw.ik_enabled = true;
-        raw.floor_contact_stability = true;
-        raw.raw_3d_source = true;
-        const auto raw_stages = raw.effective_stages();
-        check(raw_stages.raw_3d_source, "raw source marker must be true");
-        check(!raw_stages.kalman_enabled,
-              "raw source must bypass Kalman even when configured on");
-        check(!raw_stages.ik_enabled,
-              "raw source must bypass IK even when configured on");
-        check(!raw_stages.floor_contact_stability,
-              "raw source must bypass floor stabilization even when configured on");
-        check(raw.kalman_enabled && raw.ik_enabled && raw.floor_contact_stability,
-              "raw source must not overwrite normal-mode stage preferences");
+            const auto normal = cfg.effective_stages();
+            check(!normal.raw_3d_source,
+                  "normal mode must not report raw source");
+            check(normal.kalman_enabled == cfg.kalman_enabled,
+                  "normal mode must retain the Kalman preference");
+            check(normal.ik_enabled == cfg.ik_enabled,
+                  "normal mode must retain the IK preference");
+            check(normal.floor_contact_stability == cfg.floor_contact_stability,
+                  "normal mode must retain the floor preference");
+
+            cfg.raw_3d_source = true;
+            const auto raw = cfg.effective_stages();
+            check(raw.raw_3d_source, "raw source marker must be true");
+            check(!raw.kalman_enabled, "raw source must always bypass Kalman");
+            check(!raw.ik_enabled, "raw source must always bypass IK");
+            check(!raw.floor_contact_stability,
+                  "raw source must always bypass floor stabilization");
+            check(cfg.kalman_enabled == ((mask & 1U) != 0)
+                      && cfg.ik_enabled == ((mask & 2U) != 0)
+                      && cfg.floor_contact_stability == ((mask & 4U) != 0),
+                  "raw source must not overwrite normal-mode stage preferences");
+        }
 
         std::puts("test_raw_3d_source ok");
         return 0;

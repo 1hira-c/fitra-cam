@@ -59,12 +59,12 @@ public:
         lift::SubjectProfile subject_profile;
 
         EffectiveStages effective_stages() const {
-            if (raw_3d_source) return {.raw_3d_source = true};
+            const bool postprocess = !raw_3d_source;
             return {
-                .raw_3d_source = false,
-                .kalman_enabled = kalman_enabled,
-                .ik_enabled = ik_enabled,
-                .floor_contact_stability = floor_contact_stability,
+                .raw_3d_source = raw_3d_source,
+                .kalman_enabled = postprocess && kalman_enabled,
+                .ik_enabled = postprocess && ik_enabled,
+                .floor_contact_stability = postprocess && floor_contact_stability,
             };
         }
     };

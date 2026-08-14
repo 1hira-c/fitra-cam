@@ -140,8 +140,8 @@ export function build3dStatsText(
     return evidence === false ? "grace" : "plant";
   };
   const floorFreshness = s.floor_contact_fresh === false ? "stale " : "";
-  // Older C++ and Python fallback publishers do not have the additive
-  // effective-stage fields. Do not display missing telemetry as disabled.
+  // Older C++ publishers do not have the additive effective-stage fields. Do
+  // not display missing telemetry as disabled.
   const stageState = (enabled: boolean | undefined): string =>
     enabled === undefined ? "-" : enabled ? "on" : "off";
   const postprocessSource =

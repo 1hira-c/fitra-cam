@@ -41,6 +41,14 @@ Windows 実機 (SteamVR + VMT Manager + VRChat FBT)。
 
 ## Changelog (新しい順)
 
+### 2026-08-14 — raw 3D source の VMT readiness をデータ妥当性で保護
+
+raw source は IK lock を持たないため `raw_3d_source` を VMT readiness の出自条件に使うが、
+`valid_joints>0` も必須にした。これにより profile 未指定の起動直後、sync miss、idle standby の
+空 snapshot では VMT bundle を停止し、既定 `DegenMode::Hold` が原点 / 凍結 tracker を再送しない。
+通常 postprocessed source の `ik_locked` gate は従来どおり維持する。
+→ [design/pose-3d-raw-3d-source.md](../design/pose-3d-raw-3d-source.md)
+
 ### 2026-07-20 — PR #56 の tracker stream 設定レビューを反映 (バグ修正)
 
 SlimeVR 廃止後も `TrackerExtractor` は VMT 出力 OFF の WebUI / subject calibration 経路で起動する。

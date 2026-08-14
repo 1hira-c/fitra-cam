@@ -31,7 +31,9 @@ bool parse_degen_mode(const std::string& s, DegenMode& out) {
 }
 
 bool vmt_skeleton_ready(const pipeline::Skeleton3DStats& stats) {
-    return stats.enabled && (stats.ik_locked || stats.raw_3d_source);
+    if (!stats.enabled) return false;
+    if (stats.ik_locked) return true;
+    return stats.raw_3d_source && stats.valid_joints > 0;
 }
 
 namespace {
