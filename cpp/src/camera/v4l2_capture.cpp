@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -19,6 +20,47 @@
 #include "util/logging.hpp"
 
 namespace fitra::camera {
+
+const char* v4l2_timestamp_semantics_name(
+    V4l2TimestampSemantics semantics) {
+    switch (semantics) {
+        case V4l2TimestampSemantics::MonotonicSoe: return "monotonic_soe";
+        case V4l2TimestampSemantics::MonotonicEof: return "monotonic_eof";
+        case V4l2TimestampSemantics::Unavailable:  return "unavailable";
+    }
+    return "unavailable";
+}
+
+V4l2CaptureTimestamp interpret_v4l2_timestamp(
+    std::int64_t sec, std::int64_t usec, std::uint32_t flags) noexcept {
+    V4l2CaptureTimestamp out;
+    if ((flags & V4L2_BUF_FLAG_TIMESTAMP_MASK) !=
+        V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC) {
+        return out;
+    }
+    if (sec < 0 || usec < 0 || usec >= 1'000'000) return out;
+    constexpr std::uint64_t kNsPerSec = 1'000'000'000ULL;
+    constexpr std::uint64_t kNsPerUsec = 1'000ULL;
+    const auto sec_u = static_cast<std::uint64_t>(sec);
+    const auto usec_u = static_cast<std::uint64_t>(usec);
+    if (sec_u > (std::numeric_limits<std::uint64_t>::max()
+                 - usec_u * kNsPerUsec) / kNsPerSec) {
+        return out;
+    }
+    const std::uint64_t mono_ns = sec_u * kNsPerSec + usec_u * kNsPerUsec;
+    if (mono_ns == 0) return out;
+
+    const auto source = flags & V4L2_BUF_FLAG_TSTAMP_SRC_MASK;
+    if (source == V4L2_BUF_FLAG_TSTAMP_SRC_SOE) {
+        out.semantics = V4l2TimestampSemantics::MonotonicSoe;
+    } else if (source == V4L2_BUF_FLAG_TSTAMP_SRC_EOF) {
+        out.semantics = V4l2TimestampSemantics::MonotonicEof;
+    } else {
+        return out;
+    }
+    out.mono_ns = mono_ns;
+    return out;
+}
 
 namespace {
 
@@ -242,6 +284,9 @@ void V4l2Capture::worker_loop() {
         }
         auto now = std::chrono::steady_clock::now();
         const std::uint64_t captured_mono_ns = fitra::util::monotonic_ns();
+        const auto v4l2_timestamp = interpret_v4l2_timestamp(
+            static_cast<std::int64_t>(buf.timestamp.tv_sec),
+            static_cast<std::int64_t>(buf.timestamp.tv_usec), buf.flags);
         std::uint64_t seq = total_received_.fetch_add(1) + 1;
 
         // Driver-side drop detection: a jump in buf.sequence > 1 means the
@@ -289,6 +334,7 @@ void V4l2Capture::worker_loop() {
             latest_->seq         = seq;
             latest_->captured_at = now;
             latest_->captured_mono_ns = captured_mono_ns;
+            latest_->v4l2_timestamp = v4l2_timestamp;
             slot_cv_.notify_one();  // wake a consumer parked in wait_pop_latest
         }
         update_recv_fps(now);

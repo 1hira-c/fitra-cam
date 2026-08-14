@@ -15,6 +15,7 @@
 #include <crow.h>
 
 #include "pipeline/extrinsic_calib_session.hpp"
+#include "pipeline/fusion_pose.hpp"
 #include "pipeline/pose_gate.hpp"
 #include "tracking/tracker_bus.hpp"
 #include "vmt/vmt_publisher.hpp"
@@ -24,6 +25,7 @@
 #include "vmt/continuous_aligner.hpp"
 #include "vmt/discovery_beacon.hpp"
 #include "util/logging.hpp"
+#include "util/clock.hpp"
 #include "web/crow_routes_setup.hpp"
 #include "web/crow_util.hpp"
 
@@ -297,6 +299,7 @@ struct CrowServer::Impl {
     WsClients           clients2d;
     WsClients           clients3d;
     WsClients           clients_pose_gate;
+    WsClients           clients_fusion_pose;
     AutoAlignSession    auto_align;
 };
 
@@ -392,6 +395,11 @@ void CrowServer::set_pose_gate_bus(pipeline::PoseGateBus* pose_gate_bus) {
     pose_gate_bus_ = pose_gate_bus;
 }
 
+void CrowServer::set_fusion_pose_bus(
+    pipeline::FusionPoseBus* fusion_pose_bus) {
+    fusion_pose_bus_ = fusion_pose_bus;
+}
+
 void CrowServer::set_continuous_aligner(vmt::ContinuousAligner* aligner) {
     continuous_aligner_ = aligner;
 }
@@ -413,6 +421,7 @@ void CrowServer::start() {
     auto& clients2d = impl_->clients2d;
     auto& clients3d = impl_->clients3d;
     auto& clients_pose_gate = impl_->clients_pose_gate;
+    auto& clients_fusion_pose = impl_->clients_fusion_pose;
 
     // WS /ws — register first so the catch-all HTTP route below does not
     // shadow upgrade requests (Crow's BaseRule::handle_upgrade returns
@@ -475,6 +484,48 @@ void CrowServer::start() {
                   const std::string& /*data*/,
                   bool /*is_binary*/) {
         // ignore client messages (ping etc.)
+    });
+
+    CROW_WEBSOCKET_ROUTE(app, "/ws/fusion-pose")
+    .onopen([this, &clients_fusion_pose](crow::websocket::connection& c) {
+        std::lock_guard<std::mutex> lk{clients_fusion_pose.mu};
+        clients_fusion_pose.conns.insert(&c);
+        if (idle_state_) idle_state_->ws_client_count.fetch_add(1, std::memory_order_relaxed);
+    })
+    .onclose([this, &clients_fusion_pose](crow::websocket::connection& c,
+                                          const std::string& /*reason*/,
+                                          uint16_t /*code*/) {
+        std::lock_guard<std::mutex> lk{clients_fusion_pose.mu};
+        if (clients_fusion_pose.conns.erase(&c) && idle_state_)
+            idle_state_->ws_client_count.fetch_sub(1, std::memory_order_relaxed);
+    })
+    .onmessage([](crow::websocket::connection& c,
+                  const std::string& data,
+                  bool is_binary) {
+        if (is_binary) return;
+        const std::uint64_t receive_ns = fitra::util::monotonic_ns();
+        try {
+            auto body = crow::json::load(data);
+            if (!body || !body.has("type") || !body.has("nonce") ||
+                !body.has("client_send_mono_ns") ||
+                body["type"].t() != crow::json::type::String ||
+                body["nonce"].t() != crow::json::type::Number ||
+                body["client_send_mono_ns"].t() != crow::json::type::Number ||
+                std::string{body["type"].s()} != "clock_sync_ping") {
+                return;
+            }
+            const auto nonce_i = body["nonce"].i();
+            const auto client_send_i = body["client_send_mono_ns"].i();
+            if (nonce_i < 0 || client_send_i < 0) return;
+            const std::uint64_t send_ns = fitra::util::monotonic_ns();
+            c.send_text(pipeline::make_clock_sync_pong(
+                static_cast<std::uint64_t>(nonce_i),
+                static_cast<std::uint64_t>(client_send_i),
+                receive_ns, send_ns));
+        } catch (...) {
+            // Invalid/unknown client messages are ignored.  Never log the
+            // body: future messages may carry source evidence or identity.
+        }
     });
 
     // GET /api/state — run-mode discovery for the frontends (always
@@ -609,6 +660,26 @@ void CrowServer::start() {
             return resp;
         }
         crow::response resp{pose_gate_bus_->make_json()};
+        resp.set_header("Content-Type", "application/json; charset=utf-8");
+        return resp;
+    });
+
+    CROW_ROUTE(app, "/api/fusion-pose")
+    ([this]() {
+        if (!fusion_pose_bus_) {
+            pipeline::PoseGateBus disabled_gate{"disabled"};
+            const auto boundary = disabled_gate.publish_unavailable(
+                std::nullopt, pipeline::PoseGateSourceState::Unavailable,
+                "3d_disabled");
+            pipeline::FusionPoseBus disabled_fusion{
+                disabled_gate.stream_id(), disabled_gate.coordinate_epoch()};
+            disabled_fusion.publish_boundary(boundary);
+            crow::response resp{disabled_fusion.make_json()};
+            resp.code = 409;
+            resp.set_header("Content-Type", "application/json; charset=utf-8");
+            return resp;
+        }
+        crow::response resp{fusion_pose_bus_->make_json()};
         resp.set_header("Content-Type", "application/json; charset=utf-8");
         return resp;
     });
@@ -1233,6 +1304,24 @@ void CrowServer::publisher_loop() {
                     c->send_text(pose_gate_msg);
                 } catch (...) {
                     // best-effort; client will be reaped on close
+                }
+            }
+        }
+        bool have_fusion_clients = false;
+        {
+            std::lock_guard<std::mutex> lk{impl_->clients_fusion_pose.mu};
+            have_fusion_clients = !impl_->clients_fusion_pose.conns.empty();
+        }
+        if (fusion_pose_bus_ && have_fusion_clients) {
+            const auto fusion_messages = fusion_pose_bus_->drain_pending_json();
+            std::lock_guard<std::mutex> lk{impl_->clients_fusion_pose.mu};
+            for (const auto& fusion_message : fusion_messages) {
+                for (auto* c : impl_->clients_fusion_pose.conns) {
+                    try {
+                        c->send_text(fusion_message);
+                    } catch (...) {
+                        // best-effort; client will be reaped on close
+                    }
                 }
             }
         }

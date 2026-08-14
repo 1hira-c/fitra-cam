@@ -75,6 +75,10 @@ MultiCameraDriver::MultiCameraDriver(
     if ((threed_.triangulator || threed_.bus) && (!threed_.triangulator || !threed_.bus)) {
         throw std::invalid_argument("3D pipeline requires both triangulator and Skeleton3DBus");
     }
+    if (threed_.fusion_pose && !threed_.pose_gate) {
+        throw std::invalid_argument(
+            "fusion pose bus requires the PoseGate lifecycle owner");
+    }
     if (threed_.triangulator && threed_.bus) {
         FITRA_LOG_INFO(
             "3D floor-contact stability {} (floor_z={}m enter={}m/{}mps exit={}m/{}mps grace={}s)",
@@ -284,6 +288,7 @@ void MultiCameraDriver::loop() {
             snap.seq = df.seq;
             snap.captured_at = df.captured_at;
             snap.captured_mono_ns = df.captured_mono_ns;
+            snap.v4l2_timestamp = df.v4l2_timestamp;
             auto lag = std::chrono::duration_cast<std::chrono::milliseconds>(
                           now - df.captured_at);
             snap.captured_wall = wall_now - lag;
@@ -394,12 +399,14 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     std::shared_ptr<lift::Triangulator> triangulator;
     Skeleton3DBus* bus = nullptr;
     PoseGateBus* pose_gate = nullptr;
+    FusionPoseBus* fusion_pose = nullptr;
     bool pose_gate_single_subject = true;
     {
         std::lock_guard<std::mutex> g(threed_mu_);
         triangulator = threed_.triangulator;
         bus = threed_.bus;
         pose_gate = threed_.pose_gate;
+        fusion_pose = threed_.fusion_pose;
         pose_gate_single_subject = threed_.pose_gate_single_subject;
     }
     if (!triangulator || !bus) return;
@@ -456,9 +463,10 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         populate_common_stats(miss.stats);
         miss.cameras = camera_poses;
         if (pose_gate) {
-            pose_gate->publish_unavailable(std::nullopt,
-                                           PoseGateSourceState::Unavailable,
-                                           "sync_miss", sync_event.sync_dt_ms);
+            const auto boundary = pose_gate->publish_unavailable(
+                std::nullopt, PoseGateSourceState::Unavailable,
+                "sync_miss", sync_event.sync_dt_ms);
+            if (fusion_pose) fusion_pose->publish_boundary(boundary);
             miss.stats.pose_gate = pose_gate->diagnostics();
         }
         bus->update(miss);
@@ -468,6 +476,8 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     if (sync_event.frames.size() != sync_queue_.camera_count()) return;
     std::chrono::steady_clock::time_point min_ts{};
     std::optional<std::uint64_t> content_mono_ns;
+    std::vector<camera::V4l2CaptureTimestamp> fusion_timestamps;
+    fusion_timestamps.reserve(sync_event.frames.size());
     bool all_have_content_mono_ns = true;
     bool first = true;
     auto t0 = std::chrono::steady_clock::now();
@@ -486,19 +496,24 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         } else if (!content_mono_ns || snap.captured_mono_ns < *content_mono_ns) {
             content_mono_ns = snap.captured_mono_ns;
         }
+        fusion_timestamps.push_back(snap.v4l2_timestamp);
         if (snap.persons.empty()) continue;
         observations.push_back(lift::PerCameraObservation{
             static_cast<int>(i), &snap.persons[0]});
     }
     if (!all_have_content_mono_ns) content_mono_ns.reset();
+    const auto fusion_capture =
+        make_fusion_capture_interval(fusion_timestamps);
 
     auto tri = triangulator->triangulate(observations);
     // Fusion-facing output is deliberately produced from tri.skeleton before
     // any Kalman, IK, or floor-contact mutation below. It never reads the
     // Skeleton3DBus snapshot or TrackerBus.
     if (pose_gate) {
-        pose_gate->observe(tri, content_mono_ns, pose_gate_single_subject,
-                           sync_event.sync_dt_ms);
+        const auto lifecycle = pose_gate->observe(
+            tri, content_mono_ns, pose_gate_single_subject,
+            sync_event.sync_dt_ms);
+        if (fusion_pose) fusion_pose->observe(tri, fusion_capture, lifecycle);
     }
     infer::Skeleton3D skel = tri.skeleton;
     double dt_s = 1.0 / 30.0;
@@ -605,15 +620,17 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         // idle period. 2D-only runs have no 3D bus → nothing to emit.
         Skeleton3DBus* bus = nullptr;
         PoseGateBus* pose_gate = nullptr;
+        FusionPoseBus* fusion_pose = nullptr;
         {
             std::lock_guard<std::mutex> g(threed_mu_);
             bus = threed_.bus;
             pose_gate = threed_.pose_gate;
+            fusion_pose = threed_.fusion_pose;
         }
         if (pose_gate) {
-            pose_gate->publish_unavailable(std::nullopt,
-                                           PoseGateSourceState::Unavailable,
-                                           "idle");
+            const auto boundary = pose_gate->publish_unavailable(
+                std::nullopt, PoseGateSourceState::Unavailable, "idle");
+            if (fusion_pose) fusion_pose->publish_boundary(boundary);
         }
         if (!bus) return;
         Skeleton3DSnapshot snap;

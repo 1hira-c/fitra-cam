@@ -175,6 +175,7 @@ int run_mode_calib_subject(const config::MainOptions& opts_in, FlowControl& flow
               + " --subject-id " + opts.subject_id + " ...");
         server->set_tracker_bus(threed.tracker_bus.get());
         if (threed.pose_gate_bus) server->set_pose_gate_bus(threed.pose_gate_bus.get());
+        if (threed.fusion_pose_bus) server->set_fusion_pose_bus(threed.fusion_pose_bus.get());
         server->start();
     }
 

@@ -69,8 +69,11 @@ ThreeDSet make_threed(const config::MainOptions& opts,
     t.triangulator = std::make_shared<lift::Triangulator>(calib, tri_opts);
     t.triangulator->require_camera_ids(expected_camera_ids(n_cams));
     t.bus3d = std::make_unique<pipeline::Skeleton3DBus>();
+    const auto coordinate_epoch = calibration_coordinate_epoch(calib_path);
     t.pose_gate_bus = std::make_unique<pipeline::PoseGateBus>(
-        std::string{}, calibration_coordinate_epoch(calib_path));
+        std::string{}, coordinate_epoch);
+    t.fusion_pose_bus = std::make_unique<pipeline::FusionPoseBus>(
+        t.pose_gate_bus->stream_id(), coordinate_epoch);
     t.tracker_bus = std::make_unique<tracking::TrackerBus>();
     FITRA_LOG_INFO("3D lifting enabled ({} calibrated cameras, sync_window={}ms)",
                    t.triangulator->camera_count(), opts.sync_window_ms);
@@ -128,6 +131,7 @@ std::unique_ptr<pipeline::MultiCameraDriver> make_driver(
     cfg.triangulator        = threed->triangulator;
     cfg.bus                 = threed->bus3d.get();
     cfg.pose_gate           = threed->pose_gate_bus.get();
+    cfg.fusion_pose         = threed->fusion_pose_bus.get();
     cfg.pose_gate_single_subject = !opts.multi_person;
     cfg.sync_window_ms      = opts.sync_window_ms;
     cfg.kalman_enabled      = opts.kalman_3d;

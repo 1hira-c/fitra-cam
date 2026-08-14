@@ -296,6 +296,22 @@ set_target_properties(fitra_test_pose_gate PROPERTIES
 
 add_test(NAME test_pose_gate COMMAND fitra_test_pose_gate)
 
+add_executable(fitra_test_fusion_pose
+    test_fusion_pose.cpp
+)
+
+target_link_libraries(fitra_test_fusion_pose PRIVATE
+    fitra_pipeline
+    Crow::Crow
+)
+
+set_target_properties(fitra_test_fusion_pose PROPERTIES
+    OUTPUT_NAME "test_fusion_pose"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_fusion_pose COMMAND fitra_test_fusion_pose)
+
 # Bounded nearest-frame matching: tolerate phase offsets by selecting adjacent
 # camera frames, and emit only one loss boundary for a sustained stop.
 add_executable(fitra_test_sync_matcher

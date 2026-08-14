@@ -36,6 +36,14 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
 
 ### 設計原則 / live な制約
 
+- **D50 fusion wire は additive な専用 bus**: 既存 `fitra_pose_gate_v1` を変更せず、
+  同じ raw `tri.skeleton` と lifecycle 判定を読む `FusionPoseBus` から
+  `fitra_fusion_pose_v1` を `GET /api/fusion-pose` / `WS /ws/fusion-pose` へ出す。
+  8関節の位置とscore/inlier数/reprojection/max acute ray angle、V4L2 kernel
+  monotonic SOE/EOFのcapture区間、publish monotonic時刻、continuityをJSON numberで公開する。
+  通常poseはlatest-only、lifecycle境界は有界FIFOで順序保持し、overflow/stream交換時は
+  `ContinuityReset` で下流holdを必ず切る。clock-sync ping/pongも同じWSで扱う。
+  → [design/pose-3d-fusion-pose-v1.md](../design/pose-3d-fusion-pose-v1.md)
 - **fusion向け観測は tracker 経路から分離**: `fitra_pose_gate_v1` は
   `triangulator->triangulate()` の直後に raw `tri.skeleton` から position-only で生成し、
   `/ws3d` の Kalman / IK / floor-contact / quaternion 出力を入力にしない。8関節を固定名で
@@ -120,6 +128,20 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-08-14 — D50 `fitra_fusion_pose_v1` producer
+
+既存PoseGateを完全互換のまま残し、V4L2 kernel timestampのmonotonic SOE/EOF意味論を
+capture→decode→同期snapshotへ保持する専用 `FusionPoseBus` を追加した。参加cameraの意味論が
+混在・不明ならcapture区間全体をUnavailableとし、三角測量の最終inlier rayだけから最大acute交差角を
+算出する。新wireは8関節の位置・score・inlier view数・平均再投影誤差・ray angleと、capture区間、
+source publish時刻、stream/subject/coordinate/continuityを非負JSON numberで公開する。
+通常poseのlatest-only slotと順序付き境界FIFOを分離し、overflow/stream交換時は
+`ContinuityReset` を先行させる。`/api/fusion-pose`、`/ws/fusion-pose`、numeric clock-sync
+ping/pongをrun/calib-subject両runtimeへ配線した。pure timestamp/wire/lifecycle/overflow/
+ray-angleテストとCrow WebSocket integrationを追加。実cameraのtimestamp意味論・mixed/unknown
+fallback・fusion WS接続前後cadenceは実機検証項目として残る。
+設計: [design/pose-3d-fusion-pose-v1.md](../design/pose-3d-fusion-pose-v1.md)。
 
 ### 2026-08-09 — PoseGate同期待ちと診断カウンタ
 

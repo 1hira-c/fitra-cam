@@ -16,6 +16,7 @@
 
 #include <opencv2/core.hpp>
 
+#include "camera/v4l2_capture.hpp"
 #include "infer/types.hpp"
 #include "pipeline/pose_gate.hpp"
 
@@ -28,6 +29,7 @@ struct CameraSnapshot {
     std::uint64_t                          seq = 0;
     std::chrono::steady_clock::time_point  captured_at{};
     std::uint64_t                          captured_mono_ns = 0;
+    camera::V4l2CaptureTimestamp           v4l2_timestamp{};
     std::chrono::system_clock::time_point  captured_wall{};  // wall-clock for ts_ms
     std::vector<infer::Person>             persons;
     std::vector<infer::Bbox>               bboxes;

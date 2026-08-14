@@ -11,6 +11,8 @@
 //   - WS  /ws3d        broadcasts the 3D bundle when enabled
 //   - GET /api/pose-gate returns the raw tri.skeleton position-only sample
 //   - WS  /ws/pose-gate broadcasts new fitra_pose_gate_v1 samples
+//   - GET /api/fusion-pose returns the D50 evidence-rich raw pose sample
+//   - WS  /ws/fusion-pose preserves boundaries and accepts clock-sync pings
 //
 // The publisher loop runs on its own thread; Crow's worker pool handles
 // the HTTP request and WS plumbing.
@@ -31,6 +33,7 @@ class ExtrinsicCalibSession;   // fwd decl; full header included in crow_server.
 class FloorCalibSession;       // fwd decl; full header included in crow_server.cpp
 class IntrinsicCalibSession;   // fwd decl; full header included in crow_server.cpp
 class PoseGateBus;             // fwd decl; full header included in crow_server.cpp
+class FusionPoseBus;
 }
 
 namespace fitra::tracking { class TrackerBus; }
@@ -162,6 +165,9 @@ public:
     // tracker quaternions.
     void set_pose_gate_bus(pipeline::PoseGateBus* pose_gate_bus);
 
+    // Attach the additive D50 producer.  This does not alter /ws/pose-gate.
+    void set_fusion_pose_bus(pipeline::FusionPoseBus* fusion_pose_bus);
+
     // Attach the VMT publisher so /stats3d (and the /ws3d bundle splice)
     // include its send counters under a top-level "vmt" key. Same ownership
     // rules as set_tracker_bus. Setting nullptr removes the splice (and the
@@ -223,6 +229,7 @@ private:
     pipeline::SnapshotBus& bus_;
     pipeline::Skeleton3DBus* bus3d_ = nullptr;
     pipeline::PoseGateBus* pose_gate_bus_ = nullptr;
+    pipeline::FusionPoseBus* fusion_pose_bus_ = nullptr;
     ServerOptions          opts_;
     std::thread            server_thread_;
     std::thread            publisher_thread_;

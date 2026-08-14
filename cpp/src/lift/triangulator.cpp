@@ -162,10 +162,13 @@ TriangulatedSkeleton Triangulator::triangulate(
         }
 
         float err = 0.0f;
+        float ray_angle_deg = 0.0f;
         int used = 0;
-        if (triangulate_joint(views, out.skeleton.joints[k], err, used)) {
+        if (triangulate_joint(views, out.skeleton.joints[k], err, used,
+                              ray_angle_deg)) {
             out.reproj_error_px[k] = err;
             out.view_count[k] = used;
+            out.max_ray_angle_deg[k] = ray_angle_deg;
             out.valid_joints += 1;
             valid_errors.push_back(err);
         }
@@ -204,7 +207,8 @@ bool Triangulator::triangulate_position_only(
 bool Triangulator::triangulate_joint(const std::vector<JointView>& views,
                                      infer::Joint3D& joint,
                                      float& mean_reproj,
-                                     int& used_views) const {
+                                     int& used_views,
+                                     float& max_ray_angle) const {
     if (views.size() < 2) return false;
 
     // thread_local scratch (see triangulate()): allocation-free across calls,
@@ -244,12 +248,43 @@ bool Triangulator::triangulate_joint(const std::vector<JointView>& views,
     }
     used_views = static_cast<int>(indices.size());
     mean_reproj = static_cast<float>(err_sum / std::max(1, used_views));
+    max_ray_angle = max_ray_angle_deg(views, indices, point);
     joint.x = static_cast<float>(point.x);
     joint.y = static_cast<float>(point.y);
     joint.z = static_cast<float>(point.z);
     joint.score = static_cast<float>(score_sum / std::max(1, used_views));
     joint.valid = true;
     return true;
+}
+
+float Triangulator::max_ray_angle_deg(
+    const std::vector<JointView>& views,
+    const std::vector<int>& indices,
+    const cv::Point3d& point_w) const {
+    double max_angle_rad = 0.0;
+    for (std::size_t i = 0; i < indices.size(); ++i) {
+        const auto& vi = views[static_cast<std::size_t>(indices[i])];
+        const auto& ci = camera_poses_[static_cast<std::size_t>(vi.cam_index)].center_w;
+        cv::Vec3d ri{point_w.x - ci[0], point_w.y - ci[1], point_w.z - ci[2]};
+        const double ni = cv::norm(ri);
+        if (!(ni > 1.0e-12) || !std::isfinite(ni)) continue;
+        ri *= 1.0 / ni;
+        for (std::size_t j = i + 1; j < indices.size(); ++j) {
+            const auto& vj = views[static_cast<std::size_t>(indices[j])];
+            const auto& cj = camera_poses_[static_cast<std::size_t>(vj.cam_index)].center_w;
+            cv::Vec3d rj{point_w.x - cj[0], point_w.y - cj[1], point_w.z - cj[2]};
+            const double nj = cv::norm(rj);
+            if (!(nj > 1.0e-12) || !std::isfinite(nj)) continue;
+            rj *= 1.0 / nj;
+            // A triangulation crossing angle is the acute angle between the
+            // two bearing lines: both parallel and anti-parallel rays are
+            // degenerate. abs(dot) maps that geometry to [0, pi/2].
+            const double cosine = std::clamp(std::abs(ri.dot(rj)), 0.0, 1.0);
+            max_angle_rad = std::max(max_angle_rad, std::acos(cosine));
+        }
+    }
+    constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+    return static_cast<float>(max_angle_rad * kRadToDeg);
 }
 
 bool Triangulator::solve_dlt(const std::vector<JointView>& views,

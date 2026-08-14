@@ -9,6 +9,7 @@
 #include "web/crow_server.hpp"
 #include "config/main_config.hpp"
 #include "pipeline/extrinsic_calib_session.hpp"
+#include "pipeline/fusion_pose.hpp"
 #include "pipeline/pose_gate.hpp"
 #include "pipeline/snapshot.hpp"
 #include "lift/calib_io.hpp"
@@ -21,13 +22,18 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
+
+#include <crow.h>
 
 namespace {
 
@@ -71,6 +77,130 @@ bool http(const char* method, const char* path, int& status, std::string& body,
     std::size_t hdr_end = raw.find("\r\n\r\n");
     body = (hdr_end != std::string::npos) ? raw.substr(hdr_end + 4) : std::string{};
     return true;
+}
+
+bool send_all(int fd, const void* data, std::size_t size) {
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    std::size_t sent = 0;
+    while (sent < size) {
+        const ssize_t n = ::send(fd, bytes + sent, size - sent, 0);
+        if (n <= 0) return false;
+        sent += static_cast<std::size_t>(n);
+    }
+    return true;
+}
+
+bool recv_exact(int fd, void* data, std::size_t size) {
+    auto* bytes = static_cast<std::uint8_t*>(data);
+    std::size_t received = 0;
+    while (received < size) {
+        const ssize_t n = ::recv(fd, bytes + received, size - received, 0);
+        if (n <= 0) return false;
+        received += static_cast<std::size_t>(n);
+    }
+    return true;
+}
+
+// Minimal RFC 6455 client for the fusion clock-sync path. Client frames must
+// be masked; Crow server frames are unmasked. The test sends one short text
+// frame and accepts one unfragmented text response.
+bool websocket_clock_sync(std::string& pong) {
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    timeval timeout{};
+    timeout.tv_sec = 2;
+    (void)::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    (void)::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(kPort);
+    ::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        ::close(fd);
+        return false;
+    }
+
+    const std::string handshake =
+        "GET /ws/fusion-pose HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    if (!send_all(fd, handshake.data(), handshake.size())) {
+        ::close(fd);
+        return false;
+    }
+
+    std::string response_headers;
+    std::array<char, 512> header_buf{};
+    while (response_headers.find("\r\n\r\n") == std::string::npos &&
+           response_headers.size() < 8192) {
+        const ssize_t n = ::recv(fd, header_buf.data(), header_buf.size(), 0);
+        if (n <= 0) {
+            ::close(fd);
+            return false;
+        }
+        response_headers.append(header_buf.data(), static_cast<std::size_t>(n));
+    }
+    if (response_headers.find(" 101 ") == std::string::npos) {
+        ::close(fd);
+        return false;
+    }
+
+    const std::string ping =
+        "{\"type\":\"clock_sync_ping\",\"nonce\":33,"
+        "\"client_send_mono_ns\":123456789}";
+    if (ping.size() >= 126) {
+        ::close(fd);
+        return false;
+    }
+    const std::array<std::uint8_t, 4> mask{{0x12, 0x34, 0x56, 0x78}};
+    std::vector<std::uint8_t> frame;
+    frame.reserve(2 + mask.size() + ping.size());
+    frame.push_back(0x81);  // FIN + text
+    frame.push_back(static_cast<std::uint8_t>(0x80U | ping.size()));
+    frame.insert(frame.end(), mask.begin(), mask.end());
+    for (std::size_t i = 0; i < ping.size(); ++i) {
+        frame.push_back(static_cast<std::uint8_t>(ping[i]) ^ mask[i % mask.size()]);
+    }
+    if (!send_all(fd, frame.data(), frame.size())) {
+        ::close(fd);
+        return false;
+    }
+
+    std::array<std::uint8_t, 2> head{};
+    if (!recv_exact(fd, head.data(), head.size()) ||
+        (head[0] & 0x0fU) != 0x01U || (head[1] & 0x80U) != 0) {
+        ::close(fd);
+        return false;
+    }
+    std::uint64_t payload_size = head[1] & 0x7fU;
+    if (payload_size == 126) {
+        std::array<std::uint8_t, 2> ext{};
+        if (!recv_exact(fd, ext.data(), ext.size())) {
+            ::close(fd);
+            return false;
+        }
+        payload_size = (static_cast<std::uint64_t>(ext[0]) << 8U) | ext[1];
+    } else if (payload_size == 127) {
+        std::array<std::uint8_t, 8> ext{};
+        if (!recv_exact(fd, ext.data(), ext.size())) {
+            ::close(fd);
+            return false;
+        }
+        payload_size = 0;
+        for (const auto byte : ext) payload_size = (payload_size << 8U) | byte;
+    }
+    if (payload_size > 4096) {
+        ::close(fd);
+        return false;
+    }
+    pong.resize(static_cast<std::size_t>(payload_size));
+    const bool ok = recv_exact(fd, pong.data(), pong.size());
+    ::close(fd);
+    return ok;
 }
 
 fitra::lift::CalibrationSet make_intrinsics() {
@@ -138,6 +268,13 @@ int main() {
     pose_gate.publish_unavailable(
         123'000'000, fitra::pipeline::PoseGateSourceState::Unavailable,
         "test_boundary");
+    fitra::pipeline::FusionPoseBus fusion_pose{
+        pose_gate.stream_id(), pose_gate.coordinate_epoch()};
+    fusion_pose.publish_boundary(pose_gate.snapshot());
+    // Keep the WS clock-sync integration deterministic: GET still reads the
+    // latest boundary snapshot, while the connection has no queued pose frame
+    // that could race the direct pong response.
+    (void)fusion_pose.drain_pending_json();
     fitra::vmt::HmdPoseBus hmd_bus;
     fitra::vmt::ControllerPoseBus controller_bus;
 
@@ -184,6 +321,7 @@ int main() {
     // the fd closes with the process — no issue there.
     auto server = std::make_unique<fitra::web::CrowServer>(bus, nullptr, opts);
     server->set_pose_gate_bus(&pose_gate);
+    server->set_fusion_pose_bus(&fusion_pose);
     server->set_extrinsic_calib_session(&session);
     server->set_extrinsic_calib_next_step(
         "restart: ./main --calibrate --enable-3d --calib /tmp/fitra_excal_route_test.yaml ...");
@@ -253,6 +391,45 @@ int main() {
         CHECK(body.find("\"joints\":{") != std::string::npos);
         CHECK(body.find("\"hips\":{") != std::string::npos);
         CHECK(body.find("quat") == std::string::npos);
+
+        CHECK(http("GET", "/api/fusion-pose", status, body));
+        CHECK(status == 200);
+        CHECK(body.find("\"protocol_version\":\"fitra_fusion_pose_v1\"") !=
+              std::string::npos);
+        CHECK(body.find("\"event_type\":\"boundary\"") !=
+              std::string::npos);
+        CHECK(body.find("\"continuity_epoch\":1") != std::string::npos);
+        CHECK(body.find("\"source_publish_mono_ns\":") !=
+              std::string::npos);
+        CHECK(body.find("\"capture\":{\"oldest_mono_ns\":null") !=
+              std::string::npos);
+        CHECK(body.find("\"timestamp_semantics\":\"unavailable\"") !=
+              std::string::npos);
+        CHECK(body.find("quat") == std::string::npos);
+
+        std::string pong;
+        CHECK(websocket_clock_sync(pong));
+        if (!pong.empty()) {
+            const auto parsed = crow::json::load(pong);
+            CHECK(static_cast<bool>(parsed));
+            if (parsed) {
+                CHECK(parsed["type"].t() == crow::json::type::String);
+                CHECK(std::string{parsed["type"].s()} == "clock_sync_pong");
+                for (const char* field : {
+                         "nonce", "client_send_mono_ns",
+                         "server_receive_mono_ns", "server_send_mono_ns"}) {
+                    CHECK(parsed[field].t() == crow::json::type::Number);
+                    CHECK(parsed[field].nt() !=
+                          crow::json::num_type::Floating_point);
+                    CHECK(parsed[field].nt() !=
+                          crow::json::num_type::Double_precision_floating_point);
+                }
+                CHECK(parsed["nonce"].u() == 33);
+                CHECK(parsed["client_send_mono_ns"].u() == 123456789);
+                CHECK(parsed["server_receive_mono_ns"].u() <=
+                      parsed["server_send_mono_ns"].u());
+            }
+        }
 
         // /api/flow/switch only exists on daemon-managed modules. Standalone
         // runs never attach the handler, so the POST falls through to the

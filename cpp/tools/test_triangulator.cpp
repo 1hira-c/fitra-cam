@@ -100,6 +100,56 @@ void test_round_trip() {
         const double dz = static_cast<double>(got.z) - points[k].z;
         const double err_m = std::sqrt(dx * dx + dy * dy + dz * dz);
         check(err_m < 1.0e-3, "triangulated joint drift exceeds 1mm");
+        check(tri.max_ray_angle_deg[k] > 5.0f &&
+                  tri.max_ray_angle_deg[k] < 12.0f,
+              "two-camera inlier ray angle is outside expected geometry");
+    }
+}
+
+void test_ray_angle_uses_final_inliers_only() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Coco17);
+    auto calib = make_calibration({"cam0", "cam1", "cam2"});
+    fitra::lift::Triangulator::Options options;
+    options.kp_conf_thresh = 0.3f;
+    options.max_reproj_px = 6.0f;
+    fitra::lift::Triangulator triangulator{calib, options};
+
+    const auto points = make_points();
+    auto p0 = project_person(calib.cameras[0], points);
+    auto p1 = project_person(calib.cameras[1], points);
+    auto p2_clean = project_person(calib.cameras[2], points);
+    auto p2_outlier = p2_clean;
+    for (std::size_t k = 0; k < points.size(); ++k) {
+        // Keep the third view just above the confidence gate but make its
+        // reprojection incompatible with the two high-confidence inliers.
+        // If max_ray_angle_deg accidentally uses all candidate views, cam2's
+        // wider baseline would inflate the reported quality evidence.
+        p2_outlier.kpts[k].x += 20.0f;
+        p2_outlier.kpts[k].y -= 16.0f;
+        p2_outlier.kpts[k].score = 0.31f;
+    }
+
+    const auto inlier_pair = triangulator.triangulate({
+        {0, &p0}, {1, &p1},
+    });
+    const auto all_clean = triangulator.triangulate({
+        {0, &p0}, {1, &p1}, {2, &p2_clean},
+    });
+    const auto with_outlier = triangulator.triangulate({
+        {0, &p0}, {1, &p1}, {2, &p2_outlier},
+    });
+
+    for (std::size_t k = 0; k < points.size(); ++k) {
+        check(with_outlier.skeleton.joints[k].valid,
+              "two inlier views must still triangulate with one outlier");
+        check(with_outlier.view_count[k] == 2,
+              "reprojection outlier must be removed from final views");
+        check(std::abs(with_outlier.max_ray_angle_deg[k] -
+                       inlier_pair.max_ray_angle_deg[k]) < 0.1f,
+              "max ray angle included a rejected reprojection outlier");
+        check(all_clean.max_ray_angle_deg[k] >
+                  with_outlier.max_ray_angle_deg[k] + 4.0f,
+              "test geometry does not distinguish candidate and final rays");
     }
 }
 
@@ -179,6 +229,7 @@ void test_camera_id_validation() {
 int main() {
     try {
         test_round_trip();
+        test_ray_angle_uses_final_inliers_only();
         test_halpe_face_joints_are_excluded_from_3d();
         test_camera_id_validation();
         std::puts("test_triangulator ok");
