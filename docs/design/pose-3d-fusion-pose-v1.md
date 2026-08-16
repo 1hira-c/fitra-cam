@@ -22,7 +22,7 @@ Goals:
 
 - preserve the kernel-provided V4L2 monotonic timestamp and SOE/EOF meaning
   from capture through decoded frames and synchronized multi-camera samples;
-- expose the eight position-only fusion joints and the quality evidence needed
+- expose the ten position-only fusion joints and the quality evidence needed
   by the fixed consumer gates;
 - make ordinary pose delivery latest-only while preserving ordered lifecycle
   boundaries;
@@ -77,10 +77,23 @@ does not accept decimal strings.
 }
 ```
 
-The eight joint keys are `hips`, `neck`, `left_hip`, `right_hip`,
-`left_knee`, `right_knee`, `left_ankle`, and `right_ankle`.  A joint with no
-current triangulated observation has `availability:"Unavailable"` and every
-position/quality field is `null`; values are never held or predicted.
+The ten joint keys are `hips`, `neck`, `left_hip`, `right_hip`, `left_knee`,
+`right_knee`, `left_ankle`, `right_ankle`, `left_shoulder`, and
+`right_shoulder`.  The shoulder entries map directly to the corresponding
+HALPE26 joints and carry the same score, final-inlier view count, mean
+reprojection error, and maximum acute ray angle as the original eight joints.
+A joint with no current triangulated observation has
+`availability:"Unavailable"` and every position/quality field is `null`;
+values are never held or predicted.
+
+The D50 hardware review added the shoulder pair without changing the protocol
+identifier because this producer contract has not merged.  The consumer uses
+the left/right hip lateral axis as the waist world-yaw observation and the
+left/right shoulder lateral axis as the chest world-yaw observation.  This
+producer exports only raw position evidence; BoneLocal axis comparison,
+post-wear I-pose shoulder-width normalization, and tracker orientation remain
+consumer responsibilities.  `fitra_pose_gate_v1` deliberately stays at its
+original exact eight keys.
 
 `capture.timestamp_semantics` is one of:
 
@@ -108,7 +121,7 @@ invalidate accumulated evidence whenever `event_type` is `boundary`, any of
 `continuity_epoch` changes.
 
 `Reacquired` and `PersonSwitched` are boundary-only on this producer: their
-eight joints and capture evidence are unavailable, and the next ordinary
+ten joints and capture evidence are unavailable, and the next ordinary
 `Fresh` observation is published separately as a pose.  This avoids making a
 lifecycle state carry an ambiguous partially usable pose.
 
@@ -178,7 +191,8 @@ single latest slot for all events (can erase loss/epoch evidence).
 1. Both wire producers observe `TriangulatedSkeleton` before Kalman, IK and
    floor-contact mutation.
 2. `fitra_pose_gate_v1` serialization and tests remain unchanged.
-3. A Fresh fusion joint contains position plus all four quality fields; an
+3. Every document contains exactly ten fusion joints.  A Fresh fusion joint
+   contains position plus all four quality fields; an
    unavailable joint contains none of them.
 4. The triangulator's `max_ray_angle_deg` is computed only across the final
    inlier views after reprojection rejection.
@@ -202,11 +216,12 @@ single latest slot for all events (can erase loss/epoch evidence).
 
 - unit: V4L2 monotonic SOE/EOF, unknown/copy/invalid values;
 - unit: ray angle for known camera geometry and final-inlier selection;
-- unit: complete Fresh/unavailable wire shape and exact JSON number/null types,
+- unit: complete exact-ten Fresh/unavailable wire shape and exact JSON
+  number/null types, direct HALPE26 shoulder mapping,
   old PoseGate serialization, latest-only replacement, stream/subject/
   coordinate invalidation, boundary ordering and overflow continuity;
-- unit/integration: clock-sync echo, numeric fields and monotonic receive/send
-  ordering through the actual Crow WebSocket route;
+- unit/integration: exact-ten GET/WS documents plus clock-sync echo, numeric
+  fields and monotonic receive/send ordering through the actual Crow routes;
 - focused: `test_pose_gate`, `test_fusion_pose`, `test_triangulator`;
 - full: configure, build, `ctest --test-dir cpp/build --output-on-failure`, and
   `./cpp/build/main --help`;

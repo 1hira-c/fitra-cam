@@ -138,6 +138,7 @@ add_library(fitra_pipeline STATIC
     pipeline/pose_pipeline.cpp
     pipeline/multi_pipeline.cpp
     pipeline/fusion_pose.cpp
+    pipeline/tracker_axis_lineage.cpp
     pipeline/pose_gate.cpp
     pipeline/snapshot.cpp
     pipeline/calibration_session.cpp
@@ -157,6 +158,7 @@ target_link_libraries(fitra_pipeline PUBLIC
 # Shared tracker extraction, smoothing, and WebUI snapshot publication.
 add_library(fitra_tracking STATIC
     tracking/tracker_bus.cpp
+    tracking/tracker_axis.cpp
     tracking/tracker_extract.cpp
     tracking/tracker_extractor.cpp
 )

@@ -212,6 +212,36 @@ void test_halpe_face_joints_are_excluded_from_3d() {
           "neck must stay available for torso tracking");
 }
 
+void test_two_view_reprojection_outlier_is_rejected() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Coco17);
+    auto calib = make_calibration({"cam0", "cam1"});
+    fitra::lift::Triangulator::Options options;
+    options.max_reproj_px = 6.0f;
+    fitra::lift::Triangulator triangulator{calib, options};
+
+    const auto points = make_points();
+    auto p0 = project_person(calib.cameras[0], points);
+    auto p1 = project_person(calib.cameras[1], points);
+    constexpr std::size_t outlier_joint = 5;
+    // With a rectified two-camera pair, a vertical disagreement cannot be
+    // explained by disparity. The DLT compromise must not become a valid 3D
+    // joint merely because there is no third view to run the pruning pass.
+    p1.kpts[outlier_joint].y += 80.0f;
+    std::vector<fitra::lift::PerCameraObservation> observations{
+        {0, &p0},
+        {1, &p1},
+    };
+
+    const auto tri = triangulator.triangulate(observations);
+    check(!tri.skeleton.joints[outlier_joint].valid,
+          "two-view reprojection outlier must be unavailable");
+    check(tri.view_count[outlier_joint] == 0,
+          "rejected two-view joint must not publish inlier provenance");
+    check(tri.valid_joints ==
+              static_cast<int>(fitra::lift::active_kp_count()) - 1,
+          "rejecting one outlier must preserve the other triangulated joints");
+}
+
 void test_camera_id_validation() {
     auto calib = make_calibration({"left", "right"});
     fitra::lift::Triangulator triangulator{calib};
@@ -231,6 +261,7 @@ int main() {
         test_round_trip();
         test_ray_angle_uses_final_inliers_only();
         test_halpe_face_joints_are_excluded_from_3d();
+        test_two_view_reprojection_outlier_is_rejected();
         test_camera_id_validation();
         std::puts("test_triangulator ok");
         return 0;

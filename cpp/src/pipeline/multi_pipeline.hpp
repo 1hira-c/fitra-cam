@@ -43,6 +43,7 @@ public:
         Skeleton3DBus* bus = nullptr;
         PoseGateBus* pose_gate = nullptr;
         FusionPoseBus* fusion_pose = nullptr;
+        TrackerAxisLineageBus* tracker_axis_lineage = nullptr;
         // M0 has no cross-camera multi-person association. Keep the gate
         // explicitly single-subject rather than deriving identity from an
         // array index when the general multi-person path is enabled.

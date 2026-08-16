@@ -22,6 +22,7 @@
 #include <opencv2/core.hpp>
 
 #include "pipeline/snapshot.hpp"
+#include "tracking/tracker_axis.hpp"
 #include "tracking/tracker_bus.hpp"
 #include "tracking/tracker_extract.hpp"
 
@@ -87,7 +88,9 @@ class TrackerExtractor {
 public:
     TrackerExtractor(pipeline::Skeleton3DBus&    skeleton_bus,
                      TrackerBus&            tracker_bus,
-                     TrackerExtractorOptions     opts);
+                     TrackerExtractorOptions     opts,
+                     TrackerAxisBus* tracker_axis_bus = nullptr,
+                     pipeline::TrackerAxisLineageBus* lineage_bus = nullptr);
     ~TrackerExtractor();
 
     TrackerExtractor(const TrackerExtractor&) = delete;
@@ -113,6 +116,8 @@ private:
 
     pipeline::Skeleton3DBus&            skel_bus_;
     TrackerBus&                    tracker_bus_;
+    TrackerAxisBus*                tracker_axis_bus_ = nullptr;
+    pipeline::TrackerAxisLineageBus* lineage_bus_ = nullptr;
     TrackerExtractorOptions             opts_;
 
     std::thread                         thread_;

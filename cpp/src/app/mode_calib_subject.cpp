@@ -157,7 +157,9 @@ int run_mode_calib_subject(const config::MainOptions& opts_in, FlowControl& flow
     // TrackerExtractor for the wizard's WebUI 3D viz (no publishers in this
     // mode — setup modes emit no tracker output).
     auto tracker_extractor =
-        make_tracker_extractor(opts, *threed.bus3d, *threed.tracker_bus);
+        make_tracker_extractor(opts, *threed.bus3d, *threed.tracker_bus,
+                               nullptr, threed.tracker_axis_bus.get(),
+                               threed.tracker_axis_lineage_bus.get());
     struct ExtractorStop {
         tracking::TrackerExtractor* tex;
         ~ExtractorStop() { if (tex) tex->stop(); }
@@ -176,6 +178,9 @@ int run_mode_calib_subject(const config::MainOptions& opts_in, FlowControl& flow
         server->set_tracker_bus(threed.tracker_bus.get());
         if (threed.pose_gate_bus) server->set_pose_gate_bus(threed.pose_gate_bus.get());
         if (threed.fusion_pose_bus) server->set_fusion_pose_bus(threed.fusion_pose_bus.get());
+        if (threed.tracker_axis_bus) {
+            server->set_tracker_axis_bus(threed.tracker_axis_bus.get());
+        }
         server->start();
     }
 

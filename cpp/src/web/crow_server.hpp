@@ -13,6 +13,8 @@
 //   - WS  /ws/pose-gate broadcasts new fitra_pose_gate_v1 samples
 //   - GET /api/fusion-pose returns the D50 evidence-rich raw pose sample
 //   - WS  /ws/fusion-pose preserves boundaries and accepts clock-sync pings
+//   - GET /api/tracker-axis returns post-One-Euro anatomical axes
+//   - WS  /ws/tracker-axis preserves boundaries and accepts clock-sync pings
 //
 // The publisher loop runs on its own thread; Crow's worker pool handles
 // the HTTP request and WS plumbing.
@@ -36,7 +38,10 @@ class PoseGateBus;             // fwd decl; full header included in crow_server.
 class FusionPoseBus;
 }
 
-namespace fitra::tracking { class TrackerBus; }
+namespace fitra::tracking {
+class TrackerBus;
+class TrackerAxisBus;
+}
 
 namespace fitra::vmt {
 class VmtPublisher;      // fwd decl; full header in crow_server.cpp
@@ -168,6 +173,9 @@ public:
     // Attach the additive D50 producer.  This does not alter /ws/pose-gate.
     void set_fusion_pose_bus(pipeline::FusionPoseBus* fusion_pose_bus);
 
+    // Attach the additive post-One-Euro D50 anatomical-axis producer.
+    void set_tracker_axis_bus(tracking::TrackerAxisBus* tracker_axis_bus);
+
     // Attach the VMT publisher so /stats3d (and the /ws3d bundle splice)
     // include its send counters under a top-level "vmt" key. Same ownership
     // rules as set_tracker_bus. Setting nullptr removes the splice (and the
@@ -204,7 +212,8 @@ public:
     void set_discovery_beacon(vmt::DiscoveryBeacon* beacon);
 
     // Attach the idle/standby shared state (issue #37). The /ws, /ws3d, and
-    // /ws/pose-gate onopen/onclose handlers then maintain its ws_client_count,
+    // /ws/pose-gate, /ws/fusion-pose and /ws/tracker-axis onopen/onclose
+    // handlers then maintain its ws_client_count,
     // and /stats3d, the /ws3d bundle, and /api/state expose an `idle` status
     // object. `enabled` / `enter_after_s` / `tick_hz` are config echoes for the
     // status surface.
@@ -230,6 +239,7 @@ private:
     pipeline::Skeleton3DBus* bus3d_ = nullptr;
     pipeline::PoseGateBus* pose_gate_bus_ = nullptr;
     pipeline::FusionPoseBus* fusion_pose_bus_ = nullptr;
+    tracking::TrackerAxisBus* tracker_axis_bus_ = nullptr;
     ServerOptions          opts_;
     std::thread            server_thread_;
     std::thread            publisher_thread_;

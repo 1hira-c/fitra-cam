@@ -14,7 +14,7 @@ namespace fitra::pipeline {
 namespace {
 
 constexpr std::array<std::size_t,
-                     static_cast<std::size_t>(PoseGateJoint::Count)>
+                     static_cast<std::size_t>(FusionPoseJoint::Count)>
     kHalpeFusionIndices{{
         lift::kHalpeHipCenter,
         lift::kHalpeNeck,
@@ -24,6 +24,8 @@ constexpr std::array<std::size_t,
         lift::kHalpeRightKnee,
         lift::kHalpeLeftAnkle,
         lift::kHalpeRightAnkle,
+        lift::kHalpeLeftShoulder,
+        lift::kHalpeRightShoulder,
     }};
 
 void append_json_string(std::string& out, const std::string& value) {
@@ -121,9 +123,10 @@ std::string serialize(const FusionPoseFrame& frame) {
            ",\"kalman\":false,\"ik\":false,\"floor_contact\":false}";
     out += ",\"position_space\":\"fitra_world_z_up_m\",\"joints\":{";
     for (std::size_t i = 0;
-         i < static_cast<std::size_t>(PoseGateJoint::Count); ++i) {
+         i < static_cast<std::size_t>(FusionPoseJoint::Count); ++i) {
         if (i) out += ',';
-        append_json_string(out, pose_gate_joint_name(static_cast<PoseGateJoint>(i)));
+        append_json_string(out,
+                           fusion_pose_joint_name(static_cast<FusionPoseJoint>(i)));
         out += ":{";
         const auto& joint = frame.joints[i];
         out += "\"position_m\":";
@@ -181,6 +184,23 @@ const char* fusion_pose_source_state_name(FusionPoseSourceState state) {
         case FusionPoseSourceState::ContinuityReset: return "ContinuityReset";
     }
     return "Unavailable";
+}
+
+const char* fusion_pose_joint_name(FusionPoseJoint joint) {
+    switch (joint) {
+        case FusionPoseJoint::Hips:          return "hips";
+        case FusionPoseJoint::Neck:          return "neck";
+        case FusionPoseJoint::LeftHip:       return "left_hip";
+        case FusionPoseJoint::RightHip:      return "right_hip";
+        case FusionPoseJoint::LeftKnee:      return "left_knee";
+        case FusionPoseJoint::RightKnee:     return "right_knee";
+        case FusionPoseJoint::LeftAnkle:     return "left_ankle";
+        case FusionPoseJoint::RightAnkle:    return "right_ankle";
+        case FusionPoseJoint::LeftShoulder:  return "left_shoulder";
+        case FusionPoseJoint::RightShoulder: return "right_shoulder";
+        case FusionPoseJoint::Count:         break;
+    }
+    return "unknown";
 }
 
 FusionCaptureInterval make_fusion_capture_interval(

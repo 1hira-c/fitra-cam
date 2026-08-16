@@ -39,8 +39,14 @@ float percentile_inplace(std::vector<float>& samples, float pct) {
 
 TrackerExtractor::TrackerExtractor(pipeline::Skeleton3DBus& skeleton_bus,
                                    TrackerBus&         tracker_bus,
-                                   TrackerExtractorOptions  opts)
-    : skel_bus_(skeleton_bus), tracker_bus_(tracker_bus), opts_(opts) {
+                                   TrackerExtractorOptions  opts,
+                                   TrackerAxisBus* tracker_axis_bus,
+                                   pipeline::TrackerAxisLineageBus* lineage_bus)
+    : skel_bus_(skeleton_bus),
+      tracker_bus_(tracker_bus),
+      tracker_axis_bus_(tracker_axis_bus),
+      lineage_bus_(lineage_bus),
+      opts_(opts) {
     for (auto& q : prev_quat_) q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
     for (auto& p : prev_pos_)  p = cv::Vec3f{0.0f, 0.0f, 0.0f};
     for (auto& q : last_emitted_quat_) q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
@@ -309,6 +315,14 @@ void TrackerExtractor::run_loop() {
         have_last_emitted_ = true;
 
         tracker_bus_.publish(trackers, stats_out);
+        if (tracker_axis_bus_) {
+            if (lineage_bus_) {
+                for (const auto& boundary : lineage_bus_->drain_boundaries()) {
+                    tracker_axis_bus_->publish(trackers, boundary);
+                }
+            }
+            tracker_axis_bus_->publish(trackers, snap.tracker_axis_lineage);
+        }
     }
 }
 

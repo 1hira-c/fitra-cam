@@ -22,13 +22,23 @@ using fitra::camera::V4l2TimestampSemantics;
 using fitra::lift::TriangulatedSkeleton;
 using fitra::pipeline::FusionCaptureInterval;
 using fitra::pipeline::FusionPoseEventType;
+using fitra::pipeline::FusionPoseJoint;
 using fitra::pipeline::FusionPoseSourceState;
 using fitra::pipeline::PoseGateAvailability;
 using fitra::pipeline::PoseGateFrame;
 using fitra::pipeline::PoseGateJoint;
 using fitra::pipeline::PoseGateSourceState;
 
-constexpr std::array<const char*, 8> kJointNames{{
+static_assert(static_cast<std::size_t>(FusionPoseJoint::Count) == 10);
+static_assert(static_cast<std::size_t>(PoseGateJoint::Count) == 8);
+
+constexpr std::array<const char*, 10> kJointNames{{
+    "hips", "neck", "left_hip", "right_hip",
+    "left_knee", "right_knee", "left_ankle", "right_ankle",
+    "left_shoulder", "right_shoulder",
+}};
+
+constexpr std::array<const char*, 8> kPoseGateJointNames{{
     "hips", "neck", "left_hip", "right_hip",
     "left_knee", "right_knee", "left_ankle", "right_ankle",
 }};
@@ -71,7 +81,20 @@ void check_exact_joint_keys(const crow::json::rvalue& joints) {
     expected.reserve(kJointNames.size());
     for (const char* name : kJointNames) expected.emplace_back(name);
     std::sort(expected.begin(), expected.end());
-    check(keys == expected, "joints must contain exactly the eight D50 keys");
+    check(keys == expected, "joints must contain exactly the ten D50 keys");
+}
+
+void check_exact_pose_gate_joint_keys(const crow::json::rvalue& joints) {
+    check(joints.t() == crow::json::type::Object,
+          "PoseGate joints must be a JSON object");
+    auto keys = joints.keys();
+    std::sort(keys.begin(), keys.end());
+    std::vector<std::string> expected;
+    expected.reserve(kPoseGateJointNames.size());
+    for (const char* name : kPoseGateJointNames) expected.emplace_back(name);
+    std::sort(expected.begin(), expected.end());
+    check(keys == expected,
+          "PoseGate v1 joints must remain exactly the original eight keys");
 }
 
 void check_fresh_joint_wire(const crow::json::rvalue& joint,
@@ -109,6 +132,24 @@ void check_unavailable_joint_wire(const crow::json::rvalue& joint,
         check(joint[field].t() == crow::json::type::Null,
               name + "." + field + " must be null");
     }
+}
+
+void check_joint_matches_source(const crow::json::rvalue& joint,
+                                const TriangulatedSkeleton& tri,
+                                std::size_t source_index,
+                                const std::string& name) {
+    const auto& source = tri.skeleton.joints[source_index];
+    check(std::abs(joint["position_m"][0].d() - source.x) < 1.0e-6 &&
+              std::abs(joint["position_m"][1].d() - source.y) < 1.0e-6 &&
+              std::abs(joint["position_m"][2].d() - source.z) < 1.0e-6 &&
+              std::abs(joint["keypoint_score"].d() - source.score) < 1.0e-6 &&
+              joint["inlier_view_count"].u() ==
+                  static_cast<std::uint64_t>(tri.view_count[source_index]) &&
+              std::abs(joint["mean_reproj_error_px"].d() -
+                       tri.reproj_error_px[source_index]) < 1.0e-6 &&
+              std::abs(joint["max_ray_angle_deg"].d() -
+                       tri.max_ray_angle_deg[source_index]) < 1.0e-6,
+          name + " did not preserve the HALPE26 position/quality tuple");
 }
 
 void check_boundary_wire(const std::string& json,
@@ -149,13 +190,15 @@ TriangulatedSkeleton make_tri(float shift_x = 0.0f) {
         fitra::lift::kHalpeLeftHip, fitra::lift::kHalpeRightHip,
         fitra::lift::kHalpeLeftKnee, fitra::lift::kHalpeRightKnee,
         fitra::lift::kHalpeLeftAnkle, fitra::lift::kHalpeRightAnkle,
+        fitra::lift::kHalpeLeftShoulder, fitra::lift::kHalpeRightShoulder,
     };
     for (std::size_t i = 0; i < std::size(indices); ++i) {
         set_joint(tri.skeleton, indices[i], shift_x + 0.01f * i,
-                  0.0f, 0.8f + 0.05f * i);
-        tri.view_count[indices[i]] = 3;
-        tri.reproj_error_px[indices[i]] = 0.8f;
-        tri.max_ray_angle_deg[indices[i]] = 12.5f;
+                  0.0f, 0.8f + 0.05f * i,
+                  0.7f + 0.01f * i);
+        tri.view_count[indices[i]] = 2 + static_cast<int>(i % 2);
+        tri.reproj_error_px[indices[i]] = 0.5f + 0.1f * i;
+        tri.max_ray_angle_deg[indices[i]] = 5.0f + i;
     }
     return tri;
 }
@@ -228,6 +271,11 @@ void test_wire_and_pose_gate_compatibility() {
     const auto tri = make_tri();
     const PoseGateFrame lifecycle = gate.observe(tri, 1'100'000'000ULL);
     const std::string legacy_before = gate.make_json();
+    const auto legacy_root = parse_json(legacy_before);
+    check_exact_pose_gate_joint_keys(legacy_root["joints"]);
+    check(!legacy_root["joints"].has("left_shoulder") &&
+              !legacy_root["joints"].has("right_shoulder"),
+          "Fusion shoulder keys leaked into PoseGate v1");
 
     fitra::pipeline::FusionPoseBus fusion{
         gate.stream_id(), gate.coordinate_epoch()};
@@ -283,6 +331,12 @@ void test_wire_and_pose_gate_compatibility() {
     for (const char* name : kJointNames) {
         check_fresh_joint_wire(joints[name], name);
     }
+    check_joint_matches_source(joints["left_shoulder"], tri,
+                               fitra::lift::kHalpeLeftShoulder,
+                               "left_shoulder");
+    check_joint_matches_source(joints["right_shoulder"], tri,
+                               fitra::lift::kHalpeRightShoulder,
+                               "right_shoulder");
     check(json.find("quat") == std::string::npos,
           "fusion pose wire must remain position-only");
     check(gate.make_json() == legacy_before,
@@ -293,6 +347,7 @@ void test_unavailable_joint_and_timestamp_shape() {
     fitra::pipeline::PoseGateBus gate{"null-shape"};
     auto tri = make_tri();
     tri.skeleton.joints[fitra::lift::kHalpeLeftKnee].valid = false;
+    tri.skeleton.joints[fitra::lift::kHalpeLeftShoulder].valid = false;
     const auto lifecycle = gate.observe(tri, 2'000'000'000ULL);
     fitra::pipeline::FusionPoseBus fusion{gate.stream_id()};
     fusion.observe(tri, {}, lifecycle);
@@ -306,6 +361,10 @@ void test_unavailable_joint_and_timestamp_shape() {
           "unavailable capture semantics must have a complete null shape");
     check_unavailable_joint_wire(root["joints"]["left_knee"], "left_knee");
     check_fresh_joint_wire(root["joints"]["right_knee"], "right_knee");
+    check_unavailable_joint_wire(root["joints"]["left_shoulder"],
+                                 "left_shoulder");
+    check_fresh_joint_wire(root["joints"]["right_shoulder"],
+                           "right_shoulder");
 }
 
 void test_latest_pose_and_ordered_boundaries() {

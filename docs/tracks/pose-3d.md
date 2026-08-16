@@ -36,10 +36,19 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
 
 ### 設計原則 / live な制約
 
+- **D50 tracker axis wire はpost-One-Euro軸 + raw provenance**:
+  additiveな `fitra_tracker_axis_v1` を `GET /api/tracker-axis` /
+  `WS /ws/tracker-axis` へ出す。Chest/Hipsは`-rotate(q,+X)`、脚4本は
+  `rotate(q,+Z)` のfinite unit axisで、exact 6順序を固定する。軸は既存TrackerExtractorの
+  One-Euro後quaternionから作るが、同一captureのraw shoulder/hip/knee/ankle実測lineageが
+  揃わないpredict/hold/FK fillはUnavailable。通常frameはlatest-only、boundaryはraw→tracker間と
+  wire配信の両方で有界FIFOを持ち、overflowはcontinuity resetへcollapseする。不明・混在V4L2
+  timestampは`unsupported_timestamp`でfail closedし、clock-syncはFusionPose実装を共用する。
+  → [design/pose-3d-tracker-axis-v1.md](../design/pose-3d-tracker-axis-v1.md)
 - **D50 fusion wire は additive な専用 bus**: 既存 `fitra_pose_gate_v1` を変更せず、
   同じ raw `tri.skeleton` と lifecycle 判定を読む `FusionPoseBus` から
   `fitra_fusion_pose_v1` を `GET /api/fusion-pose` / `WS /ws/fusion-pose` へ出す。
-  8関節の位置とscore/inlier数/reprojection/max acute ray angle、V4L2 kernel
+  10関節（既存8 + 左右shoulder）の位置とscore/inlier数/reprojection/max acute ray angle、V4L2 kernel
   monotonic SOE/EOFのcapture区間、publish monotonic時刻、continuityをJSON numberで公開する。
   通常poseはlatest-only、lifecycle境界は有界FIFOで順序保持し、overflow/stream交換時は
   `ContinuityReset` で下流holdを必ず切る。clock-sync ping/pongも同じWSで扱う。
@@ -129,12 +138,34 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-08-16 — D50 `fitra_tracker_axis_v1` producer
+
+未マージFusionPoseのcapture/lifecycleを再利用し、One-Euro後TrackerPoseから胸・腰・両大腿・
+両下腿のexact 6 anatomical axisだけを公開するadditive GET/WSを追加した。raw triangulationの
+左右shoulder/hip/knee/ankle実測可否を値なしlineageとしてpost-filter snapshotまで運び、
+predict/hold/IK/FK fillをFreshから除外する。latest-only frameとordered boundaryを分離し、
+Skeleton3DBusのlatest上書きを跨ぐ専用lineage FIFOとpublic delivery FIFOの両方でoverflowを
+`continuity_reset`へcollapseする。不明timestampは`unsupported_timestamp`、WS clock-syncは
+FusionPoseと共用。pure axis/schema/lifecycle testとCrow GET+WS integrationを追加した。
+既存PoseGate exact8/FusionPose exact10は変更しない。
+設計: [design/pose-3d-tracker-axis-v1.md](../design/pose-3d-tracker-axis-v1.md)。
+
+### 2026-08-14 — D50 FusionPoseを肩yaw観測向けexact 10関節へ改訂
+
+未マージの `fitra_fusion_pose_v1` だけを、既存8関節にHALPE26の
+`left_shoulder` / `right_shoulder` を加えたexact 10関節へ改訂した。両肩は既存関節と同じ
+position、score、最終inlier view数、平均再投影誤差、最大acute ray angleを持ち、欠損・全boundary
+では全品質をnullにする。fitra-fusionは腰trackerのworld yawを左右hip横軸、胸trackerのworld yawを
+左右shoulder横軸から観測する。`fitra_pose_gate_v1` はexact 8関節のまま変更しない。
+pure schema/mapping/boundary testとCrow GET+WS integrationで両契約を固定した。
+設計: [design/pose-3d-fusion-pose-v1.md](../design/pose-3d-fusion-pose-v1.md)。
+
 ### 2026-08-14 — D50 `fitra_fusion_pose_v1` producer
 
 既存PoseGateを完全互換のまま残し、V4L2 kernel timestampのmonotonic SOE/EOF意味論を
 capture→decode→同期snapshotへ保持する専用 `FusionPoseBus` を追加した。参加cameraの意味論が
 混在・不明ならcapture区間全体をUnavailableとし、三角測量の最終inlier rayだけから最大acute交差角を
-算出する。新wireは8関節の位置・score・inlier view数・平均再投影誤差・ray angleと、capture区間、
+算出する。新wireは10関節（既存8 + 左右shoulder）の位置・score・inlier view数・平均再投影誤差・ray angleと、capture区間、
 source publish時刻、stream/subject/coordinate/continuityを非負JSON numberで公開する。
 通常poseのlatest-only slotと順序付き境界FIFOを分離し、overflow/stream交換時は
 `ContinuityReset` を先行させる。`/api/fusion-pose`、`/ws/fusion-pose`、numeric clock-sync

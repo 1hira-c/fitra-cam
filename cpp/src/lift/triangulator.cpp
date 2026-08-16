@@ -248,6 +248,17 @@ bool Triangulator::triangulate_joint(const std::vector<JointView>& views,
     }
     used_views = static_cast<int>(indices.size());
     mean_reproj = static_cast<float>(err_sum / std::max(1, used_views));
+    // Reprojection pruning needs at least three candidates, but the same
+    // quality limit still applies to an exact two-view triangulation.  Without
+    // this final gate, the DLT compromise for two inconsistent observations
+    // could be published as a valid 3D joint.
+    if (!std::isfinite(mean_reproj) || mean_reproj > opts_.max_reproj_px) {
+        used_views = 0;
+        mean_reproj = 0.0f;
+        max_ray_angle = 0.0f;
+        joint.valid = false;
+        return false;
+    }
     max_ray_angle = max_ray_angle_deg(views, indices, point);
     joint.x = static_cast<float>(point.x);
     joint.y = static_cast<float>(point.y);

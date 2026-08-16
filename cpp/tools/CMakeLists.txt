@@ -312,6 +312,22 @@ set_target_properties(fitra_test_fusion_pose PROPERTIES
 
 add_test(NAME test_fusion_pose COMMAND fitra_test_fusion_pose)
 
+add_executable(fitra_test_tracker_axis
+    test_tracker_axis.cpp
+)
+
+target_link_libraries(fitra_test_tracker_axis PRIVATE
+    fitra_tracking
+    Crow::Crow
+)
+
+set_target_properties(fitra_test_tracker_axis PROPERTIES
+    OUTPUT_NAME "test_tracker_axis"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_tracker_axis COMMAND fitra_test_tracker_axis)
+
 # Bounded nearest-frame matching: tolerate phase offsets by selecting adjacent
 # camera frames, and emit only one loss boundary for a sustained stop.
 add_executable(fitra_test_sync_matcher

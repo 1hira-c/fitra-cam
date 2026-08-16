@@ -34,6 +34,20 @@ enum class FusionPoseSourceState {
     ContinuityReset,
 };
 
+enum class FusionPoseJoint {
+    Hips,
+    Neck,
+    LeftHip,
+    RightHip,
+    LeftKnee,
+    RightKnee,
+    LeftAnkle,
+    RightAnkle,
+    LeftShoulder,
+    RightShoulder,
+    Count,
+};
+
 struct FusionCaptureInterval {
     std::optional<std::uint64_t> oldest_mono_ns;
     std::optional<std::uint64_t> newest_mono_ns;
@@ -63,11 +77,12 @@ struct FusionPoseFrame {
     std::uint64_t source_publish_mono_ns = 0;
     FusionCaptureInterval capture{};
     std::array<FusionPoseJointValue,
-               static_cast<std::size_t>(PoseGateJoint::Count)> joints{};
+               static_cast<std::size_t>(FusionPoseJoint::Count)> joints{};
 };
 
 const char* fusion_pose_event_type_name(FusionPoseEventType type);
 const char* fusion_pose_source_state_name(FusionPoseSourceState state);
+const char* fusion_pose_joint_name(FusionPoseJoint joint);
 
 FusionCaptureInterval make_fusion_capture_interval(
     const std::vector<camera::V4l2CaptureTimestamp>& timestamps);

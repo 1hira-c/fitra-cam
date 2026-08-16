@@ -79,6 +79,10 @@ MultiCameraDriver::MultiCameraDriver(
         throw std::invalid_argument(
             "fusion pose bus requires the PoseGate lifecycle owner");
     }
+    if (threed_.tracker_axis_lineage && !threed_.fusion_pose) {
+        throw std::invalid_argument(
+            "tracker axis lineage requires the FusionPose lifecycle source");
+    }
     if (threed_.triangulator && threed_.bus) {
         FITRA_LOG_INFO(
             "3D floor-contact stability {} (floor_z={}m enter={}m/{}mps exit={}m/{}mps grace={}s)",
@@ -400,6 +404,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     Skeleton3DBus* bus = nullptr;
     PoseGateBus* pose_gate = nullptr;
     FusionPoseBus* fusion_pose = nullptr;
+    TrackerAxisLineageBus* lineage_bus = nullptr;
     bool pose_gate_single_subject = true;
     {
         std::lock_guard<std::mutex> g(threed_mu_);
@@ -407,6 +412,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         bus = threed_.bus;
         pose_gate = threed_.pose_gate;
         fusion_pose = threed_.fusion_pose;
+        lineage_bus = threed_.tracker_axis_lineage;
         pose_gate_single_subject = threed_.pose_gate_single_subject;
     }
     if (!triangulator || !bus) return;
@@ -466,7 +472,14 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
             const auto boundary = pose_gate->publish_unavailable(
                 std::nullopt, PoseGateSourceState::Unavailable,
                 "sync_miss", sync_event.sync_dt_ms);
-            if (fusion_pose) fusion_pose->publish_boundary(boundary);
+            if (fusion_pose) {
+                miss.tracker_axis_lineage = make_tracker_axis_lineage(
+                    fusion_pose->publish_boundary(boundary));
+                if (lineage_bus) {
+                    miss.tracker_axis_lineage = lineage_bus->publish(
+                        *miss.tracker_axis_lineage);
+                }
+            }
             miss.stats.pose_gate = pose_gate->diagnostics();
         }
         bus->update(miss);
@@ -509,11 +522,18 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     // Fusion-facing output is deliberately produced from tri.skeleton before
     // any Kalman, IK, or floor-contact mutation below. It never reads the
     // Skeleton3DBus snapshot or TrackerBus.
+    std::optional<TrackerAxisLineage> tracker_lineage;
     if (pose_gate) {
         const auto lifecycle = pose_gate->observe(
             tri, content_mono_ns, pose_gate_single_subject,
             sync_event.sync_dt_ms);
-        if (fusion_pose) fusion_pose->observe(tri, fusion_capture, lifecycle);
+        if (fusion_pose) {
+            tracker_lineage = make_tracker_axis_lineage(
+                fusion_pose->observe(tri, fusion_capture, lifecycle));
+            if (lineage_bus) {
+                tracker_lineage = lineage_bus->publish(*tracker_lineage);
+            }
+        }
     }
     infer::Skeleton3D skel = tri.skeleton;
     double dt_s = 1.0 / 30.0;
@@ -583,6 +603,7 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     out.seq = tri_processed_;
     out.ts = wall_now;
     out.t_capture_oldest = min_ts;
+    out.tracker_axis_lineage = std::move(tracker_lineage);
     if (tri.valid_joints > 0) {
         out.persons.push_back(skel);
     }
@@ -621,19 +642,28 @@ void MultiCameraDriver::handle_idle_transition(bool now_idle) {
         Skeleton3DBus* bus = nullptr;
         PoseGateBus* pose_gate = nullptr;
         FusionPoseBus* fusion_pose = nullptr;
+        TrackerAxisLineageBus* lineage_bus = nullptr;
         {
             std::lock_guard<std::mutex> g(threed_mu_);
             bus = threed_.bus;
             pose_gate = threed_.pose_gate;
             fusion_pose = threed_.fusion_pose;
+            lineage_bus = threed_.tracker_axis_lineage;
         }
+        Skeleton3DSnapshot snap;
         if (pose_gate) {
             const auto boundary = pose_gate->publish_unavailable(
                 std::nullopt, PoseGateSourceState::Unavailable, "idle");
-            if (fusion_pose) fusion_pose->publish_boundary(boundary);
+            if (fusion_pose) {
+                snap.tracker_axis_lineage = make_tracker_axis_lineage(
+                    fusion_pose->publish_boundary(boundary));
+                if (lineage_bus) {
+                    snap.tracker_axis_lineage = lineage_bus->publish(
+                        *snap.tracker_axis_lineage);
+                }
+            }
         }
         if (!bus) return;
-        Skeleton3DSnapshot snap;
         snap.ts = std::chrono::system_clock::now();
         snap.stats.enabled = true;
         // ik_locked=false (even when the subject is calibrated) so both the VMT

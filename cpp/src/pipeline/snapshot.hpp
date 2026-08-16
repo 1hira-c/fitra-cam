@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,7 @@
 #include "camera/v4l2_capture.hpp"
 #include "infer/types.hpp"
 #include "pipeline/pose_gate.hpp"
+#include "pipeline/tracker_axis_lineage.hpp"
 
 namespace fitra::pipeline {
 
@@ -116,6 +118,10 @@ struct Skeleton3DSnapshot {
     // consumers must guard against it before computing a delta.
     std::chrono::steady_clock::time_point t_capture_oldest{};
     std::vector<infer::Skeleton3D> persons;
+    // Raw capture/lifecycle proof paired with this postprocessed skeleton.
+    // The TrackerExtractor carries it unchanged to the TrackerAxis producer;
+    // it contains no raw coordinates or quality values.
+    std::optional<TrackerAxisLineage> tracker_axis_lineage;
     // Static camera placements (world frame). Resent every frame; a few cameras
     // is negligible wire cost and lets the viewer build frustums lazily.
     std::vector<CameraPose3D> cameras;

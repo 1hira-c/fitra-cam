@@ -10,7 +10,9 @@ std::unique_ptr<tracking::TrackerExtractor> make_tracker_extractor(
     const config::MainOptions& opts,
     pipeline::Skeleton3DBus& bus3d,
     tracking::TrackerBus& tracker_bus,
-    const std::atomic<bool>* idle_flag) {
+    const std::atomic<bool>* idle_flag,
+    tracking::TrackerAxisBus* tracker_axis_bus,
+    pipeline::TrackerAxisLineageBus* lineage_bus) {
     tracking::TrackerExtractorOptions tex_opts;
     tex_opts.extract_rate_hz = opts.vmt_rate_hz;
     tex_opts.quat_smooth     = static_cast<float>(opts.vr_quat_smooth);
@@ -44,7 +46,7 @@ std::unique_ptr<tracking::TrackerExtractor> make_tracker_extractor(
     tex_opts.limb_extension.exit_flex_deg =
         static_cast<float>(opts.extension_snap_exit_deg);
     auto extractor = std::make_unique<tracking::TrackerExtractor>(
-        bus3d, tracker_bus, tex_opts);
+        bus3d, tracker_bus, tex_opts, tracker_axis_bus, lineage_bus);
     extractor->set_idle_gate(idle_flag);  // before start(); null = no idling
     extractor->start();
     return extractor;

@@ -74,7 +74,11 @@ ThreeDSet make_threed(const config::MainOptions& opts,
         std::string{}, coordinate_epoch);
     t.fusion_pose_bus = std::make_unique<pipeline::FusionPoseBus>(
         t.pose_gate_bus->stream_id(), coordinate_epoch);
+    t.tracker_axis_lineage_bus =
+        std::make_unique<pipeline::TrackerAxisLineageBus>();
     t.tracker_bus = std::make_unique<tracking::TrackerBus>();
+    t.tracker_axis_bus = std::make_unique<tracking::TrackerAxisBus>(
+        t.pose_gate_bus->stream_id(), coordinate_epoch);
     FITRA_LOG_INFO("3D lifting enabled ({} calibrated cameras, sync_window={}ms)",
                    t.triangulator->camera_count(), opts.sync_window_ms);
     if (t.subject_height_m > 0.0) {
@@ -132,6 +136,7 @@ std::unique_ptr<pipeline::MultiCameraDriver> make_driver(
     cfg.bus                 = threed->bus3d.get();
     cfg.pose_gate           = threed->pose_gate_bus.get();
     cfg.fusion_pose         = threed->fusion_pose_bus.get();
+    cfg.tracker_axis_lineage = threed->tracker_axis_lineage_bus.get();
     cfg.pose_gate_single_subject = !opts.multi_person;
     cfg.sync_window_ms      = opts.sync_window_ms;
     cfg.kalman_enabled      = opts.kalman_3d;

@@ -17,6 +17,7 @@
 #include "pipeline/extrinsic_calib_session.hpp"
 #include "pipeline/fusion_pose.hpp"
 #include "pipeline/pose_gate.hpp"
+#include "tracking/tracker_axis.hpp"
 #include "tracking/tracker_bus.hpp"
 #include "vmt/vmt_publisher.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
@@ -44,6 +45,35 @@ struct WsClients {
     std::mutex                       mu;
     std::set<crow::websocket::connection*> conns;
 };
+
+void handle_clock_sync_message(crow::websocket::connection& connection,
+                               const std::string& data,
+                               bool is_binary) {
+    if (is_binary) return;
+    const std::uint64_t receive_ns = fitra::util::monotonic_ns();
+    try {
+        auto body = crow::json::load(data);
+        if (!body || !body.has("type") || !body.has("nonce") ||
+            !body.has("client_send_mono_ns") ||
+            body["type"].t() != crow::json::type::String ||
+            body["nonce"].t() != crow::json::type::Number ||
+            body["client_send_mono_ns"].t() != crow::json::type::Number ||
+            std::string{body["type"].s()} != "clock_sync_ping") {
+            return;
+        }
+        const auto nonce_i = body["nonce"].i();
+        const auto client_send_i = body["client_send_mono_ns"].i();
+        if (nonce_i < 0 || client_send_i < 0) return;
+        const std::uint64_t send_ns = fitra::util::monotonic_ns();
+        connection.send_text(pipeline::make_clock_sync_pong(
+            static_cast<std::uint64_t>(nonce_i),
+            static_cast<std::uint64_t>(client_send_i),
+            receive_ns, send_ns));
+    } catch (...) {
+        // Invalid/unknown client messages are ignored. Never log the body:
+        // future messages may carry source evidence or identity.
+    }
+}
 
 void append_vmt_alignment_json(std::ostringstream& out,
                                const vmt::VmtAlignment& a) {
@@ -300,6 +330,7 @@ struct CrowServer::Impl {
     WsClients           clients3d;
     WsClients           clients_pose_gate;
     WsClients           clients_fusion_pose;
+    WsClients           clients_tracker_axis;
     AutoAlignSession    auto_align;
 };
 
@@ -400,6 +431,11 @@ void CrowServer::set_fusion_pose_bus(
     fusion_pose_bus_ = fusion_pose_bus;
 }
 
+void CrowServer::set_tracker_axis_bus(
+    tracking::TrackerAxisBus* tracker_axis_bus) {
+    tracker_axis_bus_ = tracker_axis_bus;
+}
+
 void CrowServer::set_continuous_aligner(vmt::ContinuousAligner* aligner) {
     continuous_aligner_ = aligner;
 }
@@ -422,6 +458,7 @@ void CrowServer::start() {
     auto& clients3d = impl_->clients3d;
     auto& clients_pose_gate = impl_->clients_pose_gate;
     auto& clients_fusion_pose = impl_->clients_fusion_pose;
+    auto& clients_tracker_axis = impl_->clients_tracker_axis;
 
     // WS /ws — register first so the catch-all HTTP route below does not
     // shadow upgrade requests (Crow's BaseRule::handle_upgrade returns
@@ -502,30 +539,31 @@ void CrowServer::start() {
     .onmessage([](crow::websocket::connection& c,
                   const std::string& data,
                   bool is_binary) {
-        if (is_binary) return;
-        const std::uint64_t receive_ns = fitra::util::monotonic_ns();
-        try {
-            auto body = crow::json::load(data);
-            if (!body || !body.has("type") || !body.has("nonce") ||
-                !body.has("client_send_mono_ns") ||
-                body["type"].t() != crow::json::type::String ||
-                body["nonce"].t() != crow::json::type::Number ||
-                body["client_send_mono_ns"].t() != crow::json::type::Number ||
-                std::string{body["type"].s()} != "clock_sync_ping") {
-                return;
-            }
-            const auto nonce_i = body["nonce"].i();
-            const auto client_send_i = body["client_send_mono_ns"].i();
-            if (nonce_i < 0 || client_send_i < 0) return;
-            const std::uint64_t send_ns = fitra::util::monotonic_ns();
-            c.send_text(pipeline::make_clock_sync_pong(
-                static_cast<std::uint64_t>(nonce_i),
-                static_cast<std::uint64_t>(client_send_i),
-                receive_ns, send_ns));
-        } catch (...) {
-            // Invalid/unknown client messages are ignored.  Never log the
-            // body: future messages may carry source evidence or identity.
+        handle_clock_sync_message(c, data, is_binary);
+    });
+
+    CROW_WEBSOCKET_ROUTE(app, "/ws/tracker-axis")
+    .onopen([this, &clients_tracker_axis](crow::websocket::connection& c) {
+        std::lock_guard<std::mutex> lk{clients_tracker_axis.mu};
+        clients_tracker_axis.conns.insert(&c);
+        if (idle_state_) {
+            idle_state_->ws_client_count.fetch_add(
+                1, std::memory_order_relaxed);
         }
+    })
+    .onclose([this, &clients_tracker_axis](crow::websocket::connection& c,
+                                            const std::string& /*reason*/,
+                                            uint16_t /*code*/) {
+        std::lock_guard<std::mutex> lk{clients_tracker_axis.mu};
+        if (clients_tracker_axis.conns.erase(&c) && idle_state_) {
+            idle_state_->ws_client_count.fetch_sub(
+                1, std::memory_order_relaxed);
+        }
+    })
+    .onmessage([](crow::websocket::connection& c,
+                  const std::string& data,
+                  bool is_binary) {
+        handle_clock_sync_message(c, data, is_binary);
     });
 
     // GET /api/state — run-mode discovery for the frontends (always
@@ -680,6 +718,20 @@ void CrowServer::start() {
             return resp;
         }
         crow::response resp{fusion_pose_bus_->make_json()};
+        resp.set_header("Content-Type", "application/json; charset=utf-8");
+        return resp;
+    });
+
+    CROW_ROUTE(app, "/api/tracker-axis")
+    ([this]() {
+        if (!tracker_axis_bus_) {
+            tracking::TrackerAxisBus disabled_axis{"disabled"};
+            crow::response resp{disabled_axis.make_json()};
+            resp.code = 409;
+            resp.set_header("Content-Type", "application/json; charset=utf-8");
+            return resp;
+        }
+        crow::response resp{tracker_axis_bus_->make_json()};
         resp.set_header("Content-Type", "application/json; charset=utf-8");
         return resp;
     });
@@ -1319,6 +1371,26 @@ void CrowServer::publisher_loop() {
                 for (auto* c : impl_->clients_fusion_pose.conns) {
                     try {
                         c->send_text(fusion_message);
+                    } catch (...) {
+                        // best-effort; client will be reaped on close
+                    }
+                }
+            }
+        }
+        bool have_tracker_axis_clients = false;
+        {
+            std::lock_guard<std::mutex> lk{impl_->clients_tracker_axis.mu};
+            have_tracker_axis_clients =
+                !impl_->clients_tracker_axis.conns.empty();
+        }
+        if (tracker_axis_bus_ && have_tracker_axis_clients) {
+            const auto tracker_axis_messages =
+                tracker_axis_bus_->drain_pending_json();
+            std::lock_guard<std::mutex> lk{impl_->clients_tracker_axis.mu};
+            for (const auto& tracker_axis_message : tracker_axis_messages) {
+                for (auto* c : impl_->clients_tracker_axis.conns) {
+                    try {
+                        c->send_text(tracker_axis_message);
                     } catch (...) {
                         // best-effort; client will be reaped on close
                     }
