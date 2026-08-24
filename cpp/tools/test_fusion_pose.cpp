@@ -452,6 +452,54 @@ void test_filtered_prediction_does_not_promote_raw_availability() {
           "filtered prediction/fill must not promote a low-quality raw joint");
 }
 
+void test_high_reprojection_is_wire_metadata_only() {
+    fitra::pipeline::PoseGateBus gate{"raw-quality"};
+    auto tri = make_tri();
+    tri.valid_joints = 10;
+    constexpr std::size_t source_index = fitra::lift::kHalpeLeftKnee;
+    tri.reproj_error_px[source_index] = 80.0f;
+    tri.max_ray_angle_deg[source_index] = 17.0f;
+    const auto before_joint = tri.skeleton.joints[source_index];
+    const auto before_views = tri.view_count[source_index];
+    const auto before_reproj = tri.reproj_error_px[source_index];
+    const auto before_ray_angle = tri.max_ray_angle_deg[source_index];
+    const auto before_valid_joints = tri.valid_joints;
+
+    const auto lifecycle = gate.observe(tri, 2'150'000'000ULL);
+    fitra::pipeline::FusionPoseBus fusion{gate.stream_id()};
+    const auto frame = fusion.observe(tri, {}, lifecycle);
+    const auto& left_knee =
+        frame.joints[static_cast<std::size_t>(FusionPoseJoint::LeftKnee)];
+    check(left_knee.availability == PoseGateAvailability::Fresh &&
+              left_knee.observed_this_frame && left_knee.position_m &&
+              left_knee.inlier_view_count && *left_knee.inlier_view_count == 2 &&
+              left_knee.mean_reproj_error_px &&
+              *left_knee.mean_reproj_error_px == 80.0 &&
+              left_knee.max_ray_angle_deg &&
+              *left_knee.max_ray_angle_deg == 17.0,
+          "FusionPose must retain high reprojection as raw observation metadata");
+
+    const auto root = parse_json(fusion.make_json());
+    check(root["joints"]["left_knee"]["availability"].t() ==
+              crow::json::type::String &&
+              std::string{root["joints"]["left_knee"]["availability"].s()} ==
+                  "Fresh" &&
+              root["joints"]["left_knee"]["mean_reproj_error_px"].d() ==
+                  80.0,
+          "FusionPose wire must not discard high raw reprojection metadata");
+
+    check(tri.skeleton.joints[source_index].valid == before_joint.valid &&
+              tri.skeleton.joints[source_index].x == before_joint.x &&
+              tri.skeleton.joints[source_index].y == before_joint.y &&
+              tri.skeleton.joints[source_index].z == before_joint.z &&
+              tri.skeleton.joints[source_index].score == before_joint.score &&
+              tri.view_count[source_index] == before_views &&
+              tri.reproj_error_px[source_index] == before_reproj &&
+              tri.max_ray_angle_deg[source_index] == before_ray_angle &&
+              tri.valid_joints == before_valid_joints,
+          "FusionPose observation must not mutate common Skeleton3D validity");
+}
+
 void test_hips_require_both_raw_hips_and_joint_loss_is_local() {
     fitra::pipeline::PoseGateBus gate{"joint-loss"};
     auto tri = make_tri();
@@ -648,6 +696,7 @@ int main() {
         test_wire_and_pose_gate_compatibility();
         test_unavailable_joint_and_timestamp_shape();
         test_filtered_prediction_does_not_promote_raw_availability();
+        test_high_reprojection_is_wire_metadata_only();
         test_hips_require_both_raw_hips_and_joint_loss_is_local();
         test_latest_pose_and_ordered_boundaries();
         test_stream_subject_coordinate_and_continuity_cut_hold();

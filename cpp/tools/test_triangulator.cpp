@@ -212,7 +212,7 @@ void test_halpe_face_joints_are_excluded_from_3d() {
           "neck must stay available for torso tracking");
 }
 
-void test_two_view_reprojection_outlier_is_rejected() {
+void test_two_view_reprojection_metadata_is_preserved() {
     fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Coco17);
     auto calib = make_calibration({"cam0", "cam1"});
     fitra::lift::Triangulator::Options options;
@@ -224,8 +224,8 @@ void test_two_view_reprojection_outlier_is_rejected() {
     auto p1 = project_person(calib.cameras[1], points);
     constexpr std::size_t outlier_joint = 5;
     // With a rectified two-camera pair, a vertical disagreement cannot be
-    // explained by disparity. The DLT compromise must not become a valid 3D
-    // joint merely because there is no third view to run the pruning pass.
+    // explained by disparity. The raw DLT result remains part of the common
+    // skeleton; downstream fusion owns the D50 acceptance policy.
     p1.kpts[outlier_joint].y += 80.0f;
     std::vector<fitra::lift::PerCameraObservation> observations{
         {0, &p0},
@@ -233,13 +233,19 @@ void test_two_view_reprojection_outlier_is_rejected() {
     };
 
     const auto tri = triangulator.triangulate(observations);
-    check(!tri.skeleton.joints[outlier_joint].valid,
-          "two-view reprojection outlier must be unavailable");
-    check(tri.view_count[outlier_joint] == 0,
-          "rejected two-view joint must not publish inlier provenance");
+    check(tri.skeleton.joints[outlier_joint].valid,
+          "two-view reprojection outlier must remain in the common skeleton");
+    check(tri.view_count[outlier_joint] == 2,
+          "two-view joint must preserve its inlier view count");
+    check(std::isfinite(tri.reproj_error_px[outlier_joint]) &&
+              tri.reproj_error_px[outlier_joint] > options.max_reproj_px,
+          "two-view reprojection quality must remain above the configured limit");
+    check(std::isfinite(tri.max_ray_angle_deg[outlier_joint]) &&
+              tri.max_ray_angle_deg[outlier_joint] > 0.0f,
+          "two-view ray-angle metadata must remain available");
     check(tri.valid_joints ==
-              static_cast<int>(fitra::lift::active_kp_count()) - 1,
-          "rejecting one outlier must preserve the other triangulated joints");
+              static_cast<int>(fitra::lift::active_kp_count()),
+          "quality metadata must not reduce common skeleton validity");
 }
 
 void test_camera_id_validation() {
@@ -261,7 +267,7 @@ int main() {
         test_round_trip();
         test_ray_angle_uses_final_inliers_only();
         test_halpe_face_joints_are_excluded_from_3d();
-        test_two_view_reprojection_outlier_is_rejected();
+        test_two_view_reprojection_metadata_is_preserved();
         test_camera_id_validation();
         std::puts("test_triangulator ok");
         return 0;
