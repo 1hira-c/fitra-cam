@@ -16,6 +16,13 @@ This change therefore adds a second contract.  `fitra_pose_gate_v1`,
 their existing lifecycle.  The new contract is exposed independently as
 `GET /api/fusion-pose` and `WS /ws/fusion-pose`.
 
+The FusionPose record carries two explicitly different position paths for
+each joint: raw triangulation evidence from the contributing capture, and an
+additive same-capture `post_kalman_ik` position taken after Kalman/IK but before
+floor-contact or root-output corrections.  The latter may exist for a
+predict-only or IK-filled joint, but it never creates raw observation evidence
+or a `Fresh` state.
+
 ## Goals and non-goals
 
 Goals:
@@ -24,6 +31,8 @@ Goals:
   from capture through decoded frames and synchronized multi-camera samples;
 - expose the ten position-only fusion joints and the quality evidence needed
   by the fixed consumer gates;
+- expose same-capture post-Kalman/IK positions without overwriting raw
+  position or quality lineage;
 - make ordinary pose delivery latest-only while preserving ordered lifecycle
   boundaries;
 - make boundary loss explicit through a monotonic `continuity_epoch`;
@@ -63,11 +72,19 @@ does not accept decimal strings.
     "span_ms": 0.006,
     "timestamp_semantics": "monotonic_soe"
   },
+  "filtered_position_provenance": {
+    "stage": "post_kalman_ik",
+    "position_source": "skeleton3d_snapshot",
+    "floor_contact": false,
+    "root_transform": false
+  },
   "position_space": "fitra_world_z_up_m",
   "joints": {
     "hips": {
       "position_m": [0.0, 0.0, 0.9],
+      "filtered_position_m": [0.01, 0.0, 0.91],
       "availability": "Fresh",
+      "observed_this_frame": true,
       "keypoint_score": 0.93,
       "inlier_view_count": 3,
       "mean_reproj_error_px": 0.8,
@@ -82,18 +99,32 @@ The ten joint keys are `hips`, `neck`, `left_hip`, `right_hip`, `left_knee`,
 `right_shoulder`.  The shoulder entries map directly to the corresponding
 HALPE26 joints and carry the same score, final-inlier view count, mean
 reprojection error, and maximum acute ray angle as the original eight joints.
-A joint with no current triangulated observation has
-`availability:"Unavailable"` and every position/quality field is `null`;
-values are never held or predicted.
+`position_m` and all four quality fields are always the raw triangulation
+tuple.  `filtered_position_m` is the same HALPE26 joint after the producer's
+Kalman/IK stage; it is `null` when that postprocessed skeleton has no finite
+valid joint.  `observed_this_frame` is true only when the raw joint is valid,
+has score at least 0.3, has an inlier view, and has finite non-negative
+reprojection/ray-angle evidence.  A predict-only or IK-filled filtered value
+therefore remains `observed_this_frame:false`, `availability:"Unavailable"`,
+and has null raw position/quality fields.
+
+HALPE26 has no independent camera observation for the formal `hips` role.  The
+producer derives it only from the same-capture raw left/right hip pair.  Its
+raw position is their midpoint; score, inlier views and ray angle use the
+weaker side, while mean reprojection error uses the worse side.  If either raw
+hip fails the observation conditions, Hips remains unavailable even when a
+filtered midpoint can be formed from postprocessed positions.  A missing
+non-Hips joint is local to that joint and does not invalidate the other nine.
 
 The D50 hardware review added the shoulder pair without changing the protocol
 identifier because this producer contract has not merged.  The consumer uses
 the left/right hip lateral axis as the waist world-yaw observation and the
 left/right shoulder lateral axis as the chest world-yaw observation.  This
-producer exports only raw position evidence; BoneLocal axis comparison,
-post-wear I-pose shoulder-width normalization, and tracker orientation remain
-consumer responsibilities.  `fitra_pose_gate_v1` deliberately stays at its
-original exact eight keys.
+producer exports raw position evidence plus the explicitly labelled
+post-Kalman/IK position sidecar; BoneLocal axis comparison, post-wear I-pose
+shoulder-width normalization, and tracker orientation remain consumer
+responsibilities.  `fitra_pose_gate_v1` deliberately stays at its original
+exact eight keys.
 
 `capture.timestamp_semantics` is one of:
 
@@ -109,7 +140,8 @@ internal latency diagnostics; it is never copied into these v1 fusion capture
 fields.
 
 Boundary events use `event_type:"boundary"`, keep the same complete top-level
-shape, and set all joint values and capture interval fields to `null` /
+shape, and set all joint position/quality fields to `null`,
+`observed_this_frame` to false, and capture interval fields to `null` /
 `Unavailable`.  `source_state` is exactly one of `Fresh`, `Reacquired`,
 `PersonSwitched`, `Unavailable`, `EpochChanged`, `UnsupportedTopology`,
 `UnsupportedMultiPerson`, or `ContinuityReset`.  PoseGate loss reasons such as
@@ -146,8 +178,10 @@ messages are ignored without logging their body.
 ### Additive bus instead of extending PoseGate v1
 
 Adopted: a separate `FusionPoseBus` consumes the same raw triangulation and the
-already-decided PoseGate lifecycle result.  This shares opaque stream/subject
-identity without making the new consumer depend on postprocessed `/ws3d`.
+already-decided PoseGate lifecycle result, then receives an explicitly bounded
+post-Kalman/IK skeleton sidecar.  This shares opaque stream/subject identity
+without making the new consumer depend on post-floor `/ws3d` output or
+overwriting raw quality lineage.
 
 Rejected: append the fields to `fitra_pose_gate_v1`.  Even additive fields can
 break strict consumers and would change the meaning of the existing content
@@ -188,19 +222,25 @@ single latest slot for all events (can erase loss/epoch evidence).
 
 ## Invariants
 
-1. Both wire producers observe `TriangulatedSkeleton` before Kalman, IK and
-   floor-contact mutation.
+1. PoseGate observes `TriangulatedSkeleton` before Kalman/IK.  FusionPose
+   retains that raw `TriangulatedSkeleton` and capture interval, while its
+   additive filtered position is copied after Kalman/IK and before
+   floor-contact/root-output mutation.
 2. `fitra_pose_gate_v1` serialization and tests remain unchanged.
-3. Every document contains exactly ten fusion joints.  A Fresh fusion joint
-   contains position plus all four quality fields; an
-   unavailable joint contains none of them.
-4. The triangulator's `max_ray_angle_deg` is computed only across the final
+3. Every document contains exactly ten fusion joints.  A raw-observed joint
+   contains `position_m`, all four quality fields and
+   `observed_this_frame:true`; a joint with only predicted/filled filtered
+   position remains unavailable with null raw position/quality.
+4. Hips is a same-capture left/right raw midpoint with conservative quality
+   aggregation; one missing hip cannot make Hips Fresh.  Other joint loss is
+   local.
+5. The triangulator's `max_ray_angle_deg` is computed only across the final
    inlier views after reprojection rejection.
-5. Capture interval endpoints exist only when every participating camera has a
+6. Capture interval endpoints exist only when every participating camera has a
    valid kernel monotonic timestamp with identical SOE/EOF semantics.
-6. Boundary order is never intentionally collapsed.  If capacity prevents
+7. Boundary order is never intentionally collapsed.  If capacity prevents
    preservation, `continuity_epoch` changes before further evidence is used.
-7. Clock-sync responses and normal logs never contain pose, quality or opaque
+8. Clock-sync responses and normal logs never contain pose, quality or opaque
    subject identity.
 
 ## Milestones
@@ -209,7 +249,8 @@ single latest slot for all events (can erase loss/epoch evidence).
 2. Add maximum inlier-ray crossing angle to triangulation output.
 3. Implement `FusionPoseBus`, schema and boundary/latest queue.
 4. Add HTTP/WS routes and clock-sync response.
-5. Wire the bus at the existing pre-postprocess observation point.
+5. Wire raw capture/quality and post-Kalman/IK positions into one additive
+   FusionPose record before floor-contact/root-output mutation.
 6. Add regression tests and update track/migration records.
 
 ## Validation
@@ -222,6 +263,9 @@ single latest slot for all events (can erase loss/epoch evidence).
   coordinate invalidation, boundary ordering and overflow continuity;
 - unit/integration: exact-ten GET/WS documents plus clock-sync echo, numeric
   fields and monotonic receive/send ordering through the actual Crow routes;
+- unit: deliberately different raw/filtered positions, predict-only and
+  low-quality raw joints, conservative Hips midpoint quality, one-hip loss,
+  and local single-joint loss;
 - focused: `test_pose_gate`, `test_fusion_pose`, `test_triangulator`;
 - full: configure, build, `ctest --test-dir cpp/build --output-on-failure`, and
   `./cpp/build/main --help`;

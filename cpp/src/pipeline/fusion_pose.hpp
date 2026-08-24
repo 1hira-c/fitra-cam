@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "camera/v4l2_capture.hpp"
+#include "infer/types.hpp"
 #include "lift/triangulator.hpp"
 #include "pipeline/pose_gate.hpp"
 
@@ -58,6 +59,10 @@ struct FusionCaptureInterval {
 struct FusionPoseJointValue {
     PoseGateAvailability availability = PoseGateAvailability::Unavailable;
     std::optional<std::array<double, 3>> position_m;
+    // Same-capture post-Kalman/IK position.  It may exist for a predicted or
+    // IK-filled joint, but that never changes the raw observation gate below.
+    std::optional<std::array<double, 3>> filtered_position_m;
+    bool observed_this_frame = false;
     std::optional<double> keypoint_score;
     std::optional<int> inlier_view_count;
     std::optional<double> mean_reproj_error_px;
@@ -98,7 +103,8 @@ public:
 
     FusionPoseFrame observe(const lift::TriangulatedSkeleton& tri,
                             const FusionCaptureInterval& capture,
-                            const PoseGateFrame& lifecycle);
+                            const PoseGateFrame& lifecycle,
+                            const infer::Skeleton3D* filtered_skeleton = nullptr);
     FusionPoseFrame publish_boundary(const PoseGateFrame& lifecycle);
 
     FusionPoseFrame snapshot() const;

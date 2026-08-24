@@ -7,8 +7,7 @@ namespace fitra::pipeline {
 namespace {
 
 bool fresh(const FusionPoseFrame& frame, FusionPoseJoint joint) {
-    return frame.joints[static_cast<std::size_t>(joint)].availability ==
-           PoseGateAvailability::Fresh;
+    return frame.joints[static_cast<std::size_t>(joint)].observed_this_frame;
 }
 
 }  // namespace

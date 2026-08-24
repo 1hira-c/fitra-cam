@@ -46,10 +46,12 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
   timestampは`unsupported_timestamp`でfail closedし、clock-syncはFusionPose実装を共用する。
   → [design/pose-3d-tracker-axis-v1.md](../design/pose-3d-tracker-axis-v1.md)
 - **D50 fusion wire は additive な専用 bus**: 既存 `fitra_pose_gate_v1` を変更せず、
-  同じ raw `tri.skeleton` と lifecycle 判定を読む `FusionPoseBus` から
-  `fitra_fusion_pose_v1` を `GET /api/fusion-pose` / `WS /ws/fusion-pose` へ出す。
-  10関節（既存8 + 左右shoulder）の位置とscore/inlier数/reprojection/max acute ray angle、V4L2 kernel
-  monotonic SOE/EOFのcapture区間、publish monotonic時刻、continuityをJSON numberで公開する。
+  同じ raw `tri.skeleton`/capture lineage と lifecycle 判定に、Kalman/IK後・floor/root出力補正前の
+  `filtered_position_m` を加えた `FusionPoseBus` から `fitra_fusion_pose_v1` を
+  `GET /api/fusion-pose` / `WS /ws/fusion-pose` へ出す。10関節（既存8 + 左右shoulder）の raw位置・
+  score/inlier数/reprojection/max acute ray angle、同capture filtered位置、V4L2 kernel monotonic
+  SOE/EOFのcapture区間、publish monotonic時刻、continuityをJSON numberで公開する。
+  `observed_this_frame` はraw品質だけで決まり、Hipsは同captureの左右hip midpointを保守合成する。
   通常poseはlatest-only、lifecycle境界は有界FIFOで順序保持し、overflow/stream交換時は
   `ContinuityReset` で下流holdを必ず切る。clock-sync ping/pongも同じWSで扱う。
   → [design/pose-3d-fusion-pose-v1.md](../design/pose-3d-fusion-pose-v1.md)
@@ -137,6 +139,18 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-08-24 — D50 FusionPose raw/filtered joint lineage seam
+
+既存 `fitra_fusion_pose_v1` / `fitra_pose_gate_v1` の識別子・capture/lifecycle境界・latest-only/
+boundary配送を維持したまま、各10関節へ同captureの `filtered_position_m` と
+`observed_this_frame` を追加した。filtered位置はKalman/IK後かつfloor-contact/root出力補正前から取得し、
+raw `position_m`・score・inlier view数・mean reprojection・max ray angleはtriangulation由来のまま保持する。
+低品質raw、predict-only、IK/FK fillはFreshに昇格させず、Hipsは左右raw hipのmidpointと保守的品質合成、
+片側欠損はUnavailable、その他の関節欠損は局所Unavailableとした。wire fixture、旧PoseGate互換、
+boundary/overflow/clock-syncを含む `test_fusion_pose` focused 検証を追加。実機のfiltered値とfusion adapter
+結合、実camera capture cadenceは未検証。
+設計: [design/pose-3d-fusion-pose-v1.md](../design/pose-3d-fusion-pose-v1.md)。
 
 ### 2026-08-16 — D50 `fitra_tracker_axis_v1` producer
 

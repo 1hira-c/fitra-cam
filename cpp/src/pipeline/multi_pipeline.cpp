@@ -519,21 +519,15 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
         make_fusion_capture_interval(fusion_timestamps);
 
     auto tri = triangulator->triangulate(observations);
-    // Fusion-facing output is deliberately produced from tri.skeleton before
-    // any Kalman, IK, or floor-contact mutation below. It never reads the
-    // Skeleton3DBus snapshot or TrackerBus.
+    // Keep the lifecycle decision paired with this exact raw triangulation.
+    // FusionPose commits only after the post-Kalman/IK skeleton is available,
+    // but it still receives `tri` unchanged for raw position/quality fields.
     std::optional<TrackerAxisLineage> tracker_lineage;
+    std::optional<PoseGateFrame> lifecycle;
     if (pose_gate) {
-        const auto lifecycle = pose_gate->observe(
+        lifecycle = pose_gate->observe(
             tri, content_mono_ns, pose_gate_single_subject,
             sync_event.sync_dt_ms);
-        if (fusion_pose) {
-            tracker_lineage = make_tracker_axis_lineage(
-                fusion_pose->observe(tri, fusion_capture, lifecycle));
-            if (lineage_bus) {
-                tracker_lineage = lineage_bus->publish(*tracker_lineage);
-            }
-        }
     }
     infer::Skeleton3D skel = tri.skeleton;
     double dt_s = 1.0 / 30.0;
@@ -577,6 +571,21 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     // the gate. Published stats below use the same post-IK drift.
     if (tap_active) {
         skel_tap_local(measured_skel, drift);
+    }
+
+    // Formal FusionPose seam: preserve raw tri.skeleton/capture/quality while
+    // attaching the same-frame post-Kalman/IK positions.  Deliberately take
+    // this copy before floor-contact/root output corrections; those are for
+    // WebUI/VR presentation and must not be represented as fusion evidence.
+    infer::Skeleton3D post_kalman_ik_skel;
+    if (fusion_pose && lifecycle) {
+        post_kalman_ik_skel = skel;
+        tracker_lineage = make_tracker_axis_lineage(
+            fusion_pose->observe(tri, fusion_capture, *lifecycle,
+                                 &post_kalman_ik_skel));
+        if (lineage_bus) {
+            tracker_lineage = lineage_bus->publish(*tracker_lineage);
+        }
     }
 
     lift::FloorContactReport floor_report;

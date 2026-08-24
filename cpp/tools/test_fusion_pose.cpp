@@ -98,17 +98,31 @@ void check_exact_pose_gate_joint_keys(const crow::json::rvalue& joints) {
 }
 
 void check_fresh_joint_wire(const crow::json::rvalue& joint,
-                            const std::string& name) {
+                            const std::string& name,
+                            bool require_filtered_position = false) {
     check(joint.t() == crow::json::type::Object,
           name + " must be an object");
     check(joint["availability"].t() == crow::json::type::String &&
               std::string{joint["availability"].s()} == "Fresh",
           name + " availability must be Fresh");
+    check(joint["observed_this_frame"].t() == crow::json::type::True,
+          name + " observed_this_frame must be true for Fresh data");
     const auto& position = joint["position_m"];
     check(position.t() == crow::json::type::List && position.size() == 3,
           name + " position_m must be a three-number list");
     for (std::size_t i = 0; i < position.size(); ++i) {
         check_number(position[i], name + ".position_m");
+    }
+    const auto& filtered = joint["filtered_position_m"];
+    if (require_filtered_position) {
+        check(filtered.t() == crow::json::type::List && filtered.size() == 3,
+              name + " filtered_position_m must be a three-number list");
+        for (std::size_t i = 0; i < filtered.size(); ++i) {
+            check_number(filtered[i], name + ".filtered_position_m");
+        }
+    } else {
+        check(filtered.t() == crow::json::type::Null,
+              name + " filtered_position_m must be null without a filter");
     }
     check_number(joint["keypoint_score"], name + ".keypoint_score");
     check_nonnegative_integer(joint["inlier_view_count"],
@@ -126,9 +140,12 @@ void check_unavailable_joint_wire(const crow::json::rvalue& joint,
     check(joint["availability"].t() == crow::json::type::String &&
               std::string{joint["availability"].s()} == "Unavailable",
           name + " availability must be Unavailable");
+    check(joint["observed_this_frame"].t() == crow::json::type::False,
+          name + " observed_this_frame must be false when unavailable");
     for (const char* field : {
              "position_m", "keypoint_score", "inlier_view_count",
-             "mean_reproj_error_px", "max_ray_angle_deg"}) {
+             "mean_reproj_error_px", "max_ray_angle_deg",
+             "filtered_position_m"}) {
         check(joint[field].t() == crow::json::type::Null,
               name + "." + field + " must be null");
     }
@@ -201,6 +218,14 @@ TriangulatedSkeleton make_tri(float shift_x = 0.0f) {
         tri.max_ray_angle_deg[indices[i]] = 5.0f + i;
     }
     return tri;
+}
+
+fitra::infer::Skeleton3D make_filtered(const TriangulatedSkeleton& tri) {
+    auto filtered = tri.skeleton;
+    filtered.joints[fitra::lift::kHalpeLeftHip].x += 0.20f;
+    filtered.joints[fitra::lift::kHalpeRightHip].x += 0.40f;
+    filtered.joints[fitra::lift::kHalpeLeftKnee].x += 1.00f;
+    return filtered;
 }
 
 void test_v4l2_timestamp_semantics() {
@@ -283,7 +308,8 @@ void test_wire_and_pose_gate_compatibility() {
     capture.oldest_mono_ns = 1'000'000'000ULL;
     capture.newest_mono_ns = 1'006'000'000ULL;
     capture.semantics = V4l2TimestampSemantics::MonotonicSoe;
-    const auto frame = fusion.observe(tri, capture, lifecycle);
+    const auto filtered = make_filtered(tri);
+    const auto frame = fusion.observe(tri, capture, lifecycle, &filtered);
 
     check(frame.event_type == FusionPoseEventType::Pose &&
               frame.source_state == FusionPoseSourceState::Fresh,
@@ -322,6 +348,17 @@ void test_wire_and_pose_gate_compatibility() {
     check(std::string{capture_json["timestamp_semantics"].s()} ==
               "monotonic_soe",
           "capture timestamp semantics mismatch");
+    const auto& filtered_provenance = root["filtered_position_provenance"];
+    check(filtered_provenance.t() == crow::json::type::Object &&
+              std::string{filtered_provenance["stage"].s()} ==
+                  "post_kalman_ik" &&
+              std::string{filtered_provenance["position_source"].s()} ==
+                  "skeleton3d_snapshot" &&
+              filtered_provenance["floor_contact"].t() ==
+                  crow::json::type::False &&
+              filtered_provenance["root_transform"].t() ==
+                  crow::json::type::False,
+          "filtered position provenance must describe the pre-floor/IK stage");
     check(!root.has("capture_oldest_mono_ns") &&
               !root.has("capture_newest_mono_ns"),
           "legacy flat fusion capture fields must not leak into the wire");
@@ -329,8 +366,33 @@ void test_wire_and_pose_gate_compatibility() {
     const auto& joints = root["joints"];
     check_exact_joint_keys(joints);
     for (const char* name : kJointNames) {
-        check_fresh_joint_wire(joints[name], name);
+        check_fresh_joint_wire(joints[name], name, true);
     }
+    check(std::abs(joints["left_knee"]["position_m"][0].d() -
+                       tri.skeleton.joints[fitra::lift::kHalpeLeftKnee].x) <
+                  1.0e-6 &&
+              std::abs(joints["left_knee"]["filtered_position_m"][0].d() -
+                       (tri.skeleton.joints[fitra::lift::kHalpeLeftKnee].x +
+                        1.0)) <
+                  1.0e-6,
+          "raw and filtered positions must remain distinct in one joint record");
+    check(std::abs(joints["hips"]["position_m"][0].d() - 0.025) < 1.0e-6 &&
+              std::abs(joints["hips"]["position_m"][2].d() - 0.925) <
+                  1.0e-6 &&
+              std::abs(joints["hips"]["filtered_position_m"][0].d() -
+                       0.325) <
+                  1.0e-6 &&
+              std::abs(joints["hips"]["filtered_position_m"][2].d() -
+                       0.925) <
+                  1.0e-6 &&
+              std::abs(joints["hips"]["keypoint_score"].d() - 0.72) <
+                  1.0e-6 &&
+              joints["hips"]["inlier_view_count"].u() == 2 &&
+              std::abs(joints["hips"]["mean_reproj_error_px"].d() - 0.8) <
+                  1.0e-6 &&
+              std::abs(joints["hips"]["max_ray_angle_deg"].d() - 7.0) <
+                  1.0e-6,
+          "hips must use the conservative raw hip midpoint quality");
     check_joint_matches_source(joints["left_shoulder"], tri,
                                fitra::lift::kHalpeLeftShoulder,
                                "left_shoulder");
@@ -365,6 +427,50 @@ void test_unavailable_joint_and_timestamp_shape() {
                                  "left_shoulder");
     check_fresh_joint_wire(root["joints"]["right_shoulder"],
                            "right_shoulder");
+}
+
+void test_filtered_prediction_does_not_promote_raw_availability() {
+    fitra::pipeline::PoseGateBus gate{"filtered-lineage"};
+    auto tri = make_tri();
+    tri.skeleton.joints[fitra::lift::kHalpeLeftKnee].score = 0.2f;
+    const auto lifecycle = gate.observe(tri, 2'100'000'000ULL);
+    fitra::pipeline::FusionPoseBus fusion{gate.stream_id()};
+    const auto filtered = make_filtered(tri);
+    fusion.observe(tri, {}, lifecycle, &filtered);
+
+    const auto root = parse_json(fusion.make_json());
+    const auto& left_knee = root["joints"]["left_knee"];
+    check(left_knee["availability"].t() == crow::json::type::String &&
+              std::string{left_knee["availability"].s()} == "Unavailable" &&
+              left_knee["observed_this_frame"].t() ==
+                  crow::json::type::False &&
+              left_knee["position_m"].t() == crow::json::type::Null &&
+              left_knee["keypoint_score"].t() == crow::json::type::Null &&
+              left_knee["filtered_position_m"].t() ==
+                  crow::json::type::List &&
+              left_knee["filtered_position_m"].size() == 3,
+          "filtered prediction/fill must not promote a low-quality raw joint");
+}
+
+void test_hips_require_both_raw_hips_and_joint_loss_is_local() {
+    fitra::pipeline::PoseGateBus gate{"joint-loss"};
+    auto tri = make_tri();
+    tri.skeleton.joints[fitra::lift::kHalpeRightHip].valid = false;
+    tri.skeleton.joints[fitra::lift::kHalpeLeftAnkle].valid = false;
+    const auto lifecycle = gate.observe(tri, 2'200'000'000ULL);
+    fitra::pipeline::FusionPoseBus fusion{gate.stream_id()};
+    const auto filtered = make_filtered(tri);
+    fusion.observe(tri, {}, lifecycle, &filtered);
+
+    const auto root = parse_json(fusion.make_json());
+    check_unavailable_joint_wire(root["joints"]["hips"], "hips");
+    check_unavailable_joint_wire(root["joints"]["left_ankle"],
+                                 "left_ankle");
+    check_fresh_joint_wire(root["joints"]["left_knee"], "left_knee", true);
+    check_fresh_joint_wire(root["joints"]["right_ankle"], "right_ankle",
+                           true);
+    check_fresh_joint_wire(root["joints"]["left_shoulder"],
+                           "left_shoulder", true);
 }
 
 void test_latest_pose_and_ordered_boundaries() {
@@ -541,6 +647,8 @@ int main() {
         test_capture_interval_semantics();
         test_wire_and_pose_gate_compatibility();
         test_unavailable_joint_and_timestamp_shape();
+        test_filtered_prediction_does_not_promote_raw_availability();
+        test_hips_require_both_raw_hips_and_joint_loss_is_local();
         test_latest_pose_and_ordered_boundaries();
         test_stream_subject_coordinate_and_continuity_cut_hold();
         test_subject_and_coordinate_boundaries_cut_latest();

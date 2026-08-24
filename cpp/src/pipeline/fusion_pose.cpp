@@ -79,6 +79,62 @@ void append_optional_uint64(std::string& out,
     out += std::to_string(*value);
 }
 
+constexpr float kRawKeypointScoreMin = 0.3f;
+
+bool finite_joint(const infer::Joint3D& joint) {
+    return joint.valid && std::isfinite(joint.x) && std::isfinite(joint.y) &&
+           std::isfinite(joint.z) && std::isfinite(joint.score);
+}
+
+bool raw_observed(const lift::TriangulatedSkeleton& tri, std::size_t source_idx) {
+    if (source_idx >= tri.skeleton.joints.size() ||
+        source_idx >= tri.skeleton.kp_count) {
+        return false;
+    }
+    const auto& source = tri.skeleton.joints[source_idx];
+    return finite_joint(source) && source.score >= kRawKeypointScoreMin &&
+           tri.view_count[source_idx] > 0 &&
+           std::isfinite(tri.reproj_error_px[source_idx]) &&
+           tri.reproj_error_px[source_idx] >= 0.0f &&
+           std::isfinite(tri.max_ray_angle_deg[source_idx]) &&
+           tri.max_ray_angle_deg[source_idx] >= 0.0f;
+}
+
+std::optional<std::array<double, 3>> filtered_position(
+    const infer::Skeleton3D* skeleton, std::size_t source_idx) {
+    if (!skeleton || source_idx >= skeleton->joints.size() ||
+        source_idx >= skeleton->kp_count) {
+        return std::nullopt;
+    }
+    const auto& joint = skeleton->joints[source_idx];
+    if (!joint.valid || !std::isfinite(joint.x) || !std::isfinite(joint.y) ||
+        !std::isfinite(joint.z)) {
+        return std::nullopt;
+    }
+    return std::array<double, 3>{joint.x, joint.y, joint.z};
+}
+
+std::array<double, 3> midpoint(const std::array<double, 3>& left,
+                               const std::array<double, 3>& right) {
+    return {(left[0] + right[0]) * 0.5,
+            (left[1] + right[1]) * 0.5,
+            (left[2] + right[2]) * 0.5};
+}
+
+void fill_raw_joint(const lift::TriangulatedSkeleton& tri,
+                    std::size_t source_idx,
+                    FusionPoseJointValue& dst) {
+    if (!raw_observed(tri, source_idx)) return;
+    const auto& source = tri.skeleton.joints[source_idx];
+    dst.availability = PoseGateAvailability::Fresh;
+    dst.observed_this_frame = true;
+    dst.position_m = std::array<double, 3>{source.x, source.y, source.z};
+    dst.keypoint_score = source.score;
+    dst.inlier_view_count = tri.view_count[source_idx];
+    dst.mean_reproj_error_px = tri.reproj_error_px[source_idx];
+    dst.max_ray_angle_deg = tri.max_ray_angle_deg[source_idx];
+}
+
 std::string serialize(const FusionPoseFrame& frame) {
     std::string out;
     out.reserve(2600);
@@ -121,6 +177,9 @@ std::string serialize(const FusionPoseFrame& frame) {
            ",\"position_source\":\"multi_view_triangulation\""
            ",\"postprocess\":\"none\""
            ",\"kalman\":false,\"ik\":false,\"floor_contact\":false}";
+    out += ",\"filtered_position_provenance\":{\"stage\":\"post_kalman_ik\""
+           ",\"position_source\":\"skeleton3d_snapshot\""
+           ",\"floor_contact\":false,\"root_transform\":false}";
     out += ",\"position_space\":\"fitra_world_z_up_m\",\"joints\":{";
     for (std::size_t i = 0;
          i < static_cast<std::size_t>(FusionPoseJoint::Count); ++i) {
@@ -138,10 +197,21 @@ std::string serialize(const FusionPoseFrame& frame) {
         } else {
             out += "null";
         }
+        out += ",\"filtered_position_m\":";
+        if (joint.filtered_position_m) {
+            out += '[';
+            append_number(out, (*joint.filtered_position_m)[0]); out += ',';
+            append_number(out, (*joint.filtered_position_m)[1]); out += ',';
+            append_number(out, (*joint.filtered_position_m)[2]); out += ']';
+        } else {
+            out += "null";
+        }
         out += ",\"availability\":";
         append_json_string(out,
             joint.availability == PoseGateAvailability::Fresh
                 ? "Fresh" : "Unavailable");
+        out += ",\"observed_this_frame\":";
+        out += joint.observed_this_frame ? "true" : "false";
         out += ",\"keypoint_score\":";
         append_optional_number(out, joint.keypoint_score);
         out += ",\"inlier_view_count\":";
@@ -358,7 +428,8 @@ void FusionPoseBus::commit_boundary_locked(FusionPoseFrame frame) {
 FusionPoseFrame FusionPoseBus::observe(
     const lift::TriangulatedSkeleton& tri,
     const FusionCaptureInterval& capture,
-    const PoseGateFrame& lifecycle) {
+    const PoseGateFrame& lifecycle,
+    const infer::Skeleton3D* filtered_skeleton) {
     std::lock_guard<std::mutex> lock{mu_};
     synchronize_stream_locked(lifecycle);
     coordinate_epoch_ = lifecycle.coordinate_epoch;
@@ -383,22 +454,40 @@ FusionPoseFrame FusionPoseBus::observe(
     auto frame = make_base_locked(lifecycle, FusionPoseEventType::Pose);
     frame.capture = capture;
     for (std::size_t i = 0; i < kHalpeFusionIndices.size(); ++i) {
+        if (i == static_cast<std::size_t>(FusionPoseJoint::Hips)) continue;
         const std::size_t source_idx = kHalpeFusionIndices[i];
-        const auto& source = tri.skeleton.joints[source_idx];
         auto& dst = frame.joints[i];
-        if (!source.valid || !std::isfinite(source.x) ||
-            !std::isfinite(source.y) || !std::isfinite(source.z) ||
-            !std::isfinite(source.score) || tri.view_count[source_idx] <= 0 ||
-            !std::isfinite(tri.reproj_error_px[source_idx]) ||
-            !std::isfinite(tri.max_ray_angle_deg[source_idx])) {
-            continue;
-        }
-        dst.availability = PoseGateAvailability::Fresh;
-        dst.position_m = std::array<double, 3>{source.x, source.y, source.z};
-        dst.keypoint_score = source.score;
-        dst.inlier_view_count = tri.view_count[source_idx];
-        dst.mean_reproj_error_px = tri.reproj_error_px[source_idx];
-        dst.max_ray_angle_deg = tri.max_ray_angle_deg[source_idx];
+        fill_raw_joint(tri, source_idx, dst);
+        dst.filtered_position_m = filtered_position(filtered_skeleton, source_idx);
+    }
+
+    // HALPE26 has no independent camera hip-center observation.  Keep the
+    // legacy ten-joint shape, but derive Hips only from the same-capture raw
+    // left/right hip pair and aggregate its evidence conservatively.
+    auto& hips = frame.joints[static_cast<std::size_t>(FusionPoseJoint::Hips)];
+    const auto& left_hip =
+        frame.joints[static_cast<std::size_t>(FusionPoseJoint::LeftHip)];
+    const auto& right_hip =
+        frame.joints[static_cast<std::size_t>(FusionPoseJoint::RightHip)];
+    const bool raw_hips_observed =
+        left_hip.observed_this_frame && right_hip.observed_this_frame &&
+        left_hip.position_m && right_hip.position_m;
+    if (raw_hips_observed) {
+        hips.availability = PoseGateAvailability::Fresh;
+        hips.observed_this_frame = true;
+        hips.position_m = midpoint(*left_hip.position_m, *right_hip.position_m);
+        hips.keypoint_score =
+            std::min(*left_hip.keypoint_score, *right_hip.keypoint_score);
+        hips.inlier_view_count =
+            std::min(*left_hip.inlier_view_count, *right_hip.inlier_view_count);
+        hips.mean_reproj_error_px = std::max(
+            *left_hip.mean_reproj_error_px, *right_hip.mean_reproj_error_px);
+        hips.max_ray_angle_deg =
+            std::min(*left_hip.max_ray_angle_deg, *right_hip.max_ray_angle_deg);
+    }
+    if (left_hip.filtered_position_m && right_hip.filtered_position_m) {
+        hips.filtered_position_m = midpoint(*left_hip.filtered_position_m,
+                                            *right_hip.filtered_position_m);
     }
     commit_pose_locked(std::move(frame));
     last_subject_track_id_ = lifecycle.subject_track_id;
