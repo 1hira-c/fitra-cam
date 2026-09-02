@@ -1,7 +1,7 @@
 # `fitra_pose_gate_v1` position-only 観測契約
 
 作成日: 2026-08-02
-状態: M0 実装
+状態: M0 実装（2026-09-03 Jetson partial smoke 済み）
 
 ## 背景
 
@@ -131,3 +131,13 @@ wall-clock を content time として使わない。送信の重複を防ぐた�
 I/Ski の8 joint が `Fresh` になること、再接続/再校正で ID/epoch と全Unavailable境界が
 記録されることを確認する。併せて `diagnostics` の各カウンタと `sync_dt_ms` の分布を
 保存し、`sync_miss_count` と `reacquired_count` が短い位相差だけで増えないことを確認する。
+
+### 2026-09-03 Jetson merge smoke
+
+- Jetson Orin Nano Super（MAXN_SUPER）、Halpe26、3 camera、1280x960@60 の稼働中
+  Release binary で、GET は exact 8 keys、WS は8秒で exact 8 のUnavailable文書240件を確認した。
+  座標、raw camera frame、opaque identity は保存していない。
+- PoseGate / FusionPose / TrackerAxis の3 WSを同時接続した8秒窓でも、camera processed は
+  59.3--59.9 Hz、3D processed は 58.816 Hzで、無接続窓の58.803 Hzから重大な低下は無かった。
+- 観測中は人物不在で全joint Unavailableだったため、live Fresh exact 8、再接続・人物切替・
+  再校正boundaryは未実施であり、unit/integration testの合格を実機合格へ読み替えない。

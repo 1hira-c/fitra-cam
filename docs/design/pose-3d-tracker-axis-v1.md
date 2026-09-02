@@ -179,6 +179,16 @@ axes, identity and capture values are never written to normal logs.
 
 ## Remaining work
 
-Hardware acceptance is required after the full Jetson build.  Camera
+The 2026-09-03 Jetson merge smoke completed the Release build, focused/full
+CTest, boundary GET/WS shape, and numeric clock-sync checks.  Three concurrent
+fusion-facing WebSockets did not reduce the fixed-rate TrackerBus tick proxy:
+60.052 Hz before versus 60.065 Hz during the connections.  Camera processed
+and 3D cadence were also stable.  No pose coordinates, raw camera data, or
+opaque identity were saved.
+
+Fresh exact-six hardware acceptance remains required because no person was
+present during the smoke; the live endpoint correctly returned a `person_lost`
+boundary without `capture` or `axes`.  Live SOE/EOF semantics and the rejection
+of a real predict/hold-only role therefore remain unverified.  Camera
 disconnect/person-switch destructive tests are not part of this deployment;
 the pure lifecycle and overflow tests fix their producer behavior.

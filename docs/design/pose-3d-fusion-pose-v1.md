@@ -272,3 +272,22 @@ single latest slot for all events (can erase loss/epoch evidence).
 - hardware: inspect live V4L2 semantics, verify mixed/unknown cameras produce
   `unavailable`, record `/ws/fusion-pose`, and compare capture cadence before
   and after enabling a fusion WebSocket consumer.
+
+## Jetson merge validation (2026-09-03)
+
+- Release configure/build completed on Jetson Orin Nano Super in MAXN_SUPER.
+  The focused eight tests and the full 37-test CTest suite passed; the Crow
+  test required the host context because the sandbox denies loopback sockets.
+- The live GET endpoint returned the exact ten joint keys and the live WS
+  delivered exact-ten boundary documents.  Numeric clock-sync pong and
+  receive-before-send ordering passed.  No pose coordinates, raw camera data,
+  or opaque identity were written to the smoke output.
+- With PoseGate, FusionPose, and TrackerAxis WebSockets connected together,
+  the three cameras remained at 59.3--59.9 processed frames/s.  3D processed
+  cadence was 58.803 Hz before and 58.816 Hz during the connections; the
+  Skeleton3D publish cadence was 30.088 Hz and 30.095 Hz respectively.
+- No person was present during this window.  The live document was therefore
+  an `Unavailable` boundary with unavailable capture evidence.  Fresh
+  exact-ten data, non-null `filtered_position_m`, and live SOE/EOF timestamp
+  semantics remain unverified; their unit/Crow coverage is not hardware
+  acceptance.

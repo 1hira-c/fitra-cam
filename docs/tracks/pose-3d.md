@@ -3,7 +3,7 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-07-15)
+## 現状 (2026-09-03)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
@@ -139,6 +139,20 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-09-03 — D50入力3契約のDevelopマージ前検証
+
+`b0605a3` 系統（`d867c6d` は非祖先）で、PoseGate exact 8、FusionPose exact 10 + raw lineageを
+保持した `filtered_position_m`、TrackerAxis post-One-Euro exact 6 + raw provenance gateを再確認した。
+Jetson Orin Nano Super / MAXN_SUPERでRelease configure/build、focused 8/8、全CTest 37/37、
+`main --help`を通過。稼働中のHalpe26・3 camera・1280x960@60構成では、3つのfusion向けWSを
+同時接続してもcamera processed 59.3--59.9 Hz、3D processed 58.803→58.816 Hz、Skeleton3D
+30.088→30.095 Hz、TrackerBus tick proxy 60.052→60.065 Hzで重大なcadence低下は無かった。
+GET/WSのexact 8/10 boundary shapeとFusionPose/TrackerAxis clock-syncは確認したが、観測中は人物不在のため
+Fresh exact 8/10/6、non-null filtered位置、live SOE/EOF timestamp semanticsは未実施として残す。
+raw camera data、pose座標、opaque identityは検証出力へ保存していない。
+設計: [FusionPose](../design/pose-3d-fusion-pose-v1.md) / [TrackerAxis](../design/pose-3d-tracker-axis-v1.md) /
+[PoseGate](../design/pose-3d-fitra-pose-gate-v1.md)。
 
 ### 2026-08-24 — D50 FusionPose raw/filtered joint lineage seam
 
