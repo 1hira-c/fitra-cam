@@ -140,6 +140,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-03 — D50 lifecycle境界でfilter履歴を破棄
+
+人物消失後の再取得、人物切替、stream/coordinate/continuity変更時に、FusionPoseのKalman状態と
+TrackerAxisのquaternion/position/One-Euro/FK抽出履歴を新lifecycleの処理前にresetするよう修正した。
+TrackerAxis sidecar境界がlatest-only Skeleton3D snapshotを追い越した場合も、境界publish時刻の
+watermark以前のsnapshotを平滑化へ戻さず、旧subjectの状態による補間・再seedを防ぐ。
+設計: [FusionPose](../design/pose-3d-fusion-pose-v1.md) /
+[TrackerAxis](../design/pose-3d-tracker-axis-v1.md)。
+
 ### 2026-09-03 — D50入力3契約のDevelopマージ前検証
 
 `b0605a3` 系統（`d867c6d` は非祖先）で、PoseGate exact 8、FusionPose exact 10 + raw lineageを

@@ -153,6 +153,9 @@ axes, identity and capture values are never written to normal logs.
 6. Normal frames are latest-only; lifecycle evidence is ordered or replaced
    by an explicit continuity reset.
 7. Run and calib-subject construct the same producer path.
+8. TrackerExtractor consumes lifecycle boundaries before extraction and
+   smoothing, resets quaternion/position/One-Euro/FK history, and does not let
+   a pre-boundary latest snapshot reseed that history.
 
 ## Milestones
 

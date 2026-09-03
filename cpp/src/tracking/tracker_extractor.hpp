@@ -16,6 +16,7 @@
 
 #include <array>
 #include <atomic>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -151,6 +152,14 @@ private:
     // Hip cache + per-tracker initialization flags + frame dt for the
     // position smoother. See PosSmoothingContext docstring.
     PosSmoothingContext pos_ctx_{};
+
+    // Last Fresh lifecycle admitted to extraction/smoothing. Any identity or
+    // coordinate/continuity change resets all histories before the new frame.
+    std::optional<pipeline::TrackerAxisLineage> last_smoothed_lineage_;
+    // A boundary can outrun the latest-only Skeleton3DBus snapshot. Keep its
+    // publish-time watermark so an older snapshot cannot reseed the histories
+    // after reset while the matching boundary snapshot is still in flight.
+    std::uint64_t lifecycle_boundary_publish_mono_ns_ = 0;
 
     // Per-tracker rolling stats state.
     //

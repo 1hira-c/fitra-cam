@@ -29,6 +29,11 @@ enum class PoseGateSourceState {
     UnsupportedMultiPerson,
 };
 
+constexpr bool pose_gate_is_lifecycle_boundary(
+    PoseGateSourceState state) noexcept {
+    return state != PoseGateSourceState::Fresh;
+}
+
 enum class PoseGateJoint {
     Hips,
     Neck,

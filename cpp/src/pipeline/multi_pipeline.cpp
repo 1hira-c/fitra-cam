@@ -529,6 +529,16 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
             tri, content_mono_ns, pose_gate_single_subject,
             sync_event.sync_dt_ms);
     }
+    // A non-Fresh PoseGate frame is a destructive lifecycle boundary. Reset
+    // before feeding this frame's measurement to Kalman so a reacquired/new
+    // subject or coordinate epoch cannot inherit the previous lifecycle's
+    // joint state. The boundary frame itself is hidden from FusionPose; its
+    // measurement seeds the new state for the following ordinary Fresh frame.
+    if (lifecycle &&
+        pose_gate_is_lifecycle_boundary(lifecycle->source_state)) {
+        kalman_.reset();
+        has_last_3d_update_ = false;
+    }
     infer::Skeleton3D skel = tri.skeleton;
     double dt_s = 1.0 / 30.0;
     if (has_last_3d_update_) {

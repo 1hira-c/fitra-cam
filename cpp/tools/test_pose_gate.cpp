@@ -250,6 +250,22 @@ void test_sync_diagnostics_are_bounded_and_serialized() {
     }
 }
 
+void test_non_fresh_states_are_lifecycle_boundaries() {
+    check(!fitra::pipeline::pose_gate_is_lifecycle_boundary(
+              PoseGateSourceState::Fresh),
+          "Fresh must keep the current filter lifecycle");
+    for (const auto state : {
+             PoseGateSourceState::Reacquired,
+             PoseGateSourceState::PersonSwitched,
+             PoseGateSourceState::Unavailable,
+             PoseGateSourceState::EpochChanged,
+             PoseGateSourceState::UnsupportedTopology,
+             PoseGateSourceState::UnsupportedMultiPerson}) {
+        check(fitra::pipeline::pose_gate_is_lifecycle_boundary(state),
+              "every non-Fresh PoseGate state must break filter history");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -261,6 +277,7 @@ int main() {
         test_epoch_change_has_boundary();
         test_unsupported_inputs_are_explicit();
         test_sync_diagnostics_are_bounded_and_serialized();
+        test_non_fresh_states_are_lifecycle_boundaries();
         std::puts("test_pose_gate ok");
         return 0;
     } catch (const std::exception& e) {

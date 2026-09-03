@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <limits>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <crow.h>
@@ -13,7 +15,9 @@
 #include "lift/keypoint_format.hpp"
 #include "lift/skeleton_def.hpp"
 #include "pipeline/fusion_pose.hpp"
+#include "pipeline/snapshot.hpp"
 #include "tracking/tracker_extract.hpp"
+#include "tracking/tracker_extractor.hpp"
 
 namespace {
 
@@ -66,6 +70,68 @@ TrackerAxisLineage lineage(std::uint64_t seq = 1) {
         fitra::camera::V4l2TimestampSemantics::MonotonicSoe;
     out.observed.fill(true);
     return out;
+}
+
+void set_joint(fitra::infer::Skeleton3D& skeleton, std::size_t joint,
+               float x, float y, float z) {
+    auto& value = skeleton.joints[joint];
+    value.x = x;
+    value.y = y;
+    value.z = z;
+    value.score = 1.0f;
+    value.valid = true;
+}
+
+fitra::infer::Skeleton3D lifecycle_skeleton() {
+    fitra::infer::Skeleton3D skeleton;
+    skeleton.kp_count = 26;
+    set_joint(skeleton, 19, 0.0f, 0.00f, 0.90f);
+    set_joint(skeleton, 11, 0.1f, 0.00f, 0.90f);
+    set_joint(skeleton, 12, -0.1f, 0.00f, 0.90f);
+    set_joint(skeleton, 18, 0.0f, 0.00f, 1.45f);
+    set_joint(skeleton, 5, 0.18f, 0.00f, 1.42f);
+    set_joint(skeleton, 6, -0.18f, 0.00f, 1.42f);
+    set_joint(skeleton, 7, 0.45f, 0.02f, 1.42f);
+    set_joint(skeleton, 8, -0.45f, 0.02f, 1.42f);
+    set_joint(skeleton, 9, 0.72f, 0.05f, 1.27f);
+    set_joint(skeleton, 10, -0.72f, 0.05f, 1.27f);
+    set_joint(skeleton, 13, 0.1f, 0.10f, 0.45f);
+    set_joint(skeleton, 14, -0.1f, 0.10f, 0.45f);
+    set_joint(skeleton, 15, 0.1f, 0.05f, 0.05f);
+    set_joint(skeleton, 16, -0.1f, 0.05f, 0.05f);
+    set_joint(skeleton, 20, 0.1f, 0.17f, 0.00f);
+    set_joint(skeleton, 21, -0.1f, 0.17f, 0.00f);
+    set_joint(skeleton, 22, 0.07f, 0.17f, 0.00f);
+    set_joint(skeleton, 23, -0.07f, 0.17f, 0.00f);
+    set_joint(skeleton, 24, 0.1f, 0.02f, 0.00f);
+    set_joint(skeleton, 25, -0.1f, 0.02f, 0.00f);
+    return skeleton;
+}
+
+fitra::infer::Skeleton3D rotate_z_and_translate(
+    fitra::infer::Skeleton3D skeleton, float shift_x) {
+    for (std::size_t i = 0; i < skeleton.kp_count; ++i) {
+        auto& joint = skeleton.joints[i];
+        if (!joint.valid) continue;
+        const float x = joint.x;
+        const float y = joint.y;
+        joint.x = -y + shift_x;
+        joint.y = x;
+    }
+    return skeleton;
+}
+
+bool wait_for_axis(TrackerAxisBus& bus, std::uint64_t source_sample_seq,
+                   bool fresh) {
+    for (int i = 0; i < 200; ++i) {
+        const auto frame = bus.snapshot();
+        if (frame.source_sample_seq == source_sample_seq &&
+            frame.fresh == fresh) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return false;
 }
 
 bool integer_number(const crow::json::rvalue& value) {
@@ -385,6 +451,153 @@ void test_stale_snapshot_cannot_reopen_after_boundary() {
     CHECK(after.source_sample_seq == before.source_sample_seq);
 }
 
+void test_extractor_resets_all_history_before_lifecycle_fresh() {
+    using fitra::pipeline::FusionPoseEventType;
+    using fitra::pipeline::FusionPoseSourceState;
+    using fitra::pipeline::Skeleton3DSnapshot;
+    using fitra::tracking::ExtractContext;
+    using fitra::tracking::TrackerExtractor;
+    using fitra::tracking::TrackerExtractorOptions;
+
+    fitra::lift::set_active_keypoint_format(
+        fitra::lift::KeypointFormat::Halpe26);
+    fitra::pipeline::Skeleton3DBus skeleton_bus;
+    fitra::tracking::TrackerBus tracker_bus;
+    TrackerAxisBus axis_bus{"stream-a", 3};
+    fitra::pipeline::TrackerAxisLineageBus lineage_bus;
+    TrackerExtractorOptions opts;
+    opts.event_driven = true;
+    opts.extract_rate_hz = 500.0;
+    TrackerExtractor extractor{
+        skeleton_bus, tracker_bus, opts, &axis_bus, &lineage_bus};
+    extractor.start();
+
+    const auto subject_a = lifecycle_skeleton();
+    auto lineage_a = lineage(1);
+    lineage_a = lineage_bus.publish(lineage_a);
+    Skeleton3DSnapshot snap_a;
+    snap_a.persons.push_back(subject_a);
+    snap_a.tracker_axis_lineage = lineage_a;
+    skeleton_bus.update(snap_a);
+    CHECK(wait_for_axis(axis_bus, 1, true));
+
+    auto switched = lineage(2);
+    switched.event_type = FusionPoseEventType::Boundary;
+    switched.source_state = FusionPoseSourceState::PersonSwitched;
+    switched.source_reason = "person_switched";
+    switched.subject_track_id = "subject-b";
+    lineage_bus.publish(switched);
+
+    const auto subject_b = rotate_z_and_translate(subject_a, 2.0f);
+    auto lineage_b = lineage(3);
+    lineage_b.subject_track_id = "subject-b";
+    lineage_b = lineage_bus.publish(lineage_b);
+    Skeleton3DSnapshot snap_b;
+    snap_b.persons.push_back(subject_b);
+    snap_b.tracker_axis_lineage = lineage_b;
+    skeleton_bus.update(snap_b);
+    CHECK(wait_for_axis(axis_bus, 3, true));
+
+    ExtractContext expected_ctx;
+    const auto expected_trackers =
+        fitra::tracking::extract_trackers_with_floor_corrections(
+            subject_b, {}, &expected_ctx, opts.foot_pos_mode,
+            opts.chest_height_frac, opts.waist_height_frac,
+            opts.limb_extension);
+    TrackerAxisBus expected_axis_bus{"stream-a", 3};
+    const auto expected_axes = expected_axis_bus.publish(
+        expected_trackers, lineage_b);
+    const auto actual_axes = axis_bus.snapshot();
+    CHECK(actual_axes.fresh);
+    for (std::size_t i = 0; i < actual_axes.axes.size(); ++i) {
+        CHECK(actual_axes.axes[i].axis.has_value() ==
+              expected_axes.axes[i].axis.has_value());
+        if (!actual_axes.axes[i].axis || !expected_axes.axes[i].axis) continue;
+        for (std::size_t component = 0; component < 3; ++component) {
+            CHECK(std::fabs((*actual_axes.axes[i].axis)[component] -
+                            (*expected_axes.axes[i].axis)[component]) < 1.0e-5);
+        }
+    }
+
+    const auto smoothed_b = tracker_bus.snapshot();
+    for (const auto role : {TrackerRole::Waist,
+                            TrackerRole::LeftUpperLeg}) {
+        const auto i = static_cast<std::size_t>(role);
+        CHECK(smoothed_b.trackers[i].valid);
+        for (int component = 0; component < 3; ++component) {
+            CHECK(std::fabs(smoothed_b.trackers[i].pos[component] -
+                            expected_trackers[i].pos[component]) < 1.0e-5f);
+        }
+    }
+
+    // Let the boundary sidecar outrun the latest-only skeleton snapshot. The
+    // old subject-b snapshot must not reseed smoothing or its FootAnchor while
+    // the new Fresh snapshot is still in flight.
+    auto lost = lineage(4);
+    lost.event_type = FusionPoseEventType::Boundary;
+    lost.source_state = FusionPoseSourceState::Unavailable;
+    lost.source_reason = "person_lost";
+    lost.subject_track_id = "subject-b";
+    lineage_bus.publish(lost);
+    auto reacquired = lineage(5);
+    reacquired.event_type = FusionPoseEventType::Boundary;
+    reacquired.source_state = FusionPoseSourceState::Reacquired;
+    reacquired.source_reason = "reacquired";
+    reacquired.subject_track_id = "subject-c";
+    lineage_bus.publish(reacquired);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    auto subject_c = rotate_z_and_translate(subject_a, -2.0f);
+    for (const std::size_t joint : {15u, 20u, 22u, 24u}) {
+        subject_c.joints[joint].valid = false;
+    }
+    auto lineage_c = lineage(6);
+    lineage_c.subject_track_id = "subject-c";
+    lineage_c.observed[static_cast<std::size_t>(
+        TrackerAxisSourceJoint::LeftAnkle)] = false;
+    lineage_c = lineage_bus.publish(lineage_c);
+    Skeleton3DSnapshot snap_c;
+    snap_c.persons.push_back(subject_c);
+    snap_c.tracker_axis_lineage = lineage_c;
+    skeleton_bus.update(snap_c);
+    CHECK(wait_for_axis(axis_bus, 6, true));
+    const auto trackers_c = tracker_bus.snapshot();
+    CHECK(!trackers_c.trackers[static_cast<std::size_t>(
+        TrackerRole::LeftFoot)].valid);
+
+    // Even if an upstream bug/drop presents lifecycle-field changes on a
+    // Fresh snapshot without a queued boundary, reset before smoothing. The
+    // TrackerAxisBus will synthesize the ordered stream/subject/coordinate/
+    // continuity boundaries from the same lineage.
+    const auto subject_d = rotate_z_and_translate(subject_a, 4.0f);
+    auto lineage_d = lineage(7);
+    lineage_d.stream_id = "stream-b";
+    lineage_d.subject_track_id = "subject-d";
+    lineage_d.coordinate_epoch = 4;
+    lineage_d.continuity_epoch = 6;
+    lineage_d = lineage_bus.publish(lineage_d);
+    Skeleton3DSnapshot snap_d;
+    snap_d.persons.push_back(subject_d);
+    snap_d.tracker_axis_lineage = lineage_d;
+    skeleton_bus.update(snap_d);
+    CHECK(wait_for_axis(axis_bus, 7, true));
+    ExtractContext expected_d_ctx;
+    const auto expected_d =
+        fitra::tracking::extract_trackers_with_floor_corrections(
+            subject_d, {}, &expected_d_ctx, opts.foot_pos_mode,
+            opts.chest_height_frac, opts.waist_height_frac,
+            opts.limb_extension);
+    const auto trackers_d = tracker_bus.snapshot();
+    const auto waist = static_cast<std::size_t>(TrackerRole::Waist);
+    CHECK(trackers_d.trackers[waist].valid);
+    for (int component = 0; component < 3; ++component) {
+        CHECK(std::fabs(trackers_d.trackers[waist].pos[component] -
+                        expected_d[waist].pos[component]) < 1.0e-5f);
+    }
+
+    extractor.stop();
+}
+
 void test_clock_pong() {
     const auto root = crow::json::load(fitra::pipeline::make_clock_sync_pong(
         7, 11, 13, 17));
@@ -412,6 +625,7 @@ int main() {
     test_overflow_continuity_reset();
     test_lineage_handoff_preserves_boundaries();
     test_stale_snapshot_cannot_reopen_after_boundary();
+    test_extractor_resets_all_history_before_lifecycle_fresh();
     test_clock_pong();
     if (g_fail) {
         std::fprintf(stderr, "test_tracker_axis: %d failures\n", g_fail);
