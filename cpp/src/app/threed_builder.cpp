@@ -1,10 +1,42 @@
 #include "app/threed_builder.hpp"
 
+#include <array>
+#include <cstdint>
+#include <fstream>
+#include <stdexcept>
+
 #include "app/paths.hpp"
 #include "lift/calib_io.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::app {
+
+namespace {
+
+// The coordinate epoch is a content fingerprint of the calibration artifact
+// used to construct Triangulator. A process restart already changes stream_id,
+// but retaining this fingerprint lets fusion reject a reused stream/track if a
+// calibration file is replaced between runs. Runtime hot reload is still not
+// supported; a changed artifact requires a new process.
+std::uint64_t calibration_coordinate_epoch(const std::string& path) {
+    std::ifstream input{path, std::ios::binary};
+    if (!input) {
+        throw std::runtime_error("cannot fingerprint calibration: " + path);
+    }
+    std::uint64_t hash = 1469598103934665603ULL;  // FNV-1a offset basis
+    std::array<char, 4096> buffer{};
+    while (input) {
+        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize count = input.gcount();
+        for (std::streamsize i = 0; i < count; ++i) {
+            hash ^= static_cast<unsigned char>(buffer[static_cast<std::size_t>(i)]);
+            hash *= 1099511628211ULL;  // FNV-1a prime
+        }
+    }
+    return hash == 0 ? 1 : hash;
+}
+
+}  // namespace
 
 ThreeDSet make_threed(const config::MainOptions& opts,
                       std::size_t n_cams,
@@ -37,7 +69,16 @@ ThreeDSet make_threed(const config::MainOptions& opts,
     t.triangulator = std::make_shared<lift::Triangulator>(calib, tri_opts);
     t.triangulator->require_camera_ids(expected_camera_ids(n_cams));
     t.bus3d = std::make_unique<pipeline::Skeleton3DBus>();
+    const auto coordinate_epoch = calibration_coordinate_epoch(calib_path);
+    t.pose_gate_bus = std::make_unique<pipeline::PoseGateBus>(
+        std::string{}, coordinate_epoch);
+    t.fusion_pose_bus = std::make_unique<pipeline::FusionPoseBus>(
+        t.pose_gate_bus->stream_id(), coordinate_epoch);
+    t.tracker_axis_lineage_bus =
+        std::make_unique<pipeline::TrackerAxisLineageBus>();
     t.tracker_bus = std::make_unique<tracking::TrackerBus>();
+    t.tracker_axis_bus = std::make_unique<tracking::TrackerAxisBus>(
+        t.pose_gate_bus->stream_id(), coordinate_epoch);
     FITRA_LOG_INFO("3D lifting enabled ({} calibrated cameras, sync_window={}ms)",
                    t.triangulator->camera_count(), opts.sync_window_ms);
     if (t.subject_height_m > 0.0) {
@@ -93,6 +134,10 @@ std::unique_ptr<pipeline::MultiCameraDriver> make_driver(
     pipeline::MultiCameraDriver::ThreeDConfig cfg;
     cfg.triangulator        = threed->triangulator;
     cfg.bus                 = threed->bus3d.get();
+    cfg.pose_gate           = threed->pose_gate_bus.get();
+    cfg.fusion_pose         = threed->fusion_pose_bus.get();
+    cfg.tracker_axis_lineage = threed->tracker_axis_lineage_bus.get();
+    cfg.pose_gate_single_subject = !opts.multi_person;
     cfg.sync_window_ms      = opts.sync_window_ms;
     cfg.kalman_enabled      = opts.kalman_3d;
     cfg.ik_enabled          = opts.ik_3d;

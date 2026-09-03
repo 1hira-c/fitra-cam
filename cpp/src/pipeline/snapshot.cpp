@@ -16,6 +16,16 @@ void append_float(std::string& out, double v, int precision = 6) {
     out += buf;
 }
 
+void append_optional_float(std::string& out,
+                           const std::optional<double>& value,
+                           int precision = 6) {
+    if (!value) {
+        out += "null";
+        return;
+    }
+    append_float(out, *value, precision);
+}
+
 void append_json_string(std::string& out, const std::string& value) {
     out += "\"";
     for (char ch : value) {
@@ -235,6 +245,23 @@ std::string Skeleton3DBus::make_bundle_json(const std::string& extra_fields_json
     out += ",\"quality_status\":"; append_json_string(out, s.stats.profile_quality_status);
     out += ",\"processed\":"; out += std::to_string(static_cast<long long>(s.stats.processed));
     out += ",\"sync_miss\":"; out += std::to_string(static_cast<long long>(s.stats.sync_miss));
+    out += ",\"pose_gate\":{\"sync_miss_count\":";
+    out += std::to_string(s.stats.pose_gate.sync_miss_count);
+    out += ",\"matched_3d_frame_count\":";
+    out += std::to_string(s.stats.pose_gate.matched_3d_frame_count);
+    out += ",\"unavailable_count\":";
+    out += std::to_string(s.stats.pose_gate.unavailable_count);
+    out += ",\"reacquired_count\":";
+    out += std::to_string(s.stats.pose_gate.reacquired_count);
+    out += ",\"sync_dt_ms\":{\"sample_count\":";
+    out += std::to_string(s.stats.pose_gate.sync_dt_sample_count);
+    out += ",\"min\":";
+    append_optional_float(out, s.stats.pose_gate.sync_dt_min_ms, 4);
+    out += ",\"median\":";
+    append_optional_float(out, s.stats.pose_gate.sync_dt_median_ms, 4);
+    out += ",\"max\":";
+    append_optional_float(out, s.stats.pose_gate.sync_dt_max_ms, 4);
+    out += "}}";
     out += ",\"ik_locked\":"; out += (s.stats.ik_locked ? "true" : "false");
     out += ",\"floor_stability_enabled\":";
     out += (s.stats.floor_stability_enabled ? "true" : "false");

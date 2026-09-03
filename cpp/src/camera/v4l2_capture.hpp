@@ -36,10 +36,41 @@ enum class PixFmt {
     Nvjpeg,  // captured as MJPEG, decoded on the Jetson HW NVJPEG block (GPU/VIC)
 };
 
+// Meaning of v4l2_buffer.timestamp after validating both the clock and the
+// timestamp-source flags.  Unavailable is deliberately not inferred from the
+// host's DQBUF observation time.
+enum class V4l2TimestampSemantics {
+    Unavailable,
+    MonotonicSoe,
+    MonotonicEof,
+};
+
+const char* v4l2_timestamp_semantics_name(V4l2TimestampSemantics semantics);
+
+struct V4l2CaptureTimestamp {
+    std::optional<std::uint64_t> mono_ns;
+    V4l2TimestampSemantics semantics = V4l2TimestampSemantics::Unavailable;
+};
+
+// Pure decoder kept public so timestamp flag handling is regression-testable
+// without opening a camera. `flags` is v4l2_buffer.flags; sec/usec come from
+// v4l2_buffer.timestamp.
+V4l2CaptureTimestamp interpret_v4l2_timestamp(std::int64_t sec,
+                                               std::int64_t usec,
+                                               std::uint32_t flags) noexcept;
+
 struct Frame {
     std::vector<std::uint8_t> data;  // raw payload (JPEG bytes or packed YUYV)
     std::uint64_t seq{0};
     std::chrono::steady_clock::time_point captured_at{};
+    // Exact host observation timestamp from CLOCK_MONOTONIC at DQBUF return.
+    // Retained for fitra_pose_gate_v1 compatibility and latency diagnostics;
+    // fitra_fusion_pose_v1 uses v4l2_timestamp below instead.
+    std::uint64_t captured_mono_ns{0};
+    // Kernel-provided capture timestamp for fitra_fusion_pose_v1.  This is
+    // never synthesized from captured_mono_ns when the driver flags are
+    // unknown/copy/non-monotonic.
+    V4l2CaptureTimestamp v4l2_timestamp{};
 };
 
 struct V4l2Options {

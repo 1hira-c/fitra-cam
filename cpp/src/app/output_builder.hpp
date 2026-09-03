@@ -11,6 +11,7 @@
 #include "config/main_config.hpp"
 #include "pipeline/snapshot.hpp"
 #include "tracking/tracker_bus.hpp"
+#include "tracking/tracker_axis.hpp"
 #include "tracking/tracker_extractor.hpp"
 #include "vmt/continuous_aligner.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
@@ -26,7 +27,9 @@ std::unique_ptr<tracking::TrackerExtractor> make_tracker_extractor(
     const config::MainOptions& opts,
     pipeline::Skeleton3DBus& bus3d,
     tracking::TrackerBus& tracker_bus,
-    const std::atomic<bool>* idle_flag = nullptr);
+    const std::atomic<bool>* idle_flag = nullptr,
+    tracking::TrackerAxisBus* tracker_axis_bus = nullptr,
+    pipeline::TrackerAxisLineageBus* lineage_bus = nullptr);
 
 struct RunOutputs {
     std::unique_ptr<vmt::VmtPublisher>        vmt_pub;

@@ -15,6 +15,9 @@
 #include <crow.h>
 
 #include "pipeline/extrinsic_calib_session.hpp"
+#include "pipeline/fusion_pose.hpp"
+#include "pipeline/pose_gate.hpp"
+#include "tracking/tracker_axis.hpp"
 #include "tracking/tracker_bus.hpp"
 #include "vmt/vmt_publisher.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
@@ -23,6 +26,7 @@
 #include "vmt/continuous_aligner.hpp"
 #include "vmt/discovery_beacon.hpp"
 #include "util/logging.hpp"
+#include "util/clock.hpp"
 #include "web/crow_routes_setup.hpp"
 #include "web/crow_util.hpp"
 
@@ -41,6 +45,35 @@ struct WsClients {
     std::mutex                       mu;
     std::set<crow::websocket::connection*> conns;
 };
+
+void handle_clock_sync_message(crow::websocket::connection& connection,
+                               const std::string& data,
+                               bool is_binary) {
+    if (is_binary) return;
+    const std::uint64_t receive_ns = fitra::util::monotonic_ns();
+    try {
+        auto body = crow::json::load(data);
+        if (!body || !body.has("type") || !body.has("nonce") ||
+            !body.has("client_send_mono_ns") ||
+            body["type"].t() != crow::json::type::String ||
+            body["nonce"].t() != crow::json::type::Number ||
+            body["client_send_mono_ns"].t() != crow::json::type::Number ||
+            std::string{body["type"].s()} != "clock_sync_ping") {
+            return;
+        }
+        const auto nonce_i = body["nonce"].i();
+        const auto client_send_i = body["client_send_mono_ns"].i();
+        if (nonce_i < 0 || client_send_i < 0) return;
+        const std::uint64_t send_ns = fitra::util::monotonic_ns();
+        connection.send_text(pipeline::make_clock_sync_pong(
+            static_cast<std::uint64_t>(nonce_i),
+            static_cast<std::uint64_t>(client_send_i),
+            receive_ns, send_ns));
+    } catch (...) {
+        // Invalid/unknown client messages are ignored. Never log the body:
+        // future messages may carry source evidence or identity.
+    }
+}
 
 void append_vmt_alignment_json(std::ostringstream& out,
                                const vmt::VmtAlignment& a) {
@@ -295,6 +328,9 @@ struct CrowServer::Impl {
     crow::SimpleApp     app;
     WsClients           clients2d;
     WsClients           clients3d;
+    WsClients           clients_pose_gate;
+    WsClients           clients_fusion_pose;
+    WsClients           clients_tracker_axis;
     AutoAlignSession    auto_align;
 };
 
@@ -386,6 +422,20 @@ void CrowServer::set_tracker_bus(tracking::TrackerBus* tracker_bus) {
     tracker_bus_ = tracker_bus;
 }
 
+void CrowServer::set_pose_gate_bus(pipeline::PoseGateBus* pose_gate_bus) {
+    pose_gate_bus_ = pose_gate_bus;
+}
+
+void CrowServer::set_fusion_pose_bus(
+    pipeline::FusionPoseBus* fusion_pose_bus) {
+    fusion_pose_bus_ = fusion_pose_bus;
+}
+
+void CrowServer::set_tracker_axis_bus(
+    tracking::TrackerAxisBus* tracker_axis_bus) {
+    tracker_axis_bus_ = tracker_axis_bus;
+}
+
 void CrowServer::set_continuous_aligner(vmt::ContinuousAligner* aligner) {
     continuous_aligner_ = aligner;
 }
@@ -406,6 +456,9 @@ void CrowServer::start() {
     auto& app     = impl_->app;
     auto& clients2d = impl_->clients2d;
     auto& clients3d = impl_->clients3d;
+    auto& clients_pose_gate = impl_->clients_pose_gate;
+    auto& clients_fusion_pose = impl_->clients_fusion_pose;
+    auto& clients_tracker_axis = impl_->clients_tracker_axis;
 
     // WS /ws — register first so the catch-all HTTP route below does not
     // shadow upgrade requests (Crow's BaseRule::handle_upgrade returns
@@ -446,6 +499,71 @@ void CrowServer::start() {
                   const std::string& /*data*/,
                   bool /*is_binary*/) {
         // ignore client messages (ping etc.)
+    });
+
+    // Fusion-facing raw position stream. It is intentionally a separate
+    // endpoint: `/ws3d` remains the post-Kalman/IK WebUI/VMT compatibility
+    // surface, while this stream contains only tri.skeleton observations.
+    CROW_WEBSOCKET_ROUTE(app, "/ws/pose-gate")
+    .onopen([this, &clients_pose_gate](crow::websocket::connection& c) {
+        std::lock_guard<std::mutex> lk{clients_pose_gate.mu};
+        clients_pose_gate.conns.insert(&c);
+        if (idle_state_) idle_state_->ws_client_count.fetch_add(1, std::memory_order_relaxed);
+    })
+    .onclose([this, &clients_pose_gate](crow::websocket::connection& c,
+                                        const std::string& /*reason*/,
+                                        uint16_t /*code*/) {
+        std::lock_guard<std::mutex> lk{clients_pose_gate.mu};
+        if (clients_pose_gate.conns.erase(&c) && idle_state_)
+            idle_state_->ws_client_count.fetch_sub(1, std::memory_order_relaxed);
+    })
+    .onmessage([](crow::websocket::connection& /*c*/,
+                  const std::string& /*data*/,
+                  bool /*is_binary*/) {
+        // ignore client messages (ping etc.)
+    });
+
+    CROW_WEBSOCKET_ROUTE(app, "/ws/fusion-pose")
+    .onopen([this, &clients_fusion_pose](crow::websocket::connection& c) {
+        std::lock_guard<std::mutex> lk{clients_fusion_pose.mu};
+        clients_fusion_pose.conns.insert(&c);
+        if (idle_state_) idle_state_->ws_client_count.fetch_add(1, std::memory_order_relaxed);
+    })
+    .onclose([this, &clients_fusion_pose](crow::websocket::connection& c,
+                                          const std::string& /*reason*/,
+                                          uint16_t /*code*/) {
+        std::lock_guard<std::mutex> lk{clients_fusion_pose.mu};
+        if (clients_fusion_pose.conns.erase(&c) && idle_state_)
+            idle_state_->ws_client_count.fetch_sub(1, std::memory_order_relaxed);
+    })
+    .onmessage([](crow::websocket::connection& c,
+                  const std::string& data,
+                  bool is_binary) {
+        handle_clock_sync_message(c, data, is_binary);
+    });
+
+    CROW_WEBSOCKET_ROUTE(app, "/ws/tracker-axis")
+    .onopen([this, &clients_tracker_axis](crow::websocket::connection& c) {
+        std::lock_guard<std::mutex> lk{clients_tracker_axis.mu};
+        clients_tracker_axis.conns.insert(&c);
+        if (idle_state_) {
+            idle_state_->ws_client_count.fetch_add(
+                1, std::memory_order_relaxed);
+        }
+    })
+    .onclose([this, &clients_tracker_axis](crow::websocket::connection& c,
+                                            const std::string& /*reason*/,
+                                            uint16_t /*code*/) {
+        std::lock_guard<std::mutex> lk{clients_tracker_axis.mu};
+        if (clients_tracker_axis.conns.erase(&c) && idle_state_) {
+            idle_state_->ws_client_count.fetch_sub(
+                1, std::memory_order_relaxed);
+        }
+    })
+    .onmessage([](crow::websocket::connection& c,
+                  const std::string& data,
+                  bool is_binary) {
+        handle_clock_sync_message(c, data, is_binary);
     });
 
     // GET /api/state — run-mode discovery for the frontends (always
@@ -563,6 +681,57 @@ void CrowServer::start() {
             }
         }
         crow::response resp{std::move(body)};
+        resp.set_header("Content-Type", "application/json; charset=utf-8");
+        return resp;
+    });
+
+    CROW_ROUTE(app, "/api/pose-gate")
+    ([this]() {
+        if (!pose_gate_bus_) {
+            pipeline::PoseGateBus disabled_gate{"disabled"};
+            disabled_gate.publish_unavailable(
+                std::nullopt, pipeline::PoseGateSourceState::Unavailable,
+                "3d_disabled");
+            crow::response resp{disabled_gate.make_json()};
+            resp.code = 409;
+            resp.set_header("Content-Type", "application/json; charset=utf-8");
+            return resp;
+        }
+        crow::response resp{pose_gate_bus_->make_json()};
+        resp.set_header("Content-Type", "application/json; charset=utf-8");
+        return resp;
+    });
+
+    CROW_ROUTE(app, "/api/fusion-pose")
+    ([this]() {
+        if (!fusion_pose_bus_) {
+            pipeline::PoseGateBus disabled_gate{"disabled"};
+            const auto boundary = disabled_gate.publish_unavailable(
+                std::nullopt, pipeline::PoseGateSourceState::Unavailable,
+                "3d_disabled");
+            pipeline::FusionPoseBus disabled_fusion{
+                disabled_gate.stream_id(), disabled_gate.coordinate_epoch()};
+            disabled_fusion.publish_boundary(boundary);
+            crow::response resp{disabled_fusion.make_json()};
+            resp.code = 409;
+            resp.set_header("Content-Type", "application/json; charset=utf-8");
+            return resp;
+        }
+        crow::response resp{fusion_pose_bus_->make_json()};
+        resp.set_header("Content-Type", "application/json; charset=utf-8");
+        return resp;
+    });
+
+    CROW_ROUTE(app, "/api/tracker-axis")
+    ([this]() {
+        if (!tracker_axis_bus_) {
+            tracking::TrackerAxisBus disabled_axis{"disabled"};
+            crow::response resp{disabled_axis.make_json()};
+            resp.code = 409;
+            resp.set_header("Content-Type", "application/json; charset=utf-8");
+            return resp;
+        }
+        crow::response resp{tracker_axis_bus_->make_json()};
         resp.set_header("Content-Type", "application/json; charset=utf-8");
         return resp;
     });
@@ -1107,6 +1276,7 @@ void CrowServer::publisher_loop() {
     using clock = std::chrono::steady_clock;
     auto period = std::chrono::duration<double>(1.0 / std::max(opts_.publish_hz, 1.0));
     auto next = clock::now();
+    std::uint64_t pose_gate_sent_seq = 0;
     while (!stop_.load()) {
         next += std::chrono::duration_cast<clock::duration>(period);
         std::this_thread::sleep_until(next);
@@ -1155,6 +1325,10 @@ void CrowServer::publisher_loop() {
         }
         auto msg3d = bus3d_ ? bus3d_->make_bundle_json(extra3d)
                             : pipeline::make_disabled_3d_json();
+        std::string pose_gate_msg;
+        const bool have_new_pose_gate =
+            pose_gate_bus_ && pose_gate_bus_->make_json_if_new(
+                pose_gate_sent_seq, pose_gate_msg);
         {
             std::lock_guard<std::mutex> lk{impl_->clients2d.mu};
             for (auto* c : impl_->clients2d.conns) {
@@ -1172,6 +1346,54 @@ void CrowServer::publisher_loop() {
                     c->send_text(msg3d);
                 } catch (...) {
                     // best-effort; client will be reaped on close
+                }
+            }
+        }
+        if (have_new_pose_gate) {
+            std::lock_guard<std::mutex> lk{impl_->clients_pose_gate.mu};
+            for (auto* c : impl_->clients_pose_gate.conns) {
+                try {
+                    c->send_text(pose_gate_msg);
+                } catch (...) {
+                    // best-effort; client will be reaped on close
+                }
+            }
+        }
+        bool have_fusion_clients = false;
+        {
+            std::lock_guard<std::mutex> lk{impl_->clients_fusion_pose.mu};
+            have_fusion_clients = !impl_->clients_fusion_pose.conns.empty();
+        }
+        if (fusion_pose_bus_ && have_fusion_clients) {
+            const auto fusion_messages = fusion_pose_bus_->drain_pending_json();
+            std::lock_guard<std::mutex> lk{impl_->clients_fusion_pose.mu};
+            for (const auto& fusion_message : fusion_messages) {
+                for (auto* c : impl_->clients_fusion_pose.conns) {
+                    try {
+                        c->send_text(fusion_message);
+                    } catch (...) {
+                        // best-effort; client will be reaped on close
+                    }
+                }
+            }
+        }
+        bool have_tracker_axis_clients = false;
+        {
+            std::lock_guard<std::mutex> lk{impl_->clients_tracker_axis.mu};
+            have_tracker_axis_clients =
+                !impl_->clients_tracker_axis.conns.empty();
+        }
+        if (tracker_axis_bus_ && have_tracker_axis_clients) {
+            const auto tracker_axis_messages =
+                tracker_axis_bus_->drain_pending_json();
+            std::lock_guard<std::mutex> lk{impl_->clients_tracker_axis.mu};
+            for (const auto& tracker_axis_message : tracker_axis_messages) {
+                for (auto* c : impl_->clients_tracker_axis.conns) {
+                    try {
+                        c->send_text(tracker_axis_message);
+                    } catch (...) {
+                        // best-effort; client will be reaped on close
+                    }
                 }
             }
         }

@@ -3,7 +3,7 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-07-15)
+## 現状 (2026-09-04)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
@@ -36,6 +36,36 @@ web は `/flow.js` が `/api/state` を追従し、タブ 1 枚で 3 段が完�
 
 ### 設計原則 / live な制約
 
+- **D50 tracker axis wire はpost-One-Euro軸 + raw provenance**:
+  additiveな `fitra_tracker_axis_v1` を `GET /api/tracker-axis` /
+  `WS /ws/tracker-axis` へ出す。Chest/Hipsは`-rotate(q,+X)`、脚4本は
+  `rotate(q,+Z)` のfinite unit axisで、exact 6順序を固定する。軸は既存TrackerExtractorの
+  One-Euro後quaternionから作るが、同一captureのraw shoulder/hip/knee/ankle実測lineageが
+  揃わないpredict/hold/FK fillはUnavailable。通常frameはlatest-only、boundaryはraw→tracker間と
+  wire配信の両方で有界FIFOを持ち、overflowはcontinuity resetへcollapseする。不明・混在V4L2
+  timestampは`unsupported_timestamp`でfail closedし、clock-syncはFusionPose実装を共用する。
+  → [design/pose-3d-tracker-axis-v1.md](../design/pose-3d-tracker-axis-v1.md)
+- **D50 fusion wire は additive な専用 bus**: 既存 `fitra_pose_gate_v1` を変更せず、
+  同じ raw `tri.skeleton`/capture lineage と lifecycle 判定に、Kalman/IK後・floor/root出力補正前の
+  `filtered_position_m` を加えた `FusionPoseBus` から `fitra_fusion_pose_v1` を
+  `GET /api/fusion-pose` / `WS /ws/fusion-pose` へ出す。10関節（既存8 + 左右shoulder）の raw位置・
+  score/inlier数/reprojection/max acute ray angle、同capture filtered位置、V4L2 kernel monotonic
+  SOE/EOFのcapture区間、publish monotonic時刻、continuityをJSON numberで公開する。
+  `observed_this_frame` はraw品質だけで決まり、Hipsは同captureの左右hip midpointを保守合成する。
+  通常poseはlatest-only、lifecycle境界は有界FIFOで順序保持し、overflow/stream交換時は
+  `ContinuityReset` で下流holdを必ず切る。clock-sync ping/pongも同じWSで扱う。
+  → [design/pose-3d-fusion-pose-v1.md](../design/pose-3d-fusion-pose-v1.md)
+- **fusion向け観測は tracker 経路から分離**: `fitra_pose_gate_v1` は
+  `triangulator->triangulate()` の直後に raw `tri.skeleton` から position-only で生成し、
+  `/ws3d` の Kalman / IK / floor-contact / quaternion 出力を入力にしない。8関節を固定名で
+  出し、関節単位の `Fresh | Unavailable`、品質値、Jetson `CLOCK_MONOTONIC` の
+  `content_mono_ns` を公開する。消失・同期失敗・再接続・人物切替・epoch変更で hold を
+  継続させず、専用の `WS /ws/pose-gate` と `GET /api/pose-gate` を使う。M0 は Halpe26
+  の単一人物だけを対象にし、配列 index を subject identity に変換しない。同期はカメラ別
+  有界キューの最近傍マッチングで行い、短い同期待ちを1回ごとの Unavailable に変換しない。
+  100msの継続不成立時だけ1境界を出し、`diagnostics` に同期ミス・復帰回数と
+  `sync_dt_ms` の直近分布を公開する。
+  → [design/pose-3d-fitra-pose-gate-v1.md](../design/pose-3d-fitra-pose-gate-v1.md)
 - **Halpe26 顔5点は3D body-lift対象外**: RTMPose / 2D JSONは26点のまま維持するが、
   nose / eyes / ears (0–4) はreprojection品質・6D joint Kalman state・IK・subject profileから除外する。
   noseだけはposition-only DLTした方向を頭軸へ直交射影し、`head_top`起点の0.15m固定長endpointとして
@@ -109,6 +139,107 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-09-04 — D50 lifecycle境界で床接地履歴を破棄
+
+PoseGateの非Fresh境界でKalmanと同時にFloorContactStabilizerのcontact latch、速度、XY anchor、
+直前補正と公開用の最終reportをresetし、境界frameと次のFreshが旧人物の床補正を継承しないようにした。
+床段を通したsnapshotからTrackerExtractorとTrackerAxisまで接続する回帰テストで、新lifecycleの
+ankleとlower-leg axisがclean stateに一致することを固定した。FusionPoseのpost-Kalman/IK・pre-floor
+seam、IK lock/profile、wire schema、通常の床接地policyは変更していない。
+
+### 2026-09-03 — D50 lifecycle境界でfilter履歴を破棄
+
+人物消失後の再取得、人物切替、stream/coordinate/continuity変更時に、FusionPoseのKalman状態と
+TrackerAxisのquaternion/position/One-Euro/FK抽出履歴を新lifecycleの処理前にresetするよう修正した。
+TrackerAxis sidecar境界がlatest-only Skeleton3D snapshotを追い越した場合も、境界publish時刻の
+watermark以前のsnapshotを平滑化へ戻さず、旧subjectの状態による補間・再seedを防ぐ。
+設計: [FusionPose](../design/pose-3d-fusion-pose-v1.md) /
+[TrackerAxis](../design/pose-3d-tracker-axis-v1.md)。
+
+### 2026-09-03 — D50入力3契約のDevelopマージ前検証
+
+`b0605a3` 系統（`d867c6d` は非祖先）で、PoseGate exact 8、FusionPose exact 10 + raw lineageを
+保持した `filtered_position_m`、TrackerAxis post-One-Euro exact 6 + raw provenance gateを再確認した。
+Jetson Orin Nano Super / MAXN_SUPERでRelease configure/build、focused 8/8、全CTest 37/37、
+`main --help`を通過。稼働中のHalpe26・3 camera・1280x960@60構成では、3つのfusion向けWSを
+同時接続してもcamera processed 59.3--59.9 Hz、3D processed 58.803→58.816 Hz、Skeleton3D
+30.088→30.095 Hz、TrackerBus tick proxy 60.052→60.065 Hzで重大なcadence低下は無かった。
+GET/WSのexact 8/10 boundary shapeとFusionPose/TrackerAxis clock-syncは確認したが、観測中は人物不在のため
+Fresh exact 8/10/6、non-null filtered位置、live SOE/EOF timestamp semanticsは未実施として残す。
+raw camera data、pose座標、opaque identityは検証出力へ保存していない。
+設計: [FusionPose](../design/pose-3d-fusion-pose-v1.md) / [TrackerAxis](../design/pose-3d-tracker-axis-v1.md) /
+[PoseGate](../design/pose-3d-fitra-pose-gate-v1.md)。
+
+### 2026-08-24 — D50 FusionPose raw/filtered joint lineage seam
+
+既存 `fitra_fusion_pose_v1` / `fitra_pose_gate_v1` の識別子・capture/lifecycle境界・latest-only/
+boundary配送を維持したまま、各10関節へ同captureの `filtered_position_m` と
+`observed_this_frame` を追加した。filtered位置はKalman/IK後かつfloor-contact/root出力補正前から取得し、
+raw `position_m`・score・inlier view数・mean reprojection・max ray angleはtriangulation由来のまま保持する。
+低品質raw、predict-only、IK/FK fillはFreshに昇格させず、Hipsは左右raw hipのmidpointと保守的品質合成、
+片側欠損はUnavailable、その他の関節欠損は局所Unavailableとした。wire fixture、旧PoseGate互換、
+boundary/overflow/clock-syncを含む `test_fusion_pose` focused 検証を追加。実機のfiltered値とfusion adapter
+結合、実camera capture cadenceは未検証。
+設計: [design/pose-3d-fusion-pose-v1.md](../design/pose-3d-fusion-pose-v1.md)。
+
+### 2026-08-16 — D50 `fitra_tracker_axis_v1` producer
+
+未マージFusionPoseのcapture/lifecycleを再利用し、One-Euro後TrackerPoseから胸・腰・両大腿・
+両下腿のexact 6 anatomical axisだけを公開するadditive GET/WSを追加した。raw triangulationの
+左右shoulder/hip/knee/ankle実測可否を値なしlineageとしてpost-filter snapshotまで運び、
+predict/hold/IK/FK fillをFreshから除外する。latest-only frameとordered boundaryを分離し、
+Skeleton3DBusのlatest上書きを跨ぐ専用lineage FIFOとpublic delivery FIFOの両方でoverflowを
+`continuity_reset`へcollapseする。不明timestampは`unsupported_timestamp`、WS clock-syncは
+FusionPoseと共用。pure axis/schema/lifecycle testとCrow GET+WS integrationを追加した。
+既存PoseGate exact8/FusionPose exact10は変更しない。
+設計: [design/pose-3d-tracker-axis-v1.md](../design/pose-3d-tracker-axis-v1.md)。
+
+### 2026-08-14 — D50 FusionPoseを肩yaw観測向けexact 10関節へ改訂
+
+未マージの `fitra_fusion_pose_v1` だけを、既存8関節にHALPE26の
+`left_shoulder` / `right_shoulder` を加えたexact 10関節へ改訂した。両肩は既存関節と同じ
+position、score、最終inlier view数、平均再投影誤差、最大acute ray angleを持ち、欠損・全boundary
+では全品質をnullにする。fitra-fusionは腰trackerのworld yawを左右hip横軸、胸trackerのworld yawを
+左右shoulder横軸から観測する。`fitra_pose_gate_v1` はexact 8関節のまま変更しない。
+pure schema/mapping/boundary testとCrow GET+WS integrationで両契約を固定した。
+設計: [design/pose-3d-fusion-pose-v1.md](../design/pose-3d-fusion-pose-v1.md)。
+
+### 2026-08-14 — D50 `fitra_fusion_pose_v1` producer
+
+既存PoseGateを完全互換のまま残し、V4L2 kernel timestampのmonotonic SOE/EOF意味論を
+capture→decode→同期snapshotへ保持する専用 `FusionPoseBus` を追加した。参加cameraの意味論が
+混在・不明ならcapture区間全体をUnavailableとし、三角測量の最終inlier rayだけから最大acute交差角を
+算出する。新wireは10関節（既存8 + 左右shoulder）の位置・score・inlier view数・平均再投影誤差・ray angleと、capture区間、
+source publish時刻、stream/subject/coordinate/continuityを非負JSON numberで公開する。
+通常poseのlatest-only slotと順序付き境界FIFOを分離し、overflow/stream交換時は
+`ContinuityReset` を先行させる。`/api/fusion-pose`、`/ws/fusion-pose`、numeric clock-sync
+ping/pongをrun/calib-subject両runtimeへ配線した。pure timestamp/wire/lifecycle/overflow/
+ray-angleテストとCrow WebSocket integrationを追加。実cameraのtimestamp意味論・mixed/unknown
+fallback・fusion WS接続前後cadenceは実機検証項目として残る。
+設計: [design/pose-3d-fusion-pose-v1.md](../design/pose-3d-fusion-pose-v1.md)。
+
+### 2026-08-09 — PoseGate同期待ちと診断カウンタ
+
+カメラ別の深さ6キューから `sync_window_ms` 内の最近傍フレームを選ぶ同期マッチャを追加し、
+10–25msの位相差を隣接フレームの組み合わせで吸収するようにした。同期組が100ms継続して
+成立しない場合だけキューを破棄して `Unavailable` 境界を1回発行し、復旧後の最初の
+`Fresh` を `Reacquired` とする。PoseGate JSON と `/stats3d.stats.pose_gate` に
+`sync_miss_count`、`matched_3d_frame_count`、`unavailable_count`、`reacquired_count`、
+直近256件の `sync_dt_ms` min/median/max を追加し、合成マッチング／境界／診断テストを追加した。
+実機 I/Ski の Fresh 連続性と分布は未取得であり、Jetson上の JSONL 記録が残検証である。
+
+### 2026-08-02 — `fitra_pose_gate_v1` raw position-only 出力
+
+fitra-fusion の M0 入力契約として、`tri.skeleton` を Kalman / IK / floor-contact より前に
+読み取る独立 `PoseGateBus` と `WS /ws/pose-gate`、`GET /api/pose-gate` を追加した。
+`stream_id` / opaque `subject_track_id` / `coordinate_epoch` / `content_mono_ns`、8関節の
+availability と品質値、固定 provenance を公開し、欠損値の hold・tracker quaternion・wall-clock
+content time を経路から排除した。読み込んだ calibration artifact の fingerprint を
+`coordinate_epoch` に使い、消失・再接続・人物切替・epoch変更の lifecycle 境界を専用テストと
+JSONL fixture に固定した。実機 I/Ski の8関節 Fresh とサンプル保存は未実施で、残りの検収項目である。
+設計: [design/pose-3d-fitra-pose-gate-v1.md](../design/pose-3d-fitra-pose-gate-v1.md)、
+fixture: [samples/fitra_pose_gate_v1](../samples/fitra_pose_gate_v1)。
 
 ### 2026-07-20 — Halpe26 顔5点を3D品質から除外 + 固定長head-direction endpoint
 

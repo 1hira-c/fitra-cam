@@ -9,6 +9,12 @@
 //   - WS  /ws          broadcasts the bundle at ≤30 Hz to every client
 //   - GET /stats3d     returns current 3D bundle or disabled JSON
 //   - WS  /ws3d        broadcasts the 3D bundle when enabled
+//   - GET /api/pose-gate returns the raw tri.skeleton position-only sample
+//   - WS  /ws/pose-gate broadcasts new fitra_pose_gate_v1 samples
+//   - GET /api/fusion-pose returns the D50 evidence-rich raw pose sample
+//   - WS  /ws/fusion-pose preserves boundaries and accepts clock-sync pings
+//   - GET /api/tracker-axis returns post-One-Euro anatomical axes
+//   - WS  /ws/tracker-axis preserves boundaries and accepts clock-sync pings
 //
 // The publisher loop runs on its own thread; Crow's worker pool handles
 // the HTTP request and WS plumbing.
@@ -28,9 +34,14 @@ namespace fitra::pipeline {
 class ExtrinsicCalibSession;   // fwd decl; full header included in crow_server.cpp
 class FloorCalibSession;       // fwd decl; full header included in crow_server.cpp
 class IntrinsicCalibSession;   // fwd decl; full header included in crow_server.cpp
+class PoseGateBus;             // fwd decl; full header included in crow_server.cpp
+class FusionPoseBus;
 }
 
-namespace fitra::tracking { class TrackerBus; }
+namespace fitra::tracking {
+class TrackerBus;
+class TrackerAxisBus;
+}
 
 namespace fitra::vmt {
 class VmtPublisher;      // fwd decl; full header in crow_server.cpp
@@ -154,6 +165,17 @@ public:
     // has no `trackers` field).
     void set_tracker_bus(tracking::TrackerBus* tracker_bus);
 
+    // Attach the independent raw `tri.skeleton` position-only output. The
+    // `/ws/pose-gate` stream is separate from `/ws3d` and never contains
+    // tracker quaternions.
+    void set_pose_gate_bus(pipeline::PoseGateBus* pose_gate_bus);
+
+    // Attach the additive D50 producer.  This does not alter /ws/pose-gate.
+    void set_fusion_pose_bus(pipeline::FusionPoseBus* fusion_pose_bus);
+
+    // Attach the additive post-One-Euro D50 anatomical-axis producer.
+    void set_tracker_axis_bus(tracking::TrackerAxisBus* tracker_axis_bus);
+
     // Attach the VMT publisher so /stats3d (and the /ws3d bundle splice)
     // include its send counters under a top-level "vmt" key. Same ownership
     // rules as set_tracker_bus. Setting nullptr removes the splice (and the
@@ -189,10 +211,12 @@ public:
     // peer + the live peer list. Same ownership rules as set_vmt_publisher.
     void set_discovery_beacon(vmt::DiscoveryBeacon* beacon);
 
-    // Attach the idle/standby shared state (issue #37). The /ws + /ws3d
-    // onopen/onclose handlers then maintain its ws_client_count, and /stats3d,
-    // the /ws3d bundle, and /api/state expose an `idle` status object. `enabled`
-    // / `enter_after_s` / `tick_hz` are config echoes for the status surface.
+    // Attach the idle/standby shared state (issue #37). The /ws, /ws3d, and
+    // /ws/pose-gate, /ws/fusion-pose and /ws/tracker-axis onopen/onclose
+    // handlers then maintain its ws_client_count,
+    // and /stats3d, the /ws3d bundle, and /api/state expose an `idle` status
+    // object. `enabled` / `enter_after_s` / `tick_hz` are config echoes for the
+    // status surface.
     // Caller retains ownership (the IdleState must outlive the server). Never
     // attached in calib modes.
     void set_idle_state(app::IdleState* state, bool enabled,
@@ -213,6 +237,9 @@ private:
 
     pipeline::SnapshotBus& bus_;
     pipeline::Skeleton3DBus* bus3d_ = nullptr;
+    pipeline::PoseGateBus* pose_gate_bus_ = nullptr;
+    pipeline::FusionPoseBus* fusion_pose_bus_ = nullptr;
+    tracking::TrackerAxisBus* tracker_axis_bus_ = nullptr;
     ServerOptions          opts_;
     std::thread            server_thread_;
     std::thread            publisher_thread_;

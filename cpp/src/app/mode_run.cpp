@@ -82,7 +82,9 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     if (threed.bus3d && threed.tracker_bus) {
         tracker_extractor =
             make_tracker_extractor(opts, *threed.bus3d, *threed.tracker_bus,
-                                   idle_enabled ? &idle_state.idle : nullptr);
+                                   idle_enabled ? &idle_state.idle : nullptr,
+                                   threed.tracker_axis_bus.get(),
+                                   threed.tracker_axis_lineage_bus.get());
     }
 
     // Pose relay (input) + publishers/aligner (output). Publishers spin up
@@ -115,6 +117,11 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
         if (outputs.vmt_pub)   server->set_vmt_publisher(outputs.vmt_pub.get());
         if (relay.beacon)      server->set_discovery_beacon(relay.beacon.get());
         if (threed.tracker_bus) server->set_tracker_bus(threed.tracker_bus.get());
+        if (threed.pose_gate_bus) server->set_pose_gate_bus(threed.pose_gate_bus.get());
+        if (threed.fusion_pose_bus) server->set_fusion_pose_bus(threed.fusion_pose_bus.get());
+        if (threed.tracker_axis_bus) {
+            server->set_tracker_axis_bus(threed.tracker_axis_bus.get());
+        }
         if (opts.hmd_listen_enabled) {
             server->set_hmd_pose_bus(relay.hmd_bus.get(), opts.hmd_stale_ms);
         }

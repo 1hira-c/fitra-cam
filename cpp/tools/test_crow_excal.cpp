@@ -9,9 +9,14 @@
 #include "web/crow_server.hpp"
 #include "config/main_config.hpp"
 #include "pipeline/extrinsic_calib_session.hpp"
+#include "pipeline/fusion_pose.hpp"
+#include "pipeline/pose_gate.hpp"
 #include "pipeline/snapshot.hpp"
+#include "pipeline/tracker_axis_lineage.hpp"
+#include "tracking/tracker_axis.hpp"
 #include "lift/calib_io.hpp"
 #include "lift/extrinsic_solver.hpp"
+#include "lift/skeleton_def.hpp"
 #include "vmt/controller_pose_receiver.hpp"
 #include "vmt/hmd_pose_receiver.hpp"
 
@@ -20,13 +25,19 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
+
+#include <crow.h>
 
 namespace {
 
@@ -36,6 +47,125 @@ int g_fail = 0;
 } while (0)
 
 constexpr int kPort = 18137;
+
+constexpr std::array<const char*, 8> kPoseGateJointNames{{
+    "hips", "neck", "left_hip", "right_hip",
+    "left_knee", "right_knee", "left_ankle", "right_ankle",
+}};
+
+constexpr std::array<const char*, 10> kFusionJointNames{{
+    "hips", "neck", "left_hip", "right_hip",
+    "left_knee", "right_knee", "left_ankle", "right_ankle",
+    "left_shoulder", "right_shoulder",
+}};
+
+template <std::size_t N>
+bool has_exact_joint_keys(const crow::json::rvalue& joints,
+                          const std::array<const char*, N>& names) {
+    if (joints.t() != crow::json::type::Object) return false;
+    auto keys = joints.keys();
+    std::sort(keys.begin(), keys.end());
+    std::vector<std::string> expected;
+    expected.reserve(names.size());
+    for (const char* name : names) expected.emplace_back(name);
+    std::sort(expected.begin(), expected.end());
+    return keys == expected;
+}
+
+bool is_fresh_fusion_joint(const crow::json::rvalue& joint) {
+    if (joint.t() != crow::json::type::Object ||
+        joint["availability"].t() != crow::json::type::String ||
+        std::string{joint["availability"].s()} != "Fresh") {
+        return false;
+    }
+    const auto& position = joint["position_m"];
+    if (position.t() != crow::json::type::List || position.size() != 3) {
+        return false;
+    }
+    for (std::size_t i = 0; i < position.size(); ++i) {
+        if (position[i].t() != crow::json::type::Number) return false;
+    }
+    for (const char* field : {
+             "keypoint_score", "inlier_view_count",
+             "mean_reproj_error_px", "max_ray_angle_deg"}) {
+        if (joint[field].t() != crow::json::type::Number) return false;
+    }
+    return true;
+}
+
+bool is_exact_fresh_fusion_document(const crow::json::rvalue& root) {
+    if (!root || root["protocol_version"].t() != crow::json::type::String ||
+        std::string{root["protocol_version"].s()} !=
+            "fitra_fusion_pose_v1" ||
+        root["event_type"].t() != crow::json::type::String ||
+        std::string{root["event_type"].s()} != "pose" ||
+        root["source_state"].t() != crow::json::type::String ||
+        std::string{root["source_state"].s()} != "Fresh" ||
+        !has_exact_joint_keys(root["joints"], kFusionJointNames)) {
+        return false;
+    }
+    for (const char* name : kFusionJointNames) {
+        if (!is_fresh_fusion_joint(root["joints"][name])) return false;
+    }
+    return true;
+}
+
+constexpr std::array<const char*, 6> kTrackerAxisRoles{{
+    "chest", "hips", "left_upper_leg", "right_upper_leg",
+    "left_lower_leg", "right_lower_leg",
+}};
+
+bool is_exact_fresh_tracker_axis_document(const crow::json::rvalue& root) {
+    if (!root || root["protocol_version"].t() != crow::json::type::String ||
+        std::string{root["protocol_version"].s()} !=
+            "fitra_tracker_axis_v1" ||
+        root["source_state"].t() != crow::json::type::String ||
+        std::string{root["source_state"].s()} != "fresh" ||
+        root["axes"].t() != crow::json::type::List ||
+        root["axes"].size() != kTrackerAxisRoles.size() ||
+        root.has("boundary")) {
+        return false;
+    }
+    for (const char* field : {
+             "delivery_seq", "source_sample_seq", "coordinate_epoch",
+             "continuity_epoch", "source_publish_mono_ns"}) {
+        if (root[field].t() != crow::json::type::Number ||
+            root[field].nt() == crow::json::num_type::Floating_point ||
+            root[field].nt() ==
+                crow::json::num_type::Double_precision_floating_point ||
+            root[field].u() == 0) {
+            return false;
+        }
+    }
+    const auto& capture = root["capture"];
+    if (capture.t() != crow::json::type::Object ||
+        capture["oldest_mono_ns"].t() != crow::json::type::Number ||
+        capture["newest_mono_ns"].t() != crow::json::type::Number ||
+        capture["timestamp_semantics"].t() != crow::json::type::String ||
+        std::string{capture["timestamp_semantics"].s()} != "monotonic_soe") {
+        return false;
+    }
+    for (std::size_t i = 0; i < kTrackerAxisRoles.size(); ++i) {
+        const auto& axis = root["axes"][i];
+        if (axis.t() != crow::json::type::Object ||
+            std::string{axis["role"].s()} != kTrackerAxisRoles[i] ||
+            std::string{axis["availability"].s()} != "fresh" ||
+            !axis["observed_this_frame"].b() ||
+            axis["axis"].t() != crow::json::type::List ||
+            axis["axis"].size() != 3) {
+            return false;
+        }
+        double norm2 = 0.0;
+        for (std::size_t k = 0; k < 3; ++k) {
+            if (axis["axis"][k].t() != crow::json::type::Number) return false;
+            const double v = axis["axis"][k].d();
+            if (!std::isfinite(v)) return false;
+            norm2 += v * v;
+        }
+        if (std::fabs(std::sqrt(norm2) - 1.0) > 1e-6) return false;
+    }
+    return true;
+}
 
 // Minimal blocking HTTP/1.1 client. Returns false on connect/IO failure;
 // otherwise sets status + body. Uses Connection: close so recv ends at EOF.
@@ -72,6 +202,153 @@ bool http(const char* method, const char* path, int& status, std::string& body,
     return true;
 }
 
+bool send_all(int fd, const void* data, std::size_t size) {
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    std::size_t sent = 0;
+    while (sent < size) {
+        const ssize_t n = ::send(fd, bytes + sent, size - sent, 0);
+        if (n <= 0) return false;
+        sent += static_cast<std::size_t>(n);
+    }
+    return true;
+}
+
+bool recv_exact(int fd, void* data, std::size_t size) {
+    auto* bytes = static_cast<std::uint8_t*>(data);
+    std::size_t received = 0;
+    while (received < size) {
+        const ssize_t n = ::recv(fd, bytes + received, size - received, 0);
+        if (n <= 0) return false;
+        received += static_cast<std::size_t>(n);
+    }
+    return true;
+}
+
+// Minimal RFC 6455 client for the fusion stream and clock-sync path. Client
+// frames must be masked; Crow server frames are unmasked. The test accepts
+// unfragmented text frames until it has observed both a pose document and the
+// direct pong response.
+bool websocket_probe(const char* path, const char* protocol,
+                     std::string& document, std::string& pong) {
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    timeval timeout{};
+    timeout.tv_sec = 2;
+    (void)::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    (void)::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(kPort);
+    ::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        ::close(fd);
+        return false;
+    }
+
+    const std::string handshake =
+        std::string{"GET "} + path + " HTTP/1.1\r\n" +
+        "Host: 127.0.0.1\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    if (!send_all(fd, handshake.data(), handshake.size())) {
+        ::close(fd);
+        return false;
+    }
+
+    std::string response_headers;
+    std::array<char, 512> header_buf{};
+    while (response_headers.find("\r\n\r\n") == std::string::npos &&
+           response_headers.size() < 8192) {
+        const ssize_t n = ::recv(fd, header_buf.data(), header_buf.size(), 0);
+        if (n <= 0) {
+            ::close(fd);
+            return false;
+        }
+        response_headers.append(header_buf.data(), static_cast<std::size_t>(n));
+    }
+    if (response_headers.find(" 101 ") == std::string::npos) {
+        ::close(fd);
+        return false;
+    }
+
+    const std::string ping =
+        "{\"type\":\"clock_sync_ping\",\"nonce\":33,"
+        "\"client_send_mono_ns\":123456789}";
+    if (ping.size() >= 126) {
+        ::close(fd);
+        return false;
+    }
+    const std::array<std::uint8_t, 4> mask{{0x12, 0x34, 0x56, 0x78}};
+    std::vector<std::uint8_t> frame;
+    frame.reserve(2 + mask.size() + ping.size());
+    frame.push_back(0x81);  // FIN + text
+    frame.push_back(static_cast<std::uint8_t>(0x80U | ping.size()));
+    frame.insert(frame.end(), mask.begin(), mask.end());
+    for (std::size_t i = 0; i < ping.size(); ++i) {
+        frame.push_back(static_cast<std::uint8_t>(ping[i]) ^ mask[i % mask.size()]);
+    }
+    if (!send_all(fd, frame.data(), frame.size())) {
+        ::close(fd);
+        return false;
+    }
+
+    bool ok = true;
+    for (int attempt = 0;
+         attempt < 8 && (document.empty() || pong.empty()); ++attempt) {
+        std::array<std::uint8_t, 2> head{};
+        if (!recv_exact(fd, head.data(), head.size()) ||
+            (head[0] & 0x0fU) != 0x01U || (head[1] & 0x80U) != 0) {
+            ok = false;
+            break;
+        }
+        std::uint64_t payload_size = head[1] & 0x7fU;
+        if (payload_size == 126) {
+            std::array<std::uint8_t, 2> ext{};
+            if (!recv_exact(fd, ext.data(), ext.size())) {
+                ok = false;
+                break;
+            }
+            payload_size = (static_cast<std::uint64_t>(ext[0]) << 8U) | ext[1];
+        } else if (payload_size == 127) {
+            std::array<std::uint8_t, 8> ext{};
+            if (!recv_exact(fd, ext.data(), ext.size())) {
+                ok = false;
+                break;
+            }
+            payload_size = 0;
+            for (const auto byte : ext) {
+                payload_size = (payload_size << 8U) | byte;
+            }
+        }
+        if (payload_size > 8192) {
+            ok = false;
+            break;
+        }
+        std::string payload(static_cast<std::size_t>(payload_size), '\0');
+        if (!recv_exact(fd, payload.data(), payload.size())) {
+            ok = false;
+            break;
+        }
+        const auto parsed = crow::json::load(payload);
+        if (!parsed) continue;
+        if (parsed.has("type") &&
+            parsed["type"].t() == crow::json::type::String &&
+            std::string{parsed["type"].s()} == "clock_sync_pong") {
+            pong = std::move(payload);
+        } else if (parsed.has("protocol_version") &&
+                   parsed["protocol_version"].t() ==
+                       crow::json::type::String &&
+                   std::string{parsed["protocol_version"].s()} == protocol) {
+            document = std::move(payload);
+        }
+    }
+    ::close(fd);
+    return ok && !document.empty() && !pong.empty();
+}
+
 fitra::lift::CalibrationSet make_intrinsics() {
     fitra::lift::CalibrationSet set;
     set.schema = "fitra_calibration_v1";
@@ -84,6 +361,41 @@ fitra::lift::CalibrationSet make_intrinsics() {
     cam.intrinsics.dist = cv::Mat::zeros(1, 5, CV_64F);
     set.cameras.push_back(cam);
     return set;
+}
+
+void set_fusion_joint(fitra::lift::TriangulatedSkeleton& tri,
+                      std::size_t index, float x, float y, float z) {
+    auto& joint = tri.skeleton.joints[index];
+    joint.x = x;
+    joint.y = y;
+    joint.z = z;
+    joint.score = 0.9f;
+    joint.valid = true;
+    tri.view_count[index] = 3;
+    tri.reproj_error_px[index] = 0.8f;
+    tri.max_ray_angle_deg[index] = 12.5f;
+}
+
+fitra::lift::TriangulatedSkeleton make_fusion_tri() {
+    fitra::lift::TriangulatedSkeleton tri;
+    tri.skeleton.kp_count = 26;
+    const std::array<std::size_t, 10> indices{{
+        fitra::lift::kHalpeHipCenter,
+        fitra::lift::kHalpeNeck,
+        fitra::lift::kHalpeLeftHip,
+        fitra::lift::kHalpeRightHip,
+        fitra::lift::kHalpeLeftKnee,
+        fitra::lift::kHalpeRightKnee,
+        fitra::lift::kHalpeLeftAnkle,
+        fitra::lift::kHalpeRightAnkle,
+        fitra::lift::kHalpeLeftShoulder,
+        fitra::lift::kHalpeRightShoulder,
+    }};
+    for (std::size_t i = 0; i < indices.size(); ++i) {
+        set_fusion_joint(tri, indices[i], 0.01f * i, 0.02f * i,
+                         0.8f + 0.03f * i);
+    }
+    return tri;
 }
 
 // Synthetic-sample helpers, same pattern as test_extrinsic_calib_session.
@@ -133,6 +445,30 @@ int main() {
     session.set_on_solved([&solved_calls]() { ++solved_calls; });
 
     fitra::pipeline::SnapshotBus bus{1};
+    fitra::pipeline::PoseGateBus pose_gate{"crow-route"};
+    const auto fusion_tri = make_fusion_tri();
+    const auto pose_lifecycle = pose_gate.observe(fusion_tri, 123'000'000);
+    fitra::pipeline::FusionPoseBus fusion_pose{
+        pose_gate.stream_id(), pose_gate.coordinate_epoch()};
+    fitra::pipeline::FusionCaptureInterval fusion_capture;
+    fusion_capture.oldest_mono_ns = 100'000'000;
+    fusion_capture.newest_mono_ns = 106'000'000;
+    fusion_capture.semantics =
+        fitra::camera::V4l2TimestampSemantics::MonotonicSoe;
+    const auto fusion_frame =
+        fusion_pose.observe(fusion_tri, fusion_capture, pose_lifecycle);
+    fitra::tracking::TrackerAxisBus tracker_axis{
+        pose_gate.stream_id(), pose_gate.coordinate_epoch()};
+    std::array<fitra::tracking::TrackerPose,
+               fitra::tracking::kTrackerCount> tracker_poses{};
+    for (std::size_t i = 0; i < tracker_poses.size(); ++i) {
+        tracker_poses[i].role = static_cast<fitra::tracking::TrackerRole>(i);
+        tracker_poses[i].valid = true;
+        tracker_poses[i].quat_wxyz = {1.0f, 0.0f, 0.0f, 0.0f};
+    }
+    tracker_axis.publish(
+        tracker_poses,
+        fitra::pipeline::make_tracker_axis_lineage(fusion_frame));
     fitra::vmt::HmdPoseBus hmd_bus;
     fitra::vmt::ControllerPoseBus controller_bus;
 
@@ -178,6 +514,9 @@ int main() {
     // CrowServer gone. Across processes (the flow daemon's module handover)
     // the fd closes with the process — no issue there.
     auto server = std::make_unique<fitra::web::CrowServer>(bus, nullptr, opts);
+    server->set_pose_gate_bus(&pose_gate);
+    server->set_fusion_pose_bus(&fusion_pose);
+    server->set_tracker_axis_bus(&tracker_axis);
     server->set_extrinsic_calib_session(&session);
     server->set_extrinsic_calib_next_step(
         "restart: ./main --calibrate --enable-3d --calib /tmp/fitra_excal_route_test.yaml ...");
@@ -234,6 +573,101 @@ int main() {
         CHECK(body.find("\"mode\":\"calib-extrinsic\"") != std::string::npos);
         CHECK(body.find("\"managed\":false") != std::string::npos);
         CHECK(body.find("\"enable_3d\":false") != std::string::npos);
+
+        // Fusion-facing endpoint is a separate raw position-only contract.
+        CHECK(http("GET", "/api/pose-gate", status, body));
+        CHECK(status == 200);
+        CHECK(body.find("\"protocol_version\":\"fitra_pose_gate_v1\"") !=
+              std::string::npos);
+        CHECK(body.find("\"stream_id\":\"crow-route\"") !=
+              std::string::npos);
+        CHECK(body.find("\"content_mono_ns\":123000000") !=
+              std::string::npos);
+        CHECK(body.find("\"joints\":{") != std::string::npos);
+        CHECK(body.find("\"hips\":{") != std::string::npos);
+        CHECK(body.find("quat") == std::string::npos);
+        const auto pose_gate_json = crow::json::load(body);
+        CHECK(static_cast<bool>(pose_gate_json));
+        if (pose_gate_json) {
+            CHECK(has_exact_joint_keys(pose_gate_json["joints"],
+                                       kPoseGateJointNames));
+            CHECK(!pose_gate_json["joints"].has("left_shoulder"));
+            CHECK(!pose_gate_json["joints"].has("right_shoulder"));
+        }
+
+        CHECK(http("GET", "/api/fusion-pose", status, body));
+        CHECK(status == 200);
+        CHECK(body.find("\"protocol_version\":\"fitra_fusion_pose_v1\"") !=
+              std::string::npos);
+        CHECK(body.find("\"event_type\":\"pose\"") !=
+              std::string::npos);
+        CHECK(body.find("\"continuity_epoch\":1") != std::string::npos);
+        CHECK(body.find("\"source_publish_mono_ns\":") !=
+              std::string::npos);
+        CHECK(body.find("\"capture\":{\"oldest_mono_ns\":") !=
+              std::string::npos);
+        CHECK(body.find("\"timestamp_semantics\":\"monotonic_soe\"") !=
+              std::string::npos);
+        CHECK(body.find("quat") == std::string::npos);
+        const auto fusion_get = crow::json::load(body);
+        CHECK(is_exact_fresh_fusion_document(fusion_get));
+
+        std::string fusion_ws_document;
+        std::string pong;
+        CHECK(websocket_probe("/ws/fusion-pose", "fitra_fusion_pose_v1",
+                              fusion_ws_document, pong));
+        if (!fusion_ws_document.empty()) {
+            const auto parsed = crow::json::load(fusion_ws_document);
+            CHECK(is_exact_fresh_fusion_document(parsed));
+        }
+        if (!pong.empty()) {
+            const auto parsed = crow::json::load(pong);
+            CHECK(static_cast<bool>(parsed));
+            if (parsed) {
+                CHECK(parsed["type"].t() == crow::json::type::String);
+                CHECK(std::string{parsed["type"].s()} == "clock_sync_pong");
+                for (const char* field : {
+                         "nonce", "client_send_mono_ns",
+                         "server_receive_mono_ns", "server_send_mono_ns"}) {
+                    CHECK(parsed[field].t() == crow::json::type::Number);
+                    CHECK(parsed[field].nt() !=
+                          crow::json::num_type::Floating_point);
+                    CHECK(parsed[field].nt() !=
+                          crow::json::num_type::Double_precision_floating_point);
+                }
+                CHECK(parsed["nonce"].u() == 33);
+                CHECK(parsed["client_send_mono_ns"].u() == 123456789);
+                CHECK(parsed["server_receive_mono_ns"].u() <=
+                      parsed["server_send_mono_ns"].u());
+            }
+        }
+
+        CHECK(http("GET", "/api/tracker-axis", status, body));
+        CHECK(status == 200);
+        const auto tracker_axis_get = crow::json::load(body);
+        CHECK(is_exact_fresh_tracker_axis_document(tracker_axis_get));
+        CHECK(body.find("quat") == std::string::npos);
+        CHECK(body.find("position") == std::string::npos);
+
+        std::string tracker_axis_ws_document;
+        std::string tracker_axis_pong;
+        CHECK(websocket_probe("/ws/tracker-axis", "fitra_tracker_axis_v1",
+                              tracker_axis_ws_document, tracker_axis_pong));
+        if (!tracker_axis_ws_document.empty()) {
+            CHECK(is_exact_fresh_tracker_axis_document(
+                crow::json::load(tracker_axis_ws_document)));
+        }
+        if (!tracker_axis_pong.empty()) {
+            const auto parsed = crow::json::load(tracker_axis_pong);
+            CHECK(static_cast<bool>(parsed));
+            if (parsed) {
+                CHECK(std::string{parsed["type"].s()} == "clock_sync_pong");
+                CHECK(parsed["nonce"].u() == 33);
+                CHECK(parsed["client_send_mono_ns"].u() == 123456789);
+                CHECK(parsed["server_receive_mono_ns"].u() <=
+                      parsed["server_send_mono_ns"].u());
+            }
+        }
 
         // /api/flow/switch only exists on daemon-managed modules. Standalone
         // runs never attach the handler, so the POST falls through to the

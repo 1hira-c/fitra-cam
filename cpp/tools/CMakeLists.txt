@@ -279,6 +279,72 @@ set_target_properties(fitra_test_snapshot_floor_stats PROPERTIES
 
 add_test(NAME test_snapshot_floor_stats COMMAND fitra_test_snapshot_floor_stats)
 
+# Fusion-facing raw tri.skeleton position-only gate: freshness, lifecycle
+# boundaries, coordinate epochs, and the no-quaternion JSON contract.
+add_executable(fitra_test_pose_gate
+    test_pose_gate.cpp
+)
+
+target_link_libraries(fitra_test_pose_gate PRIVATE
+    fitra_pipeline
+)
+
+set_target_properties(fitra_test_pose_gate PROPERTIES
+    OUTPUT_NAME "test_pose_gate"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_pose_gate COMMAND fitra_test_pose_gate)
+
+add_executable(fitra_test_fusion_pose
+    test_fusion_pose.cpp
+)
+
+target_link_libraries(fitra_test_fusion_pose PRIVATE
+    fitra_pipeline
+    Crow::Crow
+)
+
+set_target_properties(fitra_test_fusion_pose PROPERTIES
+    OUTPUT_NAME "test_fusion_pose"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_fusion_pose COMMAND fitra_test_fusion_pose)
+
+add_executable(fitra_test_tracker_axis
+    test_tracker_axis.cpp
+)
+
+target_link_libraries(fitra_test_tracker_axis PRIVATE
+    fitra_tracking
+    Crow::Crow
+)
+
+set_target_properties(fitra_test_tracker_axis PROPERTIES
+    OUTPUT_NAME "test_tracker_axis"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_tracker_axis COMMAND fitra_test_tracker_axis)
+
+# Bounded nearest-frame matching: tolerate phase offsets by selecting adjacent
+# camera frames, and emit only one loss boundary for a sustained stop.
+add_executable(fitra_test_sync_matcher
+    test_sync_matcher.cpp
+)
+
+target_include_directories(fitra_test_sync_matcher PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+set_target_properties(fitra_test_sync_matcher PROPERTIES
+    OUTPUT_NAME "test_sync_matcher"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_sync_matcher COMMAND fitra_test_sync_matcher)
+
 add_executable(fitra_test_pose_recognizer
     test_pose_recognizer.cpp
 )

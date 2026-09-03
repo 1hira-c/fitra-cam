@@ -269,6 +269,32 @@ void test_halpe_face_joints_are_excluded() {
           "one-frame nose flip must not reverse smoothed head direction");
 }
 
+// ---------- Test 7: explicit lifecycle reset re-anchors immediately --------
+void test_lifecycle_reset_reanchors_immediately() {
+    fitra::lift::set_active_keypoint_format(fitra::lift::KeypointFormat::Halpe26);
+    fitra::lift::SkeletonKalman kf;
+    settle(kf);
+
+    // A new subject/coordinate lifecycle can be far from the previous one.
+    // reset() must make its first measurement an exact seed, not a Kalman
+    // interpolation with the old subject.
+    kf.reset();
+    const auto measurement = make_skel(2.0f, -1.0f, 1.2f);
+    const auto out = kf.update(measurement, 1.0 / 60.0);
+    check_close(out.joints[19].x, measurement.joints[19].x,
+                "lifecycle.reset.root.x");
+    check_close(out.joints[19].y, measurement.joints[19].y,
+                "lifecycle.reset.root.y");
+    check_close(out.joints[19].z, measurement.joints[19].z,
+                "lifecycle.reset.root.z");
+    check_close(out.joints[15].x, measurement.joints[15].x,
+                "lifecycle.reset.ankle.x");
+    check_close(out.joints[15].y, measurement.joints[15].y,
+                "lifecycle.reset.ankle.y");
+    check_close(out.joints[15].z, measurement.joints[15].z,
+                "lifecycle.reset.ankle.z");
+}
+
 }  // namespace
 
 int main() {
@@ -285,6 +311,8 @@ int main() {
         std::printf("[ok] chain Kalman skips child whose parent never observed\n");
         test_halpe_face_joints_are_excluded();
         std::printf("[ok] chain Kalman retains direction-only nose endpoint\n");
+        test_lifecycle_reset_reanchors_immediately();
+        std::printf("[ok] chain Kalman lifecycle reset re-anchors immediately\n");
         std::puts("test_kalman_chain ok");
         return 0;
     } catch (const std::exception& e) {

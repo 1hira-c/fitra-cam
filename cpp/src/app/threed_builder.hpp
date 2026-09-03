@@ -11,18 +11,26 @@
 #include "infer/rtmpose.hpp"
 #include "lift/subject_profile.hpp"
 #include "lift/triangulator.hpp"
+#include "pipeline/fusion_pose.hpp"
 #include "pipeline/multi_pipeline.hpp"
+#include "pipeline/pose_gate.hpp"
 #include "pipeline/snapshot.hpp"
 #include "tracking/tracker_bus.hpp"
+#include "tracking/tracker_axis.hpp"
 
 namespace fitra::app {
 
 struct ThreeDSet {
     std::shared_ptr<lift::Triangulator>        triangulator;
     std::unique_ptr<pipeline::Skeleton3DBus>   bus3d;
+    std::unique_ptr<pipeline::PoseGateBus>     pose_gate_bus;
+    std::unique_ptr<pipeline::FusionPoseBus>   fusion_pose_bus;
+    std::unique_ptr<pipeline::TrackerAxisLineageBus>
+        tracker_axis_lineage_bus;
     // Tracker snapshot bus. Always alive when 3D is on so the WebUI
     // orientation viz works without VMT output.
     std::unique_ptr<tracking::TrackerBus>  tracker_bus;
+    std::unique_ptr<tracking::TrackerAxisBus> tracker_axis_bus;
     lift::SubjectProfile subject_profile;
     bool   has_subject_profile = false;
     // Resolved height: profile value wins over --subject-height-m.

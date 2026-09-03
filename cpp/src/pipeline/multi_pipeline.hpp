@@ -18,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -27,8 +28,11 @@
 #include "lift/ik.hpp"
 #include "lift/kalman.hpp"
 #include "lift/triangulator.hpp"
+#include "pipeline/fusion_pose.hpp"
+#include "pipeline/pose_gate.hpp"
 #include "pipeline/pose_pipeline.hpp"
 #include "pipeline/snapshot.hpp"
+#include "pipeline/sync_matcher.hpp"
 
 namespace fitra::pipeline {
 
@@ -37,6 +41,13 @@ public:
     struct ThreeDConfig {
         std::shared_ptr<lift::Triangulator> triangulator;
         Skeleton3DBus* bus = nullptr;
+        PoseGateBus* pose_gate = nullptr;
+        FusionPoseBus* fusion_pose = nullptr;
+        TrackerAxisLineageBus* tracker_axis_lineage = nullptr;
+        // M0 has no cross-camera multi-person association. Keep the gate
+        // explicitly single-subject rather than deriving identity from an
+        // array index when the general multi-person path is enabled.
+        bool pose_gate_single_subject = true;
         double sync_window_ms = 15.0;
         bool kalman_enabled = true;
         bool ik_enabled = true;
@@ -147,8 +158,10 @@ private:
     // Latest decoded frame + bboxes per camera, kept alive across the
     // RTMPose batched call so we can hand cv::Mat pointers into reqs.
     std::vector<camera::DecodedFrame> latest_per_cam_;
-    std::vector<CameraSnapshot>        latest_snapshots_;
-    std::vector<std::uint64_t>         last_3d_input_seqs_;
+    // Short post-inference queues used only for nearest cross-camera matching.
+    // The camera capture/inference slots remain latest-frame-wins.
+    SynchronizedFrameQueue<CameraSnapshot> sync_queue_;
+    std::optional<std::chrono::steady_clock::time_point> last_sync_input_at_;
     std::vector<CamState>             per_cam_;
     std::deque<std::chrono::steady_clock::time_point> tri_recent_;
     std::chrono::steady_clock::time_point last_3d_update_{};

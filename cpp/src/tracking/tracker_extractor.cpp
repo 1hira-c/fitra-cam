@@ -35,12 +35,26 @@ float percentile_inplace(std::vector<float>& samples, float pct) {
     return samples[k];
 }
 
+bool same_lifecycle(const pipeline::TrackerAxisLineage& a,
+                    const pipeline::TrackerAxisLineage& b) {
+    return a.stream_id == b.stream_id &&
+           a.subject_track_id == b.subject_track_id &&
+           a.coordinate_epoch == b.coordinate_epoch &&
+           a.continuity_epoch == b.continuity_epoch;
+}
+
 }  // namespace
 
 TrackerExtractor::TrackerExtractor(pipeline::Skeleton3DBus& skeleton_bus,
                                    TrackerBus&         tracker_bus,
-                                   TrackerExtractorOptions  opts)
-    : skel_bus_(skeleton_bus), tracker_bus_(tracker_bus), opts_(opts) {
+                                   TrackerExtractorOptions  opts,
+                                   TrackerAxisBus* tracker_axis_bus,
+                                   pipeline::TrackerAxisLineageBus* lineage_bus)
+    : skel_bus_(skeleton_bus),
+      tracker_bus_(tracker_bus),
+      tracker_axis_bus_(tracker_axis_bus),
+      lineage_bus_(lineage_bus),
+      opts_(opts) {
     for (auto& q : prev_quat_) q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
     for (auto& p : prev_pos_)  p = cv::Vec3f{0.0f, 0.0f, 0.0f};
     for (auto& q : last_emitted_quat_) q = cv::Vec4f{1.0f, 0.0f, 0.0f, 0.0f};
@@ -92,6 +106,7 @@ void TrackerExtractor::reset_smoothing() {
     quat_ctx_    = QuatSmoothingContext{};
     pos_ctx_     = PosSmoothingContext{};
     extract_ctx_ = ExtractContext{};
+    last_smoothed_lineage_.reset();
 }
 
 void TrackerExtractor::run_loop() {
@@ -147,8 +162,64 @@ void TrackerExtractor::run_loop() {
         was_idle = idle;
 
         auto snap = skel_bus_.snapshot();
+
+        // Lifecycle boundaries travel on a dedicated FIFO because the
+        // Skeleton3DBus is latest-only. Consume and publish them before any
+        // extraction/smoothing. A boundary may arrive while the skeleton bus
+        // still exposes an older Fresh snapshot, so retain a monotonic
+        // watermark and refuse to let that snapshot reseed the reset state.
+        std::vector<pipeline::TrackerAxisLineage> pending_boundaries;
+        if (lineage_bus_) {
+            pending_boundaries = lineage_bus_->drain_boundaries();
+            for (const auto& boundary : pending_boundaries) {
+                lifecycle_boundary_publish_mono_ns_ = std::max(
+                    lifecycle_boundary_publish_mono_ns_,
+                    boundary.source_publish_mono_ns);
+            }
+        }
+
+        const auto* current_lineage = snap.tracker_axis_lineage
+            ? &*snap.tracker_axis_lineage : nullptr;
+        const bool current_is_boundary = current_lineage &&
+            (current_lineage->event_type !=
+                 pipeline::FusionPoseEventType::Pose ||
+             current_lineage->source_state !=
+                 pipeline::FusionPoseSourceState::Fresh);
+        if (current_is_boundary) {
+            lifecycle_boundary_publish_mono_ns_ = std::max(
+                lifecycle_boundary_publish_mono_ns_,
+                current_lineage->source_publish_mono_ns);
+        }
+        const bool current_is_stale = current_lineage &&
+            !current_is_boundary &&
+            current_lineage->source_publish_mono_ns <=
+                lifecycle_boundary_publish_mono_ns_;
+        const bool current_changes_lifecycle = current_lineage &&
+            !current_is_boundary && !current_is_stale &&
+            last_smoothed_lineage_ &&
+            !same_lifecycle(*last_smoothed_lineage_, *current_lineage);
+        if (!pending_boundaries.empty() ||
+            (current_is_boundary && last_smoothed_lineage_) ||
+            current_changes_lifecycle) {
+            reset_smoothing();
+        }
+
+        std::array<TrackerPose, kTrackerCount> boundary_trackers{};
+        if (tracker_axis_bus_) {
+            for (const auto& boundary : pending_boundaries) {
+                tracker_axis_bus_->publish(boundary_trackers, boundary);
+            }
+            if (current_is_boundary) {
+                tracker_axis_bus_->publish(
+                    boundary_trackers, snap.tracker_axis_lineage);
+            }
+        }
+
+        const bool lifecycle_allows_smoothing =
+            !current_lineage || (!current_is_boundary && !current_is_stale);
         const infer::Skeleton3D* sk =
-            snap.stats.enabled ? pick_skeleton(snap) : nullptr;
+            snap.stats.enabled && lifecycle_allows_smoothing
+                ? pick_skeleton(snap) : nullptr;
         const bool halpe = fitra::lift::active_keypoint_format() ==
                            fitra::lift::KeypointFormat::Halpe26;
 
@@ -309,6 +380,15 @@ void TrackerExtractor::run_loop() {
         have_last_emitted_ = true;
 
         tracker_bus_.publish(trackers, stats_out);
+        if (tracker_axis_bus_) {
+            if (current_lineage && !current_is_boundary && !current_is_stale) {
+                tracker_axis_bus_->publish(trackers,
+                                           snap.tracker_axis_lineage);
+            }
+        }
+        if (current_lineage && !current_is_boundary && !current_is_stale) {
+            last_smoothed_lineage_ = *current_lineage;
+        }
     }
 }
 
