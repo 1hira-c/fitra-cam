@@ -16,6 +16,7 @@
 #include "lift/keypoint_format.hpp"
 #include "lift/skeleton_def.hpp"
 #include "pipeline/fusion_pose.hpp"
+#include "pipeline/lifecycle_filter_history.hpp"
 #include "pipeline/snapshot.hpp"
 #include "tracking/tracker_extract.hpp"
 #include "tracking/tracker_extractor.hpp"
@@ -635,6 +636,9 @@ void test_floor_history_is_clean_before_new_lifecycle_axis() {
     CHECK(last_floor_report.feet[0].contact);
     CHECK(last_floor_report.feet[0].corrected);
     CHECK(cv::norm(last_floor_report.feet[0].correction_m) > 1.0e-3f);
+    fitra::lift::SkeletonKalman kalman;
+    (void)kalman.update(old_corrected, kDt);
+    bool has_last_3d_update = true;
 
     fitra::pipeline::Skeleton3DBus skeleton_bus;
     fitra::tracking::TrackerBus tracker_bus;
@@ -660,16 +664,18 @@ void test_floor_history_is_clean_before_new_lifecycle_axis() {
     skeleton_bus.update(old_snapshot);
     CHECK(wait_for_axis(axis_bus, 1, true));
 
-    // Mirror MultiCameraDriver's destructive lifecycle action before the
-    // boundary measurement reaches FloorContactStabilizer.
-    floor.reset();
-    last_floor_report = {};
+    // Exercise the same production helper called by MultiCameraDriver before
+    // the boundary measurement reaches Kalman or FloorContactStabilizer.
+    CHECK(fitra::pipeline::reset_lifecycle_filter_history_if_boundary(
+        fitra::pipeline::PoseGateSourceState::PersonSwitched,
+        kalman, floor, last_floor_report, has_last_3d_update));
+    CHECK(!has_last_3d_update);
     CHECK(!last_floor_report.feet[0].contact);
     CHECK(cv::norm(last_floor_report.feet[0].correction_m) == 0.0f);
 
     const auto new_raw = rotate_z_and_translate(
         lifecycle_skeleton(), 2.0f);
-    auto boundary_skeleton = new_raw;
+    auto boundary_skeleton = kalman.update(new_raw, kDt);
     const auto boundary_report = floor.update(boundary_skeleton, kDt);
     CHECK(!boundary_report.feet[0].contact);
     CHECK(!boundary_report.feet[0].corrected);
@@ -694,15 +700,16 @@ void test_floor_history_is_clean_before_new_lifecycle_axis() {
     skeleton_bus.update(boundary_snapshot);
     CHECK(wait_for_axis(axis_bus, 2, false));
 
-    auto fresh_skeleton = new_raw;
+    auto fresh_skeleton = kalman.update(new_raw, kDt);
     const auto fresh_report = floor.update(fresh_skeleton, kDt);
 
-    // A separately constructed FloorContactStabilizer is the clean-state
-    // oracle for the same boundary + first-Fresh measurements.
+    // Separately constructed filters are the clean-state oracle for the same
+    // boundary + first-Fresh measurements.
+    fitra::lift::SkeletonKalman clean_kalman;
     FloorContactStabilizer clean_floor;
-    auto clean_boundary = new_raw;
+    auto clean_boundary = clean_kalman.update(new_raw, kDt);
     (void)clean_floor.update(clean_boundary, kDt);
-    auto clean_fresh = new_raw;
+    auto clean_fresh = clean_kalman.update(new_raw, kDt);
     const auto clean_report = clean_floor.update(clean_fresh, kDt);
     const auto joint = fitra::lift::kHalpeLeftAnkle;
     const cv::Vec3f actual_ankle{

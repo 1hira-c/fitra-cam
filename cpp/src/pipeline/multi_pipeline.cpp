@@ -4,6 +4,7 @@
 #include <chrono>
 #include <stdexcept>
 
+#include "pipeline/lifecycle_filter_history.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::pipeline {
@@ -535,12 +536,10 @@ void MultiCameraDriver::maybe_update_3d(std::chrono::steady_clock::time_point no
     // lifecycle's joint, contact, anchor, or release-correction state. The
     // boundary frame itself is hidden from FusionPose; its measurement seeds
     // the new state for the following ordinary Fresh frame.
-    if (lifecycle &&
-        pose_gate_is_lifecycle_boundary(lifecycle->source_state)) {
-        kalman_.reset();
-        floor_contact_.reset();
-        last_floor_report_ = {};
-        has_last_3d_update_ = false;
+    if (lifecycle) {
+        reset_lifecycle_filter_history_if_boundary(
+            lifecycle->source_state, kalman_, floor_contact_,
+            last_floor_report_, has_last_3d_update_);
     }
     infer::Skeleton3D skel = tri.skeleton;
     double dt_s = 1.0 / 30.0;

@@ -137,6 +137,7 @@ endif()
 add_library(fitra_pipeline STATIC
     pipeline/pose_pipeline.cpp
     pipeline/multi_pipeline.cpp
+    pipeline/lifecycle_filter_history.cpp
     pipeline/fusion_pose.cpp
     pipeline/tracker_axis_lineage.cpp
     pipeline/pose_gate.cpp
