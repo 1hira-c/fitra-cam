@@ -54,8 +54,9 @@ triangulate → Kalman → calibration tap / IK → FloorContactStabilizer
 subject calibration tap は補正前、`bone_len_drift_pct` は IK 出力に対して計算するため、床補正が
 校正値や IK state にフィードバックしない。VR 抽出時は足部へ適用済みの平行移動を一度除いて
 FootAnchor の tibia 長・方向と lower-leg を計算し、左右 foot tracker の位置だけ平行移動を戻す。
-idle 復帰と設定可能な更新 gap（既定 `dt > 0.50 s`）では履歴をリセットする。COCO17 は sole 点を
-持たないため自動 no-op となる。
+PoseGate の非 `Fresh` lifecycle boundary では、その境界frameを処理する前に contact latch、速度、
+XY anchor、直前補正を破棄する。idle 復帰と設定可能な更新 gap（既定 `dt > 0.50 s`）でも履歴を
+リセットする。COCO17 は sole 点を持たないため自動 no-op となる。
 
 ### 接地状態機械
 
@@ -140,7 +141,8 @@ pnpm -C web-ui build
 単体テストでは左右独立、足部の剛体平行移動、XY jitter 80% 以上減衰、孤立 sole 外れ値除外、
 8 cm 超の床貫通への有界 fail-safe、単発離地候補を吸収するサンプル数+時間 grace、継続離地と補正の単調減衰、
 欠損 grace と実適用値の分離、8 fps 相当を維持する既定 reset gap、設定した長い `dt` / idle reset、
-VR FootAnchor の補正前脚長、床 offset、COCO17 no-op を固定する。
+PoseGate lifecycle boundary 後の clean-state ankle / lower-leg axis、VR FootAnchor の補正前脚長、
+床 offset、COCO17 no-op を固定する。
 
 録画 A/B は静止クリップを同じ engine / calib / frame 数で処理し、
 `ankle_xy_rms_m_pooled` が OFF 比 40% 以上低下、ON の `sole_below_floor_fraction == 0`、

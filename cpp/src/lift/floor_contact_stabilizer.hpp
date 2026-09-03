@@ -42,7 +42,8 @@ public:
     // COCO17 (no sole points) is an automatic no-op.
     FloorContactReport update(infer::Skeleton3D& skel, double dt_s);
 
-    // Drop all contact/velocity history.  Call on idle/standby resume.
+    // Drop all contact/velocity history. Call on lifecycle boundaries and
+    // idle/standby resume.
     void reset();
 
     const FloorContactOptions& options() const { return opts_; }

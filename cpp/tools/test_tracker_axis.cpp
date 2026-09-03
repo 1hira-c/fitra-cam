@@ -12,6 +12,7 @@
 
 #include <crow.h>
 
+#include "lift/floor_contact_stabilizer.hpp"
 #include "lift/keypoint_format.hpp"
 #include "lift/skeleton_def.hpp"
 #include "pipeline/fusion_pose.hpp"
@@ -119,6 +120,16 @@ fitra::infer::Skeleton3D rotate_z_and_translate(
         joint.y = x;
     }
     return skeleton;
+}
+
+void shift_left_foot(fitra::infer::Skeleton3D& skeleton, float dx) {
+    for (const std::size_t joint : {
+             fitra::lift::kHalpeLeftAnkle,
+             fitra::lift::kHalpeLeftBigToe,
+             fitra::lift::kHalpeLeftSmallToe,
+             fitra::lift::kHalpeLeftHeel}) {
+        skeleton.joints[joint].x += dx;
+    }
 }
 
 bool wait_for_axis(TrackerAxisBus& bus, std::uint64_t source_sample_seq,
@@ -598,6 +609,161 @@ void test_extractor_resets_all_history_before_lifecycle_fresh() {
     extractor.stop();
 }
 
+void test_floor_history_is_clean_before_new_lifecycle_axis() {
+    using fitra::lift::FloorContactReport;
+    using fitra::lift::FloorContactStabilizer;
+    using fitra::pipeline::Skeleton3DSnapshot;
+    using fitra::tracking::ExtractContext;
+    using fitra::tracking::TrackerExtractor;
+    using fitra::tracking::TrackerExtractorOptions;
+
+    constexpr double kDt = 1.0 / 30.0;
+    fitra::lift::set_active_keypoint_format(
+        fitra::lift::KeypointFormat::Halpe26);
+
+    // Seed the old lifecycle with a latched contact and a non-zero XY
+    // correction. Without the boundary reset below, the new subject's first
+    // frame takes the exit-grace path and inherits this anchor/correction.
+    FloorContactStabilizer floor;
+    auto old_seed = lifecycle_skeleton();
+    (void)floor.update(old_seed, kDt);
+    auto old_contact = lifecycle_skeleton();
+    (void)floor.update(old_contact, kDt);
+    auto old_corrected = lifecycle_skeleton();
+    shift_left_foot(old_corrected, 0.02f);
+    FloorContactReport last_floor_report = floor.update(old_corrected, kDt);
+    CHECK(last_floor_report.feet[0].contact);
+    CHECK(last_floor_report.feet[0].corrected);
+    CHECK(cv::norm(last_floor_report.feet[0].correction_m) > 1.0e-3f);
+
+    fitra::pipeline::Skeleton3DBus skeleton_bus;
+    fitra::tracking::TrackerBus tracker_bus;
+    TrackerAxisBus axis_bus{"stream-a", 3};
+    fitra::pipeline::TrackerAxisLineageBus lineage_bus;
+    TrackerExtractorOptions opts;
+    opts.event_driven = true;
+    opts.extract_rate_hz = 500.0;
+    TrackerExtractor extractor{
+        skeleton_bus, tracker_bus, opts, &axis_bus, &lineage_bus};
+    extractor.start();
+
+    auto old_lineage = lineage(1);
+    old_lineage = lineage_bus.publish(old_lineage);
+    Skeleton3DSnapshot old_snapshot;
+    old_snapshot.stats.enabled = true;
+    old_snapshot.stats.floor_corrections_m[0] =
+        last_floor_report.feet[0].correction_m;
+    old_snapshot.stats.floor_corrections_m[1] =
+        last_floor_report.feet[1].correction_m;
+    old_snapshot.persons.push_back(old_corrected);
+    old_snapshot.tracker_axis_lineage = old_lineage;
+    skeleton_bus.update(old_snapshot);
+    CHECK(wait_for_axis(axis_bus, 1, true));
+
+    // Mirror MultiCameraDriver's destructive lifecycle action before the
+    // boundary measurement reaches FloorContactStabilizer.
+    floor.reset();
+    last_floor_report = {};
+    CHECK(!last_floor_report.feet[0].contact);
+    CHECK(cv::norm(last_floor_report.feet[0].correction_m) == 0.0f);
+
+    const auto new_raw = rotate_z_and_translate(
+        lifecycle_skeleton(), 2.0f);
+    auto boundary_skeleton = new_raw;
+    const auto boundary_report = floor.update(boundary_skeleton, kDt);
+    CHECK(!boundary_report.feet[0].contact);
+    CHECK(!boundary_report.feet[0].corrected);
+    CHECK(std::fabs(
+              boundary_skeleton.joints[fitra::lift::kHalpeLeftAnkle].x -
+              new_raw.joints[fitra::lift::kHalpeLeftAnkle].x) < 1.0e-6f);
+
+    auto boundary = lineage(2);
+    boundary.event_type = FusionPoseEventType::Boundary;
+    boundary.source_state = FusionPoseSourceState::PersonSwitched;
+    boundary.source_reason = "person_switched";
+    boundary.subject_track_id = "subject-b";
+    boundary = lineage_bus.publish(boundary);
+    Skeleton3DSnapshot boundary_snapshot;
+    boundary_snapshot.stats.enabled = true;
+    boundary_snapshot.stats.floor_corrections_m[0] =
+        boundary_report.feet[0].correction_m;
+    boundary_snapshot.stats.floor_corrections_m[1] =
+        boundary_report.feet[1].correction_m;
+    boundary_snapshot.persons.push_back(boundary_skeleton);
+    boundary_snapshot.tracker_axis_lineage = boundary;
+    skeleton_bus.update(boundary_snapshot);
+    CHECK(wait_for_axis(axis_bus, 2, false));
+
+    auto fresh_skeleton = new_raw;
+    const auto fresh_report = floor.update(fresh_skeleton, kDt);
+
+    // A separately constructed FloorContactStabilizer is the clean-state
+    // oracle for the same boundary + first-Fresh measurements.
+    FloorContactStabilizer clean_floor;
+    auto clean_boundary = new_raw;
+    (void)clean_floor.update(clean_boundary, kDt);
+    auto clean_fresh = new_raw;
+    const auto clean_report = clean_floor.update(clean_fresh, kDt);
+    const auto joint = fitra::lift::kHalpeLeftAnkle;
+    const cv::Vec3f actual_ankle{
+        fresh_skeleton.joints[joint].x,
+        fresh_skeleton.joints[joint].y,
+        fresh_skeleton.joints[joint].z};
+    const cv::Vec3f expected_ankle{
+        clean_fresh.joints[joint].x,
+        clean_fresh.joints[joint].y,
+        clean_fresh.joints[joint].z};
+    for (int component = 0; component < 3; ++component) {
+        CHECK(std::fabs(actual_ankle[component] - expected_ankle[component]) <
+              1.0e-6f);
+        CHECK(std::fabs(fresh_report.feet[0].correction_m[component] -
+                        clean_report.feet[0].correction_m[component]) <
+              1.0e-6f);
+    }
+
+    auto fresh_lineage = lineage(3);
+    fresh_lineage.subject_track_id = "subject-b";
+    fresh_lineage = lineage_bus.publish(fresh_lineage);
+    Skeleton3DSnapshot fresh_snapshot;
+    fresh_snapshot.stats.enabled = true;
+    fresh_snapshot.stats.floor_corrections_m[0] =
+        fresh_report.feet[0].correction_m;
+    fresh_snapshot.stats.floor_corrections_m[1] =
+        fresh_report.feet[1].correction_m;
+    fresh_snapshot.persons.push_back(fresh_skeleton);
+    fresh_snapshot.tracker_axis_lineage = fresh_lineage;
+    skeleton_bus.update(fresh_snapshot);
+    CHECK(wait_for_axis(axis_bus, 3, true));
+
+    ExtractContext expected_ctx;
+    const auto expected_trackers =
+        fitra::tracking::extract_trackers_with_floor_corrections(
+            clean_fresh,
+            {clean_report.feet[0].correction_m,
+             clean_report.feet[1].correction_m},
+            &expected_ctx, opts.foot_pos_mode, opts.chest_height_frac,
+            opts.waist_height_frac, opts.limb_extension);
+    TrackerAxisBus expected_axis_bus{"stream-a", 3};
+    const auto expected_axes = expected_axis_bus.publish(
+        expected_trackers, fresh_lineage);
+    const auto actual_axes = axis_bus.snapshot();
+    for (const auto role : {
+             fitra::tracking::TrackerAxisRole::LeftLowerLeg,
+             fitra::tracking::TrackerAxisRole::RightLowerLeg}) {
+        const std::size_t i = static_cast<std::size_t>(role);
+        CHECK(actual_axes.axes[i].axis.has_value());
+        CHECK(expected_axes.axes[i].axis.has_value());
+        if (!actual_axes.axes[i].axis || !expected_axes.axes[i].axis) continue;
+        for (std::size_t component = 0; component < 3; ++component) {
+            CHECK(std::fabs((*actual_axes.axes[i].axis)[component] -
+                            (*expected_axes.axes[i].axis)[component]) <
+                  1.0e-5);
+        }
+    }
+
+    extractor.stop();
+}
+
 void test_clock_pong() {
     const auto root = crow::json::load(fitra::pipeline::make_clock_sync_pong(
         7, 11, 13, 17));
@@ -626,6 +792,7 @@ int main() {
     test_lineage_handoff_preserves_boundaries();
     test_stale_snapshot_cannot_reopen_after_boundary();
     test_extractor_resets_all_history_before_lifecycle_fresh();
+    test_floor_history_is_clean_before_new_lifecycle_axis();
     test_clock_pong();
     if (g_fail) {
         std::fprintf(stderr, "test_tracker_axis: %d failures\n", g_fail);

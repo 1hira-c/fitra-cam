@@ -3,7 +3,7 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-09-03)
+## 現状 (2026-09-04)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
@@ -139,6 +139,14 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-09-04 — D50 lifecycle境界で床接地履歴を破棄
+
+PoseGateの非Fresh境界でKalmanと同時にFloorContactStabilizerのcontact latch、速度、XY anchor、
+直前補正と公開用の最終reportをresetし、境界frameと次のFreshが旧人物の床補正を継承しないようにした。
+床段を通したsnapshotからTrackerExtractorとTrackerAxisまで接続する回帰テストで、新lifecycleの
+ankleとlower-leg axisがclean stateに一致することを固定した。FusionPoseのpost-Kalman/IK・pre-floor
+seam、IK lock/profile、wire schema、通常の床接地policyは変更していない。
 
 ### 2026-09-03 — D50 lifecycle境界でfilter履歴を破棄
 

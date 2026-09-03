@@ -157,11 +157,13 @@ ten joints and capture evidence are unavailable, and the next ordinary
 `Fresh` observation is published separately as a pose.  This avoids making a
 lifecycle state carry an ambiguous partially usable pose.
 
-Before a non-`Fresh` lifecycle frame reaches the post-Kalman/IK seam, the
-producer resets the Kalman joint and direction history.  The boundary frame's
-measurement therefore seeds the new lifecycle, and the following `Fresh`
+Before a non-`Fresh` lifecycle frame reaches the post-Kalman/IK or floor
+stages, the producer resets the Kalman joint/direction history and the floor
+contact latch/anchor/release correction.  The boundary frame's measurement
+therefore seeds a clean new lifecycle: the following `Fresh`
 `filtered_position_m` cannot interpolate with the previous subject or
-coordinate epoch.
+coordinate epoch, and the public ankle/sole output cannot inherit its floor
+correction.  The FusionPose seam itself remains post-Kalman/IK and pre-floor.
 
 The WebSocket accepts:
 

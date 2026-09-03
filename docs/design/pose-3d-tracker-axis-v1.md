@@ -156,6 +156,9 @@ axes, identity and capture values are never written to normal logs.
 8. TrackerExtractor consumes lifecycle boundaries before extraction and
    smoothing, resets quaternion/position/One-Euro/FK history, and does not let
    a pre-boundary latest snapshot reseed that history.
+9. The upstream floor-contact latch, anchor, and release correction are reset
+   before a non-Fresh boundary frame reaches the floor stage, so the next
+   Fresh ankle and lower-leg axis start from the new lifecycle only.
 
 ## Milestones
 
