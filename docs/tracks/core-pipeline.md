@@ -36,6 +36,21 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-09-07 — 常時稼働イベント・コーパス収録 MVP
+pose model audition と後段の時系列 AI 学習に再利用できる原本を、通常 Run mode から自動収集する
+opt-in recorder を追加。V4L2 DQBUF ごとの MJPEG/YUYV 原ペイロードを、decode/inference の
+latest-frame consumer と独立した bounded queue へ tap し、いずれかのカメラで人物 pose が得られた
+区間を全台まとめて pre/post-roll 付きで収録する。短い immutable segment、process/kernel sequence、
+DQBUF monotonic と V4L2 SOE/EOF timestamp、実際に受理した capture 解像度・stride・fourcc・
+frame interval、推論 output 解像度を sidecar/manifest に保持する。
+SSD spool は総量上限 + filesystem 最小空き容量で hard stop し、録画コピーだけを drop して推論を
+継続。人物不在中の mounted-directory uploader は marker で unmount 誤書込を防ぎ、`.partial` へ
+copy後に全 file の size/SHA-256 を照合、remote commit 後だけ local を削除する。カメラ切断で
+presence が貼り付く場合も stale timeout で session を close。corpus 有効時は trigger を維持するため
+idle/standby を強制無効化。合成2-camera testで pre/post、capture 時刻による区間判定、segment、
+64-bit provenance、容量drop、stale close、起動時の無人判定、remote commit/retention を検証。
+→ [design/core-pipeline-event-corpus-recorder.md](../design/core-pipeline-event-corpus-recorder.md)
+
 ### 2026-07-21 — 多カメラcentral loopのpoll撤廃 + frame handoff zero-copy化
 3台構成に残っていた2ms pollingを、全`FrameSource`共有の世代番号付きcondition_variableへ置換。
 central loopは通知ごとに全slotを1回だけ走査し、模擬3cam×60fpsでconsumer CPUを13–22%削減、

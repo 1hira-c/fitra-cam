@@ -118,6 +118,11 @@ void MultiCameraDriver::set_skeleton3d_tap(Skeleton3DTapFn fn) {
     skeleton3d_tap_ = std::move(fn);
 }
 
+void MultiCameraDriver::set_presence_tap(PresenceTapFn fn) {
+    std::lock_guard<std::mutex> g(tap_mu_);
+    presence_tap_ = std::move(fn);
+}
+
 void MultiCameraDriver::set_idle_gate(const std::atomic<bool>* idle_flag,
                                       double idle_tick_hz) {
     idle_flag_    = idle_flag;
@@ -175,9 +180,11 @@ void MultiCameraDriver::loop() {
         // the same std::function once per ready camera (three mutex round-trips
         // for a typical synchronized batch) even when the tap was empty.
         FrameTapFn frame_tap_local;
+        PresenceTapFn presence_tap_local;
         {
             std::lock_guard<std::mutex> g(tap_mu_);
             frame_tap_local = frame_tap_;
+            presence_tap_local = presence_tap_;
         }
 
         // Idle/standby gate (issue #37). While idle the heavy 3D update is
@@ -305,6 +312,11 @@ void MultiCameraDriver::loop() {
                 snap.persons.assign(
                     all_persons.begin() + pc.person_offset,
                     all_persons.begin() + pc.person_offset + pc.person_count);
+            }
+            if (presence_tap_local) {
+                presence_tap_local(pc.idx, !snap.persons.empty(),
+                                   snap.captured_at,
+                                   snap.captured_mono_ns);
             }
             snap.bboxes          = df.bboxes;
             snap.recv_fps        = sources_[pc.idx]->recv_fps();

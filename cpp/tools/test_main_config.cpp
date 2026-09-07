@@ -11,6 +11,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -1655,6 +1656,102 @@ calibration:
     check(back.calib_frames_per_cam == 42, "subject_calib knob round-trips");
 }
 
+void test_corpus_yaml_cli_round_trip_and_validate() {
+    auto p = write_tmp("corpus.yaml", R"(schema: fitra_main_config_v1
+cameras:
+  cam0: /dev/cam-a
+inference:
+  det_engine: /tmp/d.engine
+  pose_engine: /tmp/p.engine
+corpus:
+  enabled: true
+  spool_dir: corpus-spool
+  remote_dir: /mnt/nas/corpus
+  pre_roll_s: 7.5
+  post_roll_s: 12
+  segment_s: 3
+  upload_absent_s: 45
+  presence_stale_s: 3
+  queue_max_mib: 64
+  ring_max_mib: 192
+  spool_max_gib: 42.5
+  min_free_gib: 5
+  remove_after_upload: false
+)");
+    MainOptions opts;
+    load_main_config(p.string(), opts);
+    check(opts.corpus_enabled, "corpus.enabled loads");
+    check(opts.corpus_spool_dir == "corpus-spool", "corpus spool loads");
+    check(opts.corpus_remote_dir == "/mnt/nas/corpus", "corpus remote loads");
+    check(std::abs(opts.corpus_pre_roll_s - 7.5) < 1e-9, "corpus pre-roll loads");
+    check(opts.corpus_queue_max_mib == 64, "corpus queue cap loads");
+    check(opts.corpus_ring_max_mib == 192, "corpus ring cap loads");
+    check(std::abs(opts.corpus_presence_stale_s - 3.0) < 1e-9,
+          "corpus presence timeout loads");
+    check(std::abs(opts.corpus_spool_max_gib - 42.5) < 1e-9,
+          "corpus spool cap loads");
+    check(!opts.corpus_remove_after_upload, "corpus keep-local loads");
+    check(std::abs(opts.corpus_min_free_gib - 5.0) < 1e-9,
+          "corpus filesystem reserve loads");
+    validate_options(opts);
+
+    std::vector<std::string> argv_buf{
+        "--no-corpus-record", "--corpus-spool", "/var/spool/fitra",
+        "--corpus-remote", "/srv/archive/fitra", "--corpus-pre-roll-s", "2",
+        "--corpus-post-roll-s", "4", "--corpus-segment-s", "1",
+        "--corpus-upload-absent-s", "8", "--corpus-presence-stale-s", "4",
+        "--corpus-spool-max-gib", "20", "--corpus-min-free-gib", "6"};
+    auto argv = make_argv(argv_buf);
+    apply_cli_overrides(opts, static_cast<int>(argv.size()), argv.data());
+    check(!opts.corpus_enabled, "CLI can negate YAML corpus recording");
+    check(opts.corpus_spool_dir == "/var/spool/fitra", "corpus spool CLI");
+    check(opts.corpus_remote_dir == "/srv/archive/fitra", "corpus remote CLI");
+    check(std::abs(opts.corpus_segment_s - 1.0) < 1e-9, "corpus segment CLI");
+    check(std::abs(opts.corpus_min_free_gib - 6.0) < 1e-9,
+          "corpus minimum free CLI");
+
+    opts.corpus_enabled = true;
+    const auto emitted = fitra::config::emit_main_config(opts);
+    auto round_path = write_tmp("corpus_roundtrip.yaml", emitted);
+    MainOptions round;
+    load_main_config(round_path.string(), round);
+    check(round.corpus_enabled, "corpus enabled round-trips");
+    check(round.corpus_spool_dir == opts.corpus_spool_dir,
+          "corpus spool round-trips");
+    check(round.corpus_ring_max_mib == opts.corpus_ring_max_mib,
+          "YAML-only ring cap round-trips");
+    check(round.corpus_remove_after_upload == opts.corpus_remove_after_upload,
+          "remove policy round-trips");
+
+    round.corpus_spool_dir = "/tmp/fitra-corpus";
+    round.corpus_remote_dir = "/tmp/fitra-corpus/remote";
+    bool threw = false;
+    try { validate_options(round); } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "must not be equal or nested",
+                       "nested corpus paths message");
+    }
+    check(threw, "nested corpus spool/remote paths rejected");
+
+    round.corpus_remote_dir = "/tmp/fitra-remote";
+    round.corpus_segment_s = std::numeric_limits<double>::quiet_NaN();
+    threw = false;
+    try { validate_options(round); } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "corpus-segment-s", "NaN corpus segment message");
+    }
+    check(threw, "NaN corpus segment rejected");
+
+    round.corpus_segment_s = 1.0;
+    round.bench_fake_bbox = true;
+    threw = false;
+    try { validate_options(round); } catch (const std::exception& e) {
+        threw = true;
+        check_contains(e.what(), "bench-fake-bbox", "synthetic corpus trigger message");
+    }
+    check(threw, "synthetic bbox and corpus recording are incompatible");
+}
+
 struct TestCase {
     const char* name;
     void (*fn)();
@@ -1693,6 +1790,8 @@ const TestCase kTests[] = {
     {"validate_rejects_duplicate_cameras",     test_validate_rejects_duplicate_cameras},
     {"setup_store_refuses_example_path",       test_setup_store_refuses_example_path},
     {"subject_calib_schema",                   test_subject_calib_schema},
+    {"corpus_yaml_cli_round_trip_and_validate",
+                                               test_corpus_yaml_cli_round_trip_and_validate},
     {"one_euro_yaml_cli_and_validate",         test_one_euro_yaml_cli_and_validate},
     {"tracker_stream_vmt_settings_validate_without_vmt_output",
                                                test_tracker_stream_vmt_settings_validate_without_vmt_output},

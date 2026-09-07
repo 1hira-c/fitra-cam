@@ -120,6 +120,15 @@ USB cam 2 ┘                                 │
 > continuity resetとする。`GET /api/tracker-axis` / `WS /ws/tracker-axis`をrun/calib-subjectへ
 > 配線し、FusionPoseのclock-sync処理を共用する。詳細は
 > [`design/pose-3d-tracker-axis-v1.md`](design/pose-3d-tracker-axis-v1.md)。
+>
+> **2026-09-07 更新 (event corpus recorder)**: Run mode に opt-in の常時 source recorder を追加。
+> V4L2 DQBUF payload を QBUF 後・decode/inference の latest slot と独立に bounded queue へ tap し、
+> RTMPose 後の any-person presence で全 camera の pre/post-roll session を作る。リアルタイム経路へ
+> disk/network backpressure を返さず、queue/spool/full-filesystem 時は corpus copy のみ drop する。
+> source payload は短い immutable segment と sequence/monotonic/V4L2 timestamp sidecar で保持し、
+> mounted remote への転送は人物不在中だけ `.partial` → size/SHA-256 verify → commit の順に行い、
+> commit 後だけ SSD copy を削除する。corpus 有効時は presence trigger を失わないよう idle を無効化。
+> 詳細は [`design/core-pipeline-event-corpus-recorder.md`](design/core-pipeline-event-corpus-recorder.md)。
 
 ## リポジトリレイアウト
 

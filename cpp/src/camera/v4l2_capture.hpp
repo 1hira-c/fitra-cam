@@ -20,11 +20,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace fitra::camera {
@@ -62,6 +64,20 @@ V4l2CaptureTimestamp interpret_v4l2_timestamp(std::int64_t sec,
 struct Frame {
     std::vector<std::uint8_t> data;  // raw payload (JPEG bytes or packed YUYV)
     std::uint64_t seq{0};
+    // Kernel/driver sequence from v4l2_buffer.sequence. Unlike seq (number of
+    // frames successfully dequeued by this process), gaps here also reveal
+    // frames lost before DQBUF. It wraps according to the V4L2 driver.
+    std::uint32_t v4l2_sequence{0};
+    // Format actually accepted by VIDIOC_S_FMT/S_PARM. These are repeated on
+    // each frame so a raw recorder can remain independent of capture-object
+    // lifetime and preserve enough information to decode padded YUYV.
+    std::uint32_t capture_width{0};
+    std::uint32_t capture_height{0};
+    std::uint32_t bytes_per_line{0};
+    std::uint32_t size_image{0};
+    std::uint32_t pixel_format_fourcc{0};
+    std::uint32_t frame_interval_numerator{0};
+    std::uint32_t frame_interval_denominator{0};
     std::chrono::steady_clock::time_point captured_at{};
     // Exact host observation timestamp from CLOCK_MONOTONIC at DQBUF return.
     // Retained for fitra_pose_gate_v1 compatibility and latency diagnostics;
@@ -163,6 +179,16 @@ public:
 
     const V4l2Options& options() const { return opts_; }
 
+    // Optional corpus tap, configured before start(). It observes every DQBUF
+    // payload after the V4L2 buffer has been re-queued, independently of the
+    // decode/inference consumer's latest-frame slot. The callback must return
+    // promptly; the production implementation only copies into a bounded
+    // queue and performs no file/network I/O.
+    using RawFrameTapFn = std::function<void(const Frame&)>;
+    void set_raw_frame_tap(RawFrameTapFn tap) {
+        raw_frame_tap_ = std::move(tap);
+    }
+
     // Live exposure/gain setters for the software-AE assist (called from the
     // FrameSource decode thread). VIDIOC_S_CTRL is independent of the streaming
     // DQBUF/QBUF on the worker thread. Return false on ioctl failure.
@@ -204,6 +230,14 @@ private:
     std::vector<MmapBuf> bufs_;
     std::thread worker_;
     std::atomic<bool> stop_{false};
+    RawFrameTapFn raw_frame_tap_;
+    std::uint32_t capture_width_{0};
+    std::uint32_t capture_height_{0};
+    std::uint32_t bytes_per_line_{0};
+    std::uint32_t size_image_{0};
+    std::uint32_t pixel_format_fourcc_{0};
+    std::uint32_t frame_interval_numerator_{0};
+    std::uint32_t frame_interval_denominator_{0};
 
     // Capture-thread-owned scratch for the next frame's payload. Reused every
     // frame (swapped with latest_->data under the slot lock) so the large

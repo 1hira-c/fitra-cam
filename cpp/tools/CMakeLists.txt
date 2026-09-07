@@ -785,6 +785,23 @@ set_target_properties(fitra_test_main_config PROPERTIES
 
 add_test(NAME test_main_config COMMAND fitra_test_main_config)
 
+# Always-on raw event corpus: pre/post-roll, immutable segments/provenance,
+# bounded drop behavior, and mounted-directory commit protocol.
+add_executable(fitra_test_event_corpus_recorder
+    test_event_corpus_recorder.cpp
+)
+
+target_link_libraries(fitra_test_event_corpus_recorder PRIVATE
+    fitra_corpus
+)
+
+set_target_properties(fitra_test_event_corpus_recorder PROPERTIES
+    OUTPUT_NAME "test_event_corpus_recorder"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools"
+)
+
+add_test(NAME test_event_corpus_recorder COMMAND fitra_test_event_corpus_recorder)
+
 # Idle/standby evaluator pure-logic test (issue #37). Header-only predicates
 # (IdleDecision::step / idle_consumer_present / idle_vr_observable) — links
 # fitra_config only for the cpp/src include path; no app symbols are used.

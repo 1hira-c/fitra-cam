@@ -101,9 +101,18 @@ public:
     // skeleton would let hinge/length clamps bias the hold detector.
     using Skeleton3DTapFn = std::function<void(const infer::Skeleton3D& skel,
                                                double bone_drift_pct)>;
+    // Inference-backed person-presence edge source for the event corpus. It is
+    // deliberately separate from the calibration BGR tap: no pixels cross
+    // this boundary and the callback receives the original capture lineage.
+    using PresenceTapFn = std::function<void(std::size_t cam_idx,
+                                             bool present,
+                                             std::chrono::steady_clock::time_point
+                                                 captured_at,
+                                             std::uint64_t captured_mono_ns)>;
 
     void set_frame_tap(FrameTapFn fn);
     void set_skeleton3d_tap(Skeleton3DTapFn fn);
+    void set_presence_tap(PresenceTapFn fn);
 
     // Idle/standby gate (issue #37). `idle_flag` points at the shared idle
     // atomic (owned by the IdleState in mode_run; must outlive the driver);
@@ -152,6 +161,7 @@ private:
     std::mutex           tap_mu_;
     FrameTapFn           frame_tap_;
     Skeleton3DTapFn      skeleton3d_tap_;
+    PresenceTapFn        presence_tap_;
     std::chrono::steady_clock::time_point loop_t0_{};
     bool                 loop_t0_set_ = false;
 

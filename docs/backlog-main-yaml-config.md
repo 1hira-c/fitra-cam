@@ -68,6 +68,23 @@ web:
   static: web/dual_rtmpose
   no_web: false
 
+# 常時稼働の姿勢学習用 source corpus (既定 disabled)。詳細は
+# docs/design/core-pipeline-event-corpus-recorder.md。
+corpus:
+  enabled: false
+  spool_dir: outputs/pose-corpus
+  remote_dir: ""
+  pre_roll_s: 5
+  post_roll_s: 10
+  segment_s: 5
+  upload_absent_s: 30
+  presence_stale_s: 2
+  queue_max_mib: 128
+  ring_max_mib: 512
+  spool_max_gib: 256
+  min_free_gib: 10
+  remove_after_upload: true
+
 three_d:
   enable_3d: true
   calib: calibrations/measure_session/cam_params.yaml
