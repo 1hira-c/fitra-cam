@@ -1,0 +1,170 @@
+# pose-3d: 後段補正の固定リプレイ評価器
+
+更新日: 2026-09-08。状態: M1（評価器と人工系列）実装、実録画・擬似教師での合否校正は未完了。
+関連: [時系列予測計画](../research/pose-3d-temporal-prediction-plan.md)、
+[Issue #65](https://github.com/1hira-c/fitra-cam/issues/65)。
+
+## 背景・今回の実機アンカー
+
+RTMPose-Mを続行し、DWPose-Mは将来の手トラッキング候補に留める。
+2026-09-08のライブ比較でユーザーが確認した結果:
+
+| 設定 | 体感（定量合格値ではない） |
+|---|---|
+| Kalman + One Euro | 滑らかだが追従が遅い |
+| Kalmanのみ、代替EMAの位置/回転係数1 | 揺れが増えるが速い。遅延は一応許容 |
+| Kalman OFF + One Euro OFF、代替EMA係数1 | さらに揺れるが速く、遅延は十分許容 |
+
+3設定ともIK・床補正・信頼度ゲート・伸展補正を維持。「両方OFF」は無加工raw 3Dではない。
+約150msという回想は実測値ではなく、capture→VMT送信統計にもfilter追従遅れや表示待ちは入らない。
+目標はKalmanのみの許容できる追従を悪化させず、両方OFFに近い応答を目指しながら揺れを減らすこと。
+数値しきい値と体感の対応はまだ校正していないので、現段階では自動採用しない。
+
+## 構成と境界
+
+- `cpp/tools/temporal_replay.cpp`: 共通の後処理前Halpe26 JSONLを再生。productionの
+  `SkeletonKalman`、`IkSolver`、`FloorContactStabilizer`、`extract_trackers_with_floor_corrections`、
+  位置/回転smoothingを直接呼ぶ。filterの数式をPythonで近似再実装しない。
+- `scripts/temporal_eval/evaluate.py`: Python標準ライブラリで固定出力を採点。
+  JSON詳細とMarkdown一覧、原本/出力/任意のbinary・profileのSHA-256を残す。
+  C++出力の入力byte fingerprintも照合し、同じseq/時刻でも違う入力との取り違えを拒否する。
+  fingerprintは事故検出用FNV-1aで、改ざん耐性の主張ではない。
+- `synthetic.py`: 既知正解の人工Halpe26系列。静止、並進、腕振り、開始停止反転、人物消失と足欠測。
+  モデル精度や実機合格を示すデータではない。
+- `import_dump.py`: **全後処理OFF**の既存`dump_keypoints_3d` JSONLを明示的に変換。
+  出自はoperator確認が必要。後処理済み`/ws3d`や`/stats3d`をrawと偽装しない。
+
+リアルタイムコード、wire、既定設定、GPU context/stream、queue、サービス起動は変更しない。
+`python/` fallbackへの機能追加なし。評価用の既存Python以外に新規依存はない。
+上位CMakeは従来通りJetson依存を検出するが、リプレイ処理自体はCPUのみ。
+
+### 比較候補
+
+| 名前 | Kalman | One Euro | 固定EMA係数 |
+|---|---|---|---|
+| minimal | OFF | OFF | 位置1 / 回転1 |
+| kalman | ON | OFF | 位置1 / 回転1 |
+| current | ON | ON | 使用しない |
+
+共通でIK・床補正・ankle足位置・chest/waist高さ・伸展補正は製品既定。
+One Euroは`TrackerExtractorOptions`の位置1/4/1、回転1.5/1.5/1。
+subject profileをCLIで指定でき、省略時はheaderの身長priorを使う。
+身長priorと実機profileは同一ではないので実データ比較では同じprofileを指定する。
+異なる人物/profileは別ファイル・別実行に分割する。
+
+### 再生スケジュールの制約
+
+**1個の3Dレポートにつき1回**の処理。`t_ns`差分を共通のdtに使う。
+liveの60Hz paced extractorによる同一skeleton再利用、publish位相、capture、送信、
+ネットワーク、SteamVR表示は再現しない。production関数の再利用はlive出力とのbit一致や
+体感順位の再現保証ではない。M2で検証する。先頭/境界直後はnominal dtでseed。
+gap > 0.5秒と非Fresh境界でKalman・床・抽出/FK・位置/回転filter履歴を破棄する。
+固定profileのIKは再学習させない。Fresh等のwire判定自体は再実装せず入力の区切りを使う。
+
+## 入力契約 `fitra_temporal_input_v1`
+
+JSONL先頭はheader（1行）:
+
+```json
+{"schema":"fitra_temporal_input_v1","input_stage":"raw_triangulated","kp_format":"halpe26","coordinate_frame":"fitra_world_z_up_m","nominal_hz":60,"subject_height_m":1.7,"reference_kind":"none","time_basis":"measured_report","provenance":{"session_id":"example","model":"RTMPose-M"}}
+```
+
+以降は`seq`（source番号）、`t_ns`（厳密増加する評価時計）、`segment`（不透明なcontinuity区切り）、
+`state`（`fresh` / `boundary`）、`phase`（`static` / `motion` / `unlabelled`）、
+`joints`、任意の`reference_joints`。関節はHalpe順26要素で各要素が`[x_m,y_m,z_m,score]`または`null`。
+欠損をゼロ座標にしない。
+
+- `reference_kind`: `none` / `synthetic_known` / `pseudo`。
+- `time_basis`: `measured_report` / `synthetic_nominal` / `nominal_from_legacy_frames`。
+  nominalのmsは宣言周期への換算値で実測msではない。モデルの厳密dt入力を要求するものではない。
+- `measured_report`は評価対象が受け取ったレポート時刻。capture時刻があれば別のprovenance/
+  sidecarに保存し区別する。原本/model/calibration/profileの対応・hashもprovenanceに残す。
+- 再送は取り込み側で除去。重複/逆行は失敗。seq欠落を残し、穴を埋めて入力にしない。
+- 消失・人物切替・再取得・座標系変更は`boundary`または新`segment`。boundaryは全候補unavailable。
+  時計リセット、人物/profile変更は別ファイル。
+- 教師には大型モデル＋未来を使うオフライン補正を許すが、candidateの入力/状態へ渡さない。
+  教師の信頼度で使用可否を判断した結果を`null`maskにする。M1はconfidence重みではなくmask。
+  参照trackerはIK/床/時間filterなしの幾何抽出で、欠測を過去FKで埋めない。
+- `phase`は映像/収録手順から付ける区間ラベル。候補出力が止まることを根拠に静止としない。
+  unlabelledでは静止jitter/動作lagを採点しない。全フレーム人手正解は要求しない。
+- 任意の`evaluate:false`は全候補共通の採点除外（履歴更新は実施）。人工系列は各scene先頭1秒を
+  startup warmupとし、identityからの初期収束を定常jitterへ混ぜない。動作開始を自動的に除外しない。
+
+## 採点と不採用案
+
+同時刻の3D距離RMSE/p95、quat符号二重被覆を考慮した測地角p95。
+静止位置jitterは区間重心からの距離RMS、静止回転は符号を揃えた平均quatからの角度RMS。
+動作振幅比は同じ有効ペア上の位置spread比（参照の動き1mm以下なら未評価）。
+欠測はreference coverageとoutput availabilityを別記し、誤差0へ置換しない。
+境界・gap・phase遷移を越えて違う静止姿勢を混ぜない。
+
+位置lagは±15レポートの中心化3D位置曲線相関。正が遅れ、負が先行。
+全シフト共通supportを使い、参照欠測と2.5レポート超の穴を越えて補間しない。
+最低12点、低相関/凍結出力/等速や周期の曖昧一致は未評価。探索端はcensoredとして一覧の中央値から
+除きJSONに残す。サブレポート精度は主張しない。主誤差は**時間シフトせず**同時刻で計算する。
+
+M1のlagは位置のみ。開始/停止/反転のイベント遅れ、rotation lag、接地ラベルを使う足滑り、
+jump/overshoot・復帰時間の独立指標はM2。人工start_stop/dropoutはあるが専用合否は未実装。
+`processing_ms`はCPU候補呼出しwall timeのみ（I/O/queue/GPU/送信除外）。逐次実行で他プロセスの
+負荷もあるため、live追加latencyの代替ではない。
+
+採らない案:
+
+- 滑らかさだけの単一スコア: 停止しっぱなし・微小動作抹消を優遇する。
+- 擬似教師一致だけの合否: 教師の癖や過平滑を正解として固定する。
+- nominal時刻を実測同期とする: 既存動画のskewを復元できない。
+- live APIへ評価用raw全身を即追加: 契約を広げるためM1は既存offline dumpが入口。
+- 校正前の数値合格値: レポートは常に`not_calibrated_against_human_AB`、自動優勝なし。
+
+## 実行
+
+```bash
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build cpp/build --target fitra_temporal_replay -j2
+ctest --test-dir cpp/build -N
+ctest --test-dir cpp/build -R temporal_eval --output-on-failure
+
+# 既存ファイルは上書きしない。毎回新しいpathを選ぶ。
+python3 scripts/temporal_eval/synthetic.py /tmp/eval-input.jsonl
+cpp/build/tools/temporal_replay /tmp/eval-input.jsonl /tmp/eval-output.jsonl
+python3 scripts/temporal_eval/evaluate.py /tmp/eval-input.jsonl /tmp/eval-output.jsonl /tmp/eval-report.json \
+  --binary cpp/build/tools/temporal_replay
+```
+
+既存動画は`dump_keypoints_3d`に`--no-kalman --no-ik --no-floor-contact-stability`を渡しraw dumpを作る。
+元toolのカメラ数・校正条件は維持し、filenameだけで同期済みとしない。
+
+```bash
+python3 scripts/temporal_eval/import_dump.py RAW.jsonl INPUT.jsonl \
+  --confirm-unfiltered --nominal-hz 60 --subject-height-m 1.7 --segment session_clip --phase static
+cpp/build/tools/temporal_replay INPUT.jsonl OUTPUT.jsonl calibrations/subjects/subject01/latest_profile.yaml
+python3 scripts/temporal_eval/evaluate.py INPUT.jsonl OUTPUT.jsonl REPORT.json \
+  --binary cpp/build/tools/temporal_replay --subject-profile calibrations/subjects/subject01/latest_profile.yaml
+```
+
+参照なし実録画では追従誤差/lagを空欄にし、静止区間の揺れ等だけを出す。
+C++失敗時の部分outputは採点せず新規pathで再実行する（自動削除/上書きしない）。
+
+## Milestoneと検証
+
+1. **M1（今回）**: 同一入力3設定、時刻契約、人工系列、raw dump adapter、レポート、回帰テスト。
+2. **M2**: 固定実録画をraw 3Dへ変換、sessionで開発/検証を分割。大型モデルの擬似教師と区間ラベル、
+   イベント遅れ/回転/足滑り指標を追加。今回の体感との順位・トレードオフを校正し、矛盾すれば評価器も修正。
+3. **M3**: 軽い補正＋予測／学習候補を同じ入力と出力schemaで評価。将来位置はtarget時刻/horizonを
+   明示した別指標とし、現在値へ混ぜない。採用候補のみHMDで最終確認、Jetson追加コストも測る。
+
+回帰: 150ms既知遅延、2レポート先行、凍結、振幅半減、欠測、quat符号反転、重複/逆行/NaN/wrong-stage拒否、
+legacyフレーム穴、phase区切り、determinism、prefix causality、teacher差し替えでcandidate不変、境界/gap reset。
+人工系列やCTest成功を実録画品質・体感適合の合格証拠にしない。
+人工骨格の骨長と身長priorは厳密には一致しないため、同時刻位置誤差には共通IKによる形状差も含む。
+人工データの絶対誤差で実機profileや補正方式の品質を選定しない。
+
+### M1検証結果（2026-09-08）
+
+- Release構成と`fitra_temporal_replay`、既存のKalman/位置・回転trackerテストtargetをビルド。
+- focused CTest 4/4（`tracker_extract` / `tracker_extract_pos` / `kalman_chain` / `temporal_eval`）pass。
+  `temporal_eval`内の標準ライブラリunittestは15/15、skipなし。
+- 5 scene × 360 = 1,800 reportsを全3候補で再生し、JSON/Markdownを生成。
+  artifact: `outputs/temporal-eval/20260908-m1-final/{input,replay,report}.json*` と `report.md`。
+- runtimeソース変更なしのoffline tool追加のため、全target build/全CTest/新binaryでの実機受入れは
+  今回実施せず、呼び出す既存filterと新評価器に検証を絞った。実録画/擬似教師の評価は未実施。

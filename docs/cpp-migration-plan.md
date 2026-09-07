@@ -318,6 +318,11 @@ fitra-cam/
 
 ## 検証戦略
 
+2026-09-08: 後段filterのオフライン比較には `ctest -R temporal_eval` と
+`tools/temporal_replay` を追加。既知遅延/凍結/振幅縮小、時刻・境界・未来教師分離を検証する。
+1 report 1 updateのCPU比較であり、実機capture→表示latencyやHMD体感の合格とは区別する。
+詳細: [pose-3d-temporal-evaluation](design/pose-3d-temporal-evaluation.md)。
+
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|
 | 0     | `cmake --build cpp/build && ./cpp/build/main --help`        | リンク成功、TRT runtime が初期化できる                                         |

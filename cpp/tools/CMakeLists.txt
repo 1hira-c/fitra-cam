@@ -1,5 +1,13 @@
 # Standalone CLI tools that consume the fitra_infer library.
 
+# Offline post-3D filter audition. No GPU inference or live-service changes.
+add_executable(fitra_temporal_replay temporal_replay.cpp
+    ../src/tracking/tracker_extract.cpp)
+target_link_libraries(fitra_temporal_replay PRIVATE fitra_lift yaml-cpp::yaml-cpp)
+set_target_properties(fitra_temporal_replay PROPERTIES
+    OUTPUT_NAME "temporal_replay"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+
 add_executable(fitra_build_engines
     build_engines.cpp
 )
@@ -841,3 +849,12 @@ set_target_properties(fitra_test_flow_daemon PROPERTIES
 )
 
 add_test(NAME test_flow_daemon COMMAND fitra_test_flow_daemon)
+
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME test_temporal_eval COMMAND ${CMAKE_COMMAND} -E env
+        "FITRA_TEMPORAL_REPLAY=$<TARGET_FILE:fitra_temporal_replay>"
+        ${Python3_EXECUTABLE} -m unittest discover
+        -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/temporal_eval" -v)
+    set_tests_properties(test_temporal_eval PROPERTIES TIMEOUT 120)
+endif()

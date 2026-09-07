@@ -140,6 +140,16 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-08 — 後段の固定リプレイ評価器M1
+
+RTMPose-Mを維持し、実機で確認したminimal / Kalmanのみ / Kalman+One Euroの3条件を
+同一raw 3D系列で比較するCPU tool `temporal_replay` と標準ライブラリPython採点器を追加。
+productionのKalman/IK/床/抽出/平滑化を再利用し、人工系列・legacy raw dump adapter、
+同時刻誤差・静止揺れ・振幅比・位置lag・coverageをJSON/Markdownへ分離して出す。
+主誤差は時間シフトせず、未来教師をcandidateへ渡さない。実行時コード/設定/wireは不変。
+実録画による体感との校正、擬似教師生成、イベント指標は後続M2。
+設計・検証: [temporal-evaluation](../design/pose-3d-temporal-evaluation.md)。
+
 ### 2026-09-07 — 姿勢モデル選定後の3D時系列予測をbacklog化（文書のみ）
 
 [姿勢モデル選定計画](../research/pose-model-audition-plan.md) と、その後に取り組む
