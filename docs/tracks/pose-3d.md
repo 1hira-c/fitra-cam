@@ -140,6 +140,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-07 — 姿勢モデル選定後の3D時系列予測をbacklog化（文書のみ）
+
+[姿勢モデル選定計画](../research/pose-model-audition-plan.md) と、その後に取り組む
+[3D平滑化・1〜2レポート先予測](../research/pose-3d-temporal-prediction-plan.md) の検討資料を整理。
+追跡は [Issue #65](https://github.com/1hira-c/fitra-cam/issues/65)。
+教師生成だけで大型モデル・未来情報を使い、実時間推論は現在までの3D系列から予測して
+未来実測を待たない。初期検証に厳密なフレーム間隔入力を要求せず、モデル選定を先行する。
+学習・実装・実機評価は未着手で、現行pipeline・wire・filterは変更していない。
+
 ### 2026-09-04 — D50 lifecycle境界で床接地履歴を破棄
 
 PoseGateの非Fresh境界でKalmanと同時にFloorContactStabilizerのcontact latch、速度、XY anchor、
