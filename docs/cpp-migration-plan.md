@@ -322,6 +322,9 @@ fitra-cam/
 `tools/temporal_replay` を追加。既知遅延/凍結/振幅縮小、時刻・境界・未来教師分離を検証する。
 1 report 1 updateのCPU比較であり、実機capture→表示latencyやHMD体感の合格とは区別する。
 詳細: [pose-3d-temporal-evaluation](design/pose-3d-temporal-evaluation.md)。
+同日追補: swing/twist別誤差・方向lag・回転急変とsupport・参照不明を追加。
+前屈時の腿twistは[観察ケース台帳](research/pose-3d-evaluation-cases.md)で原因未確定のまま管理し、
+人工対照・局所回転のfault injectionで評価器の検出力を検証する。本番補正の変更ではない。
 
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|

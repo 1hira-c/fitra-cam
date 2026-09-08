@@ -140,6 +140,16 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-08 — 評価器の回転診断と観察ケース台帳
+
+前屈時の「つま先は安定、腿のひねりだけ暴れる」という目視を原因未確定で記録。
+本番補正の修正ではなく、評価器にswing/twist別誤差、方向lag、twist step/rate・急変count・
+総移動量比、参照不明/分解未定義の区別、ケース別の最悪部位表を追加した。
+足点固定の前屈人工対照、片腿だけの回転振動、固定出力、wrap/符号反転/欠測のテストを追加。
+offline toolのconfidence出力を追加したがliveコード/設定/wireは不変。実録画校正は継続課題。
+→ [評価器設計](../design/pose-3d-temporal-evaluation.md)、
+[ケース台帳](../research/pose-3d-evaluation-cases.md)。
+
 ### 2026-09-08 — 後段の固定リプレイ評価器M1
 
 RTMPose-Mを維持し、実機で確認したminimal / Kalmanのみ / Kalman+One Euroの3条件を

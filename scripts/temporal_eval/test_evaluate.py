@@ -7,13 +7,25 @@ import subprocess
 import tempfile
 import unittest
 
-from evaluate import angle_deg, estimate_lag, score, read_jsonl, verify_input_binding
+from evaluate import (angle_deg, estimate_lag, score, read_jsonl, verify_input_binding,
+                      swing_twist_deg, forward_vector, rotation_metrics)
 from synthetic import dataset
 from import_dump import convert
 
 
 def track(x):
     return {"position_m":[x,0,1], "quat_wxyz":[1,0,0,0]}
+
+
+def rotation(axis, degrees):
+    half = math.radians(degrees)/2
+    q = [math.cos(half),0,0,0]
+    q[axis+1] = math.sin(half)
+    return q
+
+
+def rotated_track(q):
+    return {"position_m":[0,0,1], "quat_wxyz":q, "roll_confidence":1, "swing_confidence":1}
 
 
 class MetricsTests(unittest.TestCase):
@@ -94,6 +106,121 @@ class MetricsTests(unittest.TestCase):
             self.assertEqual(h["time_basis"],"nominal_from_legacy_frames")
             self.assertEqual(rows[1]["t_ns"],33333333)
             self.assertIsNone(rows[0]["reference_joints"])
+
+    def test_source_boundary_cannot_be_hidden_by_output_reset(self):
+        args=self.sample()
+        args[1][80]["state"]="boundary"
+        args[3][80]["reference"]=[None]*10
+        args[3][80]["candidates"]["test"]=[None]*10
+        with self.assertRaisesRegex(ValueError,"reset"): score(*args)
+
+    def test_source_time_and_reference_contract(self):
+        args=self.sample()
+        args[1][0]["t_ns"]=False
+        with self.assertRaises(ValueError): score(*args)
+        args=self.sample()
+        args[0]["reference_kind"]="none"
+        with self.assertRaises(ValueError): score(*args)
+
+
+class RotationTests(unittest.TestCase):
+    def test_twist_axis_is_reference_local_not_world_z(self):
+        # q_out = Rx(90deg) * Rz(60deg), with reference Rx(90deg).
+        c = math.sqrt(.5)
+        out = [c*math.cos(math.pi/6), c*math.cos(math.pi/6),
+               -c*math.sin(math.pi/6), c*math.sin(math.pi/6)]
+        swing,twist=swing_twist_deg(rotation(0,90),out)
+        self.assertAlmostEqual(swing,0)
+        self.assertAlmostEqual(twist,60)
+
+    def test_unobservable_reference_does_not_invent_twist_ground_truth(self):
+        for confidence in (None,0):
+            ref=rotated_track([1,0,0,0])
+            if confidence is None:
+                del ref["roll_confidence"]
+            else:
+                ref["roll_confidence"]=confidence
+            out=rotated_track(rotation(2,100))
+            m=rotation_metrics([0],[0],[ref],[out],1/60,45)
+            self.assertIsNone(m["same_time_twist_p95_deg"])
+            self.assertEqual(m["twist_unobservable_reference_pairs"],1)
+            self.assertAlmostEqual(m["same_time_swing_p95_deg"],0)
+
+    def test_swing_and_twist_are_separate_and_sign_invariant(self):
+        identity = [1,0,0,0]
+        swing,twist = swing_twist_deg(identity,rotation(0,60))
+        self.assertAlmostEqual(swing,60)
+        self.assertAlmostEqual(twist,0)
+        swing,twist = swing_twist_deg(identity,rotation(2,80))
+        self.assertAlmostEqual(swing,0)
+        self.assertAlmostEqual(twist,80)
+        for a,b in zip(swing_twist_deg(identity,rotation(2,80)),
+                       swing_twist_deg(identity,[-x for x in rotation(2,80)])):
+            self.assertAlmostEqual(a,b,places=9)
+
+    def test_antiparallel_swing_is_not_zero_twist_error(self):
+        swing,twist=swing_twist_deg([1,0,0,0],rotation(0,180))
+        self.assertAlmostEqual(swing,180)
+        self.assertIsNone(twist)
+        result=rotation_metrics([0],[0],[rotated_track([1,0,0,0])],
+                                [rotated_track(rotation(0,180))],1/60,45)
+        self.assertIsNone(result["same_time_twist_p95_deg"])
+        self.assertEqual(result["twist_undefined_pairs"],1)
+
+    def test_wraparound_is_a_small_step_not_full_turn(self):
+        qs=[rotated_track(rotation(2,179)),rotated_track(rotation(2,-179))]
+        result=rotation_metrics([0,1/60],[0,1],qs,qs,1/60,45)
+        self.assertAlmostEqual(result["twist_step_max_deg"],2)
+        self.assertEqual(result["twist_jump_count"],0)
+
+    def test_thigh_only_noise_is_not_hidden_by_stable_feet(self):
+        h,source,oh,outputs=MetricsTests().sample()
+        for i,out in enumerate(outputs):
+            out["reference"]=[rotated_track([1,0,0,0]) for _ in range(10)]
+            out["candidates"]["test"]=[rotated_track([1,0,0,0]) for _ in range(10)]
+            out["candidates"]["test"][4]=rotated_track(rotation(2,80 if i%2 else -80))
+        report=score(h,source,oh,outputs)
+        thigh=next(d for d in report["details"] if d["role"]=="left_upper_leg")
+        foot=next(d for d in report["details"] if d["role"]=="left_foot")
+        self.assertAlmostEqual(thigh["rotation"]["same_time_twist_p95_deg"],80)
+        self.assertGreater(thigh["rotation"]["twist_jump_count"],100)
+        self.assertEqual(foot["rotation"]["twist_jump_count"],0)
+        self.assertEqual(report["case_summary"][0]["worst_twist_role"],"left_upper_leg")
+        self.assertAlmostEqual(thigh["rotation"]["same_time_swing_p95_deg"],0)
+
+    def test_freeze_cannot_win_on_jump_count_alone(self):
+        times=[i/60 for i in range(120)]
+        refs=[rotated_track(rotation(2,i*.8)) for i in range(120)]
+        outs=[rotated_track([1,0,0,0])]*120
+        m=rotation_metrics(times,list(range(120)),refs,outs,1/60,45)
+        self.assertEqual(m["twist_jump_count"],0)
+        self.assertEqual(m["twist_path_length_ratio"],0)
+        self.assertGreater(m["same_time_twist_p95_deg"],80)
+
+    def test_no_rate_or_jump_across_missing_reports(self):
+        identity=rotated_track([1,0,0,0])
+        turn=rotated_track(rotation(2,100))
+        for times,seqs,qs in (([0,1/60,2/60],[0,1,2],[identity,None,turn]),
+                              ([0,1/60],[0,2],[identity,turn]),
+                              ([0,1],[0,1],[identity,turn])):
+            m=rotation_metrics(times,seqs,qs,qs,1/60,45)
+            self.assertEqual(m["twist_step_support"],0)
+            self.assertIsNone(m["twist_jump_count"])
+
+    def test_swing_lag_known_delay_with_no_position_motion(self):
+        times=[i/60 for i in range(240)]
+        def q(t): return rotation(0,40*math.sin(4*t)+10*math.sin(9*t))
+        refs=[forward_vector(q(t)) for t in times]
+        outs=[forward_vector(q(t-.1)) for t in times]
+        self.assertEqual(estimate_lag(times,refs,outs,1/60)["lag_steps"],6)
+
+    def test_forward_bend_control_keeps_observed_feet_fixed(self):
+        _,rows=dataset()
+        rows=[r for r in rows if r["segment"]=="forward_bend_fixed_feet"]
+        self.assertEqual(len(rows),360)
+        for k in (15,16,20,21,22,23,24,25):
+            self.assertTrue(all(r["joints"][k]==rows[0]["joints"][k] for r in rows))
+        self.assertGreater(max(r["reference_joints"][18][1] for r in rows),.4)
 
 
 @unittest.skipUnless(os.environ.get("FITRA_TEMPORAL_REPLAY"), "set FITRA_TEMPORAL_REPLAY to test C++ replay")

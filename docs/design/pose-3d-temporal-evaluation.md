@@ -1,6 +1,8 @@
 # pose-3d: 後段補正の固定リプレイ評価器
 
 更新日: 2026-09-08。状態: M1（評価器と人工系列）実装、実録画・擬似教師での合否校正は未完了。
+追補: 回転診断を強化（metrics revision 2）。[観察ケース台帳](../research/pose-3d-evaluation-cases.md)に
+前屈時の腿twist不安定を、原因未確定の評価課題として記録した。本番処理は変更しない。
 関連: [時系列予測計画](../research/pose-3d-temporal-prediction-plan.md)、
 [Issue #65](https://github.com/1hira-c/fitra-cam/issues/65)。
 
@@ -103,10 +105,35 @@ JSONL先頭はheader（1行）:
 最低12点、低相関/凍結出力/等速や周期の曖昧一致は未評価。探索端はcensoredとして一覧の中央値から
 除きJSONに残す。サブレポート精度は主張しない。主誤差は**時間シフトせず**同時刻で計算する。
 
-M1のlagは位置のみ。開始/停止/反転のイベント遅れ、rotation lag、接地ラベルを使う足滑り、
-jump/overshoot・復帰時間の独立指標はM2。人工start_stop/dropoutはあるが専用合否は未実装。
+方向のlagはtrackerのlocal +Zをworldへ回した単位ベクトルの相関で、位置lagと独立に測る。
+これはswingの曲線診断であり、twistの遅れはまだ測らない。開始/停止/反転のイベント遅れ、
+接地ラベルを使う足滑り、位置jump/overshoot・復帰時間の独立指標はM2。
+人工start_stop/dropoutはあるが専用合否は未実装。
 `processing_ms`はCPU候補呼出しwall timeのみ（I/O/queue/GPU/送信除外）。逐次実行で他プロセスの
 負荷もあるため、live追加latencyの代替ではない。
+
+### 回転診断（metrics revision 2）
+
+- 同時刻の`conjugate(reference) * output`を参照local +Zまわりのswing/twistに分解する。
+  swingは骨軸のなす角、twistは符号付き最短残差（±180°）で、Euler角ではない。
+  p95はtwist絶対値。qと−qは同じ姿勢として扱う。
+- forwardがほぼ正反対（`hypot(delta.w, delta.z) < 1e-6`）ならtwistは非一意なので未定義。
+  また参照の`roll_confidence`が0/未収録なら参照不明。両者を別countにし、誤差0で埋めない。
+  C++ toolはreference/candidateのroll/swing confidenceを出力するが、live wireは変えない。
+  confidence>0も絶対正解の保証ではない。教師生成時のmaskと出自が別途必要。
+- 連続seq・有効quat・gap≤2.5 nominal reportの隣接ペアだけからtwist step/rateを計算する。
+  欠測や復帰の穴を跨がず、supportを併記。±180°wrapを358°ジャンプと誤認しない。
+- `--twist-jump-deg`（既定45°）以上のstepを診断countにする。これは合否閾値でなく、
+  実動作も数える。参照があるときは`max(0, abs(output_step)-abs(reference_step))`も出す。
+- 同じ有効隣接ペア上のtwist総移動量比（絶対step和）を出す。参照総量が5°未満なら未評価。
+  出力固定の0と、ノイズ増幅の大きな比を区別する補助指標。振幅そのものではなく、単独の合否にしない。
+- 部位・区間別JSONに加えてcase別の最悪部位twist誤差p95、急変count/support、未評価数を表にする。
+  全身中央値だけで局所破綻を隠さない。参照なしでもstep/rateは出せるが精度の良否は断定しない。
+- 採点器自身も入力の時刻/seq型、境界reset宣言、参照の有無を検証する。
+  candidate出力が境界を隠した場合に、前後の系列を黙って連結しない。
+
+人工系列に`forward_bend_fixed_feet`を追加。上体は前屈し観測足点は固定するが、
+これは実機症状の再現保証ではない。別の採点テストで腿だけの既知twist振動を注入して検出力を確認する。
 
 採らない案:
 
@@ -168,3 +195,13 @@ legacyフレーム穴、phase区切り、determinism、prefix causality、teache
   artifact: `outputs/temporal-eval/20260908-m1-final/{input,replay,report}.json*` と `report.md`。
 - runtimeソース変更なしのoffline tool追加のため、全target build/全CTest/新binaryでの実機受入れは
   今回実施せず、呼び出す既存filterと新評価器に検証を絞った。実録画/擬似教師の評価は未実施。
+
+### 回転診断追補の検証結果（2026-09-08）
+
+- offline toolをRelease再ビルド。focused CTest 4/4、評価器内unittest 27/27（skipなし）pass。
+- 位置150ms/方向100ms遅延、片腿のみ±80°twist振動、正しいtwistを消す固定出力、
+  world軸とreference-local軸の区別、±180°wrap、qの符号反転、参照不明・分解未定義、欠測を検証。
+- 6 scene × 360 = 2,160 reportsの人工系列を全3候補で再生し、
+  `outputs/temporal-eval/20260908-rotation-v2/report.{json,md}`を生成。
+- 実機のBEND-TWIST-001を再現・解決したという判定はしていない。runtimeコード/設定は変更せず、
+  実録画の擬似教師と体感校正、イベント指標は引き続き未完了。

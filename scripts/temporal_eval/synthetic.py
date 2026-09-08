@@ -28,7 +28,7 @@ def dataset(hz=60, seed=20260908):
               "time_basis":"synthetic_nominal", "provenance":{"generator":"synthetic.py", "seed":seed,
                   "startup_unscored_reports_per_scene":hz}}
     rows = []
-    for scene in ("static", "translation", "arm_swing", "start_stop", "dropout"):
+    for scene in ("static", "translation", "arm_swing", "start_stop", "dropout", "forward_bend_fixed_feet"):
         for i in range(6*hz):
             t = i/hz
             truth = pose()
@@ -46,7 +46,21 @@ def dataset(hz=60, seed=20260908):
                 dx = .25*max(0,min(t-1,1))-.25*max(0,min(t-3,1))
                 for p in truth:
                     if p: p[0] += dx
+            elif scene == "forward_bend_fixed_feet":
+                # Control case: torso leans while the true leg/foot pose is fixed.
+                # This is not a reproduction or causal explanation of the user's
+                # observed thigh-only twist instability.
+                theta = math.radians(70)*(.5-.5*math.cos(2*math.pi*t/3))
+                for k in (0,5,6,7,8,9,10,17,18):
+                    x,y,z,_ = truth[k]
+                    z -= .95
+                    truth[k][:3] = [x,y*math.cos(theta)+z*math.sin(theta),
+                                   .95+z*math.cos(theta)-y*math.sin(theta)]
             noisy = [[p[c]+rng.gauss(0,.003) for c in range(3)]+[p[3]] if p else None for p in truth]
+            if scene == "forward_bend_fixed_feet":
+                # Stable observed ankles/toes/heels. Hip/knee/body noise remains.
+                for k in (15,16,20,21,22,23,24,25):
+                    noisy[k] = list(truth[k])
             boundary = scene == "dropout" and 2*hz <= i < 2*hz+6
             if scene == "dropout" and 3*hz <= i < 3*hz+5:
                 for k in (15,20,22,24): noisy[k] = None

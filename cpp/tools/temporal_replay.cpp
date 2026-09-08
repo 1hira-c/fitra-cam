@@ -59,7 +59,8 @@ void write_trackers(std::ostream& out, const Trackers& trackers) {
             if (c) out << ',';
             out << t.quat_wxyz[c];
         }
-        out << "]}";
+        out << "],\"roll_confidence\":" << t.roll_confidence
+            << ",\"swing_confidence\":" << t.swing_confidence << '}';
     }
     out << ']';
 }

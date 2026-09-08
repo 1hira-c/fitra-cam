@@ -70,6 +70,88 @@ def rotation_spread(quats):
     return rms([angle_deg(q, center) for q in qs])
 
 
+def swing_twist_deg(reference, output):
+    """Relative rotation in reference-local coordinates, forward axis +Z.
+
+    Swing is the angle between bone directions. Twist is the signed shortest
+    residual about +Z, not an Euler angle. At an antiparallel forward direction
+    (180-degree swing), twist is not uniquely defined and is returned as None.
+    """
+    aw, ax, ay, az = unit_quat(reference)
+    bw, bx, by, bz = unit_quat(output)
+    # conjugate(reference) * output
+    w = aw*bw + ax*bx + ay*by + az*bz
+    x = aw*bx - ax*bw - ay*bz + az*by
+    y = aw*by + ax*bz - ay*bw - az*bx
+    z = aw*bz - ax*by + ay*bx - az*bw
+    projected = math.hypot(w, z)
+    swing = math.degrees(2*math.atan2(math.hypot(x, y), projected))
+    twist = None if projected < 1e-6 else (math.degrees(2*math.atan2(z, w))+180) % 360-180
+    return swing, twist
+
+
+def forward_vector(quat):
+    w, x, y, z = unit_quat(quat)
+    return [2*(x*z+w*y), 2*(y*z-w*x), 1-2*(x*x+y*y)]
+
+
+def rotation_metrics(times, seqs, refs, outs, nominal_s, jump_deg):
+    swings, twists = [], []
+    reference_pairs = 0
+    unobservable_reference = 0
+    for ref, out in zip(refs, outs):
+        if ref is None or out is None:
+            continue
+        reference_pairs += 1
+        swing, twist = swing_twist_deg(ref["quat_wxyz"], out["quat_wxyz"])
+        swings.append(swing)
+        # A forward-only reference may contain an arbitrary valid quaternion.
+        # Missing legacy observability metadata is unknown, not full confidence.
+        if ref.get("roll_confidence", 0) <= 0:
+            unobservable_reference += 1
+        elif twist is not None:
+            twists.append(abs(twist))
+    rates, steps, excesses = [], [], []
+    reference_steps, output_steps = [], []
+    for i in range(1, len(times)):
+        dt = times[i]-times[i-1]
+        # Never turn a dropout or reappearance into an apparent per-frame jump.
+        if seqs[i] != seqs[i-1]+1 or not 0 < dt <= 2.5*nominal_s:
+            continue
+        if outs[i-1] is None or outs[i] is None:
+            continue
+        _, out_twist = swing_twist_deg(outs[i-1]["quat_wxyz"], outs[i]["quat_wxyz"])
+        if out_twist is None:
+            continue
+        step = abs(out_twist)
+        steps.append(step)
+        rates.append(step/dt)
+        if (refs[i-1] is None or refs[i] is None or refs[i-1].get("roll_confidence", 0) <= 0
+                or refs[i].get("roll_confidence", 0) <= 0):
+            continue
+        _, ref_twist = swing_twist_deg(refs[i-1]["quat_wxyz"], refs[i]["quat_wxyz"])
+        if ref_twist is not None:
+            reference_steps.append(abs(ref_twist))
+            output_steps.append(step)
+            excesses.append(max(0, step-abs(ref_twist)))
+    ref_path = sum(reference_steps)
+    return {"same_time_swing_p95_deg": percentile(swings, .95),
+            "same_time_twist_p95_deg": percentile(twists, .95),
+            "twist_reference_pairs": reference_pairs, "twist_defined_pairs": len(twists),
+            "twist_unobservable_reference_pairs": unobservable_reference,
+            "twist_undefined_pairs": reference_pairs-len(twists)-unobservable_reference,
+            "twist_step_p95_deg": percentile(steps, .95),
+            "twist_step_max_deg": max(steps) if steps else None,
+            "twist_rate_p95_deg_s": percentile(rates, .95), "twist_step_support": len(steps),
+            "twist_jump_count": sum(s >= jump_deg for s in steps) if steps else None,
+            "excess_twist_step_p95_deg": percentile(excesses, .95),
+            "twist_path_pair_support": len(reference_steps),
+            "reference_twist_path_deg": ref_path if reference_steps else None,
+            # Path length, not amplitude: high-frequency jitter can inflate it.
+            # Always read alongside same-time error and jump/coverage metrics.
+            "twist_path_length_ratio": sum(output_steps)/ref_path if ref_path >= 5 else None}
+
+
 def estimate_lag(times, reference, output, nominal_s, max_steps=15):
     """Diagnostic only. Positive lag means output follows an older reference.
 
@@ -78,6 +160,14 @@ def estimate_lag(times, reference, output, nominal_s, max_steps=15):
     Returns no estimate for frozen outputs or insufficient/nonunique evidence.
     """
     import bisect
+
+    empty = {"lag_steps": None, "lag_ms": None, "correlation": None,
+             "support": 0, "at_search_boundary": False}
+    for vectors, reason in ((reference, "reference_motion_unobservable"),
+                            (output, "frozen_or_unobservable_output")):
+        available = [v for v in vectors if v is not None]
+        if len(available) >= 2 and spread(available) < 1e-5:
+            return {**empty, "reason": reason}
 
     def interpolate(t):
         j = bisect.bisect_left(times, t)
@@ -135,24 +225,34 @@ def validate_tracker(t):
     if len(p) != 3 or not all(math.isfinite(x) for x in p):
         raise ValueError("invalid output position")
     unit_quat(t["quat_wxyz"])
+    for field in ("roll_confidence", "swing_confidence"):
+        if field in t and (not math.isfinite(t[field]) or not 0 <= t[field] <= 1):
+            raise ValueError("invalid rotation confidence")
 
 
-def score(input_header, source, output_header, outputs):
+def score(input_header, source, output_header, outputs, twist_jump_deg=45.0):
     if input_header["schema"] != "fitra_temporal_input_v1" or output_header["schema"] != "fitra_temporal_output_v1":
         raise ValueError("unsupported schema")
-    if len(source) != len(outputs):
+    if not source or len(source) != len(outputs):
         raise ValueError("output dropped/added reports")
+    if not math.isfinite(twist_jump_deg) or not 0 < twist_jump_deg <= 180:
+        raise ValueError("twist jump diagnostic threshold must be in (0, 180]")
     hz = float(input_header["nominal_hz"])
-    if not math.isfinite(hz) or hz <= 0 or hz != output_header["nominal_hz"]:
+    if not math.isfinite(hz) or not 5 <= hz <= 240 or hz != output_header["nominal_hz"]:
         raise ValueError("invalid/mismatched report frequency")
     candidates = output_header["candidates"]
     if not candidates or len(candidates) != len(set(candidates)):
         raise ValueError("missing/duplicate candidate names")
     groups, previous_time, previous_seq, previous_segment = {}, -1, -1, None
     previous_phase = None
+    previous_fresh = False
     run = 0
     missing_sequence_reports = 0
     for s, o in zip(source, outputs):
+        if any(type(s[k]) is not int or s[k] < 0 for k in ("seq", "t_ns")):
+            raise ValueError("source time and sequence must be nonnegative integers")
+        if not isinstance(s["segment"], str) or not s["segment"]:
+            raise ValueError("nonempty continuity segment required")
         if (s["seq"], s["t_ns"]) != (o["seq"], o["t_ns"]):
             raise ValueError("reference/output time or sequence misalignment")
         if s["t_ns"] <= previous_time:
@@ -163,6 +263,11 @@ def score(input_header, source, output_header, outputs):
             missing_sequence_reports += s["seq"]-previous_seq-1
         if s["state"] not in ("fresh", "boundary"):
             raise ValueError("unknown source state")
+        fresh = s["state"] == "fresh"
+        required_reset = (not fresh or not previous_fresh or s["segment"] != previous_segment
+                          or s["t_ns"]-previous_time > 500_000_000)
+        if type(o["reset"]) is not bool or (required_reset and not o["reset"]):
+            raise ValueError("output omitted required lifecycle reset")
         phase = s.get("phase", "unlabelled")
         # Never combine separate still poses into a false static-jitter window.
         if (o["reset"] or s["segment"] != previous_segment or phase != previous_phase
@@ -177,6 +282,8 @@ def score(input_header, source, output_header, outputs):
                 validate_tracker(t)
             if s["state"] == "boundary" and any(t is not None for t in ts):
                 raise ValueError("boundary output must be unavailable")
+        if input_header["reference_kind"] == "none" and any(r is not None for r in o["reference"]):
+            raise ValueError("reference present despite reference_kind=none")
         if phase not in ("static", "motion", "unlabelled"):
             raise ValueError("unknown phase")
         if type(s.get("evaluate", True)) is not bool:
@@ -187,10 +294,12 @@ def score(input_header, source, output_header, outputs):
             groups.setdefault((run, s["segment"], phase), []).append((s, o))
         previous_time, previous_seq, previous_segment = s["t_ns"], s["seq"], s["segment"]
         previous_phase = phase
+        previous_fresh = fresh
 
     details = []
     for (run, segment, phase), rows in groups.items():
         times = [(s["t_ns"]-rows[0][0]["t_ns"])*1e-9 for s, _ in rows]
+        seqs = [s["seq"] for s, _ in rows]
         for role, name in enumerate(ROLES):
             refs = [o["reference"][role] for _, o in rows]
             expected = sum(r is not None for r in refs)
@@ -205,6 +314,9 @@ def score(input_header, source, output_header, outputs):
                 out_spread = spread([y["position_m"] for _, y in pairs])
                 lag = estimate_lag(times, [r["position_m"] if r else None for r in refs],
                                    [y["position_m"] if y else None for y in outs], 1/hz) if phase == "motion" else None
+                swing_lag = estimate_lag(times,
+                    [forward_vector(r["quat_wxyz"]) if r else None for r in refs],
+                    [forward_vector(y["quat_wxyz"]) if y else None for y in outs], 1/hz) if phase == "motion" else None
                 details.append({"run": run, "segment": segment, "phase": phase, "role": name,
                     "candidate": candidate, "reports": len(rows), "reference_available": expected,
                     "paired": len(pairs), "output_available": len(values),
@@ -215,7 +327,8 @@ def score(input_header, source, output_header, outputs):
                     "static_rotation_rms_deg": rotation_spread(rotations) if phase == "static" else None,
                     "motion_amplitude_ratio": out_spread/ref_spread if phase == "motion" and
                         ref_spread is not None and ref_spread > .001 else None,
-                    "position_lag": lag})
+                    "position_lag": lag, "swing_lag": swing_lag,
+                    "rotation": rotation_metrics(times, seqs, refs, outs, 1/hz, twist_jump_deg)})
     summary = {}
     for candidate in candidates:
         ds = [d for d in details if d["candidate"] == candidate]
@@ -237,18 +350,38 @@ def score(input_header, source, output_header, outputs):
             "median_motion_amplitude_ratio": median_field("motion_amplitude_ratio"),
             "reference_coverage": sum(d["paired"] for d in ds)/sum(d["reference_available"] for d in ds)
                 if sum(d["reference_available"] for d in ds) else None}
-    return {"schema": "fitra_temporal_report_v1", "reference_kind": input_header["reference_kind"],
+    cases = []
+    for segment in dict.fromkeys(d["segment"] for d in details):
+        for candidate in candidates:
+            ds = [d for d in details if d["segment"] == segment and d["candidate"] == candidate]
+            defined = [d for d in ds if d["rotation"]["same_time_twist_p95_deg"] is not None]
+            worst = max(defined, key=lambda d: d["rotation"]["same_time_twist_p95_deg"]) if defined else None
+            supported = [d for d in ds if d["rotation"]["twist_step_support"] > 0]
+            cases.append({"segment": segment, "candidate": candidate,
+                "worst_twist_p95_deg": worst["rotation"]["same_time_twist_p95_deg"] if worst else None,
+                "worst_twist_role": worst["role"] if worst else None,
+                "twist_jump_count": sum(d["rotation"]["twist_jump_count"] for d in supported) if supported else None,
+                "twist_step_support": sum(d["rotation"]["twist_step_support"] for d in ds),
+                "twist_unobservable_reference_pairs": sum(d["rotation"]["twist_unobservable_reference_pairs"] for d in ds),
+                "twist_undefined_pairs": sum(d["rotation"]["twist_undefined_pairs"] for d in ds)})
+    return {"schema": "fitra_temporal_report_v1", "metrics_revision": 2,
+            "reference_kind": input_header["reference_kind"],
             "time_basis": input_header["time_basis"], "source_provenance": input_header.get("provenance", {}),
             "replay_settings": output_header, "reports": len(source),
             "unscored_reports": sum(not s.get("evaluate", True) for s in source),
             "missing_sequence_reports": missing_sequence_reports,
             "acceptance": "not_calibrated_against_human_AB",
+            "diagnostic_thresholds": {"twist_jump_deg": twist_jump_deg,
+                                      "minimum_reference_twist_path_deg": 5},
             "limitations": ["Offline filter response, not capture-to-display latency.",
                 "One update per report; live paced re-sampling is not emulated.",
-                "Lag is a position-curve diagnostic, not onset/stop/rotation delay.",
+                "Position/swing lag are curve diagnostics, not onset/stop/twist or display delay.",
+                "Twist is undefined at antiparallel bone directions; missing decomposition is not zero error.",
+                "Reference roll_confidence=0 or missing is unobservable, never a zero twist error.",
+                "Twist jumps/rates are diagnostics, not defects without motion/reference context.",
                 "No automatic winner: coverage, amplitude and per-role failures must be checked.",
                 "Missing reference is unavailable, never zero error; synthetic/pseudo labels are not measured ground truth."],
-            "summary": summary, "details": details}
+            "summary": summary, "case_summary": cases, "details": details}
 
 
 def digest(path):
@@ -275,6 +408,18 @@ def markdown(report):
               "median_same_time_rmse_mm", "median_motion_amplitude_ratio", "reference_coverage")
     for name, s in report["summary"].items():
         lines.append(f"| {name} | " + " | ".join(f(s[k]) for k in fields) + " |")
+    lines.extend(["", "## ケース別の回転診断", "",
+        "全体中央値に埋もれる局所的な暴れを確認する表です。ひねり誤差は同時刻参照に対する値。",
+        f"急変は連続レポート間で {report['diagnostic_thresholds']['twist_jump_deg']:g}° 以上という診断用しきい値で、合否ではありません。",
+        "", "| ケース | 設定 | 最悪部位のひねり誤差p95 ° | 部位 | 急変回数 / 有効step | 参照不明 / 分解未定義 |",
+        "|---|---|---:|---|---:|---:|"])
+    def cell(value):
+        return str(value).replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+    for c in report["case_summary"]:
+        jumps = "—" if c["twist_jump_count"] is None else str(c["twist_jump_count"])
+        lines.append(f"| {cell(c['segment'])} | {cell(c['candidate'])} | {f(c['worst_twist_p95_deg'])} | "
+                     f"{c['worst_twist_role'] or '—'} | {jumps} / {c['twist_step_support']} | "
+                     f"{c['twist_unobservable_reference_pairs']} / {c['twist_undefined_pairs']} |")
     lines.extend(["", "`minimal`もIK・床補正・信頼度ゲートを含みます。小さい揺れだけで優勝を決めません。",
                   "擬似教師との同時刻誤差は時間合わせなし。lag探索は別指標です。",
                   "部位・区間別、欠測率、探索端に達したlagは同名JSONで確認してください。", ""])
@@ -288,6 +433,8 @@ def main():
     parser.add_argument("report", type=Path, help="new JSON report; also writes .md")
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--subject-profile", type=Path)
+    parser.add_argument("--twist-jump-deg", type=float, default=45,
+                        help="diagnostic jump threshold, not an acceptance threshold")
     args = parser.parse_args()
     md = args.report.with_suffix(".md")
     if args.report == md or args.report.exists() or md.exists():
@@ -295,7 +442,7 @@ def main():
     ih, rows = read_jsonl(args.input)
     oh, outputs = read_jsonl(args.output)
     verify_input_binding(args.input, oh)
-    report = score(ih, rows, oh, outputs)
+    report = score(ih, rows, oh, outputs, args.twist_jump_deg)
     report["artifacts"] = {name: {"path": str(path.resolve()), "sha256": digest(path)}
                            for name, path in (("input", args.input), ("output", args.output),
                                               ("binary", args.binary), ("subject_profile", args.subject_profile)) if path}
