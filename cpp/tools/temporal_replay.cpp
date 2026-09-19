@@ -33,7 +33,7 @@ infer::Skeleton3D skeleton(const YAML::Node& values) {
         auto& j = result.joints[i];
         j = {v[0].as<float>(), v[1].as<float>(), v[2].as<float>(), v[3].as<float>(), true};
         require(std::isfinite(j.x) && std::isfinite(j.y) && std::isfinite(j.z)
-                    && std::isfinite(j.score) && j.score >= 0 && j.score <= 1,
+                    && std::isfinite(j.score) && j.score >= 0,
                 "nonfinite joint or invalid score");
     }
     return result;

@@ -1,6 +1,7 @@
 # pose-3d: 後段補正の固定リプレイ評価器
 
-更新日: 2026-09-08。状態: M1（評価器と人工系列）実装、実録画・擬似教師での合否校正は未完了。
+更新日: 2026-09-19。状態: M1実装、M2のlegacy実録画2視点pilotへ進行。
+擬似教師・3視点時刻付き再生・体感との合否校正は未完了。
 追補: 回転診断を強化（metrics revision 2）。[観察ケース台帳](../research/pose-3d-evaluation-cases.md)に
 前屈時の腿twist不安定を、原因未確定の評価課題として記録した。本番処理は変更しない。
 関連: [時系列予測計画](../research/pose-3d-temporal-prediction-plan.md)、
@@ -75,6 +76,8 @@ JSONL先頭はheader（1行）:
 `state`（`fresh` / `boundary`）、`phase`（`static` / `motion` / `unlabelled`）、
 `joints`、任意の`reference_joints`。関節はHalpe順26要素で各要素が`[x_m,y_m,z_m,score]`または`null`。
 欠損をゼロ座標にしない。
+`score`は有限の非負値で、確率ではない。RTMPoseのSimCC最大値およびそのtriangulation平均には
+1超があり、productionと同様にそのまま渡す。0〜1へ丸めたり高スコアを欠測へ変換したりしない。
 
 - `reference_kind`: `none` / `synthetic_known` / `pseudo`。
 - `time_basis`: `measured_report` / `synthetic_nominal` / `nominal_from_legacy_frames`。
@@ -172,6 +175,44 @@ python3 scripts/temporal_eval/evaluate.py INPUT.jsonl OUTPUT.jsonl REPORT.json \
 参照なし実録画では追従誤差/lagを空欄にし、静止区間の揺れ等だけを出す。
 C++失敗時の部分outputは採点せず新規pathで再実行する（自動削除/上書きしない）。
 
+### Legacy録画の再現可能なpilot（2026-09-19）
+
+`scripts/temporal_eval/run_recording.py`は`record_3cam`形式の`meta.json`と元映像から
+**cam0/1だけ**を既存dump toolで処理し、全後段OFFのraw→3候補replay→reportを一括生成する。
+既存toolは2視点専用であり、3カメラliveの再現と呼ばない。cam2は使用しない。
+ファイル名cam0/1をmetadata内で照合し、配列の並びからcameraを推測しない。
+
+```bash
+python3 scripts/temporal_eval/run_recording.py RECORDING_DIR NEW_OUTPUT_DIR \
+  --dump-binary /absolute/path/to/dump_keypoints_3d \
+  --replay-binary cpp/build/tools/temporal_replay \
+  --calib /absolute/path/to/frozen-extrinsics.yaml \
+  --det-engine /absolute/path/to/yolox_s.fp16.engine \
+  --pose-engine /absolute/path/to/rtmpose_m_halpe26.fp16.engine \
+  --subject-profile /absolute/path/to/subject-profile.yaml --subject-height-m 1.7
+```
+
+- outputは新規directoryのみ。開始前に原動画・metadata・calibration・profile・engine・binary・
+  解析scriptsのSHA-256と実行argvを`manifest.json`へ保存する。終了時にも入力hashを検査。
+  `complete.json`がない実行は未完了。失敗時のraw/log/manifestは残す。
+- 期待したframe数/連番が出なければ採点へ進まず、decode途中終了を成功扱いしない。
+- 時刻はcam0のmetadata平均FPSに基づく`nominal_from_legacy_frames`。
+  同じframe番号をペアにするだけであり、実測のcapture間隔/skew/同期やlive latencyは不明。
+  `frames.csv`がある録画はこのadapterで処理せず、時刻を利用できるadapterへ回す。
+- calibration/profileの対応はoperator選択。hashは選択の再現性を保証するだけで、収録時の
+  正しい校正だったことを証明しない。`latest`でも参照先の絶対pathとhashを残す。
+- phaseは既定`unlabelled`。ファイル名から静止を推定しない。
+  `--labels FILE`は`fitra_temporal_labels_v1`、`evidence`、`intervals`を持つJSON。
+  intervalは`start_frame`以上`end_frame`未満、`phase`と任意のboolean `evaluate`。
+  順序逆転/重複/範囲外を拒否し、未ラベル部分はunlabelled。ラベル変更でfilter履歴はresetしない。
+- 試験用の静止ラベルは映像1Hzサンプルの確認に基づく暫定値。真の身体動揺を含む出力RMSであり、
+  厳密な無動作区間・純粋な推定ノイズ・GT一致とはしない。
+
+実データでscore>1の拒否を発見し、importとC++ readerをproductionの非負score契約へ合わせた。
+前屈pilot初回は1186フレームの生成後、この検証で停止。失敗artifactは保存し、新規v2で再実行した。
+ライブコード・既定設定・wireは変更しない。
+追加収録の依頼手順は[短時間収録プロトコル](../research/pose-3d-temporal-capture-protocol.md)。
+
 ## Milestoneと検証
 
 1. **M1（今回）**: 同一入力3設定、時刻契約、人工系列、raw dump adapter、レポート、回帰テスト。
@@ -205,3 +246,19 @@ legacyフレーム穴、phase区切り、determinism、prefix causality、teache
   `outputs/temporal-eval/20260908-rotation-v2/report.{json,md}`を生成。
 - 実機のBEND-TWIST-001を再現・解決したという判定はしていない。runtimeコード/設定は変更せず、
   実録画の擬似教師と体感校正、イベント指標は引き続き未完了。
+
+### 実録画pilotの検証結果（2026-09-19）
+
+- Release `fitra_temporal_replay` build、focused CTest 4/4、unittest 34/34（skipなし）pass。
+  C++ reader/importで1超scoreを保持し、負値/非有限値拒否を確認。
+- `outputs/records/still`全1185、`forward_bend`全1186フレームをGPUで再推論し3候補で比較。
+  原本/成果物の完了hashを照合。出力は通常workspaceの
+  `outputs/temporal-eval/20260919-real-{still,forward-bend}-v2/`。
+  入口レポート: `outputs/temporal-eval/20260919-real-pilot-summary.md`。
+- 静止の暫定ラベル範囲で位置RMSの部位中央値はminimal 6.602mm / kalman 5.401mm /
+  current 4.807mm。身体動揺を含む。遅延・参照誤差は未評価なので優勝を決めない。
+- 前屈録画では左腿の45°以上twist stepが8/836・7/1153・5/1153、左足はいずれも0。
+  分母は有効隣接step。左側出力利用可能数はminimal 877/1186、Kalmanあり1155/1186と異なる。
+  欠測/補完・真の動作・startupが混在し、症状再現/原因特定や精度順位の証拠ではない。
+- 全target/full CTestはoffline変更に範囲を絞るため未実施。新規実機収録・HMD受入れ・
+  3視点時刻付き再生・教師生成/体感校正も未実施。本番処理や稼働設定は変更していない。

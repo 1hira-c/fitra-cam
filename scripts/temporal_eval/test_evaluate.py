@@ -279,6 +279,15 @@ class ReplayTests(unittest.TestCase):
         h["input_stage"]="post_kalman"
         self.run_replay(rows[1:2],header=h,expect_ok=False)
 
+    def test_nonnegative_simcc_score_above_one_is_accepted(self):
+        _, rows = dataset()
+        rows = rows[:2]
+        rows[0]["joints"][19][3] = 1.0332
+        _, output = self.run_replay(rows)
+        self.assertEqual(len(output), 2)
+        rows[0]["joints"][19][3] = -0.1
+        self.run_replay(rows, expect_ok=False)
+
     def test_synthetic_three_candidates_score_without_nan(self):
         h,rows=dataset()
         oh,out=self.run_replay(rows)

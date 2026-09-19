@@ -140,6 +140,17 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-19 — 実録画pilotの再実行・出自管理
+
+既存録画から全後処理OFFのraw 3Dを生成し3候補で比較するrunnerを追加。
+入力/モデル/校正/profile/binary/scriptのSHA-256、実行argv、途中失敗と完了の区別を保存する。
+区間ラベルは明示指定、未確認部分はunlabelled。重複/範囲外を拒否し履歴は維持する。
+実データでRTMPose score>1の拒否を発見。import/C++ readerを有限非負scoreへ修正し、丸めず保存。
+これはcam0/1のlegacy nominal時刻pilotであり、3視点live・擬似教師・体感校正は未完了。
+本番設定/処理は変更しない。追加収録は約2分の動作セットを計画し、時刻付き入口の確認を先行する。
+→ [設計・実行手順](../design/pose-3d-temporal-evaluation.md)、
+[収録プロトコル](../research/pose-3d-temporal-capture-protocol.md)。
+
 ### 2026-09-08 — 評価器の回転診断と観察ケース台帳
 
 前屈時の「つま先は安定、腿のひねりだけ暴れる」という目視を原因未確定で記録。

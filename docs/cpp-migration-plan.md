@@ -326,6 +326,12 @@ fitra-cam/
 前屈時の腿twistは[観察ケース台帳](research/pose-3d-evaluation-cases.md)で原因未確定のまま管理し、
 人工対照・局所回転のfault injectionで評価器の検出力を検証する。本番補正の変更ではない。
 
+2026-09-19: legacy実録画2視点pilot runnerを追加。元動画/校正/model/profile/binaryのhashと
+実行argv、完了マーカーを保存し、出力取り違え・入力変更・decode途中終了を検出する。
+暫定区間ラベルの検証、SimCCの1超score保持を回帰対象に追加。
+cam0/1の同frame番号による名目時刻比較であり、3カメラ同期やlive遅延の証拠とはしない。
+追加収録・擬似教師での校正は[収録プロトコル](research/pose-3d-temporal-capture-protocol.md)を参照。
+
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|
 | 0     | `cmake --build cpp/build && ./cpp/build/main --help`        | リンク成功、TRT runtime が初期化できる                                         |

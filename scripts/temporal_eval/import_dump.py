@@ -40,8 +40,10 @@ def convert(path, hz, height, segment, phase):
                 for j in js:
                     if len(j) != 5 or type(j[4]) is not bool:
                         raise ValueError("joint must be [x,y,z,score,valid]")
-                    if j[4] and (not all(isinstance(x, (int,float)) and math.isfinite(x) for x in j[:4])
-                                  or not 0 <= j[3] <= 1):
+                    # SimCC maxima are nonnegative scores, not probabilities.
+                    # Production RTMPose/triangulation preserve values above 1.
+                    if j[4] and (not all(type(x) in (int,float) and math.isfinite(x) for x in j[:4])
+                                  or j[3] < 0):
                         raise ValueError("invalid valid-joint value")
                     joints.append(j[:4] if j[4] else None)
             fresh = joints is not None and any(j is not None for j in joints)
