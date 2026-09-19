@@ -331,6 +331,11 @@ fitra-cam/
 暫定区間ラベルの検証、SimCCの1超score保持を回帰対象に追加。
 cam0/1の同frame番号による名目時刻比較であり、3カメラ同期やlive遅延の証拠とはしない。
 追加収録・擬似教師での校正は[収録プロトコル](research/pose-3d-temporal-capture-protocol.md)を参照。
+同日: 既存event recorderによる3台7688 framesのローカル収録・正常停止、
+checksum/byte範囲/sequence/kernel SOE時刻を確認。検査器は時刻欠損非補完・wrap・
+未完了拒否・非再利用groupingを回帰対象とする。raw capture全体からのoffline索引であり、
+production推論後matcherやtracker scheduleを再現しない。
+詳細: [corpus qualification](design/pose-3d-corpus-qualification.md)。
 
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|

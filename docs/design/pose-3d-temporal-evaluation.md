@@ -2,6 +2,8 @@
 
 更新日: 2026-09-19。状態: M1実装、M2のlegacy実録画2視点pilotへ進行。
 擬似教師・3視点時刻付き再生・体感との合否校正は未完了。
+同日追補: [時刻付き原本の収録確認・3視点索引](pose-3d-corpus-qualification.md)を実装・実機確認。
+3視点のraw 3D再推論adapterは未実装であり、従来の2視点pilotと区別する。
 追補: 回転診断を強化（metrics revision 2）。[観察ケース台帳](../research/pose-3d-evaluation-cases.md)に
 前屈時の腿twist不安定を、原因未確定の評価課題として記録した。本番処理は変更しない。
 関連: [時系列予測計画](../research/pose-3d-temporal-prediction-plan.md)、

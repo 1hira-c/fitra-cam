@@ -140,6 +140,16 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-19 — 時刻付き3カメラ原本の実機収録確認
+
+既存event recorderをVMT出力/remote転送なし・90秒上限で起動するwrapperと、
+closed corpusのchecksum/offset/sequence/時刻検査・3視点captureグループ索引を追加。
+ユーザーの立位・退出を3台7688 framesに保存、9 segmentを照合。欠損timestamp/sequence穴/
+recorder dropは0、SOE基準15ms窓2492組、skew p95=12.1905ms。完全同期とは判定しない。
+中央付近の3画像で全身と1280×960 decodeを確認。原本→3D再推論・教師・体感校正は未実装。
+本番source/config/wireは変更しない。
+→ [設計・実機結果](../design/pose-3d-corpus-qualification.md)。
+
 ### 2026-09-19 — 実録画pilotの再実行・出自管理
 
 既存録画から全後処理OFFのraw 3Dを生成し3候補で比較するrunnerを追加。
