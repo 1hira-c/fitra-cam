@@ -159,3 +159,7 @@ cam2は1tagしか検出できず、全域の合格とはしない。床配置変
 新規toolsをRelease build、関連CTest 5/5（内部Python 55件、skipなし）pass、CLI helpとdiff検査を確認。
 standalone評価toolが対象のため全アプリtarget/full CTestは未実施。新規runtime依存なし。
 GPU原本再推論の成功は本番のpaced更新・VR表示品質・追加遅延の実機受入れではない。
+
+同日追補: [床タグによる校正救済と保存済み2Dの再三角測量](pose-3d-corpus-calibration-rescue.md)を実装。
+通常runのcapture校正一致制約は維持し、校正を変える試験は明示的なderived-runとして扱う。
+元校正controlはM/Lとも数値差0。cam0/1候補で静止揺れは減ったが、全身教師の支持不足は残った。

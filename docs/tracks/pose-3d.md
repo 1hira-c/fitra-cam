@@ -140,6 +140,16 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-22 — 原本の床タグ校正候補と保存済み2D再三角測量
+
+CPU tool `corpus_geometry`と校正/derived-run wrapperを追加。推定/検証画像を時間帯で分け、
+失敗cameraは元校正を保持。capture-boundの校正制約は緩めず、派生runに変更出自を残す。
+M/L各2,492組の旧校正controlは元3Dと最大差0。cam0/1候補を使い、cam2は検証悪化で保持した。
+立位minimalの位置揺れ中央値は8.518→3.999mmだが、参照有効率は0%のままで誤差/lagは未評価。
+品質条件や本番filterを調整して採点を成立させることはしていない。校正・2D関節の切り分けを続ける。
+Release tool build、関連CTest 7/7（Python 63件）pass。元校正/設定/subject/mapは不変、live未適用。
+→ [校正救済の設計・結果](../design/pose-3d-corpus-calibration-rescue.md)。
+
 ### 2026-09-22 — 時刻付き3視点raw 3D再生と未来文脈の暫定参照
 
 `corpus_infer` / `run_corpus.py`で検証済みraw JPEG原本を同一3視点groupから再推論し、

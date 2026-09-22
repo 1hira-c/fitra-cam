@@ -109,6 +109,14 @@ def validate_pair(student_manifest, student_done, teacher_manifest, teacher_done
             raise ValueError("teacher/candidate geometry, detector, or capture mismatch")
     if student_manifest["assets"]["pose_engine"]["sha256"] == teacher_manifest["assets"]["pose_engine"]["sha256"]:
         raise ValueError("teacher must use a distinct pose engine")
+    student_derived = student_manifest.get("calibration_derivation")
+    teacher_derived = teacher_manifest.get("calibration_derivation")
+    if bool(student_derived) != bool(teacher_derived):
+        raise ValueError("cannot mix capture-bound and derived calibration runs")
+    if student_derived:
+        for key in ("calibration_complete", "original_calib", "geometry_binary"):
+            if student_derived[key] != teacher_derived[key]:
+                raise ValueError("teacher/candidate calibration derivation mismatch")
 
 
 def main():

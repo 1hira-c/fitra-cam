@@ -1,5 +1,10 @@
 # Standalone CLI tools that consume the fitra_infer library.
 
+add_executable(fitra_corpus_geometry corpus_geometry.cpp)
+target_link_libraries(fitra_corpus_geometry PRIVATE fitra_lift yaml-cpp::yaml-cpp opencv_imgcodecs)
+set_target_properties(fitra_corpus_geometry PROPERTIES OUTPUT_NAME "corpus_geometry"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+
 add_executable(fitra_corpus_infer corpus_infer.cpp)
 target_link_libraries(fitra_corpus_infer PRIVATE fitra_infer fitra_lift yaml-cpp::yaml-cpp opencv_imgcodecs)
 set_target_properties(fitra_corpus_infer PROPERTIES OUTPUT_NAME "corpus_infer"
@@ -859,6 +864,7 @@ find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME test_temporal_eval COMMAND ${CMAKE_COMMAND} -E env
         "FITRA_TEMPORAL_REPLAY=$<TARGET_FILE:fitra_temporal_replay>"
+        "FITRA_CORPUS_GEOMETRY=$<TARGET_FILE:fitra_corpus_geometry>"
         ${Python3_EXECUTABLE} -m unittest discover
         -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/temporal_eval" -v)
     set_tests_properties(test_temporal_eval PROPERTIES TIMEOUT 120)
