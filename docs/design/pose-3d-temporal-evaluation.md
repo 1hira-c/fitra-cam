@@ -1,6 +1,7 @@
 # pose-3d: 後段補正の固定リプレイ評価器
 
 更新日: 2026-09-22。状態: M1実装、M2の時刻付き3視点raw 3D再生と暫定擬似参照へ進行。
+股関節の観測不確かさは[股関節のみの固定対照](pose-3d-hip-observation-sensitivity.md)で段階別に評価する。
 体感との合否校正は未完了。[収録確認・3視点adapter](pose-3d-corpus-qualification.md)を参照。
 capture基準の3視点再生と、従来の時刻を失った2視点legacy pilotを区別する。
 追補: 回転診断を強化（metrics revision 2、参照可用性と完全回転誤差の扱いはrevision 3）。[観察ケース台帳](../research/pose-3d-evaluation-cases.md)に
@@ -247,6 +248,17 @@ python3 scripts/temporal_eval/run_recording.py RECORDING_DIR NEW_OUTPUT_DIR \
 前屈pilot初回は1186フレームの生成後、この検証で停止。失敗artifactは保存し、新規v2で再実行した。
 ライブコード・既定設定・wireは変更しない。
 追加収録の依頼手順は[短時間収録プロトコル](../research/pose-3d-temporal-capture-protocol.md)。
+
+### 股関節のみの感度診断（2026-09-22）
+
+`temporal_replay ... [--diagnostics]`で、候補の計算を変更せずpost-Kalman/post-IKのjointと
+床・伸展補正を使った抽出直後のtrackerを保存できる。通常出力は不変、boundaryでは診断をnullにする。
+専用`hip_sensitivity.py`は股関節だけに既知の誤差を加え、同じ後処理を通した誤差なし入力との差を測る。
+これは擬似教師・人体の正解誤差・実機症状の再現とは別の、誤差伝播を調べる対照実験である。
+5/20mm × 15ケースの完了結果で、入力不変の膝・足への伝播と平滑化前の腿回転差を確認。
+raw/段階別/最終の分離、診断ON/OFFで候補不変、注入0、固定biasとjitterの区別、
+twist支持数、入力/出力bindingを回帰で保護する。focused CTest 8/8、Python 86件pass。
+詳細・限界・成果物は[股関節観測の誤差伝播](pose-3d-hip-observation-sensitivity.md)を参照。
 
 ## Milestoneと検証
 

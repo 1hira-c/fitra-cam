@@ -366,6 +366,14 @@ Lの左hip入口品質は0/24のままで、1Hz診断をlag/jitter/未来教師c
 runtime/校正/filterは不変。関連CTest 7/7・Python 71件pass。再build/full CTestとlive VR受入れは未実施。
 [設計・結果](design/pose-3d-corpus-calibration-rescue.md)を参照。
 
+同日追補: 股関節のみの既知誤差を加えた対入力をproduction CPU replayへ通し、
+post-Kalman/post-IK/抽出直後/最終trackerの差を分離する感度評価を追加。
+5/20mm各15ケースで入力不変の膝・足への伝播と平滑化前の腿回転差を確認したが、
+人工的な差を人体GT・時間的jitter・実機症状の原因認定には使わない。
+誤差0、対象外入力不変、固定bias、欠損分母、twist支持数、診断ON/OFFで候補不変を回帰検証。
+Release replay build、focused CTest 8/8（Python 86件）pass。runtime/校正/wireは不変、
+full CTestとlive VR受入れは未実施。[股関節感度評価](design/pose-3d-hip-observation-sensitivity.md)を参照。
+
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|
 | 0     | `cmake --build cpp/build && ./cpp/build/main --help`        | リンク成功、TRT runtime が初期化できる                                         |

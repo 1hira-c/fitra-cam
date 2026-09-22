@@ -41,6 +41,24 @@ infer::Skeleton3D skeleton(const YAML::Node& values) {
 
 using Trackers = std::array<tracking::TrackerPose, tracking::kTrackerCount>;
 
+struct Diagnostics {
+    infer::Skeleton3D post_kalman, post_ik;
+    Trackers pre_smoothing{};
+};
+
+void write_skeleton(std::ostream& out, const infer::Skeleton3D& s) {
+    out << '[';
+    for (std::size_t i = 0; i < 26; ++i) {
+        if (i) out << ',';
+        const auto& j = s.joints[i];
+        if (!j.valid) { out << "null"; continue; }
+        require(std::isfinite(j.x) && std::isfinite(j.y) && std::isfinite(j.z)
+                    && std::isfinite(j.score), "nonfinite diagnostic joint");
+        out << '[' << j.x << ',' << j.y << ',' << j.z << ',' << j.score << ']';
+    }
+    out << ']';
+}
+
 void write_trackers(std::ostream& out, const Trackers& trackers) {
     out << '[';
     for (std::size_t i = 0; i < trackers.size(); ++i) {
@@ -88,14 +106,17 @@ struct Candidate {
         for (auto& q : prev_quat) q = {1, 0, 0, 0};
     }
 
-    Trackers update(infer::Skeleton3D s, double dt, double nominal) {
+    Trackers update(infer::Skeleton3D s, double dt, double nominal, Diagnostics* diagnostic = nullptr) {
         if (use_kalman) s = kalman.update(s, dt);
+        if (diagnostic) diagnostic->post_kalman = s;
         s = ik.update(s);
+        if (diagnostic) diagnostic->post_ik = s;
         const auto report = floor.update(s, dt);
         auto t = tracking::extract_trackers_with_floor_corrections(
             s, {report.feet[0].correction_m, report.feet[1].correction_m},
             &extract, opts.foot_pos_mode, opts.chest_height_frac,
             opts.waist_height_frac, opts.limb_extension);
+        if (diagnostic) diagnostic->pre_smoothing = t;
         pos.dt_s = static_cast<float>(dt);
         const auto& hip = s.joints[19];
         pos.hip_valid = hip.valid;
@@ -115,13 +136,26 @@ struct Candidate {
 int main(int argc, char** argv) {
     try {
         if (argc == 2 && std::string(argv[1]) == "--help") {
-            std::cout << "temporal_replay INPUT.jsonl OUTPUT.jsonl [SUBJECT_PROFILE.yaml]\n"
+            std::cout << "temporal_replay INPUT.jsonl OUTPUT.jsonl [SUBJECT_PROFILE.yaml] [--diagnostics]\n"
                          "Input: fitra_temporal_input_v1 header, then timestamped Halpe26 reports.\n"
                          "Without a profile, header.subject_height_m supplies the IK prior.\n"
+                         "--diagnostics: copy post-Kalman/IK joints and pre-smoothing trackers (offline only).\n"
                          "CPU offline evaluation only; output must not already exist.\n";
             return 0;
         }
-        require(argc == 3 || argc == 4, "usage: temporal_replay INPUT OUTPUT [SUBJECT_PROFILE]");
+        require(argc >= 3 && argc <= 5, "usage: temporal_replay INPUT OUTPUT [SUBJECT_PROFILE] [--diagnostics]");
+        std::string profile;
+        bool diagnostics = false;
+        for (int i = 3; i < argc; ++i) {
+            const std::string option = argv[i];
+            if (option == "--diagnostics") {
+                require(!diagnostics, "duplicate --diagnostics");
+                diagnostics = true;
+            } else {
+                require(profile.empty() && !option.empty() && option.front() != '-', "unexpected argument");
+                profile = option;
+            }
+        }
         std::ifstream input(argv[1]);
         require(input.good(), "cannot open input");
         require(!std::ifstream(argv[2]).good(), "output already exists; choose a new path");
@@ -156,8 +190,8 @@ int main(int argc, char** argv) {
         io.subject_height_m = header["subject_height_m"].as<double>();
         require(std::isfinite(io.subject_height_m) && io.subject_height_m >= 1 && io.subject_height_m <= 2.5,
                 "invalid subject height");
-        if (argc == 4) {
-            io.subject_profile = lift::load_subject_profile(argv[3]);
+        if (!profile.empty()) {
+            io.subject_profile = lift::load_subject_profile(profile);
             io.has_subject_profile = true;
         }
         std::array<std::unique_ptr<Candidate>, 3> candidates{
@@ -173,12 +207,14 @@ int main(int argc, char** argv) {
                   "\"input_fnv1a64\":\"" << input_fingerprint << "\","
                   "\"candidates\":[\"minimal\",\"kalman\",\"current\"],"
                   "\"common\":{\"ik\":true,\"floor\":true,\"confidence_gates\":true},"
-                  "\"nominal_hz\":" << hz << ",\"profile_loaded\":" << (argc == 4 ? "true" : "false")
+                  "\"nominal_hz\":" << hz << ",\"profile_loaded\":" << (!profile.empty() ? "true" : "false")
                << ",\"subject_height_prior_m\":" << io.subject_height_m
                << ",\"pos_one_euro\":[" << opts.pos_one_euro.mincutoff << ',' << opts.pos_one_euro.beta << ',' << opts.pos_one_euro.dcutoff
                << "],\"quat_one_euro\":[" << opts.quat_one_euro.mincutoff << ',' << opts.quat_one_euro.beta << ',' << opts.quat_one_euro.dcutoff
                << "],\"foot_position\":\"ankle\",\"chest_height_frac\":" << opts.chest_height_frac
-               << ",\"waist_height_frac\":" << opts.waist_height_frac << "}\n";
+               << ",\"waist_height_frac\":" << opts.waist_height_frac;
+        if (diagnostics) output << ",\"diagnostics_schema\":\"fitra_temporal_diagnostics_v1\"";
+        output << "}\n";
         std::int64_t previous_time = -1, previous_seq = -1;
         std::string previous_segment;
         bool previous_fresh = false;
@@ -216,11 +252,13 @@ int main(int argc, char** argv) {
             output << ",\"candidates\":{";
             const auto raw = fresh ? skeleton(row["joints"]) : infer::Skeleton3D{};
             std::array<double, 3> processing_ms{};
+            std::array<Diagnostics, 3> stages{};
             for (std::size_t i = 0; i < candidates.size(); ++i) {
                 if (i) output << ',';
                 output << '"' << names[i] << "\":";
                 const auto start = std::chrono::steady_clock::now();
-                const auto trackers = fresh ? candidates[i]->update(raw, dt, nominal) : Trackers{};
+                const auto trackers = fresh ? candidates[i]->update(raw, dt, nominal,
+                    diagnostics ? &stages[i] : nullptr) : Trackers{};
                 processing_ms[i] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-start).count();
                 write_trackers(output, trackers);
             }
@@ -229,7 +267,26 @@ int main(int argc, char** argv) {
                 if (i) output << ',';
                 output << '"' << names[i] << "\":" << processing_ms[i];
             }
-            output << "}}\n";
+            output << '}';
+            if (diagnostics) {
+                output << ",\"diagnostics\":";
+                if (!fresh) output << "null";
+                else {
+                    output << '{';
+                    for (std::size_t i = 0; i < candidates.size(); ++i) {
+                        if (i) output << ',';
+                        output << '"' << names[i] << "\":{\"post_kalman\":";
+                        write_skeleton(output, stages[i].post_kalman);
+                        output << ",\"post_ik\":";
+                        write_skeleton(output, stages[i].post_ik);
+                        output << ",\"pre_smoothing\":";
+                        write_trackers(output, stages[i].pre_smoothing);
+                        output << '}';
+                    }
+                    output << '}';
+                }
+            }
+            output << "}\n";
             require(output.good(), "output write failed");
             previous_time = t; previous_seq = seq; previous_segment = segment; previous_fresh = fresh;
             ++rows;

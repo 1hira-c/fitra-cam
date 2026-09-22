@@ -140,6 +140,19 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-22 — 股関節のみの誤差注入と後段の段階別感度評価
+
+offline replayにoptional診断を追加し、post-Kalman/post-IK/平滑化前trackerをコピー保存する。
+`hip_sensitivity.py`でcenter/左右hip共通/逆向きのjitter・固定bias・向き依存biasを対比較。
+5/20mmの各15ケース、各clean/fault 4,500 reportsを3候補で完了し、出力と完了hashを照合した。
+入力不変の膝・足への誤差伝播と、静止の左右hip逆向き20mmで平滑化前から約43.47°の
+右腿twist出力差を確認。ただし一定の向きの差であって時間的jitterや人体の正解誤差ではない。
+仮説/実録画の観察/人工感度を分けてケース台帳へ追記。候補順位・本番修正は未決定。
+Release replay build、focused CTest 8/8（Python 86件、追加15件）pass。
+診断有無の候補不変・注入0・境界reset・支持不足nullを回帰確認。runtime/model/校正/wireは不変、
+全target build/full CTest・live VR受入れはoffline変更に範囲を絞るため未実施。
+→ [設計・結果](../design/pose-3d-hip-observation-sensitivity.md)。
+
 ### 2026-09-22 — 四方向の疎なM/L診断と暫定静止ラベル
 
 全フレーム再生より先に、capture-boundな床map/校正と画像evidenceを固定して各方向6組を診断する
