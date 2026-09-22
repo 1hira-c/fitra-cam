@@ -140,6 +140,17 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-22 — 四方向立位と後段評価用の動作原本を追加収録
+
+既存recorder・RTMPose-MでHMDなしの四方向立位、静止、横移動/停止、前屈、左右膝上げ、
+小動作を3 sessionへ収録。計57,620画像・19,078組、checksum/索引/時刻検査と画像抜き取りを確認。
+録画drop0、kernel sequenceの抜け計6は明記。未実施だった最初の四方向案内は成功扱いせず原本を保持。
+チャットの逐次合図をやめ、動作順を一括提示→退出報告とpost-roll確認→正常終了へ運用を修正。
+床mapもhash固定。中央からずれた前屈は条件を残し、中央付近の別収録を補った。
+runtime/設定/校正は不変。追加原本の区間ラベル・3D/教師品質・後段採点は未完了。
+今回は収録・文書更新のみで再build/CTestは実施せず、検証を原本整合性と動作の抜き取り確認に限定。
+→ [収録手順・結果](../research/pose-3d-temporal-capture-protocol.md)。
+
 ### 2026-09-22 — 原本の床タグ校正候補と保存済み2D再三角測量
 
 CPU tool `corpus_geometry`と校正/derived-run wrapperを追加。推定/検証画像を時間帯で分け、
