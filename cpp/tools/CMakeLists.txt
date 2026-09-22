@@ -10,6 +10,21 @@ target_link_libraries(fitra_corpus_infer PRIVATE fitra_infer fitra_lift yaml-cpp
 set_target_properties(fitra_corpus_infer PROPERTIES OUTPUT_NAME "corpus_infer"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
 
+# Explicit experimental VMT runner; the normal main target is unchanged.
+add_executable(fitra_temporal_vmt_trial temporal_vmt_trial.cpp)
+target_link_libraries(fitra_temporal_vmt_trial PRIVATE fitra_app)
+set_target_properties(fitra_temporal_vmt_trial PROPERTIES OUTPUT_NAME "temporal_vmt_trial"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+if(FITRA_HAVE_NVJPEG)
+    add_dependencies(fitra_temporal_vmt_trial fitra_nvjpeg)
+endif()
+add_executable(fitra_test_temporal_live_state test_temporal_live_state.cpp)
+target_link_libraries(fitra_test_temporal_live_state PRIVATE fitra_tracking fitra_lift)
+set_target_properties(fitra_test_temporal_live_state PROPERTIES OUTPUT_NAME "test_temporal_live_state"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+add_test(NAME test_temporal_live_state COMMAND fitra_test_temporal_live_state)
+add_test(NAME test_temporal_vmt_trial_help COMMAND fitra_temporal_vmt_trial --help)
+
 # Offline post-3D filter audition. No GPU inference or live-service changes.
 add_executable(fitra_temporal_replay temporal_replay.cpp
     ../src/tracking/tracker_extract.cpp)

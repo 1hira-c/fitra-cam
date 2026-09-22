@@ -327,6 +327,7 @@ def run_pair(output, binary, header, clean, faulty, experiments=False, target_se
     assets = {"binary": artifact(binary), "replay_source": artifact(Path(__file__).parents[2]/"cpp/tools/temporal_replay.cpp")}
     assets["weighted_bones_source"] = artifact(Path(__file__).parents[2]/"cpp/tools/temporal_weighted_bones.hpp")
     assets["distance_source"] = artifact(Path(__file__).parents[2]/"cpp/tools/temporal_distance_filter.hpp")
+    assets["candidate_source"] = artifact(Path(__file__).parents[2]/"cpp/tools/temporal_candidate.hpp")
     scripts = {f.name: artifact(f) for f in Path(__file__).parent.glob("*.py")}
     out = output.resolve()
     commands = {name: [assets["binary"]["path"], str(out/f"{name}-input.jsonl"),

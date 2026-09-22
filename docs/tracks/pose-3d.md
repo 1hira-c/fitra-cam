@@ -140,6 +140,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-22 — VMT体感比較用の独立試験ランナーを準備
+
+`temporal_vmt_trial`でminimal / spatial / distance2 / distance5を再起動なしで切替可能にした。
+offline Candidateを共有し、raw入力と表示/送信busを分離、履歴reset・source age・境界watermark・
+明示disableで古い出力の再利用を防ぐ。通常main/既定設定/D50 wireへの採用ではない。
+Release build、focused CTest 11件（Python 128件を含む）、静止1185 reportの旧10候補数値一致を確認。
+ユーザー都合で実機は翌日へ延期。カメラ/VMTサーバー未起動、HMD/Windows受信・体感・E2Eは未確認。
+→ [設計・検証境界](../design/pose-3d-vmt-live-trial.md)。
+
 ### 2026-09-22 — checkpointから距離残差filterをoffline比較
 
 `6891845`にlocal tag `checkpoint/pose-3d-before-distance-filter-20260922`を作り、旧binaryを保存。

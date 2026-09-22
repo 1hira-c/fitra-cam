@@ -398,6 +398,13 @@ capはaccepted targetとの差であって真値/時間遅れの上限ではな�
 人工2＋録画3 run、focused CTest 8/8（Python 128件）pass。本番採用・full CTest/live受入れは保留。
 [距離filter設計・結果](design/pose-3d-distance-filter-experiment.md)を参照。
 
+同日追補: 明示起動の`temporal_vmt_trial`に限りshared Candidateをlive raw reportへ適用し、
+選択候補のTrackerBusを既存VMT/WebUIで共有する。通常main/設定schema/D50 wireは不変。
+境界/切替/欠損/staleは履歴resetと明示disable、重複reportは再更新しない。
+Release build、focused CTest 11件（Python 128件を含む）、静止1185 reportの10候補数値一致を確認。
+GPU/camera起動・Windows受信・体感・E2Eとfull CTestは未実施。実機は翌日ユーザーと確認する。
+[独立VMT試験設計](design/pose-3d-vmt-live-trial.md)を参照。
+
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|
 | 0     | `cmake --build cpp/build && ./cpp/build/main --help`        | リンク成功、TRT runtime が初期化できる                                         |

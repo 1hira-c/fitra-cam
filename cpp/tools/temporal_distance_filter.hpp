@@ -1,5 +1,5 @@
 #pragma once
-// Offline-only distance-adaptive residual filter. Never wired to live output.
+// Experimental distance residual filter: replay + explicit VMT trial tool only.
 #include <array>
 #include <cmath>
 #include <stdexcept>

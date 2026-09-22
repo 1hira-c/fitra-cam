@@ -111,6 +111,7 @@ def main():
     assets = {"binary": artifact(args.binary), "replay_source": artifact(root/"cpp/tools/temporal_replay.cpp"),
               "spatial_source": artifact(root/"cpp/tools/temporal_weighted_bones.hpp"),
               "distance_source": artifact(root/"cpp/tools/temporal_distance_filter.hpp")}
+    assets["candidate_source"] = artifact(root/"cpp/tools/temporal_candidate.hpp")
     if args.baseline_binary: assets["baseline_binary"] = artifact(args.baseline_binary)
     scripts = {f.name: artifact(f) for f in Path(__file__).parent.glob("*.py")}
     out = args.output.resolve()
