@@ -140,6 +140,22 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-22 — 時刻付き3視点raw 3D再生と未来文脈の暫定参照
+
+`corpus_infer` / `run_corpus.py`で検証済みraw JPEG原本を同一3視点groupから再推論し、
+後処理前Halpe26・2D観測・関節別幾何品質を保存。`measured_capture_group`で不等間隔とseq穴を保持。
+capture時点の校正/profileをhashで拘束し、完了runだけを次段へ渡す。
+`pseudo_reference.py`は別pose engine・同じ原本の品質通過点にのみ±50ms局所一次回帰を適用。
+未来参照を候補へ入れず、参照追加前後のcandidate出力一致を実データでも検査する。
+品質不足・穴・境界でnullとし、参照一致を真の精度や体感遅延の合格へ読み替えない。
+本番RTMPose-M・filter・wire・設定は不変。前屈の腿twist修正はこの変更に含めない。
+採点revision 3で参照有効率と候補対応率を分離し、roll不明の完全回転誤差を未評価化。
+M/L各2,492組を完了、参照前後の候補出力一致を確認。静止472 reportは3候補を比較できたが、
+トラッカー参照は品質不足で0%。床タグ残差も踏まえ校正整合性を次の確認対象とする。
+Release tools build、関連CTest 5/5（Python 55件）pass。全target/full CTestとlive VRの受入れは未実施。
+→ [3視点adapter](../design/pose-3d-corpus-qualification.md)、
+[後段評価・暫定参照](../design/pose-3d-temporal-evaluation.md)。
+
 ### 2026-09-19 — 時刻付き3カメラ原本の実機収録確認
 
 既存event recorderをVMT出力/remote転送なし・90秒上限で起動するwrapperと、

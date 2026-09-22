@@ -1,5 +1,10 @@
 # Standalone CLI tools that consume the fitra_infer library.
 
+add_executable(fitra_corpus_infer corpus_infer.cpp)
+target_link_libraries(fitra_corpus_infer PRIVATE fitra_infer fitra_lift yaml-cpp::yaml-cpp opencv_imgcodecs)
+set_target_properties(fitra_corpus_infer PROPERTIES OUTPUT_NAME "corpus_infer"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+
 # Offline post-3D filter audition. No GPU inference or live-service changes.
 add_executable(fitra_temporal_replay temporal_replay.cpp
     ../src/tracking/tracker_extract.cpp)

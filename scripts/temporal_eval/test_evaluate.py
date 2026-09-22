@@ -79,6 +79,26 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(s["reference_coverage"],0)
         self.assertIsNone(s["median_same_time_rmse_mm"])
 
+    def test_sparse_reference_not_mistaken_for_full_reference_availability(self):
+        args = self.sample()
+        for row in args[3][1:]:
+            row["reference"] = [None]*10
+        s = score(*args)["summary"]["test"]
+        self.assertEqual(s["reference_coverage"], 1)
+        self.assertEqual(s["output_availability"], 1)
+        self.assertAlmostEqual(s["reference_availability"], 1/240)
+
+    def test_full_rotation_error_requires_reference_roll(self):
+        args = self.sample()
+        report = score(*args)
+        self.assertTrue(all(d["same_time_angle_p95_deg"] is None for d in report["details"]))
+        self.assertTrue(all(d["same_time_angle_support"] == 0 for d in report["details"]))
+        for row in args[3]:
+            for ref in row["reference"]:
+                ref["roll_confidence"] = 1
+        report = score(*args)
+        self.assertTrue(all(d["same_time_angle_p95_deg"] == 0 for d in report["details"]))
+
     def test_misaligned_output_rejected(self):
         args=self.sample()
         args[3][2]["t_ns"]+=1
@@ -287,6 +307,16 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(len(output), 2)
         rows[0]["joints"][19][3] = -0.1
         self.run_replay(rows, expect_ok=False)
+
+    def test_measured_capture_group_keeps_irregular_time_and_resets(self):
+        h, rows = dataset()
+        h["time_basis"] = "measured_capture_group"
+        rows = rows[:3]
+        rows[1]["t_ns"] = 37_000_000
+        rows[2]["t_ns"] = 600_000_000
+        _, output = self.run_replay(rows, header=h)
+        self.assertEqual([r["t_ns"] for r in output], [0,37_000_000,600_000_000])
+        self.assertTrue(output[-1]["reset"])
 
     def test_synthetic_three_candidates_score_without_nan(self):
         h,rows=dataset()

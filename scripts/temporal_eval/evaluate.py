@@ -307,7 +307,9 @@ def score(input_header, source, output_header, outputs, twist_jump_deg=45.0):
                 outs = [o["candidates"][candidate][role] for _, o in rows]
                 pairs = [(r, y) for r, y in zip(refs, outs) if r is not None and y is not None]
                 errors = [1000*norm(sub(y["position_m"], r["position_m"])) for r, y in pairs]
-                angles = [angle_deg(y["quat_wxyz"], r["quat_wxyz"]) for r, y in pairs]
+                # A forward-only reference has arbitrary roll: full-quaternion error is unknown.
+                angles = [angle_deg(y["quat_wxyz"], r["quat_wxyz"]) for r, y in pairs
+                          if r.get("roll_confidence", 0) > 0]
                 values = [y["position_m"] for y in outs if y is not None]
                 rotations = [y["quat_wxyz"] for y in outs if y is not None]
                 ref_spread = spread([r["position_m"] for r, _ in pairs])
@@ -323,6 +325,7 @@ def score(input_header, source, output_header, outputs, twist_jump_deg=45.0):
                     "coverage": len(pairs)/expected if expected else None,
                     "same_time_rmse_mm": rms(errors), "same_time_p95_mm": percentile(errors, .95),
                     "same_time_angle_p95_deg": percentile(angles, .95),
+                    "same_time_angle_support": len(angles),
                     "static_jitter_rms_mm": 1000*spread(values) if phase == "static" and len(values) > 1 else None,
                     "static_rotation_rms_deg": rotation_spread(rotations) if phase == "static" else None,
                     "motion_amplitude_ratio": out_spread/ref_spread if phase == "motion" and
@@ -341,6 +344,7 @@ def score(input_header, source, output_header, outputs, twist_jump_deg=45.0):
             return statistics.median(vs) if vs else None
         lags = [d["position_lag"]["lag_ms"] for d in ds if d["position_lag"] and
                 d["position_lag"]["lag_ms"] is not None and not d["position_lag"]["at_search_boundary"]]
+        expected_reports = sum(d["reports"] for d in ds)
         summary[candidate] = {"median_static_jitter_mm": median_field("static_jitter_rms_mm"),
             "offline_call_p50_ms": percentile(processing,.5), "offline_call_p95_ms": percentile(processing,.95),
             "median_static_rotation_deg": median_field("static_rotation_rms_deg"),
@@ -348,6 +352,10 @@ def score(input_header, source, output_header, outputs, twist_jump_deg=45.0):
             "position_lag_estimates": len(lags),
             "median_same_time_rmse_mm": median_field("same_time_rmse_mm"),
             "median_motion_amplitude_ratio": median_field("motion_amplitude_ratio"),
+            "reference_availability": sum(d["reference_available"] for d in ds)/expected_reports
+                if expected_reports else None,
+            "output_availability": sum(d["output_available"] for d in ds)/expected_reports
+                if expected_reports else None,
             "reference_coverage": sum(d["paired"] for d in ds)/sum(d["reference_available"] for d in ds)
                 if sum(d["reference_available"] for d in ds) else None}
     cases = []
@@ -364,7 +372,7 @@ def score(input_header, source, output_header, outputs, twist_jump_deg=45.0):
                 "twist_step_support": sum(d["rotation"]["twist_step_support"] for d in ds),
                 "twist_unobservable_reference_pairs": sum(d["rotation"]["twist_unobservable_reference_pairs"] for d in ds),
                 "twist_undefined_pairs": sum(d["rotation"]["twist_undefined_pairs"] for d in ds)})
-    return {"schema": "fitra_temporal_report_v1", "metrics_revision": 2,
+    return {"schema": "fitra_temporal_report_v1", "metrics_revision": 3,
             "reference_kind": input_header["reference_kind"],
             "time_basis": input_header["time_basis"], "source_provenance": input_header.get("provenance", {}),
             "replay_settings": output_header, "reports": len(source),
@@ -402,10 +410,11 @@ def markdown(report):
     lines = ["# 3D後段・オフライン比較", "", f"参照: `{report['reference_kind']}` / 時刻: `{report['time_basis']}`",
              "", "以下は部位・区間別指標の中央値。体感遅延の実測値や合否ではありません。",
              f"入力で指定した採点除外: {report['unscored_reports']} reports（全候補共通、履歴更新は継続）。",
-             "", "| 設定 | 静止揺れ mm | 静止回転 ° | 位置遅れ ms | 同時刻誤差 mm | 振幅比 | 参照coverage |",
-             "|---|---:|---:|---:|---:|---:|---:|"]
+             "参照有効率は採点対象の部位×レポートに対する参照の割合、対応率は有効参照に対する候補出力の割合です。",
+             "", "| 設定 | 静止揺れ mm | 静止回転 ° | 位置遅れ ms | 同時刻誤差 mm | 振幅比 | 参照有効率 | 参照との対応率 |",
+             "|---|---:|---:|---:|---:|---:|---:|---:|"]
     fields = ("median_static_jitter_mm", "median_static_rotation_deg", "median_position_lag_ms",
-              "median_same_time_rmse_mm", "median_motion_amplitude_ratio", "reference_coverage")
+              "median_same_time_rmse_mm", "median_motion_amplitude_ratio", "reference_availability", "reference_coverage")
     for name, s in report["summary"].items():
         lines.append(f"| {name} | " + " | ".join(f(s[k]) for k in fields) + " |")
     lines.extend(["", "## ケース別の回転診断", "",

@@ -1,7 +1,7 @@
 # pose-3d: 時刻付き原本の収録確認と3視点グループ化
 
-更新: 2026-09-19。収録確認・captureグループ生成まで実装。
-**この原本からの3D再推論と後段評価への接続はまだ未実装**。
+更新: 2026-09-22。収録確認・captureグループ生成に加え、3視点raw 3D再推論と後段評価への接続を実装。
+大型モデル＋未来文脈の暫定参照は[後段評価器](pose-3d-temporal-evaluation.md)を参照。
 関連: [後段評価器](pose-3d-temporal-evaluation.md)、
 [収録手順](../research/pose-3d-temporal-capture-protocol.md)。
 
@@ -102,6 +102,60 @@ Python offline工具だけの追加のため全target再build/全CTestは行わ�
 上記の収録・停止・timestamp/payload検査に限定する。NAS転送、容量枯渇、全姿勢やVR出力の
 受入れ確認は今回の対象外。
 
-残作業は、group索引からの**3視点raw 3D再推論adapter**、capture基準の評価時刻契約、
-校正対応/再投影確認、区間ラベル、大型モデル＋未来参照教師、実機体感との対応付け。
+当日時点の残作業は3視点raw 3D再推論adapter、capture基準の評価時刻契約、
+校正対応/再投影確認、区間ラベル、大型モデル＋未来参照教師、実機体感との対応付けだった。
 raw映像を確保できたため、これらの実装中にユーザーへ同じ動作の再収録を繰り返し求めずに済む。
+
+## 2026-09-22: raw 3D adapter
+
+`cpp/tools/corpus_infer.cpp` / `scripts/temporal_eval/run_corpus.py`を追加。
+原本のchecksum検証からグループ作成、CPU JPEG decode、production YOLOX/RTMPose/triangulation、
+3候補CPU replay、採点まで新規ディレクトリへ生成する。CMake targetは`fitra_corpus_infer`。
+3台のJPEG原本に限定し、camera config slotと校正ID・解像度を照合。暗黙の縮小やcropはしない。
+各モデルに共有contextを1個だけ使い、Kalman/IK/床補正前の観測と2D/3D品質を保存する。
+detectorは各frameで実行し、liveの検出間引き・bbox cache・latest-only消費順序は再現しない。
+単一人物を前提とし、どの視点でも複数検出があればgroup全体を無効にする。
+交代者の識別器ではないため、別人物の収録は別sessionと明示境界が必要。
+
+評価時計`measured_capture_group`は最大kernel capture時刻を起点からの整数nsへ変換する。
+実際の不等間隔とcam0由来seqの穴を保持し、nominal FPSで等間隔化しない。
+live受信時刻・paced tracker更新・体感遅延とは別。校正/profileはcapture時点のasset hashと一致必須。
+planのFNV、原本/engine/binary/scriptsのSHAを記録し、入力が処理中に変われば完了にしない。
+途中失敗の成果物は残し、`complete.json`があるrunのみ次段の参照生成に使う。
+
+`raw-quality.json`は関節ごとの有効率、inlier視点数、再投影誤差、ray angleを出す。
+Halpe slot 0は合成鼻方向端点なので幾何品質の実測として数えない。
+productionの6px設定は厳密な全点rejectではなく、一回の外れ値選別である。
+2視点以上を残せない場合は大きな再投影誤差がrawに残るため、参照生成で別途maskする。
+本番の受理ポリシーを評価専用の都合で変えない。
+
+```bash
+cmake --build cpp/build --target fitra_corpus_infer fitra_temporal_replay -j2
+python3 scripts/temporal_eval/run_corpus.py SESSION NEW_OUTPUT \
+  --infer-binary cpp/build/tools/corpus_infer --replay-binary cpp/build/tools/temporal_replay \
+  --calib EXTRINSICS --det-engine DET_ENGINE --pose-engine POSE_ENGINE \
+  --subject-profile PROFILE --capture-run CAPTURE_RUN
+```
+
+未解決: 校正を含む幾何品質の実機確認、動作セット、ライブ体感との対応付け。
+この経路だけで無人映像や品質不足を「遅延ゼロ・誤差ゼロ」の合格へ変えない。
+
+### 同日検証結果
+
+通常workspaceの`outputs/temporal-eval/20260922-corpus-3d-{m,l}`で、各2,492組を完了。
+`20260922-pseudo-reference`にL＋未来参照とMの後段3候補比較を保存した。
+参照追加前後のM候補出力/resetは全reportで一致。約16〜24秒の暫定静止472 reportでは
+出力有効率100%、部位別揺れRMS中央値はminimal 8.518 / Kalman 3.815 / current 3.108mm。
+身体動揺を含み、遅延との優劣はこの値では決められない。
+
+Lでも左右hip等が品質を満たさず、静止区間のトラッカー参照有効率は0%。
+誤差・lagは未評価のまま。教師条件を緩めず、先に幾何の整合性を確認する。
+床タグ6時刻の独立チェックではcam1の残差p50 6.5px（cam0 1.508 / cam2 2.334）。
+cam2は1tagしか検出できず、全域の合格とはしない。床配置変更なしとの申告と、カメラが
+微小にずれた可能性の申告あり。モデルの問題だけとも、校正ずれ確定とも結論しない。
+床mapは収録manifestの固定assetではない。詳細は通常workspaceの
+`outputs/temporal-eval/20260922-progress.md`。校正/runtime設定は書き換えていない。
+
+新規toolsをRelease build、関連CTest 5/5（内部Python 55件、skipなし）pass、CLI helpとdiff検査を確認。
+standalone評価toolが対象のため全アプリtarget/full CTestは未実施。新規runtime依存なし。
+GPU原本再推論の成功は本番のpaced更新・VR表示品質・追加遅延の実機受入れではない。

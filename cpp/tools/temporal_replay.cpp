@@ -142,7 +142,8 @@ int main(int argc, char** argv) {
         require(header["kp_format"].as<std::string>() == "halpe26", "Halpe26 required");
         require(header["coordinate_frame"].as<std::string>() == "fitra_world_z_up_m", "wrong coordinate frame");
         const auto basis = header["time_basis"].as<std::string>();
-        require(basis == "synthetic_nominal" || basis == "nominal_from_legacy_frames" || basis == "measured_report",
+        require(basis == "synthetic_nominal" || basis == "nominal_from_legacy_frames" || basis == "measured_report"
+                    || basis == "measured_capture_group",
                 "unsupported time basis");
         const auto reference_kind = header["reference_kind"].as<std::string>();
         require(reference_kind == "synthetic_known" || reference_kind == "pseudo" || reference_kind == "none",

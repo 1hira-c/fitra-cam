@@ -1,10 +1,9 @@
 # pose-3d: 後段補正の固定リプレイ評価器
 
-更新日: 2026-09-19。状態: M1実装、M2のlegacy実録画2視点pilotへ進行。
-擬似教師・3視点時刻付き再生・体感との合否校正は未完了。
-同日追補: [時刻付き原本の収録確認・3視点索引](pose-3d-corpus-qualification.md)を実装・実機確認。
-3視点のraw 3D再推論adapterは未実装であり、従来の2視点pilotと区別する。
-追補: 回転診断を強化（metrics revision 2）。[観察ケース台帳](../research/pose-3d-evaluation-cases.md)に
+更新日: 2026-09-22。状態: M1実装、M2の時刻付き3視点raw 3D再生と暫定擬似参照へ進行。
+体感との合否校正は未完了。[収録確認・3視点adapter](pose-3d-corpus-qualification.md)を参照。
+capture基準の3視点再生と、従来の時刻を失った2視点legacy pilotを区別する。
+追補: 回転診断を強化（metrics revision 2、参照可用性と完全回転誤差の扱いはrevision 3）。[観察ケース台帳](../research/pose-3d-evaluation-cases.md)に
 前屈時の腿twist不安定を、原因未確定の評価課題として記録した。本番処理は変更しない。
 関連: [時系列予測計画](../research/pose-3d-temporal-prediction-plan.md)、
 [Issue #65](https://github.com/1hira-c/fitra-cam/issues/65)。
@@ -82,10 +81,12 @@ JSONL先頭はheader（1行）:
 1超があり、productionと同様にそのまま渡す。0〜1へ丸めたり高スコアを欠測へ変換したりしない。
 
 - `reference_kind`: `none` / `synthetic_known` / `pseudo`。
-- `time_basis`: `measured_report` / `synthetic_nominal` / `nominal_from_legacy_frames`。
+- `time_basis`: `measured_report` / `measured_capture_group` / `synthetic_nominal` / `nominal_from_legacy_frames`。
   nominalのmsは宣言周期への換算値で実測msではない。モデルの厳密dt入力を要求するものではない。
 - `measured_report`は評価対象が受け取ったレポート時刻。capture時刻があれば別のprovenance/
   sidecarに保存し区別する。原本/model/calibration/profileの対応・hashもprovenanceに残す。
+- `measured_capture_group`は3視点groupの最大kernel時刻。原点を引いた整数nsを使い、
+  原点は`capture_origin_ns`にdecimal stringで保持。不等間隔・seq穴を維持し、live report時刻と呼ばない。
 - 再送は取り込み側で除去。重複/逆行は失敗。seq欠落を残し、穴を埋めて入力にしない。
 - 消失・人物切替・再取得・座標系変更は`boundary`または新`segment`。boundaryは全候補unavailable。
   時計リセット、人物/profile変更は別ファイル。
@@ -97,12 +98,44 @@ JSONL先頭はheader（1行）:
 - 任意の`evaluate:false`は全候補共通の採点除外（履歴更新は実施）。人工系列は各scene先頭1秒を
   startup warmupとし、identityからの初期収束を定常jitterへ混ぜない。動作開始を自動的に除外しない。
 
+## 暫定擬似参照（2026-09-22）
+
+`scripts/temporal_eval/pseudo_reference.py`は、完了済みのM候補runと別pose engineの教師runを読む。
+同一plan hash・calibration/profile・detector/inference binary・capture出自を要求し、
+completed artifactの改変/不完全なrunを拒否する。教師候補は手元のRTMPose-L Halpe26 FP16。
+同系統モデルのため誤り相関があり、Lが必ず正確とは主張しない。モデル選定をやり直すものでもない。
+
+- 品質maskは教師側だけで決める。score≥0.3、inlier views≥2、再投影≤6px、ray angle≥10°。
+  暫定の診断値であって校正済み合格値ではない。合成方向端点Halpe 0は参照にしない。
+- 各関節の±50ms窓で実時刻を使った局所一次回帰を中心時刻へ評価する。
+  前後各2点以上と有効な中心観測を必須にし、等速運動を保持する。
+  これは未来を使うoffline教師であり、runtimeに50ms待ちを入れる仕様ではない。
+- seq穴・42ms超の隣接gap・品質不足・曖昧人物検出を跨がない。
+  不足はnull。エッジの外挿・未観測中心の補間・教師の過去状態による穴埋めはしない。
+- 信頼できる参照が減った場合はcoverageを記録する。採点を成立させるために閾値を緩めない。
+  再投影は内部整合性であり、低くても実測正解ではない。急な動作の過平滑や教師固有biasが残り得る。
+- 参照付与後の3候補を再生し、元runのcandidate出力/resetと完全一致を検証する
+  （計測用processing_msは比較しない）。教師は候補状態へ入れない。
+
+```bash
+python3 scripts/temporal_eval/pseudo_reference.py M_RUN L_RUN NEW_REFERENCE_RUN --labels LABELS_JSON
+```
+
+`reference-quality.json`に品質通過数と未来窓を確保できた数を関節別に保存する。
+同時刻誤差は「擬似参照との一致度」であり、精度改善の証明にはしない。
+静止ラベルは原画像を根拠に付け、開始・停止・前屈などの動作評価と実機体感校正は別途必要。
+
 ## 採点と不採用案
 
 同時刻の3D距離RMSE/p95、quat符号二重被覆を考慮した測地角p95。
 静止位置jitterは区間重心からの距離RMS、静止回転は符号を揃えた平均quatからの角度RMS。
 動作振幅比は同じ有効ペア上の位置spread比（参照の動き1mm以下なら未評価）。
 欠測はreference coverageとoutput availabilityを別記し、誤差0へ置換しない。
+revision 3では`reference_availability`（参照数/採点対象部位×report）と
+`output_availability`をsummaryに追加。従来の`reference_coverage`は対応ペア/参照数であり、
+参照自体が十分にあるという意味ではない。Markdownでも参照有効率と対応率を分ける。
+完全quaternionの角誤差は参照roll confidence>0のペアだけを使い、supportを明記する。
+方向だけが既知の参照はswing診断のみ有効で、任意rollを正解として採点しない。
 境界・gap・phase遷移を越えて違う静止姿勢を混ぜない。
 
 位置lagは±15レポートの中心化3D位置曲線相関。正が遅れ、負が先行。

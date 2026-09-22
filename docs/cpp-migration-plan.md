@@ -337,6 +337,15 @@ checksum/byte範囲/sequence/kernel SOE時刻を確認。検査器は時刻欠�
 production推論後matcherやtracker scheduleを再現しない。
 詳細: [corpus qualification](design/pose-3d-corpus-qualification.md)。
 
+2026-09-22: JPEG原本の3視点GPU再推論からcapture時刻基準の後段replayへ接続。
+64bit原点・不等間隔・seq穴・曖昧検出・raw品質を回帰検証する。
+別pose engineの品質mask＋±50ms未来窓による擬似参照を追加し、窓不足/欠測非補完・
+等速保持・教師と候補のgeometry一致・候補出力不変を検証する。測定GTではなく、
+校正品質・動作セット・実機A/B対応付けを済ませるまで自動合否判定は行わない。
+採点revision 3は参照有効率と候補対応率を別集計し、roll不明参照の完全回転誤差を除外する。
+実録画M/L各2,492組の完了と候補出力不変を確認した一方、静止トラッカー参照は品質不足で0%。
+これは評価系の未評価判定であり、モデル/校正/filterの合格や原因確定とはしない。
+
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|
 | 0     | `cmake --build cpp/build && ./cpp/build/main --help`        | リンク成功、TRT runtime が初期化できる                                         |
