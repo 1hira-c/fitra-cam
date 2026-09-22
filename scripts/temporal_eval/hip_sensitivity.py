@@ -18,11 +18,17 @@ BODY = tuple(range(5, 26))
 CANDIDATES = ("minimal", "kalman", "current")
 EXPERIMENTAL = CANDIDATES + ("no_ik", "soft_bones", "soft_hips")
 HEAD_ISOLATED = EXPERIMENTAL + ("soft_bones_head_leaf", "soft_hips_head_leaf")
+DISTANCE = HEAD_ISOLATED + ("distance_2mm", "distance_5mm")
 STAGES = ("raw", "post_kalman", "post_ik")
 
 
 def candidate_names(header):
     names = tuple(header.get("candidates", []))
+    if "distance_experiment" in header:
+        if (names == DISTANCE and header.get("ik_experiment", {}).get("schema") == "fitra_soft_bones_experiment_v2"
+                and header["distance_experiment"].get("schema") == "fitra_distance_experiment_v1"):
+            return names
+        raise ValueError("unknown distance experiment candidate set")
     if names == CANDIDATES and "ik_experiment" not in header:
         return names
     if names == EXPERIMENTAL and header.get("ik_experiment", {}).get("schema") == "fitra_soft_bones_experiment_v1":
@@ -320,6 +326,7 @@ def run_pair(output, binary, header, clean, faulty, experiments=False, target_se
     validate_pair(header, clean, faulty, target_sets)
     assets = {"binary": artifact(binary), "replay_source": artifact(Path(__file__).parents[2]/"cpp/tools/temporal_replay.cpp")}
     assets["weighted_bones_source"] = artifact(Path(__file__).parents[2]/"cpp/tools/temporal_weighted_bones.hpp")
+    assets["distance_source"] = artifact(Path(__file__).parents[2]/"cpp/tools/temporal_distance_filter.hpp")
     scripts = {f.name: artifact(f) for f in Path(__file__).parent.glob("*.py")}
     out = output.resolve()
     commands = {name: [assets["binary"]["path"], str(out/f"{name}-input.jsonl"),

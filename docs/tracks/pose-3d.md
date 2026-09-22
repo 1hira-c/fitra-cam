@@ -140,6 +140,17 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-22 — checkpointから距離残差filterをoffline比較
+
+`6891845`にlocal tag `checkpoint/pose-3d-before-distance-filter-20260922`を作り、旧binaryを保存。
+position-onlyの2/5mm残差filterと1mm微動・低速・開始停止反転の対照を追加した。
+人工2 run＋実録画3 runすべてで保存binaryの旧8候補が完全一致。
+静止の部位別揺れ中央値はbase 5.058→4.451/3.772mmだが、noise0の1mm往復は振幅比0.501/0.137、
+5mm/s到達遅れ216.7/400msとなり、一律採用は保留。前屈左腿twistは7/836で変わらない。
+Release replay build、focused CTest 8/8（Python 128件）pass。full CTest/live受入れは未実施。
+原本・校正・runtime・wireは未変更、localのみでpushなし。
+→ [設計・結果・再実行](../design/pose-3d-distance-filter-experiment.md)。
+
 ### 2026-09-22 — 頭部観測の腰への伝播をofflineで分離
 
 静止raw頭頂の大きな距離不整合を確認し、head→bodyフィードバックだけを切る2候補を追加。

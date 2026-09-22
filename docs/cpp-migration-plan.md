@@ -391,6 +391,13 @@ hipを弱く扱うと下流ノイズを腰へ戻すことを確認し、候補�
 静止時の試作悪化は分離できたが、前屈腿twistは未解決。候補の実機採用は保留。
 Release replay build、focused CTest 8/8（Python 114件）pass。full CTest/live受入れは未実施。
 
+同日追補: checkpoint旧binaryとの8候補完全一致を実験runnerへ追加し、距離残差filterの
+2/5mm候補をoffline限定で比較。1mm正弦の振幅/位相fitと低速/開始停止反転のcrossingを追加して、
+大動作の低遅延・静止改善だけでは微動の消失/遅れを見逃すことを実測した（人工対照）。
+capはaccepted targetとの差であって真値/時間遅れの上限ではない。原本/実機/wireは不変。
+人工2＋録画3 run、focused CTest 8/8（Python 128件）pass。本番採用・full CTest/live受入れは保留。
+[距離filter設計・結果](design/pose-3d-distance-filter-experiment.md)を参照。
+
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|
 | 0     | `cmake --build cpp/build && ./cpp/build/main --help`        | リンク成功、TRT runtime が初期化できる                                         |

@@ -15,6 +15,7 @@
 #include "lift/floor_contact_stabilizer.hpp"
 #include "tracking/tracker_extractor.hpp"
 #include "temporal_weighted_bones.hpp"
+#include "temporal_distance_filter.hpp"
 
 using namespace fitra;
 
@@ -97,17 +98,20 @@ struct Candidate {
     tracking::QuatSmoothingContext quat;
     std::array<cv::Vec3f, tracking::kTrackerCount> prev_pos{};
     std::array<cv::Vec4f, tracking::kTrackerCount> prev_quat{};
+    double distance_cap_m = 0;
+    temporal_experiment::DistanceFilter distance_filter;
 
-    Candidate(bool k, bool e, const lift::IkSolver::Options& io, int experiment = 0)
+    Candidate(bool k, bool e, const lift::IkSolver::Options& io, int experiment = 0, double cap_m = 0)
         : use_kalman(k), use_euro(e), experimental_ik(experiment),
           bones(experiment ? temporal_experiment::bone_targets(io) : std::vector<temporal_experiment::Bone>{}),
-          ik(io) { reset(); }
+          ik(io), distance_cap_m(cap_m) { reset(); }
 
     void reset() {
         kalman.reset();
         floor.reset();
         extract = {}; pos = {}; quat = {};
         prev_pos = {};
+        distance_filter.reset();
         for (auto& q : prev_quat) q = {1, 0, 0, 0};
     }
 
@@ -136,6 +140,7 @@ struct Candidate {
             tracking::apply_quat_smoothing(t, prev_quat, 1.0f, dt, nominal);
             tracking::apply_pos_smoothing(t, prev_pos, pos, 1.0f, nominal);
         }
+        if (distance_cap_m > 0) distance_filter.update(t, distance_cap_m);
         return t;
     }
 };
@@ -144,18 +149,19 @@ struct Candidate {
 int main(int argc, char** argv) {
     try {
         if (argc == 2 && std::string(argv[1]) == "--help") {
-            std::cout << "temporal_replay INPUT.jsonl OUTPUT.jsonl [SUBJECT_PROFILE.yaml] [--diagnostics] [--ik-experiments] [--isolate-head]\n"
+            std::cout << "temporal_replay INPUT.jsonl OUTPUT.jsonl [SUBJECT_PROFILE.yaml] [--diagnostics] [--ik-experiments] [--isolate-head] [--distance-experiments]\n"
                          "Input: fitra_temporal_input_v1 header, then timestamped Halpe26 reports.\n"
                          "Without a profile, header.subject_height_m supplies the IK prior.\n"
                          "--diagnostics: copy post-Kalman/IK joints and pre-smoothing trackers (offline only).\n"
                          "--ik-experiments: append no_ik/soft_bones/soft_hips; experimental, never live.\n"
                          "--isolate-head: with --ik-experiments, append one-way head leaf ablations.\n"
+                         "--distance-experiments: with both experiment flags, append 2/5 mm position residual filters.\n"
                          "CPU offline evaluation only; output must not already exist.\n";
             return 0;
         }
-        require(argc >= 3 && argc <= 7, "usage: temporal_replay INPUT OUTPUT [SUBJECT_PROFILE] [--diagnostics] [--ik-experiments] [--isolate-head]");
+        require(argc >= 3 && argc <= 8, "usage: temporal_replay INPUT OUTPUT [SUBJECT_PROFILE] [--diagnostics] [--ik-experiments] [--isolate-head] [--distance-experiments]");
         std::string profile;
-        bool diagnostics = false, experiments = false, isolate_head = false;
+        bool diagnostics = false, experiments = false, isolate_head = false, distance_experiments = false;
         for (int i = 3; i < argc; ++i) {
             const std::string option = argv[i];
             if (option == "--diagnostics") {
@@ -167,12 +173,16 @@ int main(int argc, char** argv) {
             } else if (option == "--isolate-head") {
                 require(!isolate_head, "duplicate --isolate-head");
                 isolate_head = true;
+            } else if (option == "--distance-experiments") {
+                require(!distance_experiments, "duplicate --distance-experiments");
+                distance_experiments = true;
             } else {
                 require(profile.empty() && !option.empty() && option.front() != '-', "unexpected argument");
                 profile = option;
             }
         }
         require(!isolate_head || experiments, "--isolate-head requires --ik-experiments");
+        require(!distance_experiments || isolate_head, "--distance-experiments requires --isolate-head and --ik-experiments");
         std::ifstream input(argv[1]);
         require(input.good(), "cannot open input");
         require(!std::ifstream(argv[2]).good(), "output already exists; choose a new path");
@@ -223,6 +233,11 @@ int main(int argc, char** argv) {
             names.insert(names.end(), {"no_ik", "soft_bones", "soft_hips"});
             if (isolate_head) names.insert(names.end(), {"soft_bones_head_leaf", "soft_hips_head_leaf"});
         }
+        if (distance_experiments) {
+            for (double cap : {.002, .005})
+                candidates.push_back(std::make_unique<Candidate>(false, false, io, 4, cap));
+            names.insert(names.end(), {"distance_2mm", "distance_5mm"});
+        }
         tracking::TrackerExtractorOptions opts;
         std::ofstream output(argv[2]);
         require(output.good(), "cannot open output");
@@ -258,6 +273,12 @@ int main(int argc, char** argv) {
                           "\"soft_hips_head_leaf\":\"same_with_hip_prior_0.1_one_way_head\"";
             output << "}}";
         }
+        if (distance_experiments)
+            output << ",\"distance_experiment\":{\"schema\":\"fitra_distance_experiment_v1\","
+                      "\"base_candidate\":\"soft_bones_head_leaf\",\"position_only\":true,"
+                      "\"alpha\":\"d_squared_over_d_squared_plus_4cap_squared\","
+                      "\"history\":\"previous_valid_output\",\"uses_dt\":false,"
+                      "\"cap_m\":{\"distance_2mm\":0.002,\"distance_5mm\":0.005}}";
         output << "}\n";
         std::int64_t previous_time = -1, previous_seq = -1;
         std::string previous_segment;
