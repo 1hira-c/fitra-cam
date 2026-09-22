@@ -14,6 +14,7 @@
 #include "lift/ik.hpp"
 #include "lift/floor_contact_stabilizer.hpp"
 #include "tracking/tracker_extractor.hpp"
+#include "temporal_weighted_bones.hpp"
 
 using namespace fitra;
 
@@ -85,6 +86,8 @@ void write_trackers(std::ostream& out, const Trackers& trackers) {
 
 struct Candidate {
     bool use_kalman, use_euro;
+    int experimental_ik = 0; // 0=production, 1=bypass, 2=soft bones, 3=soft hips
+    std::vector<temporal_experiment::Bone> bones;
     lift::SkeletonKalman kalman;
     lift::IkSolver ik;
     lift::FloorContactStabilizer floor;
@@ -95,8 +98,10 @@ struct Candidate {
     std::array<cv::Vec3f, tracking::kTrackerCount> prev_pos{};
     std::array<cv::Vec4f, tracking::kTrackerCount> prev_quat{};
 
-    Candidate(bool k, bool e, const lift::IkSolver::Options& io)
-        : use_kalman(k), use_euro(e), ik(io) { reset(); }
+    Candidate(bool k, bool e, const lift::IkSolver::Options& io, int experiment = 0)
+        : use_kalman(k), use_euro(e), experimental_ik(experiment),
+          bones(experiment ? temporal_experiment::bone_targets(io) : std::vector<temporal_experiment::Bone>{}),
+          ik(io) { reset(); }
 
     void reset() {
         kalman.reset();
@@ -109,7 +114,9 @@ struct Candidate {
     Trackers update(infer::Skeleton3D s, double dt, double nominal, Diagnostics* diagnostic = nullptr) {
         if (use_kalman) s = kalman.update(s, dt);
         if (diagnostic) diagnostic->post_kalman = s;
-        s = ik.update(s);
+        if (experimental_ik == 0) s = ik.update(s);
+        else if (experimental_ik >= 2)
+            s = temporal_experiment::soft_bones(s, bones, experimental_ik == 3 ? .1 : 1.);
         if (diagnostic) diagnostic->post_ik = s;
         const auto report = floor.update(s, dt);
         auto t = tracking::extract_trackers_with_floor_corrections(
@@ -136,21 +143,25 @@ struct Candidate {
 int main(int argc, char** argv) {
     try {
         if (argc == 2 && std::string(argv[1]) == "--help") {
-            std::cout << "temporal_replay INPUT.jsonl OUTPUT.jsonl [SUBJECT_PROFILE.yaml] [--diagnostics]\n"
+            std::cout << "temporal_replay INPUT.jsonl OUTPUT.jsonl [SUBJECT_PROFILE.yaml] [--diagnostics] [--ik-experiments]\n"
                          "Input: fitra_temporal_input_v1 header, then timestamped Halpe26 reports.\n"
                          "Without a profile, header.subject_height_m supplies the IK prior.\n"
                          "--diagnostics: copy post-Kalman/IK joints and pre-smoothing trackers (offline only).\n"
+                         "--ik-experiments: append no_ik/soft_bones/soft_hips; experimental, never live.\n"
                          "CPU offline evaluation only; output must not already exist.\n";
             return 0;
         }
-        require(argc >= 3 && argc <= 5, "usage: temporal_replay INPUT OUTPUT [SUBJECT_PROFILE] [--diagnostics]");
+        require(argc >= 3 && argc <= 6, "usage: temporal_replay INPUT OUTPUT [SUBJECT_PROFILE] [--diagnostics] [--ik-experiments]");
         std::string profile;
-        bool diagnostics = false;
+        bool diagnostics = false, experiments = false;
         for (int i = 3; i < argc; ++i) {
             const std::string option = argv[i];
             if (option == "--diagnostics") {
                 require(!diagnostics, "duplicate --diagnostics");
                 diagnostics = true;
+            } else if (option == "--ik-experiments") {
+                require(!experiments, "duplicate --ik-experiments");
+                experiments = true;
             } else {
                 require(profile.empty() && !option.empty() && option.front() != '-', "unexpected argument");
                 profile = option;
@@ -194,26 +205,48 @@ int main(int argc, char** argv) {
             io.subject_profile = lift::load_subject_profile(profile);
             io.has_subject_profile = true;
         }
-        std::array<std::unique_ptr<Candidate>, 3> candidates{
-            std::make_unique<Candidate>(false, false, io),
-            std::make_unique<Candidate>(true, false, io),
-            std::make_unique<Candidate>(true, true, io)};
-        const std::array<const char*, 3> names{"minimal", "kalman", "current"};
+        std::vector<std::unique_ptr<Candidate>> candidates;
+        candidates.push_back(std::make_unique<Candidate>(false, false, io));
+        candidates.push_back(std::make_unique<Candidate>(true, false, io));
+        candidates.push_back(std::make_unique<Candidate>(true, true, io));
+        std::vector<const char*> names{"minimal", "kalman", "current"};
+        const auto targets = experiments ? temporal_experiment::bone_targets(io) : std::vector<temporal_experiment::Bone>{};
+        if (experiments) {
+            for (int kind = 1; kind <= 3; ++kind)
+                candidates.push_back(std::make_unique<Candidate>(false, false, io, kind));
+            names.insert(names.end(), {"no_ik", "soft_bones", "soft_hips"});
+        }
         tracking::TrackerExtractorOptions opts;
         std::ofstream output(argv[2]);
         require(output.good(), "cannot open output");
         output << std::setprecision(9);
         output << "{\"schema\":\"fitra_temporal_output_v1\",\"schedule\":\"one_step_per_report\","
-                  "\"input_fnv1a64\":\"" << input_fingerprint << "\","
-                  "\"candidates\":[\"minimal\",\"kalman\",\"current\"],"
-                  "\"common\":{\"ik\":true,\"floor\":true,\"confidence_gates\":true},"
-                  "\"nominal_hz\":" << hz << ",\"profile_loaded\":" << (!profile.empty() ? "true" : "false")
+                  "\"input_fnv1a64\":\"" << input_fingerprint << "\",\"candidates\":[";
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (i) output << ',';
+            output << '"' << names[i] << '"';
+        }
+        output << "],\"common\":{";
+        if (!experiments) output << "\"ik\":true,";
+        output << "\"floor\":true,\"confidence_gates\":true},\"nominal_hz\":" << hz
+               << ",\"profile_loaded\":" << (!profile.empty() ? "true" : "false")
                << ",\"subject_height_prior_m\":" << io.subject_height_m
                << ",\"pos_one_euro\":[" << opts.pos_one_euro.mincutoff << ',' << opts.pos_one_euro.beta << ',' << opts.pos_one_euro.dcutoff
                << "],\"quat_one_euro\":[" << opts.quat_one_euro.mincutoff << ',' << opts.quat_one_euro.beta << ',' << opts.quat_one_euro.dcutoff
                << "],\"foot_position\":\"ankle\",\"chest_height_frac\":" << opts.chest_height_frac
                << ",\"waist_height_frac\":" << opts.waist_height_frac;
         if (diagnostics) output << ",\"diagnostics_schema\":\"fitra_temporal_diagnostics_v1\"";
+        if (experiments) {
+            output << ",\"ik_experiment\":{\"schema\":\"fitra_soft_bones_experiment_v1\","
+                      "\"iterations\":12,\"bone_stiffness\":10,\"score_floor\":0.05,\"hip_weight\":0.1,"
+                      "\"temporal_filter\":false,\"hard_hinges\":false,\"bone_targets\":[";
+            for (std::size_t i = 0; i < targets.size(); ++i) {
+                if (i) output << ',';
+                output << '[' << targets[i].parent << ',' << targets[i].child << ',' << targets[i].length << ']';
+            }
+            output << "],\"candidates\":{\"no_ik\":\"bypass_ablation\","
+                      "\"soft_bones\":\"score_weighted_spatial\",\"soft_hips\":\"same_with_hip_prior_0.1\"}}";
+        }
         output << "}\n";
         std::int64_t previous_time = -1, previous_seq = -1;
         std::string previous_segment;
@@ -251,14 +284,14 @@ int main(int argc, char** argv) {
             write_trackers(output, reference);
             output << ",\"candidates\":{";
             const auto raw = fresh ? skeleton(row["joints"]) : infer::Skeleton3D{};
-            std::array<double, 3> processing_ms{};
-            std::array<Diagnostics, 3> stages{};
+            std::vector<double> processing_ms(candidates.size());
+            std::vector<Diagnostics> stages(candidates.size());
             for (std::size_t i = 0; i < candidates.size(); ++i) {
                 if (i) output << ',';
                 output << '"' << names[i] << "\":";
                 const auto start = std::chrono::steady_clock::now();
                 const auto trackers = fresh ? candidates[i]->update(raw, dt, nominal,
-                    diagnostics ? &stages[i] : nullptr) : Trackers{};
+                    (diagnostics || experiments) ? &stages[i] : nullptr) : Trackers{};
                 processing_ms[i] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-start).count();
                 write_trackers(output, trackers);
             }
@@ -282,6 +315,19 @@ int main(int argc, char** argv) {
                         output << ",\"pre_smoothing\":";
                         write_trackers(output, stages[i].pre_smoothing);
                         output << '}';
+                    }
+                    output << '}';
+                }
+            }
+            if (experiments) {
+                output << ",\"constraint_metrics\":";
+                if (!fresh) output << "null";
+                else {
+                    output << '{';
+                    for (std::size_t i = 0; i < candidates.size(); ++i) {
+                        if (i) output << ',';
+                        output << '"' << names[i] << "\":";
+                        temporal_experiment::write_constraints(output, stages[i].post_ik, targets);
                     }
                     output << '}';
                 }

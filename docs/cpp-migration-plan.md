@@ -374,6 +374,12 @@ post-Kalman/post-IK/抽出直後/最終trackerの差を分離する感度評価�
 Release replay build、focused CTest 8/8（Python 86件）pass。runtime/校正/wireは不変、
 full CTestとlive VR受入れは未実施。[股関節感度評価](design/pose-3d-hip-observation-sensitivity.md)を参照。
 
+同日追補: offline限定のscore重み付きsoft骨長solverと、完了録画をそのまま再生する比較runnerを追加。
+既存3候補の数値不変を保存済みbaselineへ照合し、拘束充足と入力誤差伝播を別々に評価する。
+人工系列での改善だけでなくlegacy静止で腰/腿の揺れが悪化することも検出し、候補の本番採用は見送り。
+Release replay build、CTest 8/8（Python 99件）pass。runtime/wire未変更・live品質未確認。
+[soft骨長比較](design/pose-3d-soft-bone-experiment.md)を参照。
+
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|
 | 0     | `cmake --build cpp/build && ./cpp/build/main --help`        | リンク成功、TRT runtime が初期化できる                                         |

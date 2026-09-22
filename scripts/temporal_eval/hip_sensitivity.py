@@ -16,7 +16,41 @@ from synthetic import pose
 TARGETS = {"center": (19,), "hips_common": (11, 12), "hips_differential": (11, 12)}
 BODY = tuple(range(5, 26))
 CANDIDATES = ("minimal", "kalman", "current")
+EXPERIMENTAL = CANDIDATES + ("no_ik", "soft_bones", "soft_hips")
 STAGES = ("raw", "post_kalman", "post_ik")
+
+
+def candidate_names(header):
+    names = tuple(header.get("candidates", []))
+    if names == CANDIDATES and "ik_experiment" not in header:
+        return names
+    if names == EXPERIMENTAL and header.get("ik_experiment", {}).get("schema") == "fitra_soft_bones_experiment_v1":
+        return names
+    raise ValueError("unknown sensitivity candidate set")
+
+
+def constraint_summary(rows, candidate):
+    pairs, hinges, violations, squares, maximum = 0, 0, 0, 0., None
+    for r in rows:
+        m = r["constraint_metrics"][candidate]
+        for key in ("bone_pairs", "hinge_pairs", "hinge_outside_5_175"):
+            if type(m[key]) is not int or m[key] < 0:
+                raise ValueError("invalid constraint support")
+        if m["hinge_outside_5_175"] > m["hinge_pairs"]:
+            raise ValueError("invalid hinge support")
+        for key in ("bone_rms_mm", "bone_max_mm"):
+            value = m[key]
+            if ((m["bone_pairs"] == 0 and value is not None) or (m["bone_pairs"] > 0 and
+                    (type(value) not in (int, float) or not math.isfinite(value) or value < 0))):
+                raise ValueError("invalid bone residual")
+        pairs += m["bone_pairs"]
+        hinges += m["hinge_pairs"]
+        violations += m["hinge_outside_5_175"]
+        if m["bone_pairs"]:
+            squares += m["bone_pairs"]*m["bone_rms_mm"]**2
+            maximum = max(maximum or 0., m["bone_max_mm"])
+    return {"bone_pairs": pairs, "bone_rms_mm": math.sqrt(squares/pairs) if pairs else None,
+            "bone_max_mm": maximum, "hinge_pairs": hinges, "hinge_outside_5_175": violations}
 
 
 def cases():
@@ -170,9 +204,10 @@ def tracker_difference(clean, faulty, input_rms_m):
 
 
 def validate_replay(source, header, rows):
+    candidates = candidate_names(header)
     if (header.get("schema") != "fitra_temporal_output_v1"
             or header.get("diagnostics_schema") != "fitra_temporal_diagnostics_v1"
-            or header.get("candidates") != list(CANDIDATES) or len(rows) != len(source)):
+            or len(rows) != len(source)):
         raise ValueError("complete diagnostic replay required")
     previous = None
     for s, r in zip(source, rows):
@@ -183,10 +218,10 @@ def validate_replay(source, header, rows):
         reset = previous is None or s["segment"] != previous["segment"] or s["t_ns"]-previous["t_ns"] > 500_000_000
         if type(r["reset"]) is not bool or r["reset"] != reset:
             raise ValueError("replay reset mismatch")
-        if (set(r["candidates"]) != set(CANDIDATES) or not isinstance(r["diagnostics"], dict)
-                or set(r["diagnostics"]) != set(CANDIDATES)):
+        if (set(r["candidates"]) != set(candidates) or not isinstance(r["diagnostics"], dict)
+                or set(r["diagnostics"]) != set(candidates)):
             raise ValueError("diagnostic candidates mismatch")
-        for name in CANDIDATES:
+        for name in candidates:
             d = r["diagnostics"][name]
             if set(d) != {"post_kalman", "post_ik", "pre_smoothing"}:
                 raise ValueError("diagnostic stages mismatch")
@@ -203,6 +238,9 @@ def validate_replay(source, header, rows):
                     if t is not None:
                         validate_tracker(t)
         previous = s
+    if candidates == EXPERIMENTAL:
+        for name in candidates:
+            constraint_summary(rows, name)
 
 
 def score_pair(header, clean, faulty, clean_header, clean_out, fault_header, fault_out):
@@ -220,7 +258,7 @@ def score_pair(header, clean, faulty, clean_header, clean_out, fault_header, fau
         targets = TARGETS[case["target"]]
         magnitude = rms([norm(sub(faulty[i]["joints"][k][:3], clean[i]["joints"][k][:3]))
                          for i in indices for k in targets])
-        for candidate in CANDIDATES:
+        for candidate in candidate_names(clean_header):
             joints = {}
             for stage in STAGES:
                 def points(source, out, k):
@@ -237,6 +275,9 @@ def score_pair(header, clean, faulty, clean_header, clean_out, fault_header, fau
                                    for k, role in enumerate(ROLES)}
             details.append({"case": case, "candidate": candidate, "reports": len(indices),
                             "input_target_vector_rms_mm": magnitude*1000, "joints": joints, "trackers": trackers})
+            if "ik_experiment" in clean_header:
+                details[-1]["constraints"] = {name: constraint_summary([rows[i] for i in indices], candidate)
+                                              for name, rows in (("clean", clean_out), ("fault", fault_out))}
     return {"schema": "fitra_hip_sensitivity_report_v1", "details": details,
             "acceptance": "diagnostic_only_not_real_rig_accuracy_or_latency",
             "reference": "same_pipeline_unperturbed_control_not_anatomical_ground_truth",
@@ -272,16 +313,21 @@ def main():
     p.add_argument("output", type=Path)
     p.add_argument("--binary", type=Path, required=True)
     p.add_argument("--amplitude-mm", type=float, default=20.)
+    p.add_argument("--ik-experiments", action="store_true", help="append offline spatial IK ablations")
     args = p.parse_args()
     if args.output.exists():
         p.error("new output directory required")
     header, clean, faulty = dataset(args.amplitude_mm)
     validate_pair(header, clean, faulty)
     assets = {"binary": artifact(args.binary), "replay_source": artifact(Path(__file__).parents[2]/"cpp/tools/temporal_replay.cpp")}
+    assets["weighted_bones_source"] = artifact(Path(__file__).parents[2]/"cpp/tools/temporal_weighted_bones.hpp")
     scripts = {f.name: artifact(f) for f in Path(__file__).parent.glob("*.py")}
     out = args.output.resolve()
     commands = {name: [assets["binary"]["path"], str(out/f"{name}-input.jsonl"),
                        str(out/f"{name}-output.jsonl"), "--diagnostics"] for name in ("clean", "fault")}
+    if args.ik_experiments:
+        for command in commands.values():
+            command.append("--ik-experiments")
     out.mkdir(parents=True, exist_ok=False)
     write_json(out/"manifest.json", {"schema": "fitra_hip_sensitivity_run_v1", "assets": assets,
         "scripts": scripts, "commands": commands, "fixture": header, "runtime_applied": False})

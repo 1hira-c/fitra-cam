@@ -54,6 +54,9 @@
   ankleの入口品質が良好なだけで常時固定anchorにはしない。股関節全面無効化や独立Kalmanへの
   単純回帰では、移動/足欠測時の連動を壊す可能性がある。
 - 詳細: [固定対照の設計・結果](../design/pose-3d-hip-observation-sensitivity.md)。runtime未変更。
+- offline候補の初回結果: [soft骨長比較](../design/pose-3d-soft-bone-experiment.md)で人工対照の
+  下流伝播は減ったが、legacy静止の腰/腿揺れが増えた。hipを常に弱くする設定は採用せず、
+  膝/足首側の誤差とsource confidenceの逆条件も評価する。
 
 ## 評価器を試す対照ケース
 

@@ -140,6 +140,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-22 — 観測重み付き骨長補正をoffline比較し、実録画の悪化を検出
+
+既存3候補を変えず、IKなし/soft骨長/hip重み0.1の実験候補を追加。
+骨長/hinge残差、score・欠損保持、prior一致、現在入力のみ、既存数値不変を回帰検証する。
+人工股関節5/20mm、6動作、実録画3 runを完了。人工前屈の足位置差は19.86→1.41mmだが、
+legacy静止の揺れ中央値は6.602→11.978mmへ悪化、腰へ揺れが移るため本番採用しない。
+Release replay build、CTest 8/8（Python 99件）pass。runtime/model/校正/wireは不変。
+full CTest/live受入れは未実施。→ [設計・結果](../design/pose-3d-soft-bone-experiment.md)。
+
 ### 2026-09-22 — 股関節のみの誤差注入と後段の段階別感度評価
 
 offline replayにoptional診断を追加し、post-Kalman/post-IK/平滑化前trackerをコピー保存する。
