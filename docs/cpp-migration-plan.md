@@ -358,6 +358,14 @@ checksum/索引/時刻検査と原画像の抜き取りで予定動作を確認�
 追加分の区間ラベル・校正・3D/教師品質・後段採点は未完了で、収録成功を品質合格に読み替えない。
 収録・文書更新のみのため再build/CTestは未実施。[収録手順](research/pose-3d-temporal-capture-protocol.md)を参照。
 
+同日追補: 全フレーム前の疎な診断wrapperを追加。画像evidence・captureに束縛された校正/床map・
+原seq/実時刻を保持し、元校正control→候補の再計算を行う。新規四方向M/L各24組でcontrol最大差0。
+Lの左hip入口品質は0/24のままで、1Hz診断をlag/jitter/未来教師coverageの評価に混ぜない。
+欠損分母、未観測null、capture不一致、疎な完了結果と通常temporal runの分離を回帰対象へ追加。
+全密度の暫定静止ラベル1,423組は用意したが、同区間の全推論・動作A/Bの採点は未完了。
+runtime/校正/filterは不変。関連CTest 7/7・Python 71件pass。再build/full CTestとlive VR受入れは未実施。
+[設計・結果](design/pose-3d-corpus-calibration-rescue.md)を参照。
+
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|
 | 0     | `cmake --build cpp/build && ./cpp/build/main --help`        | リンク成功、TRT runtime が初期化できる                                         |

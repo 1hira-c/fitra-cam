@@ -140,6 +140,18 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-22 — 四方向の疎なM/L診断と暫定静止ラベル
+
+全フレーム再生より先に、capture-boundな床map/校正と画像evidenceを固定して各方向6組を診断する
+`diagnose_corpus.py`を追加。原seq/実時刻・欠損分母を保持し、temporal runとはschemaを分ける。
+新規四方向原本のM/L各24組で旧校正control最大差0。床タグ候補はcam1のみ通過したが、
+股関節のraw品質通過はM左右0/24、L左0/24・右2/24。左右足首はM/Lとも24/24。
+方向で整合するcamera対が入れ替わり、1台の固定除外でも不足することを補助診断で確認した。
+全密度1,423組の暫定静止ラベルを作成。動作A/B・未来教師・時系列採点は引き続き未完了で、
+今回の1Hz結果から遅延/jitter/参照coverageを主張しない。runtime C++/filter/校正は不変。
+関連CTest 7/7・Python 71件pass。新規runtime変更なしのため再build/full CTestは未実施、実機VR品質は未確認。
+→ [疎な診断の設計・結果](../design/pose-3d-corpus-calibration-rescue.md#疎な四方向診断を全フレーム評価より先に行う)。
+
 ### 2026-09-22 — 四方向立位と後段評価用の動作原本を追加収録
 
 既存recorder・RTMPose-MでHMDなしの四方向立位、静止、横移動/停止、前屈、左右膝上げ、

@@ -121,3 +121,79 @@ Release build、関連CTest 7/7、内部Python 63件（skipなし）pass。
 旧run・元校正・captureに紐付く7 assetのhash不変を確認。main/main設定の変更はないため
 全アプリtarget/full CTestは未実施。live VRと実測GTによる品質受入れは未確認。
 詳細・数値は通常workspaceの`outputs/temporal-eval/20260922-calibration-rescue-summary.md`。
+
+## 疎な四方向診断を全フレーム評価より先に行う
+
+追加収録の全M/L推論より先に、静止区間の代表画像で幾何と2D観測の整合性を確認する。
+`scripts/temporal_eval/diagnose_corpus.py`は完了済みのcapture原本から直接起動できるが、
+通常のtemporal runとして完了したようには見せない。既存`completed_run`の制約も緩めない。
+
+- 原本checksum/索引/時刻を再検証し、正常停止sessionとcapture manifestを照合する。
+  元校正と床mapは**どちらもcapture時にhash固定済み**であることを要求する。
+  ファイルの一致はカメラ/床の物理配置一致を保証しない。
+- 推論前に画像を確認し、名前付きの順序付き・非重複区間をJSONで固定。
+  evidence画像のpath/hashを照合し、各整数秒に最も近いgroupを100ms以内・再利用なしで選ぶ。
+  原seq/64bit kernel時刻は保持し、1Hzの合成時刻に置き換えない。
+- 別時間帯の床タグ推定/検証は既存の固定gateを使う。全camera不採用の場合も診断結果として残す。
+  選択した同じpose groupへM/Lを実行し、旧校正controlの数値再現→候補校正の再計算を行う。
+- 方向・関節別に従来の品質gate通過数と再投影残差を出す。欠損/曖昧検出は分母から除かず、
+  観測不能の誤差は0でなくnull。synthetic nose endpointは参照適格にしない。
+- 元原本・asset・engine・script・evidenceを終了時にも照合し、各artifactのhashを完了マーカーへ残す。
+  schemaは`fitra_corpus_diagnostic_{selection,run,report,complete}_v1`の別系列。
+  **jitter、lag、未来window、tracker教師coverageは計算しない**。間引き結果を時間評価へ渡さない。
+
+selectionの最小形（`evidence`には実際に見た画像のartifactを指定）:
+
+```json
+{
+  "schema": "fitra_corpus_diagnostic_selection_v1",
+  "evidence": [{"path": "/absolute/path/reviewed-image.jpg", "sha256": "SHA256"}],
+  "train_seconds": [0, 13],
+  "validation_seconds": [81, 90],
+  "poses": [{"name": "facing_a", "start_second": 24, "end_second": 30}]
+}
+```
+
+```bash
+python3 scripts/temporal_eval/diagnose_corpus.py CLOSED_SESSION NEW_OUTPUT \
+  --capture-run CAPTURE_RUN --selection SELECTION_JSON \
+  --infer-binary cpp/build/tools/corpus_infer --geometry-binary cpp/build/tools/corpus_geometry \
+  --calib CAPTURE_CALIB --floor-map CAPTURE_FLOOR_MAP --det-engine DET_ENGINE \
+  --pose-engine M_ENGINE --pose-engine L_ENGINE
+```
+
+### 2026-09-22 四方向原本での結果
+
+`20260922-capture-orientation-02`の24〜30/35〜41/56〜62/66〜72秒を各6組選択。
+「四方向」は目視の向き区別であり、測量した90°のGTではない。推定13時刻・検証9時刻は別時間帯。
+`20260922-orientation-diagnostic`を完了し、M/L各24組の旧校正controlは全比較値で最大差0。
+cam1だけが校正候補のgateを通り、床の検証RMSは6.999→2.221px。
+cam0は2.310→2.369px、cam2は3.923→4.161pxと悪化し、元校正を保持。
+全候補に平面縮退警告。cam1の推定中心差60.87mm/回転差1.201°は実物の移動量ではない。
+
+候補校正のraw品質gateで、Mの左右hipは各0/24、Lは左0/24・右2/24。
+左右ankleはM/Lとも24/24。曖昧な複数人物検出は0。Lの方向別hip再投影中央値は以下。
+
+| 向き | 左hip px | 右hip px | 左通過 | 右通過 |
+|---|---:|---:|---:|---:|
+| A | 6.61 | 11.91 | 0/6 | 0/6 |
+| B | 8.90 | 18.60 | 0/6 | 0/6 |
+| C | 16.46 | 9.80 | 0/6 | 0/6 |
+| D | 9.89 | 6.46 | 0/6 | 2/6 |
+
+補助のPython/OpenCV probeでも全カメラ対を列挙。production三角測量に対し最大差は
+位置6.01e-8m以下・再投影1.50e-5px以下。Lの左hipは、Aではcam0–2が0.76px、
+Bではcam1–2が2.53pxと良い組み合わせが入れ替わり、Cでは3ペアとも9.56px以上。
+固定の1台除外だけでは解決しない観察だが、残存校正と視点依存の2D関節biasの原因分離は未完了。
+良いpairだけを採用するteacher生成やproduction変更は行っていない。
+
+四方向の暫定静止ラベルは全密度の1,423組に対応し、残り3,897組は採点外。
+全密度推論、動作A/Bのラベル・未来教師・後段採点は未完了。最初の全フレームM試行は
+診断優先へ切り替えて意図的に中断し、`complete.json`なしの未完了原本として保持した。
+疎な結果を用いて教師有効率/遅延/前屈twistが測れたとは主張しない。
+
+wrapperに8回帰を追加し、時刻/欠損/区間不正/capture束縛/未観測null/時系列runとの分離を検査。
+runtime C++、依存、wire、live校正/profile/filterは不変。
+関連CTest 7/7、内部Python 71件（skipなし）pass、CLI helpも確認。C++変更なしのため再buildと
+full CTestは未実施。全21診断artifactとcaptureの8 assetを再hash照合した。live VRの品質合格は未確認。
+詳細は通常workspaceの`outputs/temporal-eval/20260922-orientation-diagnostic-summary.md`。
