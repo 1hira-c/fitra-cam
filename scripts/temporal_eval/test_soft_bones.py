@@ -12,6 +12,7 @@ from hip_sensitivity import CANDIDATES, EXPERIMENTAL, constraint_summary, datase
 from synthetic import pose
 from run_postprocess_experiment import verify_baseline, verified_source
 from run_recording import artifact, write_json
+from joint_fault_controls import TARGETS as CONTROL_TARGETS, controls
 
 
 @unittest.skipUnless(os.environ.get("FITRA_TEMPORAL_REPLAY"), "C++ replay required")
@@ -167,6 +168,43 @@ class SoftBoneTests(unittest.TestCase):
         bad = copy.deepcopy(fo)
         bad[0]["constraint_metrics"]["soft_hips"]["bone_pairs"] = True
         with self.assertRaises(ValueError): score_pair(h, clean, fault, ch, co, fh, bad)
+
+    def test_nonhip_fault_controls_score_all_stages(self):
+        h, clean, fault = controls(hz=5, seconds=2)
+        ch, co = self.replay(h, clean)
+        fh, fo = self.replay(h, fault)
+        report = score_pair(h, clean, fault, ch, co, fh, fo, target_sets=CONTROL_TARGETS)
+        self.assertEqual(len(report["details"]), 8*6)
+        for d in report["details"]:
+            for k in (11, 12, 19): self.assertEqual(d["joints"]["raw"][str(k)]["rms_mm"], 0)
+        self.assertTrue(any(d["candidate"] == "soft_hips" and d["joints"]["post_ik"]["11"]["rms_mm"] > 0
+                            for d in report["details"]))
+
+
+class CounterControlTests(unittest.TestCase):
+    def test_only_declared_targets_change_and_scores_are_shared(self):
+        from hip_sensitivity import validate_pair
+        h, clean, fault = controls(hz=5, seconds=2)
+        self.assertEqual(len(clean), 80)
+        validate_pair(h, clean, fault, CONTROL_TARGETS)
+        for a, b in zip(clean, fault):
+            for k in (11, 12, 19): self.assertEqual(a["joints"][k], b["joints"][k])
+        with self.assertRaises(ValueError): validate_pair(h, clean, fault)
+        fault[0]["seq"] = False
+        with self.assertRaises(ValueError): validate_pair(h, clean, fault, CONTROL_TARGETS)
+
+    def test_score_conditions_have_identical_positions_and_random_errors(self):
+        _, clean, fault = controls(hz=5, seconds=2)
+        for series in (clean, fault):
+            for start in range(0, len(series), 20):
+                for high, low in zip(series[start:start+10], series[start+10:start+20]):
+                    for a, b in zip(high["joints"], low["joints"]):
+                        if a is not None: self.assertEqual(a[:3], b[:3])
+
+    def test_zero_fault_control_and_seed_reproducibility(self):
+        self.assertEqual(controls(hz=5, seconds=2), controls(hz=5, seconds=2))
+        _, clean, fault = controls(0, hz=5, seconds=2)
+        self.assertEqual(clean, fault)
 
 
 class ConstraintMetricTests(unittest.TestCase):

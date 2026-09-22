@@ -140,6 +140,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-22 — 膝・足首の逆条件で補正の上流伝播を評価
+
+静止/前屈×膝/足首×score高/低の8対照を追加。score比較は座標・乱数を同一に保つ。
+hip入力が不変でもsoft_hipsの腰が動く副作用を検出し、hip-only改善で採用しない評価を補強。
+既存hip CLIを共通runnerへ整理、対象indexの記録と両入力のlineage型検証を追加した。
+focused CTest 6/6（Python 103件、soft骨長17件）pass。既存CLIの誤差0/4,500 reports対も完了。
+原本・runtime・校正・モデルは未変更。full CTest/live受入れは未実施。
+→ [逆条件の設計・結果](../design/pose-3d-soft-bone-experiment.md#膝足首側の逆条件2026-09-22)。
+
 ### 2026-09-22 — 観測重み付き骨長補正をoffline比較し、実録画の悪化を検出
 
 既存3候補を変えず、IKなし/soft骨長/hip重み0.1の実験候補を追加。

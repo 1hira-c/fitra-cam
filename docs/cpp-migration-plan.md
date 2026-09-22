@@ -380,6 +380,11 @@ full CTestとlive VR受入れは未実施。[股関節感度評価](design/pose-
 Release replay build、CTest 8/8（Python 99件）pass。runtime/wire未変更・live品質未確認。
 [soft骨長比較](design/pose-3d-soft-bone-experiment.md)を参照。
 
+同日追補: 膝/足首誤差の8逆条件を追加。hip-onlyの改善と逆向きの伝播を対にし、
+同一座標/乱数に対してscoreだけを変えるテストでconfidence依存を可視化する。
+hipを弱く扱うと下流ノイズを腰へ戻すことを確認し、候補の採用見送りを維持。
+欠損/回転support・骨長拘束は共通runnerで保持する。実録画の原因確定やlive受入れとは区別する。
+
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|
 | 0     | `cmake --build cpp/build && ./cpp/build/main --help`        | リンク成功、TRT runtime が初期化できる                                         |

@@ -99,3 +99,27 @@ Release build、focused CTest 8/8（Python 99件、追加13件）pass。
 
 成果物: `outputs/temporal-eval/20260922-soft-bones-{hip5,hip20,motion,rescued-m,forward-bend,still}/`。
 各manifest/completeが入力・binary/source/scripts・結果hashを固定する。
+
+## 膝・足首側の逆条件（2026-09-22）
+
+`joint_fault_controls.py NEW_OUTPUT --binary REPLAY`は静止/前屈×膝/足首×score 0.95/0.2の
+8ケース（clean/fault各2,400 reports）を追加する。股関節入力は全く変更しない。
+high/low-score間も座標と乱数は同一で、宣言scoreだけの影響を測る。
+scoreは入力が本当に正しい確率ではなく、誤差をscoreが正しく知らせた場合/知らせない場合の対照。
+共通runnerは既存hip-only CLI/候補を保ち、対象indexをmanifestへ固定する。
+
+- 静止・膝20mm・高score: 最終腰位置の対照との差RMSはminimal 0、soft_bones 1.052、
+  soft_hips 4.192mm。最終足（左右の悪い方）もsoft_bones 3.801→soft_hips 5.352mm。
+- 同じ座標で膝scoreだけ0.2へ下げると、腰差はsoft_bones 0.134、soft_hips 1.109mm。
+  scoreが誤差を正しく示せれば抑制できるが、hip固定弱重みの副作用自体は残る。
+- 静止・足首20mm・高score: 腰差0→0.902→3.840mm、最終足差15.409→18.106→19.244mm
+  （minimal→soft_bones→soft_hips）。足首誤差ではsoft化自体が不利なケースもある。
+- 前屈でも同傾向。入力不変のhipが動くため、下流の良い観測を守る効果と、
+  下流の悪い観測を上流へ戻す効果を両方評価できた。実録画悪化の原因をこれだけで確定しない。
+
+結果: `outputs/temporal-eval/20260922-soft-bones-joint-controls/`。
+全48 case/candidateで段階差・欠損/回転support・拘束残差を保存。
+対象外点不変、high/low-score対照同一、seed再現、誤差0、全段採点を回帰対象へ追加した。
+focused CTest 6/6（Python 103件、追加4件）pass。共通runnerへ移した既存CLIも、
+誤差0/clean・fault各4,500 reportsで全支持関節の対照差0と完了hashを確認した。
+一律hip重み0.1は引き続き不採用。次は保存済み静止rawの部位別異常と拘束伝播を切り分ける。

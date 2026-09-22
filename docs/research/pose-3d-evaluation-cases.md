@@ -57,6 +57,9 @@
 - offline候補の初回結果: [soft骨長比較](../design/pose-3d-soft-bone-experiment.md)で人工対照の
   下流伝播は減ったが、legacy静止の腰/腿揺れが増えた。hipを常に弱くする設定は採用せず、
   膝/足首側の誤差とsource confidenceの逆条件も評価する。
+- 逆条件8ケースも完了。静止の膝ノイズ20mm/high-scoreではhip入力不変でも、
+  soft_hipsの最終腰に4.192mmの対照差が出た（soft_bones 1.052mm）。
+  同じ座標で膝scoreだけ下げる対照も保持し、「股関節だけが常に悪い」前提の過適合を検出する。
 
 ## 評価器を試す対照ケース
 
@@ -69,6 +72,7 @@
 | forwardが反対向き / twist参照confidence=0 | 分解未定義 / 参照不明を分離 | 根拠のないtwist正解や誤差0 |
 | 欠測・seq穴・人物境界 | jump/rateのsupportを切る | 復帰を1レポートの急回転と誤認 |
 | 股関節のみのjitter / 固定bias / 向き依存bias | 入力不変の膝・足・腿回転への段階別伝播 | 固定ずれをjitter=0で高評価 / 人工誤差を実測GTに格上げ |
+| 膝/足首のみのjitter、同一座標でscore高/低 | 入力不変の腰への逆伝播、誤った高scoreへの弱さ | hip-only人工対照の改善だけで候補採用 |
 
 ## 次の評価器作業
 

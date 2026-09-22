@@ -127,7 +127,7 @@ def dataset(amplitude_mm=20., hz=60, seconds=5, seed=20260922, selected=None):
     return header, clean, faulty
 
 
-def validate_pair(header, clean, faulty):
+def validate_pair(header, clean, faulty, target_sets=TARGETS):
     if (header.get("schema") != "fitra_temporal_input_v1" or header.get("input_stage") != "raw_triangulated"
             or header.get("kp_format") != "halpe26" or header.get("coordinate_frame") != "fitra_world_z_up_m"
             or header.get("time_basis") != "synthetic_nominal" or header.get("reference_kind") != "none"
@@ -135,15 +135,17 @@ def validate_pair(header, clean, faulty):
             or not clean or len(clean) != len(faulty)):
         raise ValueError("controlled synthetic pair required")
     definitions = {c["id"]: c for c in header["provenance"]["cases"]}
+    if any(c["target"] not in target_sets for c in definitions.values()):
+        raise ValueError("unknown perturbation target set")
     for a, b in zip(clean, faulty):
-        if (type(a["seq"]) is not int or type(a["t_ns"]) is not int or type(a["evaluate"]) is not bool
-                or a["seq"] < 0 or a["t_ns"] < 0):
+        if any(type(r["seq"]) is not int or type(r["t_ns"]) is not int or type(r["evaluate"]) is not bool
+               or r["seq"] < 0 or r["t_ns"] < 0 for r in (a, b)):
             raise ValueError("invalid controlled pair lineage")
         if {k: v for k, v in a.items() if k != "joints"} != {k: v for k, v in b.items() if k != "joints"}:
             raise ValueError("pair metadata/lineage mismatch")
         if len(a["joints"]) != 26 or len(b["joints"]) != 26 or a["state"] != "fresh":
             raise ValueError("expected fresh Halpe26 synthetic pair")
-        targets = TARGETS[definitions[a["segment"]]["target"]]
+        targets = target_sets[definitions[a["segment"]]["target"]]
         for k, (x, y) in enumerate(zip(a["joints"], b["joints"])):
             if (x is None) != (y is None) or (k not in targets and x != y):
                 raise ValueError("perturbation changed missingness or a non-target joint")
@@ -243,8 +245,8 @@ def validate_replay(source, header, rows):
             constraint_summary(rows, name)
 
 
-def score_pair(header, clean, faulty, clean_header, clean_out, fault_header, fault_out):
-    validate_pair(header, clean, faulty)
+def score_pair(header, clean, faulty, clean_header, clean_out, fault_header, fault_out, target_sets=TARGETS):
+    validate_pair(header, clean, faulty, target_sets)
     validate_replay(clean, clean_header, clean_out)
     validate_replay(faulty, fault_header, fault_out)
     if ({k: v for k, v in clean_header.items() if k != "input_fnv1a64"}
@@ -255,7 +257,7 @@ def score_pair(header, clean, faulty, clean_header, clean_out, fault_header, fau
         indices = [i for i, r in enumerate(clean) if r["segment"] == case["id"] and r["evaluate"]]
         if not indices:
             raise ValueError("empty scored case")
-        targets = TARGETS[case["target"]]
+        targets = target_sets[case["target"]]
         magnitude = rms([norm(sub(faulty[i]["joints"][k][:3], clean[i]["joints"][k][:3]))
                          for i in indices for k in targets])
         for candidate in candidate_names(clean_header):
@@ -308,29 +310,24 @@ def markdown(report):
     return "\n".join(lines)+"\n"
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("output", type=Path)
-    p.add_argument("--binary", type=Path, required=True)
-    p.add_argument("--amplitude-mm", type=float, default=20.)
-    p.add_argument("--ik-experiments", action="store_true", help="append offline spatial IK ablations")
-    args = p.parse_args()
-    if args.output.exists():
-        p.error("new output directory required")
-    header, clean, faulty = dataset(args.amplitude_mm)
-    validate_pair(header, clean, faulty)
-    assets = {"binary": artifact(args.binary), "replay_source": artifact(Path(__file__).parents[2]/"cpp/tools/temporal_replay.cpp")}
+def run_pair(output, binary, header, clean, faulty, experiments=False, target_sets=TARGETS,
+             schema_prefix="fitra_hip_sensitivity", formatter=markdown):
+    if output.exists():
+        raise ValueError("new output directory required")
+    validate_pair(header, clean, faulty, target_sets)
+    assets = {"binary": artifact(binary), "replay_source": artifact(Path(__file__).parents[2]/"cpp/tools/temporal_replay.cpp")}
     assets["weighted_bones_source"] = artifact(Path(__file__).parents[2]/"cpp/tools/temporal_weighted_bones.hpp")
     scripts = {f.name: artifact(f) for f in Path(__file__).parent.glob("*.py")}
-    out = args.output.resolve()
+    out = output.resolve()
     commands = {name: [assets["binary"]["path"], str(out/f"{name}-input.jsonl"),
                        str(out/f"{name}-output.jsonl"), "--diagnostics"] for name in ("clean", "fault")}
-    if args.ik_experiments:
+    if experiments:
         for command in commands.values():
             command.append("--ik-experiments")
     out.mkdir(parents=True, exist_ok=False)
-    write_json(out/"manifest.json", {"schema": "fitra_hip_sensitivity_run_v1", "assets": assets,
-        "scripts": scripts, "commands": commands, "fixture": header, "runtime_applied": False})
+    write_json(out/"manifest.json", {"schema": schema_prefix+"_run_v1", "assets": assets,
+        "scripts": scripts, "commands": commands, "fixture": header, "target_indices": target_sets,
+        "runtime_applied": False})
     results, inputs = {}, []
     for name, rows in (("clean", clean), ("fault", faulty)):
         with (out/f"{name}-input.jsonl").open("x") as handle:
@@ -342,15 +339,26 @@ def main():
             subprocess.run(commands[name], stdout=log, stderr=subprocess.STDOUT, check=True)
         results[name] = read_jsonl(out/f"{name}-output.jsonl")
         verify_input_binding(out/f"{name}-input.jsonl", results[name][0])
-    report = score_pair(header, clean, faulty, *results["clean"], *results["fault"])
+    report = score_pair(header, clean, faulty, *results["clean"], *results["fault"], target_sets=target_sets)
+    report["schema"] = schema_prefix+"_report_v1"
     write_json(out/"report.json", report)
     with (out/"report.md").open("x") as handle:
-        handle.write(markdown(report))
+        handle.write(formatter(report))
     if any(artifact(a["path"]) != a for a in [*assets.values(), *scripts.values(), *inputs]):
         raise ValueError("code, binary or generated input changed during sensitivity run")
-    write_json(out/"complete.json", {"schema": "fitra_hip_sensitivity_complete_v1", "runtime_applied": False,
+    write_json(out/"complete.json", {"schema": schema_prefix+"_complete_v1", "runtime_applied": False,
         "artifacts": {f.name: artifact(f) for f in sorted(out.iterdir()) if f.is_file()}})
     print(out/"report.md")
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("output", type=Path)
+    p.add_argument("--binary", type=Path, required=True)
+    p.add_argument("--amplitude-mm", type=float, default=20.)
+    p.add_argument("--ik-experiments", action="store_true", help="append offline spatial IK ablations")
+    args = p.parse_args()
+    run_pair(args.output, args.binary, *dataset(args.amplitude_mm), experiments=args.ik_experiments)
 
 
 if __name__ == "__main__":
