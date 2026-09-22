@@ -9,9 +9,9 @@ import statistics
 import subprocess
 
 from evaluate import markdown, percentile, read_jsonl, score, verify_input_binding
-from hip_sensitivity import CANDIDATES, EXPERIMENTAL, candidate_names, constraint_summary
+from hip_sensitivity import CANDIDATES, candidate_names, constraint_summary
 from run_recording import artifact, write_json
-from synthetic import dataset
+from synthetic import dataset, template_profile
 
 
 def verified_source(directory):
@@ -51,7 +51,8 @@ def verify_baseline(control, experiment):
 
 
 def diagnostics(source, output, header):
-    if candidate_names(header) != EXPERIMENTAL or len(source) != len(output):
+    candidates = candidate_names(header)
+    if candidates == CANDIDATES or len(source) != len(output):
         raise ValueError("complete experimental replay required")
     groups = {}
     for s, o in zip(source, output):
@@ -64,7 +65,7 @@ def diagnostics(source, output, header):
             groups.setdefault((s["segment"], s.get("phase", "unlabelled")), []).append(o)
     details = []
     for (segment, phase), rows in groups.items():
-        for name in EXPERIMENTAL:
+        for name in candidates:
             times = [r["processing_ms"][name] for r in rows]
             if not all(type(t) in (int, float) and math.isfinite(t) and t >= 0 for t in times):
                 raise ValueError("invalid processing time")
@@ -80,23 +81,38 @@ def main():
     p.add_argument("output", type=Path)
     p.add_argument("--binary", type=Path, required=True)
     p.add_argument("--source-run", type=Path, help="omit to use deterministic synthetic motion")
+    p.add_argument("--isolate-head", action="store_true", help="append one-way head leaf ablations")
+    p.add_argument("--diagnostics", action="store_true", help="retain stage copies without changing candidate values")
+    p.add_argument("--synthetic-bone-prior", action="store_true",
+                   help="synthetic input only: fixed template prior including head/torso/feet")
     args = p.parse_args()
+    if args.source_run and args.synthetic_bone_prior:
+        p.error("synthetic prior cannot override a recorded subject profile")
     if args.output.exists(): p.error("choose a new output directory")
     source = None
     if args.source_run:
         source, header, rows = verified_source(args.source_run)
     else:
         header, rows = dataset()
+        if args.synthetic_bone_prior:
+            header["provenance"]["bone_prior"] = "fixed_synthetic_template_not_fitted_to_run"
     root = Path(__file__).parents[2]
     assets = {"binary": artifact(args.binary), "replay_source": artifact(root/"cpp/tools/temporal_replay.cpp"),
               "spatial_source": artifact(root/"cpp/tools/temporal_weighted_bones.hpp")}
     scripts = {f.name: artifact(f) for f in Path(__file__).parent.glob("*.py")}
     out = args.output.resolve()
     command = [assets["binary"]["path"], str(out/"input.jsonl"), str(out/"replay.jsonl"), "--ik-experiments"]
-    if source: command.append(source["subject_profile"]["path"])
+    if args.isolate_head: command.append("--isolate-head")
+    if args.diagnostics: command.append("--diagnostics")
     control = [assets["binary"]["path"], str(out/"input.jsonl"), str(out/"control.jsonl")]
+    if source: command.append(source["subject_profile"]["path"])
+    elif args.synthetic_bone_prior:
+        for argv in (command, control): argv.append(str(out/"synthetic-profile.json"))
     commands = [command] if source else [control, command]
     out.mkdir(parents=True, exist_ok=False)
+    if args.synthetic_bone_prior:
+        write_json(out/"synthetic-profile.json", template_profile())
+        assets["synthetic_profile"] = artifact(out/"synthetic-profile.json")
     write_json(out/"manifest.json", {"schema": "fitra_postprocess_experiment_run_v1", "source": source,
         "assets": assets, "scripts": scripts, "commands": commands, "runtime_applied": False})
     if source: shutil.copyfile(source["input"]["path"], out/"input.jsonl")

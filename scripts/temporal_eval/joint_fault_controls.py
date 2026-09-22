@@ -67,9 +67,11 @@ def main():
     p.add_argument("output", type=Path)
     p.add_argument("--binary", type=Path, required=True)
     p.add_argument("--amplitude-mm", type=float, default=20.)
+    p.add_argument("--isolate-head", action="store_true")
     args = p.parse_args()
     run_pair(args.output, args.binary, *controls(args.amplitude_mm), experiments=True,
-             target_sets=TARGETS, schema_prefix="fitra_joint_fault_control", formatter=markdown)
+             target_sets=TARGETS, schema_prefix="fitra_joint_fault_control", formatter=markdown,
+             isolate_head=args.isolate_head)
 
 
 if __name__ == "__main__":

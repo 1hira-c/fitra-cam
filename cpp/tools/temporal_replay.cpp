@@ -86,7 +86,7 @@ void write_trackers(std::ostream& out, const Trackers& trackers) {
 
 struct Candidate {
     bool use_kalman, use_euro;
-    int experimental_ik = 0; // 0=production, 1=bypass, 2=soft bones, 3=soft hips
+    int experimental_ik = 0; // 0=production, 1=bypass, 2/3=soft bones/hips, 4/5=head leaf variants
     std::vector<temporal_experiment::Bone> bones;
     lift::SkeletonKalman kalman;
     lift::IkSolver ik;
@@ -116,7 +116,8 @@ struct Candidate {
         if (diagnostic) diagnostic->post_kalman = s;
         if (experimental_ik == 0) s = ik.update(s);
         else if (experimental_ik >= 2)
-            s = temporal_experiment::soft_bones(s, bones, experimental_ik == 3 ? .1 : 1.);
+            s = temporal_experiment::soft_bones(s, bones,
+                (experimental_ik == 3 || experimental_ik == 5) ? .1 : 1., experimental_ik >= 4);
         if (diagnostic) diagnostic->post_ik = s;
         const auto report = floor.update(s, dt);
         auto t = tracking::extract_trackers_with_floor_corrections(
@@ -143,17 +144,18 @@ struct Candidate {
 int main(int argc, char** argv) {
     try {
         if (argc == 2 && std::string(argv[1]) == "--help") {
-            std::cout << "temporal_replay INPUT.jsonl OUTPUT.jsonl [SUBJECT_PROFILE.yaml] [--diagnostics] [--ik-experiments]\n"
+            std::cout << "temporal_replay INPUT.jsonl OUTPUT.jsonl [SUBJECT_PROFILE.yaml] [--diagnostics] [--ik-experiments] [--isolate-head]\n"
                          "Input: fitra_temporal_input_v1 header, then timestamped Halpe26 reports.\n"
                          "Without a profile, header.subject_height_m supplies the IK prior.\n"
                          "--diagnostics: copy post-Kalman/IK joints and pre-smoothing trackers (offline only).\n"
                          "--ik-experiments: append no_ik/soft_bones/soft_hips; experimental, never live.\n"
+                         "--isolate-head: with --ik-experiments, append one-way head leaf ablations.\n"
                          "CPU offline evaluation only; output must not already exist.\n";
             return 0;
         }
-        require(argc >= 3 && argc <= 6, "usage: temporal_replay INPUT OUTPUT [SUBJECT_PROFILE] [--diagnostics] [--ik-experiments]");
+        require(argc >= 3 && argc <= 7, "usage: temporal_replay INPUT OUTPUT [SUBJECT_PROFILE] [--diagnostics] [--ik-experiments] [--isolate-head]");
         std::string profile;
-        bool diagnostics = false, experiments = false;
+        bool diagnostics = false, experiments = false, isolate_head = false;
         for (int i = 3; i < argc; ++i) {
             const std::string option = argv[i];
             if (option == "--diagnostics") {
@@ -162,11 +164,15 @@ int main(int argc, char** argv) {
             } else if (option == "--ik-experiments") {
                 require(!experiments, "duplicate --ik-experiments");
                 experiments = true;
+            } else if (option == "--isolate-head") {
+                require(!isolate_head, "duplicate --isolate-head");
+                isolate_head = true;
             } else {
                 require(profile.empty() && !option.empty() && option.front() != '-', "unexpected argument");
                 profile = option;
             }
         }
+        require(!isolate_head || experiments, "--isolate-head requires --ik-experiments");
         std::ifstream input(argv[1]);
         require(input.good(), "cannot open input");
         require(!std::ifstream(argv[2]).good(), "output already exists; choose a new path");
@@ -212,9 +218,10 @@ int main(int argc, char** argv) {
         std::vector<const char*> names{"minimal", "kalman", "current"};
         const auto targets = experiments ? temporal_experiment::bone_targets(io) : std::vector<temporal_experiment::Bone>{};
         if (experiments) {
-            for (int kind = 1; kind <= 3; ++kind)
+            for (int kind = 1; kind <= (isolate_head ? 5 : 3); ++kind)
                 candidates.push_back(std::make_unique<Candidate>(false, false, io, kind));
             names.insert(names.end(), {"no_ik", "soft_bones", "soft_hips"});
+            if (isolate_head) names.insert(names.end(), {"soft_bones_head_leaf", "soft_hips_head_leaf"});
         }
         tracking::TrackerExtractorOptions opts;
         std::ofstream output(argv[2]);
@@ -237,7 +244,7 @@ int main(int argc, char** argv) {
                << ",\"waist_height_frac\":" << opts.waist_height_frac;
         if (diagnostics) output << ",\"diagnostics_schema\":\"fitra_temporal_diagnostics_v1\"";
         if (experiments) {
-            output << ",\"ik_experiment\":{\"schema\":\"fitra_soft_bones_experiment_v1\","
+            output << ",\"ik_experiment\":{\"schema\":\"fitra_soft_bones_experiment_v" << (isolate_head ? 2 : 1) << "\","
                       "\"iterations\":12,\"bone_stiffness\":10,\"score_floor\":0.05,\"hip_weight\":0.1,"
                       "\"temporal_filter\":false,\"hard_hinges\":false,\"bone_targets\":[";
             for (std::size_t i = 0; i < targets.size(); ++i) {
@@ -245,7 +252,11 @@ int main(int argc, char** argv) {
                 output << '[' << targets[i].parent << ',' << targets[i].child << ',' << targets[i].length << ']';
             }
             output << "],\"candidates\":{\"no_ik\":\"bypass_ablation\","
-                      "\"soft_bones\":\"score_weighted_spatial\",\"soft_hips\":\"same_with_hip_prior_0.1\"}}";
+                      "\"soft_bones\":\"score_weighted_spatial\",\"soft_hips\":\"same_with_hip_prior_0.1\"";
+            if (isolate_head)
+                output << ",\"soft_bones_head_leaf\":\"score_weighted_body_one_way_head\","
+                          "\"soft_hips_head_leaf\":\"same_with_hip_prior_0.1_one_way_head\"";
+            output << "}}";
         }
         output << "}\n";
         std::int64_t previous_time = -1, previous_seq = -1;

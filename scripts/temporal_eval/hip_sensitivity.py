@@ -17,6 +17,7 @@ TARGETS = {"center": (19,), "hips_common": (11, 12), "hips_differential": (11, 1
 BODY = tuple(range(5, 26))
 CANDIDATES = ("minimal", "kalman", "current")
 EXPERIMENTAL = CANDIDATES + ("no_ik", "soft_bones", "soft_hips")
+HEAD_ISOLATED = EXPERIMENTAL + ("soft_bones_head_leaf", "soft_hips_head_leaf")
 STAGES = ("raw", "post_kalman", "post_ik")
 
 
@@ -25,6 +26,8 @@ def candidate_names(header):
     if names == CANDIDATES and "ik_experiment" not in header:
         return names
     if names == EXPERIMENTAL and header.get("ik_experiment", {}).get("schema") == "fitra_soft_bones_experiment_v1":
+        return names
+    if names == HEAD_ISOLATED and header.get("ik_experiment", {}).get("schema") == "fitra_soft_bones_experiment_v2":
         return names
     raise ValueError("unknown sensitivity candidate set")
 
@@ -240,7 +243,7 @@ def validate_replay(source, header, rows):
                     if t is not None:
                         validate_tracker(t)
         previous = s
-    if candidates == EXPERIMENTAL:
+    if candidates != CANDIDATES:
         for name in candidates:
             constraint_summary(rows, name)
 
@@ -311,7 +314,7 @@ def markdown(report):
 
 
 def run_pair(output, binary, header, clean, faulty, experiments=False, target_sets=TARGETS,
-             schema_prefix="fitra_hip_sensitivity", formatter=markdown):
+             schema_prefix="fitra_hip_sensitivity", formatter=markdown, isolate_head=False):
     if output.exists():
         raise ValueError("new output directory required")
     validate_pair(header, clean, faulty, target_sets)
@@ -321,9 +324,10 @@ def run_pair(output, binary, header, clean, faulty, experiments=False, target_se
     out = output.resolve()
     commands = {name: [assets["binary"]["path"], str(out/f"{name}-input.jsonl"),
                        str(out/f"{name}-output.jsonl"), "--diagnostics"] for name in ("clean", "fault")}
-    if experiments:
+    if experiments or isolate_head:
         for command in commands.values():
             command.append("--ik-experiments")
+            if isolate_head: command.append("--isolate-head")
     out.mkdir(parents=True, exist_ok=False)
     write_json(out/"manifest.json", {"schema": schema_prefix+"_run_v1", "assets": assets,
         "scripts": scripts, "commands": commands, "fixture": header, "target_indices": target_sets,
@@ -357,8 +361,10 @@ def main():
     p.add_argument("--binary", type=Path, required=True)
     p.add_argument("--amplitude-mm", type=float, default=20.)
     p.add_argument("--ik-experiments", action="store_true", help="append offline spatial IK ablations")
+    p.add_argument("--isolate-head", action="store_true", help="also append one-way head leaf ablations")
     args = p.parse_args()
-    run_pair(args.output, args.binary, *dataset(args.amplitude_mm), experiments=args.ik_experiments)
+    run_pair(args.output, args.binary, *dataset(args.amplitude_mm), experiments=args.ik_experiments,
+             isolate_head=args.isolate_head)
 
 
 if __name__ == "__main__":

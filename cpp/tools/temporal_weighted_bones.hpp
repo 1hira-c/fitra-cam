@@ -50,7 +50,8 @@ inline std::vector<Bone> bone_targets(const lift::IkSolver::Options& options) {
 inline cv::Vec3d point(const infer::Joint3D& joint) { return {joint.x, joint.y, joint.z}; }
 
 inline infer::Skeleton3D soft_bones(const infer::Skeleton3D& input,
-                                  const std::vector<Bone>& bones, double hip_weight) {
+                                  const std::vector<Bone>& bones, double hip_weight,
+                                  bool isolate_head = false) {
     // Minimize sum_i w_i |x_i-y_i|^2 + 10 sum_edges (|x_c-x_p|-L)^2.
     // Alternating unit edge directions and an SPD linear solve decrease that
     // objective. Fixed 12 iterations; no history, future samples or dt.
@@ -74,6 +75,9 @@ inline infer::Skeleton3D soft_bones(const infer::Skeleton3D& input,
     }
     std::vector<Bone> active;
     for (const auto& b : bones) {
+        // Optional ablation: head is a one-way leaf. A bad head observation
+        // must not pull the entire body through the neck/torso constraints.
+        if (isolate_head && b.child == lift::kHalpeHeadTop) continue;
         if (!input.joints[b.parent].valid || !input.joints[b.child].valid) continue;
         // Coincident observations contain no bone direction. Do not fabricate it.
         if (cv::norm(point(input.joints[b.child])-point(input.joints[b.parent])) < 1e-8) continue;
@@ -108,6 +112,19 @@ inline infer::Skeleton3D soft_bones(const infer::Skeleton3D& input,
         output.joints[k].x = static_cast<float>(current.at<double>(k, 0));
         output.joints[k].y = static_cast<float>(current.at<double>(k, 1));
         output.joints[k].z = static_cast<float>(current.at<double>(k, 2));
+    }
+    if (isolate_head) for (const auto& b : bones) {
+        if (b.child != lift::kHalpeHeadTop) continue;
+        const auto& parent = output.joints[b.parent];
+        auto& child = output.joints[b.child];
+        if (!parent.valid || !child.valid) continue;
+        auto direction = point(child)-point(parent);
+        const double length = cv::norm(direction);
+        if (length < 1e-8) continue;
+        const auto projected = point(parent)+direction*(b.length/length);
+        child.x = static_cast<float>(projected[0]);
+        child.y = static_cast<float>(projected[1]);
+        child.z = static_cast<float>(projected[2]);
     }
     lift::synthesize_halpe_head_direction(output, input);
     return output;

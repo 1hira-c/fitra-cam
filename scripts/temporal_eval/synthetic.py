@@ -20,6 +20,20 @@ def pose():
     return values
 
 
+def template_profile():
+    """Synthetic-only prior from the fixed template, never fitted to a test run."""
+    p = pose()
+    parents = (-1, -1, -1, -1, -1, 18, 18, 5, 6, 7, 8, 19, 19,
+               11, 12, 13, 14, 18, 19, -1, 15, 16, 15, 16, 15, 16)
+    lengths = [math.dist(p[parent][:3], p[child][:3]) if parent >= 0 else 0.
+               for child, parent in enumerate(parents)]
+    return {"schema": "fitra_subject_profile_v2", "subject_id": "synthetic_template_only",
+            "subject_height_m": 1.7, "quality_status": "pass", "bone_lengths_m": lengths,
+            "shoulder_width_m": math.dist(p[5][:3], p[6][:3]),
+            "hip_width_m": math.dist(p[11][:3], p[12][:3]),
+            "provenance": "fixed_synthetic_template_not_real_subject_calibration"}
+
+
 def dataset(hz=60, seed=20260908):
     rng = random.Random(seed)
     header = {"schema":"fitra_temporal_input_v1", "input_stage":"raw_triangulated",

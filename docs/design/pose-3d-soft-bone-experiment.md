@@ -123,3 +123,71 @@ scoreは入力が本当に正しい確率ではなく、誤差をscoreが正し�
 focused CTest 6/6（Python 103件、追加4件）pass。共通runnerへ移した既存CLIも、
 誤差0/clean・fault各4,500 reportsで全支持関節の対照差0と完了hashを確認した。
 一律hip重み0.1は引き続き不採用。次は保存済み静止rawの部位別異常と拘束伝播を切り分ける。
+
+## 頭部leafの一方向化による切り分け
+
+legacy静止のraw頭頂17は940/940点が存在するが、位置のばらつきRMSは216.8mm、
+neck→head_topの保存prior 273.9mmに対する距離残差RMSは551.4mmだった。
+score中央値0.736でもこの異常を示しておらず、全身の双方向拘束に入れると腰まで波及し得る。
+人体の真の動き/校正/推論のどれが原因かは未確定だが、offline候補の副作用は対照で分離できる。
+
+`--ik-experiments --isolate-head`に限り`soft_bones_head_leaf` / `soft_hips_head_leaf`を追加。
+頭頂17→首18からbodyへのフィードバックだけをなくし、bodyを解いた後に17を首からの保存骨長へ
+一方向投影する。頭部を固定したり欠損を合成したりはしない。既存6候補の計算は変更しない。
+同一hip重みの候補同士で比較し、head分離とhip重み変更を混同しない。
+頭priorがない場合は元候補と完全同一。顔方向の合成は既存処理を維持する。
+
+8候補時はoffline markerを`fitra_soft_bones_experiment_v2`へ分け、既存3/6候補も読める。
+`run_postprocess_experiment.py --isolate-head --diagnostics`で同じ完了録画の段階コピーも保存する。
+これは品質に応じた外れ値処理ではなく、特定leafの方向性を変える原因切り分け用の候補。
+頭以外の外れ値、移動/欠測、骨長不整合、ひねりの観測可能性を解決したとは扱わない。
+
+### 切り分け結果と候補の扱い（2026-09-22）
+
+同じ実録画3 runで、既存6候補の全出力数値がhead分離追加前と一致することを確認した。
+legacy静止の940 reportsでは以下。位置揺れは実際の微動も含み、GT誤差ではない。
+
+| 候補 | 腰の揺れRMS mm | 左/右腿 mm | 左/右足 mm | 部位中央値 mm |
+|---|---:|---:|---:|---:|
+| minimal | 5.392 | 6.888 / 6.378 | 5.132 / 6.323 | 6.602 |
+| soft_bones | 17.185 | 7.120 / 6.752 | 2.223 / 4.303 | 6.936 |
+| soft_hips | 25.380 | 12.369 / 11.587 | 2.398 / 4.370 | 11.978 |
+| soft_bones_head_leaf | 4.960 | 5.242 / 5.156 | 2.263 / 4.287 | 5.058 |
+| soft_hips_head_leaf | 4.911 | 5.200 / 5.054 | 2.298 / 4.343 | 4.983 |
+
+全欄940/940出力。post-IK hip-center自身もsoft_hips 22.613→分離後4.943mmへ減る。
+頭部からの拘束伝播が、この試作で増えた腰の揺れに寄与したと切り分けられる。
+本番で以前体感した遅延・腿twistの原因を認定した結果ではない。
+拘束残差RMSはminimal 0.698、head分離2候補1.007/0.585mm（19,740骨pair）。
+5–175°外hingeは0対1,777/1,736（各3,760pair）で、hard hingeの相違は依然残る。
+この範囲外というだけで人体として誤りと断定もしない。
+
+legacy前屈の左腿twist急変はminimal 8/836、分離後2候補とも7/836。
+左腿出力はいずれも877/1,186。新規3視点Mでも、head分離前後で全trackerの急変数は
+soft_bones 1/16,675、soft_hips 0/16,675のまま。未観測window85件は急変0扱いにしない。
+head分離で位置の悪化を解消できても、前屈の腿ひねり問題の解消には至っていない。
+
+### 通常動作・欠測の対照
+
+`run_postprocess_experiment.py NEW_OUTPUT --binary REPLAY --isolate-head --diagnostics --synthetic-bone-prior`
+は既存6動作2,160 reportsを、固定人工templateのhead/torso/feet込みpriorで再生する。
+test runや未来から骨長を学習せず、templateから作った人工profileを成果物へhash付きで保存する。
+`--source-run`との併用は禁止し、実録画のprofileを上書きしない。
+arm_swing等のfixture自体は完全な剛体骨運動ではなく、物理精度ランキングとは区別する。
+
+- head分離2候補の動作振幅比中央値1.0003/1.0004、位置lag中央値0ms。
+  ただし既存の足処理で、並進の左足16.7ms、start_stopの左足50msはminimalと同じく残る。
+  静止脚の前屈等、動きがないためlag未定義の項目は0扱いにしない。
+- minimal/分離2候補とも出力17,935/17,940 tracker-reports。欠測を隠して数値を改善していない。
+- stage solverは現在入力のみ。prefix、境界reset、欠損/score保持、同変性、頭のみの外れ値の
+  body非伝播、頭priorなしの完全同一性、診断ON/OFF同値、CLI誤用拒否を検証した。
+- Release replay build、focused CTest 8/8（Python 114件、head関連11件）pass。
+  full CTest/VR runtime起動/HMD受入れは実施していない。
+
+結論: `soft_bones_head_leaf`を次の検証用候補として保持する。hip重み0.1との差はこの静止録画では
+小さく、膝/足首逆条件の代償もあるため、hipを一律0.1にする根拠にはしない。
+学習型補正の導入前でも、観測の誤りを全身へ伝播させる構造を評価器で検出できるようになった。
+実機への採用は保留。未確定のカメラ/観測品質と腿twistを、さらなる平滑化で隠さない。
+
+成果物: `outputs/temporal-eval/20260922-head-leaf-{still,forward-bend,rescued-m,motion-matched}/`。
+利用者向け入口: `outputs/temporal-eval/20260922-postprocess-comparison-summary.md`（ローカル成果物）。

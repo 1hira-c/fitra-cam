@@ -140,6 +140,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-22 — 頭部観測の腰への伝播をofflineで分離
+
+静止raw頭頂の大きな距離不整合を確認し、head→bodyフィードバックだけを切る2候補を追加。
+既存6候補の実録画出力を維持したまま、soft_hipsで増えた腰の揺れ25.380→4.911mmを分離した。
+hip通常重みのhead分離候補も4.960mmで、hipを一律弱くする積極的な根拠にはしない。
+前屈左腿twist急変7/836は残る。実録画3 runと人工template prior付き6動作を完了。
+Release replay build、focused CTest 8/8（Python 114件）pass。runtime/原本/校正/wireは未変更。
+本番採用・full CTest・HMD受入れは未実施。→ [設計・結果](../design/pose-3d-soft-bone-experiment.md)。
+
 ### 2026-09-22 — 膝・足首の逆条件で補正の上流伝播を評価
 
 静止/前屈×膝/足首×score高/低の8対照を追加。score比較は座標・乱数を同一に保つ。
