@@ -140,6 +140,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-23 — VMT体感比較でdistance5を暫定維持、腿twistは別課題へ
+
+Windows手動接続後、minimal→spatial→distance2→distance5を同じalignmentで順番に比較。
+ユーザー体感はspatialで差なし、distance2で少し改善、distance5でかなり改善・遅延も大きく感じない。
+試験中はdistance5を維持するが、既定採用や計測E2E合格とはしない。
+伸展時の腿は「勝手なひねり」が残り、ユーザー合意で回転改修を別課題として保留。
+T-poseの前後逆転も発見し、runtimeの向きを補正して体感上改善。恒久修正・回帰テストは未着手。
+→ [比較結果と未解決事項](../design/pose-3d-vmt-live-trial.md)。
+
 ### 2026-09-23 — VMT試験ランナーをJetson実機で事前確認
 
 3カメラ/GPU/校正/profileの起動、WebUI応答、4候補の切替を確認。
