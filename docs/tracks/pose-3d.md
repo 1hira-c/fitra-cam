@@ -145,7 +145,9 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 Windows手動接続後、minimal→spatial→distance2→distance5を同じalignmentで順番に比較。
 ユーザー体感はspatialで差なし、distance2で少し改善、distance5でかなり改善・遅延も大きく感じない。
 試験中はdistance5を維持するが、既定採用や計測E2E合格とはしない。
+左右移動→停止の体感でも極端な後追いは感じないとの報告。ユーザー了承で試験サーバーを正常停止。
 伸展時の腿は「勝手なひねり」が残り、ユーザー合意で回転改修を別課題として保留。
+浅い屈曲時の膝位置ノイズ伝播という仮説と、具体形未確認の「極端に弱い姿勢」も残件として記録。
 T-poseの前後逆転も発見し、runtimeの向きを補正して体感上改善。恒久修正・回帰テストは未着手。
 → [比較結果と未解決事項](../design/pose-3d-vmt-live-trial.md)。
 
