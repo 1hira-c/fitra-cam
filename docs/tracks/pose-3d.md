@@ -140,6 +140,15 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-09-23 — VMT試験ランナーをJetson実機で事前確認
+
+3カメラ/GPU/校正/profileの起動、WebUI応答、4候補の切替を確認。
+HTTP/HMD/VMTをlocalhost限定・discovery無効として、各候補8秒のP8 UDPを約60Hzで受信し、
+schema/finite/unit quaternionの異常なし。終了時の全disable 5 bundlesとポート解放も確認。
+minimalで再起動してユーザー復帰待ち。Windows受信・HMD位置合わせ・体感/E2E受入れは未実施。
+人物条件は統制していないため候補間の品質比較には使わない。通常コード/設定/校正原本は不変。
+→ [実機事前確認と残る検証](../design/pose-3d-vmt-live-trial.md)。
+
 ### 2026-09-22 — VMT体感比較用の独立試験ランナーを準備
 
 `temporal_vmt_trial`でminimal / spatial / distance2 / distance5を再起動なしで切替可能にした。

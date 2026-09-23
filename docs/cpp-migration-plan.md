@@ -405,6 +405,11 @@ Release build、focused CTest 11件（Python 128件を含む）、静止1185 rep
 GPU/camera起動・Windows受信・体感・E2Eとfull CTestは未実施。実機は翌日ユーザーと確認する。
 [独立VMT試験設計](design/pose-3d-vmt-live-trial.md)を参照。
 
+2026-09-23: 同trialの3 USBカメラ/GPU実起動、WebUI、4候補の切替、localhost UDP受信を確認。
+各8秒で約60Hz/P8/schema/finite/unit quaternionを満たし、停止時の最後5 bundlesは全disable。
+HTTP/HMD/VMTはlocalhost限定、Windowsは未接続。人物条件非統制のため品質比較には使わず、
+capture-to-send EMA約37–45msもfilter遅れ・Windows/表示を含むE2E合格とはみなさない。
+
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|
 | 0     | `cmake --build cpp/build && ./cpp/build/main --help`        | リンク成功、TRT runtime が初期化できる                                         |

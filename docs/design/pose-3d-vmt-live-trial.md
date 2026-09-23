@@ -58,3 +58,20 @@ VMT/HMD/alignerの既存test、起動/送信/無効化/停止を順に確認す�
 - 通常main/binary・設定・校正原本は変更しない。trialのWebUI rolling tracker statsは未計測
   （window=0）、上流floor statsも補正後の品質指標には使わない。出力時刻差のEMAは
   filter遅れ・Windows/表示を含むE2Eではない。4候補同時計算の負荷も本番単一候補と区別する。
+
+### 2026-09-23: Jetson実機のlocalhost事前確認
+
+- `30294f3`のtrial binaryで3 USBカメラ1280x960 MJPGと既存RTMPose-M FP16/YOLOX-Sを起動。
+  カメラ受信は約59.2–60.0fps、4候補の採取末尾の3D更新は約53–56fps。
+  rescue-v2校正候補・既存subject profileを正常ロード。校正の実空間一致は未受入れ。
+- Web/HMD bind・VMT宛先をすべて`127.0.0.1`へ固定しdiscoveryをOFF。HTTP 200と
+  localhost限定listenを確認。Windowsへの送信・HMD擬似入力・録画は行っていない。
+- minimal/spatial/distance2/distance5をstdinで切替し、各8秒のUDP受信は481 bundles、
+  約60Hz、P8固定index、finite pose、単位quaternion（norm²誤差最大2.8e-7未満）、schema異常0。
+  各区間の人物の姿勢/位置は統制していないため、disable率や候補品質の比較には使わない。
+- `quit`終了時の最後5 bundlesが全enable=0、正常終了とHTTP/HMDポート解放を確認。
+  その後minimalでlocalhost待機用に再起動。停止時無効化はローカル受信までの証拠。
+- 採取末尾のcapture-to-send EMAは約37–45ms。分位値でもfilter遅れ込みのE2Eでもなく、
+  Jetson50ms/E2E100msの合格判定には使わない。Windows/HMD/配置/体感は引き続き未確認。
+- 設定・集約のみのプローブ結果・ログは`outputs/temporal-eval/20260923-vmt-preflight/`。
+  通常設定・校正原本・production codeは変更なし。Windows接続時だけ試験YAMLへ切り替える。
