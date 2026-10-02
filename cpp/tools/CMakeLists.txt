@@ -25,6 +25,19 @@ set_target_properties(fitra_test_temporal_live_state PROPERTIES OUTPUT_NAME "tes
 add_test(NAME test_temporal_live_state COMMAND fitra_test_temporal_live_state)
 add_test(NAME test_temporal_vmt_trial_help COMMAND fitra_temporal_vmt_trial --help)
 
+add_executable(fitra_test_temporal_outlier_gate test_temporal_outlier_gate.cpp)
+target_link_libraries(fitra_test_temporal_outlier_gate PRIVATE fitra_tracking fitra_lift)
+set_target_properties(fitra_test_temporal_outlier_gate PROPERTIES OUTPUT_NAME "test_temporal_outlier_gate"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+add_test(NAME test_temporal_outlier_gate COMMAND fitra_test_temporal_outlier_gate)
+
+# Diagnostic HTTP snapshots are asynchronous approximations, not capture replay.
+add_executable(fitra_temporal_snapshot_import temporal_snapshot_import.cpp)
+target_link_libraries(fitra_temporal_snapshot_import PRIVATE fitra_lift yaml-cpp::yaml-cpp)
+set_target_properties(fitra_temporal_snapshot_import PROPERTIES OUTPUT_NAME "temporal_snapshot_import"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+add_test(NAME test_temporal_snapshot_import_help COMMAND fitra_temporal_snapshot_import --help)
+
 # Offline post-3D filter audition. No GPU inference or live-service changes.
 add_executable(fitra_temporal_replay temporal_replay.cpp
     ../src/tracking/tracker_extract.cpp)
@@ -879,8 +892,9 @@ find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME test_temporal_eval COMMAND ${CMAKE_COMMAND} -E env
         "FITRA_TEMPORAL_REPLAY=$<TARGET_FILE:fitra_temporal_replay>"
+        "TEMPORAL_SNAPSHOT_IMPORT_BINARY=$<TARGET_FILE:fitra_temporal_snapshot_import>"
         "FITRA_CORPUS_GEOMETRY=$<TARGET_FILE:fitra_corpus_geometry>"
         ${Python3_EXECUTABLE} -m unittest discover
         -s "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/temporal_eval" -v)
-    set_tests_properties(test_temporal_eval PROPERTIES TIMEOUT 120)
+    set_tests_properties(test_temporal_eval PROPERTIES TIMEOUT 180)
 endif()

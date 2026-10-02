@@ -35,7 +35,8 @@ int main(int argc, char** argv) {
     if (argc==2 && std::string(argv[1])=="--help") {
         std::cout << "temporal_vmt_trial --config TRIAL.yaml\n"
                      "Opt-in live VMT test; never starts the normal TrackerExtractor.\n"
-                     "stdin: minimal | spatial | distance2 | distance5 | freeze-align | quit\n"
+                     "stdin: minimal | spatial | distance2 | distance5 | guard5 | freeze-align | quit\n"
+                     "guard5 adds raw-joint outlier admission and at most 50ms causal prediction.\n"
                      "A closed stdin or SIGINT/SIGTERM stops and disables trackers.\n"
                      "Requires fixed Halpe26 subject profile and 60 Hz VMT output.\n";
         return 0;
@@ -66,7 +67,7 @@ int main(int argc, char** argv) {
         opts.vr_one_euro=false; opts.idle_enabled=false;
         opts.vmt_degeneracy_mode="disable";
         FITRA_LOG_WARN("[TRIAL] raw upstream; fixed replay geometry/floor; no OneEuro; "
-                       "degen=disable; no D50 wire; four candidate copies per source report");
+                       "degen=disable; no D50 wire; five candidate copies per source report");
         auto trt=app::make_trt_stack(opts);
         auto cams=app::make_frame_sources(opts,trt.get(),nullptr,nullptr);
         require(cams.sources.size()>=2,"trial requires at least two calibrated cameras");
@@ -150,7 +151,7 @@ int main(int argc, char** argv) {
                 trial.boundary(b.source_publish_mono_ns);
             const auto now=std::chrono::steady_clock::now();
             const bool fresh=trial.advance(raw,now);
-            if (fresh) {
+            if (fresh || (trial.active() && trial.output_changed)) {
                 // This stream's metadata and pose refer to the same consumed raw report.
                 // The raw bus and FusionPose evidence are never overwritten.
                 auto view=raw;
@@ -169,6 +170,18 @@ int main(int argc, char** argv) {
                                "source_age_ms={} sent={} disabled={} host_send_age_ema_ms={}",
                                trial.selected(),trial.generation,trial.active(),trial.processed,raw.seq,
                                raw.stats.tri_fps,age,v.sent_bundles,v.disabled_count,v.e2e_capture_to_send_ms);
+                if (std::string(trial.selected())=="guard5" && trial.active()) {
+                    int accepted=0,predicted=0,unavailable=0,rejected=0,reacquired=0;
+                    for (const auto& d:trial.diagnostics.joint_gate) {
+                        accepted += d.state==temporal_experiment::JointAdmission::Accepted;
+                        predicted += d.state==temporal_experiment::JointAdmission::Predicted;
+                        unavailable += d.state==temporal_experiment::JointAdmission::Unavailable;
+                        rejected += d.rejected; reacquired += d.reacquired;
+                    }
+                    FITRA_LOG_INFO("[TRIAL] current joint admission: accepted={} predicted={} unavailable={} "
+                                   "rejected={} reacquired={}; prediction is not fresh observation",
+                                   accepted,predicted,unavailable,rejected,reacquired);
+                }
             }
         }
         if (server) server->stop();

@@ -20,6 +20,8 @@ capture-to-sendの時計差とfilterの追従遅れ、Windows/表示は別測定
   同じ候補内でIKまたはsoft骨長→床→抽出→gate→距離filterを実行。二重補正しない。
 - offlineのCandidate本体を共通headerへ抽出し、保存済みreplayとの数値一致を確認する。
 - `minimal / spatial / distance2 / distance5`をstdinで切替。spatialは`soft_bones_head_leaf`。
+  2026-10-02に`guard5`を実験候補として追加した（raw関節の棄却/50ms補完→distance5）。
+  [関節外れ値実験](pose-3d-joint-outlier-experiment.md)を参照。旧4候補の体感結果と混ぜない。
   切替時は全候補の履歴を捨て、次の新しいreportからseedする。各切替後2秒は体感採点から外す。
 - 入力はlatest-only。boundary FIFO・identity/epoch・時刻gapでreset。
   同じsnapshotを再更新せず、受信時刻基準のageが100msを超えた入力は出力無効化する。
@@ -58,6 +60,15 @@ VMT/HMD/alignerの既存test、起動/送信/無効化/停止を順に確認す�
 - 通常main/binary・設定・校正原本は変更しない。trialのWebUI rolling tracker statsは未計測
   （window=0）、上流floor statsも補正後の品質指標には使わない。出力時刻差のEMAは
   filter遅れ・Windows/表示を含むE2Eではない。4候補同時計算の負荷も本番単一候補と区別する。
+
+### 2026-10-02: 関節棄却/短期補完候補を追加、再体感は未実施
+
+`guard5`は`distance5`の前段にraw3D関節の採否を置く。補完は採用観測から最大50ms、
+棄却値や補完値で速度/期限/接地/足anchorを更新しない。無入力時のreceipt-clock失効も別に行う。
+旧候補の数式は維持し、既定は従来のminimal。5候補の同時計算負荷を本番単一候補/E2Eと混同しない。
+固定rawと人工対照で数値比較するが、今回カメラ/VMTサーバー起動やWindows送信はしていない。
+通常設定への採用、前後逆転の恒久対応、腿twistの回転ロジック変更は対象外。
+詳細: [アルゴリズム・検証結果・残件](pose-3d-joint-outlier-experiment.md)。
 
 ### 2026-09-23: Jetson実機のlocalhost事前確認
 

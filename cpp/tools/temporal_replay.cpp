@@ -88,19 +88,21 @@ void write_trackers(std::ostream& out, const Trackers& trackers) {
 int main(int argc, char** argv) {
     try {
         if (argc == 2 && std::string(argv[1]) == "--help") {
-            std::cout << "temporal_replay INPUT.jsonl OUTPUT.jsonl [SUBJECT_PROFILE.yaml] [--diagnostics] [--ik-experiments] [--isolate-head] [--distance-experiments]\n"
+            std::cout << "temporal_replay INPUT.jsonl OUTPUT.jsonl [SUBJECT_PROFILE.yaml] [--diagnostics] [--ik-experiments] [--isolate-head] [--distance-experiments] [--outlier-experiments]\n"
                          "Input: fitra_temporal_input_v1 header, then timestamped Halpe26 reports.\n"
                          "Without a profile, header.subject_height_m supplies the IK prior.\n"
                          "--diagnostics: copy post-Kalman/IK joints and pre-smoothing trackers (offline only).\n"
                          "--ik-experiments: append no_ik/soft_bones/soft_hips; experimental, never live.\n"
                          "--isolate-head: with --ik-experiments, append one-way head leaf ablations.\n"
                          "--distance-experiments: with both experiment flags, append 2/5 mm position residual filters.\n"
+                         "--outlier-experiments: with distance experiments, append causal raw-joint admission and bounded prediction.\n"
                          "CPU offline evaluation only; output must not already exist.\n";
             return 0;
         }
-        require(argc >= 3 && argc <= 8, "usage: temporal_replay INPUT OUTPUT [SUBJECT_PROFILE] [--diagnostics] [--ik-experiments] [--isolate-head] [--distance-experiments]");
+        require(argc >= 3 && argc <= 9, "usage: temporal_replay INPUT OUTPUT [SUBJECT_PROFILE] [--diagnostics] [--ik-experiments] [--isolate-head] [--distance-experiments] [--outlier-experiments]");
         std::string profile;
         bool diagnostics = false, experiments = false, isolate_head = false, distance_experiments = false;
+        bool outlier_experiments = false;
         for (int i = 3; i < argc; ++i) {
             const std::string option = argv[i];
             if (option == "--diagnostics") {
@@ -115,6 +117,9 @@ int main(int argc, char** argv) {
             } else if (option == "--distance-experiments") {
                 require(!distance_experiments, "duplicate --distance-experiments");
                 distance_experiments = true;
+            } else if (option == "--outlier-experiments") {
+                require(!outlier_experiments, "duplicate --outlier-experiments");
+                outlier_experiments = true;
             } else {
                 require(profile.empty() && !option.empty() && option.front() != '-', "unexpected argument");
                 profile = option;
@@ -122,6 +127,7 @@ int main(int argc, char** argv) {
         }
         require(!isolate_head || experiments, "--isolate-head requires --ik-experiments");
         require(!distance_experiments || isolate_head, "--distance-experiments requires --isolate-head and --ik-experiments");
+        require(!outlier_experiments || distance_experiments, "--outlier-experiments requires --distance-experiments");
         std::ifstream input(argv[1]);
         require(input.good(), "cannot open input");
         require(!std::ifstream(argv[2]).good(), "output already exists; choose a new path");
@@ -177,6 +183,10 @@ int main(int argc, char** argv) {
                 candidates.push_back(std::make_unique<Candidate>(false, false, io, 4, cap));
             names.insert(names.end(), {"distance_2mm", "distance_5mm"});
         }
+        if (outlier_experiments) {
+            candidates.push_back(std::make_unique<Candidate>(false,false,io,4,.005,true));
+            names.push_back("guarded_distance_5mm");
+        }
         tracking::TrackerExtractorOptions opts;
         std::ofstream output(argv[2]);
         require(output.good(), "cannot open output");
@@ -218,6 +228,14 @@ int main(int argc, char** argv) {
                       "\"alpha\":\"d_squared_over_d_squared_plus_4cap_squared\","
                       "\"history\":\"previous_valid_output\",\"uses_dt\":false,"
                       "\"cap_m\":{\"distance_2mm\":0.002,\"distance_5mm\":0.005}}";
+        if (outlier_experiments)
+            output << ",\"outlier_experiment\":{\"schema\":\"fitra_joint_outlier_experiment_v1\","
+                      "\"base_candidate\":\"distance_5mm\",\"stage\":\"raw_3d_before_ik\","
+                      "\"admission\":\"near_prediction_or_last_accepted\","
+                      "\"residual_radius_m\":0.08,\"acceleration_mps2\":30,\"max_prediction_speed_mps\":3,"
+                      "\"max_compensation_s\":0.05,\"reacquire_reports\":3,"
+                      "\"accepted_history_only\":true,\"velocity_seed\":\"consecutive_accepted_raw\","
+                      "\"future_lookahead\":false}";
         output << "}\n";
         std::int64_t previous_time = -1, previous_seq = -1;
         std::string previous_segment;
@@ -285,6 +303,23 @@ int main(int argc, char** argv) {
                         write_skeleton(output, stages[i].post_ik);
                         output << ",\"pre_smoothing\":";
                         write_trackers(output, stages[i].pre_smoothing);
+                        if (candidates[i]->use_outlier_gate) {
+                            output << ",\"post_gate\":";
+                            write_skeleton(output,stages[i].post_gate);
+                            output << ",\"joint_gate\":[";
+                            for (std::size_t k=0; k<26; ++k) {
+                                if (k) output << ',';
+                                const auto& d = stages[i].joint_gate[k];
+                                output << "{\"state\":\"" << temporal_experiment::admission_name(d.state)
+                                    << "\",\"rejected\":" << (d.rejected ? "true" : "false")
+                                    << ",\"reacquired\":" << (d.reacquired ? "true" : "false")
+                                    << ",\"age_s\":";
+                                if (d.age_s < 0) output << "null";
+                                else output << d.age_s;
+                                output << '}';
+                            }
+                            output << ']';
+                        }
                         output << '}';
                     }
                     output << '}';

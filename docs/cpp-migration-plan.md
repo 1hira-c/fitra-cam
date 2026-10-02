@@ -410,6 +410,16 @@ GPU/camera起動・Windows受信・体感・E2Eとfull CTestは未実施。実�
 HTTP/HMD/VMTはlocalhost限定、Windowsは未接続。人物条件非統制のため品質比較には使わず、
 capture-to-send EMA約37–45msもfilter遅れ・Windows/表示を含むE2E合格とはみなさない。
 
+2026-10-02: shared実験Candidateにraw関節の外れ値棄却/50ms補完を追加。
+人工12対照と保存済みrawを旧10候補と比較し、補完の由来・期限・再取得・連続rawによる速度seed・
+小さな切り返し・足anchor/FK・床棄却・伸展確認の観測穴・live無入力の失効を回帰検証する。
+`temporal_snapshot_import`は非同期HTTPの2D記録をCPU再構成する診断専用toolで、
+ID/整数時刻/重複/boundary/原本保持を検査する。kernel capture同期や元live3D再現は保証しない。
+無効出力を変化0として採点せず、有効report/pairの分母と悪化例を併記する。
+Release全target build、全CTest 42/42（Python 158件）pass。
+通常main/runtime/D50 wireは不変、実機再体感/E2Eと本番採用は別工程。
+[関節外れ値実験の設計と検証結果](design/pose-3d-joint-outlier-experiment.md)を参照。
+
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|
 | 0     | `cmake --build cpp/build && ./cpp/build/main --help`        | リンク成功、TRT runtime が初期化できる                                         |

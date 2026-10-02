@@ -140,6 +140,20 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-10-02 — raw関節の外れ値棄却と50ms短期補完を独立試験へ追加
+
+RTMPose-Mとdistance5を維持し、回転抽出前に関節単位の因果gateを追加。
+極端な飛びを履歴へ採用せず、最大50msだけ補完、期限後はinvalidとする。
+補完score/由来、床・足anchor・伸展確認の非学習、無入力時のlive失効を回帰対象にした。
+予測残差だけでは小さな切り返しを誤棄却し、観測穴を跨ぐ速度でも足の戻りが増幅するため、
+採用位置近傍も即採用し、補完速度は連続採用rawからのみseedする。
+offlineの11番目候補とVMT trialの`guard5`に限定し、通常main/設定/校正原本/D50 wireは不変。
+HTTP 2D traceの参考再構成は非同期取得の近似であり、live3D再現・正解GTと呼ばない。
+人工対照だけでなく静止・前屈・動作rawも再評価し、欠損分母と悪化例を残す。
+Release全target build、全CTest 42/42（Python 158件）pass。
+腿twistと持続する誤推定は未解決。実機再体感・E2E計測・本番採用は未実施。
+→ [設計・対照結果・検証境界](../design/pose-3d-joint-outlier-experiment.md)。
+
 ### 2026-09-23 — VMT体感比較でdistance5を暫定維持、腿twistは別課題へ
 
 Windows手動接続後、minimal→spatial→distance2→distance5を同じalignmentで順番に比較。

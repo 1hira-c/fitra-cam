@@ -45,10 +45,10 @@ int main() {
     try {
         lift::set_active_keypoint_format(lift::KeypointFormat::Halpe26);
         lift::IkSolver::Options io; io.subject_height_m=1.7;
-        // All four choices use exactly the replay recurrence, once per source.
-        for (int c=0;c<4;++c) {
+        // All five choices use exactly the replay recurrence, once per source.
+        for (int c=0;c<5;++c) {
             LiveTrialState state(io); state.select(LiveTrialState::names[c]);
-            Candidate oracle(false,false,io,c==0?0:4,c==2?.002:(c==3?.005:0));
+            Candidate oracle(false,false,io,c==0?0:4,c==2?.002:(c>=3?.005:0),c==4);
             for (std::uint64_t n=0;n<25;++n) {
                 auto s=frame(n,float(n%7)*.003f);
                 check(state.advance(s,received(s)),"fresh rejected");
@@ -96,6 +96,29 @@ int main() {
         LiveTrialState gap_oracle(io); gap_oracle.select("distance5"); gap_oracle.advance(gap,received(gap));
         same(state.trackers,gap_oracle.trackers);
         auto backwards=frame(59); check(!state.advance(backwards,received(backwards)),"backwards publish accepted"); empty(state);
+        LiveTrialState guarded(io); guarded.select("guard5");
+        auto normal=frame(0); guarded.advance(normal,received(normal));
+        auto spike=frame(1); spike.persons[0].joints[13].x+=.4f;
+        check(guarded.advance(spike,received(spike)),"guarded report rejected globally");
+        check(guarded.diagnostics.joint_gate[13].state==JointAdmission::Predicted,"spike not compensated");
+        const auto held=guarded.diagnostics.post_gate.joints[13];
+        check(!guarded.advance(spike,received(spike)),"duplicate advanced admission state");
+        check(guarded.diagnostics.post_gate.joints[13].x==held.x,"duplicate changed compensation");
+        check(!guarded.output_changed,"ordinary duplicate republished");
+        const auto processed=guarded.processed;
+        check(!guarded.advance(spike,spike.t_capture_oldest+std::chrono::milliseconds(80)),"stall treated as new evidence");
+        check(guarded.active() && guarded.output_changed,"stall expiry did not publish invalidation");
+        check(guarded.processed==processed,"stall expiry advanced filter histories");
+        check(!guarded.trackers[4].valid && !guarded.trackers[6].valid && !guarded.trackers[8].valid,
+              "stall resent expired knee-derived trackers");
+        check(guarded.trackers[5].valid && guarded.trackers[9].valid,"stall disabled unaffected trackers prematurely");
+        guarded.boundary(spike.tracker_axis_lineage->source_publish_mono_ns+1); empty(guarded);
+        auto next=frame(2,.4f); guarded.advance(next,received(next));
+        check(guarded.diagnostics.joint_gate[13].state==JointAdmission::Accepted,"boundary retained admission history");
+        check(guarded.select("distance5") && guarded.select("guard5"),"guard switch failed");
+        auto after=frame(3,.9f); guarded.advance(after,received(after));
+        LiveTrialState new_guard(io); new_guard.select("guard5"); new_guard.advance(after,received(after));
+        same(guarded.trackers,new_guard.trackers);
         std::cout << "temporal live state: recurrence/duplicates/switch/boundaries/identity/stale/gaps passed\n";
         return 0;
     } catch (const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; }
