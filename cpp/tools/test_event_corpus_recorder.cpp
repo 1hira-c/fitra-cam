@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "corpus/event_corpus_recorder.hpp"
+#include "corpus/event_corpus_queue.hpp"
 #include "util/sha256.hpp"
 
 namespace {
@@ -245,6 +246,136 @@ void test_queue_and_spool_caps_drop_only_recorder_copy() {
     check(stats.written_frames == 0, "caps never write oversized payload");
 }
 
+void test_presence_backlog_is_bounded_and_resynchronizes() {
+    using fitra::corpus::detail::EventQueue;
+    using fitra::corpus::detail::PresenceItem;
+    using fitra::corpus::detail::RawItem;
+    EventQueue queue;
+    std::deque<EventQueue::Item> discarded;
+    const auto base = std::chrono::steady_clock::now();
+    for (int i = 0; i < 2; ++i) {
+        RawItem raw;
+        raw.seq = i + 1;
+        raw.payload = {1, 2, 3};
+        raw.captured_at = base;
+        check(queue.push_raw(std::move(raw)), "old payload enqueued");
+    }
+    for (std::size_t i = 0; i < EventQueue::kMaxPresenceEvents; ++i) {
+        check(queue.push_presence(PresenceItem{0, i % 2 == 0, base, i},
+                                  i % 2 == 0 ? 1 : 0), "bounded edges enqueue");
+    }
+    for (std::uint64_t i = 1; i <= 100000; ++i) {
+        check(!queue.push_presence(PresenceItem{1, i % 2 == 0, base + 1ms, i},
+                                   i % 2 == 0 ? 2 : 0), "overflow uses reset slot");
+        check(queue.pending_presence_events() == EventQueue::kMaxPresenceEvents,
+              "control backlog never grows beyond its edge cap");
+    }
+    check(queue.resync_pending(), "overflow marks an explicit reset");
+    // A late callback from another camera must not move the boundary backward.
+    queue.push_presence(PresenceItem{0, false, base, 7}, 2);
+    auto batch = queue.take(discarded);
+    check(batch.reset && !batch.item, "reset precedes stale queue contents");
+    check(batch.reset->presence_mask == 2, "latest complete camera mask retained");
+    check(batch.reset->captured_at == base + 1ms,
+          "recovery boundary keeps the newest discarded capture time");
+    check(batch.reset->captured_mono_ns == 100000,
+          "boundary time and lineage come from the same source");
+    check(batch.discarded_raw_frames == 2 && batch.discarded_raw_bytes == 6,
+          "retired payload reservations can be released exactly");
+    check(batch.discarded_presence_events == EventQueue::kMaxPresenceEvents,
+          "retired control edges are counted");
+    check(queue.empty() && !queue.resync_pending(), "old backlog detached atomically");
+    discarded.clear();  // Production releases it outside queue_mu_.
+
+    RawItem stale;
+    stale.payload = {4};
+    stale.captured_at = base;
+    check(!queue.push_raw(std::move(stale)), "in-flight old payload cannot reseed");
+    RawItem fresh;
+    fresh.seq = 42;
+    fresh.payload = {5};
+    fresh.captured_at = base + 2ms;
+    check(queue.push_raw(std::move(fresh)), "new capture is admitted after recovery");
+    check(queue.push_presence(PresenceItem{1, false, base + 3ms, 43}, 0),
+          "new absence edge is admitted after recovery");
+    auto next = queue.take(discarded);
+    check(next.item && std::get<RawItem>(*next.item).seq == 42,
+          "ordinary payload/control order is retained");
+    next = queue.take(discarded);
+    check(next.item && !std::get<PresenceItem>(*next.item).present,
+          "absence does not remain stuck behind the discarded edges");
+    queue.reset();
+    RawItem restarted;
+    restarted.payload = {6};
+    restarted.captured_at = base;
+    check(queue.push_raw(std::move(restarted)), "restart clears the old capture watermark");
+}
+
+void test_empty_payload_cannot_bypass_queue_limit() {
+    TempRoot root{"empty_payload"};
+    RecorderOptions options;
+    options.spool_dir = root.path / "spool";
+    options.queue_max_bytes = 1;
+    options.min_free_bytes = 0;
+    EventCorpusRecorder recorder{options, {two_cameras()[0]}};
+    recorder.start();
+    for (std::uint64_t i = 0; i < 10000; ++i) {
+        recorder.ingest_raw(0, frame(i, {}, i));
+    }
+    recorder.stop();
+    const auto stats = recorder.stats();
+    check(stats.accepted_frames == 0 && stats.queue_dropped_frames == 10000,
+          "zero-byte payloads cannot accumulate uncharged queue entries");
+    check(stats.queued_bytes == 0, "empty payloads leave no reservation");
+}
+
+void test_presence_overflow_recovers_recording_and_absence() {
+    TempRoot root{"presence_overflow"};
+    RecorderOptions options;
+    options.spool_dir = root.path / "spool";
+    options.pre_roll = 0ms;
+    options.post_roll = 0ms;
+    options.min_free_bytes = 0;
+    EventCorpusRecorder recorder{options, {two_cameras()[0]}};
+    recorder.start();
+    recorder.observe_presence(0, true, std::chrono::steady_clock::now(), 1);
+    check(wait_until([&] { return recorder.stats().recording; }, 2s),
+          "initial event starts before overload");
+    for (std::uint64_t i = 0; i < 20000; ++i) {
+        recorder.observe_presence(0, i % 2 != 0, std::chrono::steady_clock::now(), i + 2);
+    }
+    recorder.observe_presence(0, true, std::chrono::steady_clock::now(), 30000);
+    check(wait_until([&] {
+              const auto stats = recorder.stats();
+              return stats.presence_resyncs > 0 && stats.recording
+                  && stats.pending_presence_events == 0 && !stats.presence_resync_pending;
+          }, 3s), "overflow converges to the latest present state");
+    recorder.ingest_raw(0, frame(4242, {1, 2, 3}, 40000));
+    check(wait_until([&] { return recorder.stats().written_frames == 1; }, 2s),
+          "fresh capture is written after recovery");
+    recorder.observe_presence(0, false, std::chrono::steady_clock::now(), 40001);
+    check(wait_until([&] {
+              const auto stats = recorder.stats();
+              return !stats.recording && stats.pending_presence_events == 0
+                  && !stats.presence_resync_pending;
+          }, 3s), "later absence closes the recovered event");
+    recorder.stop();
+    const auto stats = recorder.stats();
+    check(stats.presence_dropped_events > 0 && stats.queued_bytes == 0,
+          "overflow is visible and retired reservations are released");
+    bool found_boundary = false, found_capture = false;
+    for (const auto& session : child_directories(options.spool_dir / "ready")) {
+        const auto manifest = read_all(session / "manifest.json");
+        found_boundary |= manifest.find("presence_queue_overflow") != std::string::npos;
+        for (const auto& segment : child_directories(session / "segments")) {
+            found_capture |= read_all(segment / "frames.jsonl").find("\"seq\":\"4242\"")
+                             != std::string::npos;
+        }
+    }
+    check(found_boundary && found_capture,
+          "committed sessions retain the explicit boundary and new capture");
+}
+
 void test_stale_presence_closes_disconnected_camera_event() {
     TempRoot root{"stale_presence"};
     RecorderOptions options;
@@ -429,6 +560,12 @@ const TestCase kTests[] = {
      test_pre_post_roll_segments_and_provenance},
     {"queue_and_spool_caps_drop_only_recorder_copy",
      test_queue_and_spool_caps_drop_only_recorder_copy},
+    {"presence_backlog_is_bounded_and_resynchronizes",
+     test_presence_backlog_is_bounded_and_resynchronizes},
+    {"empty_payload_cannot_bypass_queue_limit",
+     test_empty_payload_cannot_bypass_queue_limit},
+    {"presence_overflow_recovers_recording_and_absence",
+     test_presence_overflow_recovers_recording_and_absence},
     {"stale_presence_closes_disconnected_camera_event",
      test_stale_presence_closes_disconnected_camera_event},
     {"post_roll_uses_capture_timeline",

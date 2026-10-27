@@ -129,6 +129,11 @@ USB cam 2 ┘                                 │
 > mounted remote への転送は人物不在中だけ `.partial` → size/SHA-256 verify → commit の順に行い、
 > commit 後だけ SSD copy を削除する。corpus 有効時は presence trigger を失わないよう idle を無効化。
 > 詳細は [`design/core-pipeline-event-corpus-recorder.md`](design/core-pipeline-event-corpus-recorder.md)。
+> **2026-10-27 更新**: raw payloadとは別に人物通知を256件＋最新状態1件へ有界化。
+> overflow時はwriterで旧FIFOを退避し、sessionを区切って最新状態へ再同期する。退避rawの解放まで
+> byte予約を維持し、capture watermarkで古いコピーの再seedを防ぐ。空payloadは拒否し、
+> 欠落はcounter／manifestで公開する。通常推論・wire・既定OFFは維持し、合成過負荷の回帰と
+> 3camera／NAS障害の実機受入れを区別する。
 
 ## リポジトリレイアウト
 

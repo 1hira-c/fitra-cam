@@ -47,12 +47,16 @@ struct RecorderOptions {
 struct RecorderStats {
     std::uint64_t accepted_frames = 0;
     std::uint64_t queue_dropped_frames = 0;
+    std::uint64_t presence_dropped_events = 0;
+    std::uint64_t presence_resyncs = 0;
     std::uint64_t storage_dropped_frames = 0;
     std::uint64_t written_frames = 0;
     std::uint64_t ready_sessions = 0;
     std::uint64_t uploaded_sessions = 0;
     std::uint64_t upload_failures = 0;
     std::size_t queued_bytes = 0;
+    std::size_t pending_presence_events = 0;
+    bool presence_resync_pending = false;
     std::size_t ring_bytes = 0;
     std::uintmax_t spool_bytes = 0;
     bool recording = false;

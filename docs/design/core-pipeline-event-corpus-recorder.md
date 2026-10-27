@@ -45,6 +45,20 @@ decode/inference 側の latest slot 消費とは独立なので、推論 worker 
 上限予約、ペイロード copy、キューへの move だけであり、ファイル I/O は recorder worker に閉じる。
 キューが満杯なら recorder 側だけがそのフレームを drop し、リアルタイムパイプラインは継続する。
 
+**2026-10-27: 人物通知も有界化。** raw payload の byte 上限とは別に、人物有無の変化は最大256件まで
+FIFOへ入れる。超過時は追加のedgeを積まず、固定サイズの最新全camera状態1件へ集約する。
+writerは古いFIFOを一括で退避し、既存sessionを`presence_queue_overflow`で閉じ、pre-roll履歴を破棄する。
+人物ありなら`start_reason: presence_queue_resync`の新sessionを開始し、人物なしなら待機へ戻す。
+退避payloadの解放はwriter側・queue mutexの外で行い、解放までbyte予約を維持する。
+境界以前にcaptureされたコピーが遅れてenqueueされても、新sessionへ再投入しない。
+空payloadも、byte上限に計上されない要素を増やさないようqueue dropとして拒否する。
+
+通知の単純dropでは、upload用の最新presenceとwriterの収録状態が食い違い、入場を逃す／退出しても
+収録を続ける問題が残る。通常時から最新状態だけへ畳む案も短い人物出現を失うため採らず、通常はFIFO、
+過負荷時だけ明示的なsession境界を作って再同期する。通知欠落は`presence_dropped_events`と
+manifestの`recorder_drops.presence`、適用した再同期は`presence_resyncs`で確認できる。
+復旧時に退避したrawも`queue_dropped_frames`へ加算し、収録欠落を成功扱いにしない。
+
 presence tap は RTMPose 結果を `CameraSnapshot` に割り当てた直後に、カメラ別の人物有無を通知する。
 1 台でも人物ありなら 1 つの session を開き、全台分を収録する。全台不在になっても post-roll の間は
 同じ session を維持する。短い再出現は session を分断しない。writer の I/O が遅れても既に queue に
@@ -133,6 +147,7 @@ spool 上限だけを公開し、queue/ring memory 上限は YAML で設定す�
   `presence_stale_s` 無更新でそのカメラの presence を失効させ、post-roll へ進む。
 - `.partial` または checksum 未照合の remote session を commit 済みとして扱わない。
 - 未転送ローカル session を容量確保のため自動削除しない。
+- 人物通知のoverflow後に旧FIFOや古いin-flight captureで収録状態を再seedしない。
 
 ## Milestone
 
@@ -147,6 +162,16 @@ spool 上限だけを公開し、queue/ring memory 上限は YAML で設定す�
 - 単体: pre-roll / post-roll、複数カメラ session 統合、segment rotate、raw offset、64 bit timestamp、
   queue/spool drop、SHA-256、remote commit 前後のローカル保持を一時ディレクトリで確認する。
 - config: YAML/CLI/emit-load、範囲、spool と remote の入れ子拒否を確認する。
+- 過負荷: productionと共通のqueueで10万通知の上限、最新全camera状態への集約、退避byteの計数、
+  capture watermark・restartを固定する。実writerへの通知burst後に新規captureを保存し、退出で閉じること、
+  空payloadがbyte上限を迂回しないことも回帰対象にする。
 - build/CTest: Release build、focused corpus/config test、全 CTest、`main --help`。
 - 実機: 3 camera full inference の fps/latency、人物の進入・退出と pre/post-roll、SSD 実効 bytes/s、
   NAS 切断・再接続、転送中の再進入による pause、spool full 時も pose が継続することを別途確認する。
+
+2026-10-27の統合前確認: Release configure／全target build、`main --help`、全CTest 38/38を通過。
+recorder内は既存8ケース＋過負荷・空payload・再同期復帰の3ケースを実行した。Crowはsandboxの
+loopback制限を切り分け、修正後の全CTestはhost contextで実行した。合成の10万通知で未修正時に
+raw byte上限とは独立したRSS増加を確認し、修正後は同じ通知数でその増加傾向を再現しなかった。
+これは合成過負荷の確認であり、3camera収録ONの負荷・NAS障害復帰・実機acceptanceは未検証。
+設定・WebUI・推論数値・公開REST/WSは変更していないためpnpmやモデル数値照合は再実行していない。

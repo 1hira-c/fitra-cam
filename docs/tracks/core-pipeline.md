@@ -36,6 +36,17 @@ Crow WS 30Hz)、リポジトリレイアウト、依存表 (FetchContent header-
 
 ## Changelog (新しい順)
 
+### 2026-10-27 — コーパス人物通知の滞留を有界化し、overflow後の収録を再同期
+
+統合前確認で、raw byte上限の対象外だった人物の入退場通知が無制限に蓄積する問題を再現した。
+通知を256件＋最新状態1件に制限し、超過時は旧FIFOとpre-rollを破棄してsession境界を作り、
+最新の全camera状態から再開する。payloadの解放はwriter・queue lock外で行い、capture watermarkで
+古いin-flightコピーの再seedを防ぐ。空payloadも拒否し、通知／rawの欠落と再同期を診断可能にした。
+productionと共通のqueueによる10万通知、空payload、実writerでの収録再開・退出の3回帰を追加。
+Release全target build、`main --help`、全CTest 38/38（recorder内11ケース）pass。
+既定OFF、通常推論・wire・稼働設定は維持。3camera収録ON負荷とNAS障害復帰は実機未検証。
+→ [設計・検証範囲](../design/core-pipeline-event-corpus-recorder.md)
+
 ### 2026-09-07 — 常時稼働イベント・コーパス収録 MVP
 pose model audition と後段の時系列 AI 学習に再利用できる原本を、通常 Run mode から自動収集する
 opt-in recorder を追加。V4L2 DQBUF ごとの MJPEG/YUYV 原ペイロードを、decode/inference の

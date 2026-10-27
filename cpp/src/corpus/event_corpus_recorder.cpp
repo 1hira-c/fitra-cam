@@ -1,4 +1,5 @@
 #include "corpus/event_corpus_recorder.hpp"
+#include "corpus/event_corpus_queue.hpp"
 
 #include <algorithm>
 #include <array>
@@ -240,6 +241,10 @@ CopyResult copy_file_verified(const fs::path& source,
 }  // namespace
 
 class EventCorpusRecorder::Impl {
+    using RawItem = detail::RawItem;
+    using PresenceItem = detail::PresenceItem;
+    using QueueItem = detail::EventQueue::Item;
+
 public:
     Impl(RecorderOptions options, std::vector<CameraSpec> cameras)
         : options_{std::move(options)}, cameras_{std::move(cameras)},
@@ -285,6 +290,10 @@ public:
             writer_presence_mask_ = 0;
             last_presence_observed_ns_.fill(0);
             post_deadline_.reset();
+            {
+                std::lock_guard<std::mutex> lock(queue_mu_);
+                queue_.reset();
+            }
             space_known_ = false;
             accepting_.store(true);
             upload_stop_.store(false);
@@ -334,6 +343,10 @@ public:
     void ingest_raw(std::size_t camera_index, const camera::Frame& frame) noexcept {
         if (!accepting_.load(std::memory_order_relaxed)
             || camera_index >= cameras_.size()) return;
+        if (frame.data.empty()) {
+            queue_dropped_frames_.fetch_add(1);
+            return;
+        }
         inflight_copies_.fetch_add(1, std::memory_order_acq_rel);
         auto finish = [this]() {
             inflight_copies_.fetch_sub(1, std::memory_order_acq_rel);
@@ -374,7 +387,12 @@ public:
             item.accepted_wall_unix_ns = unix_now_ns();
             {
                 std::lock_guard<std::mutex> lock(queue_mu_);
-                queue_.emplace_back(std::move(item));
+                if (!queue_.push_raw(std::move(item))) {
+                    queued_bytes_.fetch_sub(bytes);
+                    queue_dropped_frames_.fetch_add(1);
+                    finish();
+                    return;
+                }
             }
             accepted_frames_.fetch_add(1);
             queue_cv_.notify_one();
@@ -395,20 +413,18 @@ public:
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 now.time_since_epoch()).count());
         const std::uint64_t bit = 1ULL << camera_index;
-        std::uint64_t old = 0;
-        std::uint64_t next = 0;
-        {
+        try {
             std::lock_guard<std::mutex> state_lock(presence_state_mu_);
             last_presence_observed_ns_[camera_index] = now_ns;
             presence_observed_mask_.fetch_or(bit, std::memory_order_release);
-            old = presence_mask_.load(std::memory_order_relaxed);
-            next = present ? (old | bit) : (old & ~bit);
+            const auto old = presence_mask_.load(std::memory_order_relaxed);
+            const auto next = present ? (old | bit) : (old & ~bit);
             if (next == old) return;
             presence_mask_.store(next, std::memory_order_release);
             absent_since_ns_.store(next == 0 ? now_ns : 0,
                                    std::memory_order_release);
-        }
-        try {
+            // Keep edge order consistent with the atomic upload gate. The
+            // writer never takes the state lock while holding queue_mu_.
             std::lock_guard<std::mutex> lock(queue_mu_);
             if (!accepting_.load(std::memory_order_relaxed)) return;
             PresenceItem item;
@@ -416,12 +432,14 @@ public:
             item.present = present;
             item.captured_at = captured_at;
             item.captured_mono_ns = captured_mono_ns;
-            queue_.emplace_back(std::move(item));
+            if (!queue_.push_presence(item, next)) {
+                presence_dropped_events_.fetch_add(1);
+            }
             queue_cv_.notify_one();
         } catch (...) {
             // The atomic gate still prevents upload while present. A failed
-            // allocation only loses this recorder state transition; it must
-            // never escape into the inference thread.
+            // callback must never escape into the inference thread. Queue
+            // allocation failures are handled by push_presence's fixed reset.
         }
     }
 
@@ -429,12 +447,19 @@ public:
         RecorderStats out;
         out.accepted_frames = accepted_frames_.load();
         out.queue_dropped_frames = queue_dropped_frames_.load();
+        out.presence_dropped_events = presence_dropped_events_.load();
+        out.presence_resyncs = presence_resyncs_.load();
         out.storage_dropped_frames = storage_dropped_frames_.load();
         out.written_frames = written_frames_.load();
         out.ready_sessions = ready_sessions_.load();
         out.uploaded_sessions = uploaded_sessions_.load();
         out.upload_failures = upload_failures_.load();
         out.queued_bytes = queued_bytes_.load();
+        {
+            std::lock_guard<std::mutex> lock(queue_mu_);
+            out.pending_presence_events = queue_.pending_presence_events();
+            out.presence_resync_pending = queue_.resync_pending();
+        }
         out.ring_bytes = ring_bytes_stat_.load();
         out.spool_bytes = spool_bytes_.load();
         out.recording = recording_.load();
@@ -442,33 +467,6 @@ public:
     }
 
 private:
-    struct RawItem {
-        std::size_t camera_index = 0;
-        std::vector<std::uint8_t> payload;
-        std::uint64_t seq = 0;
-        std::uint32_t v4l2_sequence = 0;
-        std::uint32_t capture_width = 0;
-        std::uint32_t capture_height = 0;
-        std::uint32_t bytes_per_line = 0;
-        std::uint32_t size_image = 0;
-        std::uint32_t pixel_format_fourcc = 0;
-        std::uint32_t frame_interval_numerator = 0;
-        std::uint32_t frame_interval_denominator = 0;
-        std::chrono::steady_clock::time_point captured_at{};
-        std::uint64_t captured_mono_ns = 0;
-        camera::V4l2CaptureTimestamp v4l2_timestamp{};
-        std::uint64_t accepted_wall_unix_ns = 0;
-    };
-
-    struct PresenceItem {
-        std::size_t camera_index = 0;
-        bool present = false;
-        std::chrono::steady_clock::time_point captured_at{};
-        std::uint64_t captured_mono_ns = 0;
-    };
-
-    using QueueItem = std::variant<RawItem, PresenceItem>;
-
     fs::path open_root() const { return options_.spool_dir / "open"; }
     fs::path ready_root() const { return options_.spool_dir / "ready"; }
     fs::path uploaded_root() const { return options_.spool_dir / "uploaded"; }
@@ -496,8 +494,9 @@ private:
     }
 
     void writer_loop() noexcept {
+        std::deque<QueueItem> discarded;
         while (true) {
-            std::optional<QueueItem> item;
+            detail::EventQueue::Taken taken;
             {
                 std::unique_lock<std::mutex> lock(queue_mu_);
                 queue_cv_.wait_for(lock, std::chrono::milliseconds(50), [&]() {
@@ -506,26 +505,40 @@ private:
                             && inflight_copies_.load(std::memory_order_acquire) == 0);
                 });
                 if (!queue_.empty()) {
-                    item.emplace(std::move(queue_.front()));
-                    queue_.pop_front();
+                    taken = queue_.take(discarded);
                 } else if (!accepting_.load(std::memory_order_relaxed)
                            && inflight_copies_.load(std::memory_order_acquire) == 0) {
                     break;
                 }
             }
 
+            // Release retired payloads on the writer, outside the queue lock.
+            // Reservations remain charged until that memory has been freed.
+            if (taken.reset) {
+                discarded.clear();
+                queued_bytes_.fetch_sub(taken.discarded_raw_bytes);
+                queue_dropped_frames_.fetch_add(taken.discarded_raw_frames);
+                presence_dropped_events_.fetch_add(taken.discarded_presence_events);
+            } else if (taken.item) {
+                if (const auto* raw = std::get_if<RawItem>(&*taken.item)) {
+                    queued_bytes_.fetch_sub(raw->payload.size());
+                }
+            }
             try {
                 const auto now = std::chrono::steady_clock::now();
                 expire_stale_presence(now);
-                if (!item) {
+                if (taken.reset) {
+                    process_presence_reset(*taken.reset);
+                    continue;
+                }
+                if (!taken.item) {
                     maybe_close_post_roll(now);
                     continue;
                 }
-                if (auto* raw = std::get_if<RawItem>(&*item)) {
-                    queued_bytes_.fetch_sub(raw->payload.size());
+                if (auto* raw = std::get_if<RawItem>(&*taken.item)) {
                     process_raw(std::move(*raw));
                 } else {
-                    process_presence(std::get<PresenceItem>(*item));
+                    process_presence(std::get<PresenceItem>(*taken.item));
                 }
             } catch (const std::exception& e) {
                 FITRA_LOG_ERROR("corpus: writer error: {}", e.what());
@@ -541,6 +554,21 @@ private:
         ring_.clear();
         ring_bytes_ = 0;
         ring_bytes_stat_.store(0);
+    }
+
+    void process_presence_reset(const detail::PresenceReset& reset) {
+        ring_.clear();
+        ring_bytes_ = 0;
+        ring_bytes_stat_.store(0);
+        writer_presence_mask_ = 0;
+        post_deadline_.reset();
+        if (recording_.load()) close_event("presence_queue_overflow");
+        writer_presence_mask_ = reset.presence_mask;
+        if (writer_presence_mask_ != 0) {
+            begin_event(PresenceItem{0, true, reset.captured_at, reset.captured_mono_ns},
+                        "presence_queue_resync");
+        }
+        presence_resyncs_.fetch_add(1);
     }
 
     void process_presence(const PresenceItem& item) {
@@ -651,12 +679,14 @@ private:
         return utc_compact_now() + "-" + std::to_string(session_counter_++);
     }
 
-    void begin_event(const PresenceItem& trigger) {
+    void begin_event(const PresenceItem& trigger,
+                     const char* start_reason = "presence_edge") {
         session_id_ = next_session_id();
         session_path_ = unique_destination(open_root() / session_id_);
         fs::create_directories(session_path_ / "segments");
         session_started_unix_ns_ = unix_now_ns();
         trigger_capture_mono_ns_ = trigger.captured_mono_ns;
+        session_start_reason_ = start_reason;
         total_frame_counts_.assign(cameras_.size(), 0);
         session_accounted_bytes_ = 0;
         segment_index_ = 0;
@@ -828,6 +858,7 @@ private:
             << "  \"schema\": \"" << kSchema << "\",\n"
             << "  \"session_id\": \"" << json_escape(session_id_) << "\",\n"
             << "  \"trigger\": \"any_inferred_person\",\n"
+            << "  \"start_reason\": \"" << session_start_reason_ << "\",\n"
             << "  \"started_wall_unix_ns\": \"" << session_started_unix_ns_ << "\",\n"
             << "  \"ended_wall_unix_ns\": \"" << unix_now_ns() << "\",\n"
             << "  \"trigger_capture_mono_ns\": \"" << trigger_capture_mono_ns_ << "\",\n"
@@ -864,7 +895,8 @@ private:
         out << "  ],\n"
             << "  \"recorder_drops\": {\"queue\":"
             << queue_dropped_frames_.load() << ",\"storage\":"
-            << storage_dropped_frames_.load() << "}\n"
+            << storage_dropped_frames_.load() << ",\"presence\":"
+            << presence_dropped_events_.load() << "}\n"
             << "}\n";
         return out.str();
     }
@@ -1080,9 +1112,9 @@ private:
     std::thread writer_;
     std::thread uploader_;
 
-    std::mutex queue_mu_;
+    mutable std::mutex queue_mu_;
     std::condition_variable queue_cv_;
-    std::deque<QueueItem> queue_;
+    detail::EventQueue queue_;
     std::atomic<std::size_t> queued_bytes_{0};
     std::atomic<std::uint64_t> inflight_copies_{0};
 
@@ -1109,6 +1141,7 @@ private:
     std::uint64_t session_counter_ = 0;
     std::uint64_t session_started_unix_ns_ = 0;
     std::uint64_t trigger_capture_mono_ns_ = 0;
+    std::string session_start_reason_;
     std::uintmax_t session_accounted_bytes_ = 0;
     std::size_t segment_index_ = 0;
     bool segment_open_ = false;
@@ -1123,6 +1156,8 @@ private:
 
     std::atomic<std::uint64_t> accepted_frames_{0};
     std::atomic<std::uint64_t> queue_dropped_frames_{0};
+    std::atomic<std::uint64_t> presence_dropped_events_{0};
+    std::atomic<std::uint64_t> presence_resyncs_{0};
     std::atomic<std::uint64_t> storage_dropped_frames_{0};
     std::atomic<std::uint64_t> written_frames_{0};
     std::atomic<std::uint64_t> ready_sessions_{0};
