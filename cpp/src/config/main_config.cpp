@@ -130,6 +130,29 @@ void load_idle(const YAML::Node& section, MainOptions& out) {
     if (section["tick_hz"])       out.idle_tick_hz       = parse_scalar<double>(section["tick_hz"],       "idle.tick_hz");
 }
 
+void load_corpus(const YAML::Node& section, MainOptions& out) {
+    ensure_map(section, "corpus");
+    static const std::set<std::string> allowed{
+        "enabled", "spool_dir", "remote_dir", "pre_roll_s", "post_roll_s",
+        "segment_s", "upload_absent_s", "presence_stale_s", "queue_max_mib",
+        "ring_max_mib", "spool_max_gib", "min_free_gib", "remove_after_upload",
+    };
+    check_keys(section, allowed, "corpus");
+    if (section["enabled"]) out.corpus_enabled = parse_scalar<bool>(section["enabled"], "corpus.enabled");
+    if (section["spool_dir"]) out.corpus_spool_dir = parse_scalar<std::string>(section["spool_dir"], "corpus.spool_dir");
+    if (section["remote_dir"]) out.corpus_remote_dir = parse_scalar<std::string>(section["remote_dir"], "corpus.remote_dir");
+    if (section["pre_roll_s"]) out.corpus_pre_roll_s = parse_scalar<double>(section["pre_roll_s"], "corpus.pre_roll_s");
+    if (section["post_roll_s"]) out.corpus_post_roll_s = parse_scalar<double>(section["post_roll_s"], "corpus.post_roll_s");
+    if (section["segment_s"]) out.corpus_segment_s = parse_scalar<double>(section["segment_s"], "corpus.segment_s");
+    if (section["upload_absent_s"]) out.corpus_upload_absent_s = parse_scalar<double>(section["upload_absent_s"], "corpus.upload_absent_s");
+    if (section["presence_stale_s"]) out.corpus_presence_stale_s = parse_scalar<double>(section["presence_stale_s"], "corpus.presence_stale_s");
+    if (section["queue_max_mib"]) out.corpus_queue_max_mib = parse_scalar<int>(section["queue_max_mib"], "corpus.queue_max_mib");
+    if (section["ring_max_mib"]) out.corpus_ring_max_mib = parse_scalar<int>(section["ring_max_mib"], "corpus.ring_max_mib");
+    if (section["spool_max_gib"]) out.corpus_spool_max_gib = parse_scalar<double>(section["spool_max_gib"], "corpus.spool_max_gib");
+    if (section["min_free_gib"]) out.corpus_min_free_gib = parse_scalar<double>(section["min_free_gib"], "corpus.min_free_gib");
+    if (section["remove_after_upload"]) out.corpus_remove_after_upload = parse_scalar<bool>(section["remove_after_upload"], "corpus.remove_after_upload");
+}
+
 void load_three_d(const YAML::Node& section, MainOptions& out) {
     ensure_map(section, "three_d");
     static const std::set<std::string> allowed{
@@ -461,7 +484,7 @@ void load_main_config(const std::string& path, MainOptions& out) {
     }
 
     static const std::set<std::string> top_allowed{
-        "schema", "cameras", "inference", "web", "idle", "three_d",
+        "schema", "cameras", "inference", "web", "idle", "corpus", "three_d",
         "subject", "subject_calib", "calibration", "logging", "vmt",
         "extrinsic_calib", "intrinsic_calib",
     };
@@ -479,6 +502,7 @@ void load_main_config(const std::string& path, MainOptions& out) {
     if (root["inference"])   load_inference (root["inference"],   out);
     if (root["web"])         load_web       (root["web"],         out);
     if (root["idle"])        load_idle      (root["idle"],        out);
+    if (root["corpus"])      load_corpus    (root["corpus"],      out);
     if (root["three_d"])     load_three_d   (root["three_d"],     out);
     if (root["subject"])     load_subject   (root["subject"],     out);
     // DEPRECATED calibration: block first (may set subject_id from
@@ -545,6 +569,23 @@ std::string emit_main_config(const MainOptions& o) {
     if (o.idle_enabled != d.idle_enabled)             e << YAML::Key << "no_idle"       << YAML::Value << !o.idle_enabled;
     if (o.idle_enter_after_s != d.idle_enter_after_s) e << YAML::Key << "enter_after_s" << YAML::Value << o.idle_enter_after_s;
     if (o.idle_tick_hz != d.idle_tick_hz)             e << YAML::Key << "tick_hz"       << YAML::Value << o.idle_tick_hz;
+    e << YAML::EndMap;
+
+    // corpus ---------------------------------------------------------------
+    e << YAML::Key << "corpus" << YAML::Value << YAML::BeginMap;
+    if (o.corpus_enabled != d.corpus_enabled) e << YAML::Key << "enabled" << YAML::Value << o.corpus_enabled;
+    if (o.corpus_spool_dir != d.corpus_spool_dir) e << YAML::Key << "spool_dir" << YAML::Value << o.corpus_spool_dir;
+    if (o.corpus_remote_dir != d.corpus_remote_dir) e << YAML::Key << "remote_dir" << YAML::Value << o.corpus_remote_dir;
+    if (o.corpus_pre_roll_s != d.corpus_pre_roll_s) e << YAML::Key << "pre_roll_s" << YAML::Value << o.corpus_pre_roll_s;
+    if (o.corpus_post_roll_s != d.corpus_post_roll_s) e << YAML::Key << "post_roll_s" << YAML::Value << o.corpus_post_roll_s;
+    if (o.corpus_segment_s != d.corpus_segment_s) e << YAML::Key << "segment_s" << YAML::Value << o.corpus_segment_s;
+    if (o.corpus_upload_absent_s != d.corpus_upload_absent_s) e << YAML::Key << "upload_absent_s" << YAML::Value << o.corpus_upload_absent_s;
+    if (o.corpus_presence_stale_s != d.corpus_presence_stale_s) e << YAML::Key << "presence_stale_s" << YAML::Value << o.corpus_presence_stale_s;
+    if (o.corpus_queue_max_mib != d.corpus_queue_max_mib) e << YAML::Key << "queue_max_mib" << YAML::Value << o.corpus_queue_max_mib;
+    if (o.corpus_ring_max_mib != d.corpus_ring_max_mib) e << YAML::Key << "ring_max_mib" << YAML::Value << o.corpus_ring_max_mib;
+    if (o.corpus_spool_max_gib != d.corpus_spool_max_gib) e << YAML::Key << "spool_max_gib" << YAML::Value << o.corpus_spool_max_gib;
+    if (o.corpus_min_free_gib != d.corpus_min_free_gib) e << YAML::Key << "min_free_gib" << YAML::Value << o.corpus_min_free_gib;
+    if (o.corpus_remove_after_upload != d.corpus_remove_after_upload) e << YAML::Key << "remove_after_upload" << YAML::Value << o.corpus_remove_after_upload;
     e << YAML::EndMap;
 
     // three_d --------------------------------------------------------------
@@ -751,6 +792,24 @@ void abs_path(std::string& p) {
     auto a = std::filesystem::absolute(p, ec);
     if (!ec) p = a.lexically_normal().string();
 }
+
+std::filesystem::path normalized_absolute(const std::string& p) {
+    std::error_code ec;
+    auto out = std::filesystem::absolute(p, ec);
+    if (ec) return std::filesystem::path{p}.lexically_normal();
+    auto canonical = std::filesystem::weakly_canonical(out, ec);
+    return ec ? out.lexically_normal() : canonical.lexically_normal();
+}
+
+bool path_at_or_below(const std::filesystem::path& candidate,
+                      const std::filesystem::path& root) {
+    auto ci = candidate.begin();
+    auto ri = root.begin();
+    for (; ri != root.end(); ++ri, ++ci) {
+        if (ci == candidate.end() || *ci != *ri) return false;
+    }
+    return true;
+}
 }  // namespace
 
 void absolutize_config_paths(MainOptions& o) {
@@ -767,6 +826,8 @@ void absolutize_config_paths(MainOptions& o) {
     abs_path(o.subjects_dir);
     abs_path(o.subject_profile);
     abs_path(o.static_dir);
+    abs_path(o.corpus_spool_dir);
+    abs_path(o.corpus_remote_dir);
 }
 
 EarlyArgs scan_early_args(int argc, char** argv) {
@@ -827,6 +888,17 @@ void apply_cli_overrides(MainOptions& out, int argc, char** argv) {
         else if (a == "--no-idle")           { out.idle_enabled = false; }
         else if (a == "--idle-enter-after-s"){ out.idle_enter_after_s = std::stod(need(i, "--idle-enter-after-s")); }
         else if (a == "--idle-tick-hz")      { out.idle_tick_hz = std::stod(need(i, "--idle-tick-hz")); }
+        else if (a == "--corpus-record")      { out.corpus_enabled = true; }
+        else if (a == "--no-corpus-record")   { out.corpus_enabled = false; }
+        else if (a == "--corpus-spool")       { out.corpus_spool_dir = need(i, "--corpus-spool"); }
+        else if (a == "--corpus-remote")      { out.corpus_remote_dir = need(i, "--corpus-remote"); }
+        else if (a == "--corpus-pre-roll-s")  { out.corpus_pre_roll_s = std::stod(need(i, "--corpus-pre-roll-s")); }
+        else if (a == "--corpus-post-roll-s") { out.corpus_post_roll_s = std::stod(need(i, "--corpus-post-roll-s")); }
+        else if (a == "--corpus-segment-s")   { out.corpus_segment_s = std::stod(need(i, "--corpus-segment-s")); }
+        else if (a == "--corpus-upload-absent-s") { out.corpus_upload_absent_s = std::stod(need(i, "--corpus-upload-absent-s")); }
+        else if (a == "--corpus-presence-stale-s") { out.corpus_presence_stale_s = std::stod(need(i, "--corpus-presence-stale-s")); }
+        else if (a == "--corpus-spool-max-gib") { out.corpus_spool_max_gib = std::stod(need(i, "--corpus-spool-max-gib")); }
+        else if (a == "--corpus-min-free-gib") { out.corpus_min_free_gib = std::stod(need(i, "--corpus-min-free-gib")); }
         else if (a == "--width")             { out.width  = std::atoi(need(i, "--width")); }
         else if (a == "--height")            { out.height = std::atoi(need(i, "--height")); }
         else if (a == "--fps")               { out.fps    = std::atoi(need(i, "--fps")); }
@@ -1208,6 +1280,53 @@ void validate_options(const MainOptions& opts) {
     }
     if (!std::isfinite(opts.idle_tick_hz) || opts.idle_tick_hz <= 0.0) {
         fail("--idle-tick-hz must be a finite number > 0");
+    }
+    if (opts.corpus_enabled) {
+        const auto finite_range = [](double value, double lo, double hi) {
+            return std::isfinite(value) && value >= lo && value <= hi;
+        };
+        if (opts.corpus_spool_dir.empty()) {
+            fail("--corpus-spool must not be empty when corpus recording is enabled");
+        }
+        if (opts.bench_fake_bbox) {
+            fail("--corpus-record cannot be combined with --bench-fake-bbox "
+                 "(the synthetic person would record continuously)");
+        }
+        if (!finite_range(opts.corpus_pre_roll_s, 0.0, 86400.0)) {
+            fail("--corpus-pre-roll-s must be finite and in [0, 86400]");
+        }
+        if (!finite_range(opts.corpus_post_roll_s, 0.0, 86400.0)) {
+            fail("--corpus-post-roll-s must be finite and in [0, 86400]");
+        }
+        if (!finite_range(opts.corpus_segment_s, 0.001, 3600.0)) {
+            fail("--corpus-segment-s must be finite and in [0.001, 3600]");
+        }
+        if (!finite_range(opts.corpus_upload_absent_s, 0.0, 86400.0)) {
+            fail("--corpus-upload-absent-s must be finite and in [0, 86400]");
+        }
+        if (!finite_range(opts.corpus_presence_stale_s, 0.1, 3600.0)) {
+            fail("corpus.presence_stale_s must be finite and in [0.1, 3600]");
+        }
+        if (opts.corpus_queue_max_mib < 1 || opts.corpus_queue_max_mib > 16384) {
+            fail("corpus.queue_max_mib must be in [1, 16384]");
+        }
+        if (opts.corpus_ring_max_mib < 1 || opts.corpus_ring_max_mib > 16384) {
+            fail("corpus.ring_max_mib must be in [1, 16384]");
+        }
+        if (!finite_range(opts.corpus_spool_max_gib, 0.001, 1048576.0)) {
+            fail("--corpus-spool-max-gib must be finite and in [0.001, 1048576]");
+        }
+        if (!finite_range(opts.corpus_min_free_gib, 0.0, 1048576.0)) {
+            fail("corpus.min_free_gib must be finite and in [0, 1048576]");
+        }
+        if (!opts.corpus_remote_dir.empty()) {
+            const auto spool = normalized_absolute(opts.corpus_spool_dir);
+            const auto remote = normalized_absolute(opts.corpus_remote_dir);
+            if (path_at_or_below(spool, remote)
+                || path_at_or_below(remote, spool)) {
+                fail("corpus spool_dir and remote_dir must not be equal or nested");
+            }
+        }
     }
     // NOTE: --enable-3d does NOT require an explicit --calib. The extrinsics file
     // is a GENERATED artifact: the run-side read resolves to extrinsic_calib.out

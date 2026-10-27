@@ -23,6 +23,27 @@ schema: fitra_main_config_v1
 web:
     port: 8000
 
+# Optional always-on source-corpus collection for pose-model audition and later
+# temporal-model training. Enabling this keeps full inference running even when
+# the normal consumer-idle gate would enter standby. The SSD spool never deletes
+# unverified data merely to make room. For a mounted NAS target, create the
+# marker while it is mounted (`touch /mnt/nas/fitra-corpus/.fitra-corpus-target`)
+# so an unmounted empty directory is never filled accidentally.
+#corpus:
+#    enabled: true
+#    spool_dir: outputs/pose-corpus
+#    remote_dir: /mnt/nas/fitra-corpus
+#    pre_roll_s: 5
+#    post_roll_s: 10
+#    segment_s: 5
+#    upload_absent_s: 30
+#    presence_stale_s: 2
+#    queue_max_mib: 128
+#    ring_max_mib: 512
+#    spool_max_gib: 256
+#    min_free_gib: 10
+#    remove_after_upload: true
+
 # Run the intrinsic calibration step (step 0) once cameras are configured. Its
 # output is a GENERATED artifact written to calibrations/intrinsics/latest.yaml
 # (a timestamped <date>.yaml history + a `latest` symlink). Set false only if you

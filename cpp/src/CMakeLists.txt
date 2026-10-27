@@ -74,6 +74,22 @@ target_link_libraries(fitra_camera PUBLIC
     ${CMAKE_DL_LIBS}  # dlopen of the isolated HW-NVJPEG .so
 )
 
+# Always-on event corpus recorder. It consumes raw V4L2 payload taps but keeps
+# all spool / checksum / mounted-NAS I/O on its own workers.
+add_library(fitra_corpus STATIC
+    corpus/event_corpus_recorder.cpp
+    util/sha256.cpp
+)
+
+target_include_directories(fitra_corpus PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(fitra_corpus PUBLIC
+    fitra_camera
+    Threads::Threads
+)
+
 # --- Isolated Jetson hardware-NVJPEG decoder (libfitra_nvjpeg.so) -------------
 # Built only when the Jetson Multimedia API is present. This is a SEPARATE
 # shared library, dlopen'd at runtime (NOT linked into the main binary): its
@@ -250,6 +266,7 @@ target_include_directories(fitra_app PUBLIC
 
 target_link_libraries(fitra_app PUBLIC
     fitra_config
+    fitra_corpus
     fitra_pipeline
     fitra_vmt
     fitra_web

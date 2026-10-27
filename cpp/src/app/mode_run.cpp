@@ -2,8 +2,12 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
+#include <cmath>
 #include <exception>
+#include <functional>
 #include <memory>
+#include <vector>
 
 #include "app/camera_builder.hpp"
 #include "app/idle_evaluator.hpp"
@@ -14,9 +18,72 @@
 #include "app/stats_loop.hpp"
 #include "app/threed_builder.hpp"
 #include "app/trt_stack.hpp"
+#include "corpus/event_corpus_recorder.hpp"
 #include "util/logging.hpp"
 
 namespace fitra::app {
+
+namespace {
+
+camera::PixFmt corpus_pixel_format(const config::MainOptions& opts,
+                                   std::size_t slot) {
+    const std::string& configured = opts.cam_pixel_format[slot].empty()
+                                      ? opts.pixel_format
+                                      : opts.cam_pixel_format[slot];
+    if (configured == "yuyv") return camera::PixFmt::Yuyv;
+    if (configured == "nvjpeg") return camera::PixFmt::Nvjpeg;
+    return camera::PixFmt::Mjpeg;
+}
+
+std::vector<corpus::CameraSpec> corpus_camera_specs(
+    const config::MainOptions& opts) {
+    std::vector<corpus::CameraSpec> cameras;
+    for (std::size_t slot = 0; slot < opts.cam_paths.size(); ++slot) {
+        if (opts.cam_paths[slot].empty()) continue;
+        corpus::CameraSpec camera;
+        camera.index = cameras.size();
+        camera.config_slot = slot;
+        camera.device_path = opts.cam_paths[slot];
+        camera.capture_width = opts.cam_cap_width[slot] > 0
+                                 ? opts.cam_cap_width[slot] : opts.width;
+        camera.capture_height = opts.cam_cap_height[slot] > 0
+                                  ? opts.cam_cap_height[slot] : opts.height;
+        camera.output_width = opts.width;
+        camera.output_height = opts.height;
+        camera.requested_fps = opts.fps;
+        camera.pixel_format = corpus_pixel_format(opts, slot);
+        cameras.push_back(std::move(camera));
+    }
+    return cameras;
+}
+
+corpus::RecorderOptions corpus_options(const config::MainOptions& opts) {
+    const auto millis = [](double seconds) {
+        return std::chrono::milliseconds{
+            static_cast<std::chrono::milliseconds::rep>(
+                std::llround(seconds * 1000.0))};
+    };
+    corpus::RecorderOptions out;
+    out.spool_dir = opts.corpus_spool_dir;
+    out.remote_dir = opts.corpus_remote_dir;
+    out.pre_roll = millis(opts.corpus_pre_roll_s);
+    out.post_roll = millis(opts.corpus_post_roll_s);
+    out.segment = millis(opts.corpus_segment_s);
+    out.upload_absent = millis(opts.corpus_upload_absent_s);
+    out.presence_stale = millis(opts.corpus_presence_stale_s);
+    out.queue_max_bytes = static_cast<std::size_t>(opts.corpus_queue_max_mib)
+                        * 1024ULL * 1024ULL;
+    out.ring_max_bytes = static_cast<std::size_t>(opts.corpus_ring_max_mib)
+                       * 1024ULL * 1024ULL;
+    out.spool_max_bytes = static_cast<std::uintmax_t>(
+        opts.corpus_spool_max_gib * 1024.0 * 1024.0 * 1024.0);
+    out.min_free_bytes = static_cast<std::uintmax_t>(
+        opts.corpus_min_free_gib * 1024.0 * 1024.0 * 1024.0);
+    out.remove_after_upload = opts.corpus_remove_after_upload;
+    return out;
+}
+
+}  // namespace
 
 int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     auto trt = make_trt_stack(opts);
@@ -28,12 +95,38 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     // it injects a synthetic bbox to keep inference saturated for ceiling
     // measurement, which has no real consumer (often --no-web) and would
     // otherwise standby after enter_after_s and collapse the measured fps.
-    const bool idle_enabled = opts.idle_enabled && !opts.bench_fake_bbox;
+    const bool idle_enabled = opts.idle_enabled && !opts.bench_fake_bbox
+                           && !opts.corpus_enabled;
     if (opts.idle_enabled && opts.bench_fake_bbox) {
         FITRA_LOG_INFO("idle: disabled for --bench-fake-bbox (benchmark path)");
     }
+    if (opts.idle_enabled && opts.corpus_enabled) {
+        FITRA_LOG_INFO("idle: disabled while event corpus recording is enabled");
+    }
+
+    std::unique_ptr<corpus::EventCorpusRecorder> corpus_recorder;
+    std::function<void(std::size_t, const camera::Frame&)> raw_frame_tap;
+    if (opts.corpus_enabled) {
+        auto camera_specs = corpus_camera_specs(opts);
+        for (const auto& camera : camera_specs) {
+            if (camera.pixel_format == camera::PixFmt::Yuyv) {
+                FITRA_LOG_WARN(
+                    "corpus: camera {} uses raw YUYV; expect very high SSD bandwidth/usage",
+                    camera.index);
+            }
+        }
+        corpus_recorder = std::make_unique<corpus::EventCorpusRecorder>(
+            corpus_options(opts), std::move(camera_specs));
+        corpus_recorder->start();
+        raw_frame_tap = [recorder = corpus_recorder.get()](
+                            std::size_t camera_index,
+                            const camera::Frame& frame) noexcept {
+            recorder->ingest_raw(camera_index, frame);
+        };
+    }
     auto cams = make_frame_sources(opts, trt.get(), nullptr,
-                                   idle_enabled ? &idle_state.idle : nullptr);
+                                   idle_enabled ? &idle_state.idle : nullptr,
+                                   std::move(raw_frame_tap));
     const std::size_t n_cams = cams.sources.size();
     if (opts.enable_3d && n_cams < 2) {
         std::fprintf(stderr, "--enable-3d requires at least two cameras\n");
@@ -63,6 +156,18 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     pipeline::SnapshotBus bus{n_cams};
     auto driver = make_driver(std::move(cams.sources), *trt->rtmpose, bus, opts,
                               enable_3d ? &threed : nullptr);
+    if (corpus_recorder) {
+        driver->set_presence_tap(
+            [recorder = corpus_recorder.get()](std::size_t camera_index,
+                                                bool present,
+                                                std::chrono::steady_clock::time_point
+                                                    captured_at,
+                                                std::uint64_t captured_mono_ns) noexcept {
+                recorder->observe_presence(camera_index, present,
+                                            captured_at,
+                                            captured_mono_ns);
+            });
+    }
     // Idle/standby gate (issue #37): while idle the driver skips the 3D update
     // and throttles to idle_tick_hz. Run mode only — calib never sets it.
     driver->set_idle_gate(idle_enabled ? &idle_state.idle : nullptr,
@@ -166,6 +271,7 @@ int run_mode_run(const config::MainOptions& opts, FlowControl& flow) {
     if (server) server->stop();
     outputs.stop();
     driver->stop();
+    if (corpus_recorder) corpus_recorder->stop();
     return EXIT_SUCCESS;
 }
 

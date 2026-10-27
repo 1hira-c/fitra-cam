@@ -8,7 +8,9 @@ namespace fitra::app {
 CameraSet make_frame_sources(const config::MainOptions& opts,
                              TrtStack* trt,
                              std::shared_ptr<std::atomic<bool>> recording_flag,
-                             const std::atomic<bool>* idle_flag) {
+                             const std::atomic<bool>* idle_flag,
+                             std::function<void(std::size_t,
+                                                const camera::Frame&)> raw_frame_tap) {
     CameraSet set;
     // Count active cameras up front so each can be given a distinct YOLOX
     // detection phase slot (stagger), spreading the per-camera detection bursts
@@ -49,6 +51,14 @@ CameraSet make_frame_sources(const config::MainOptions& opts,
         o.ae_target      = opts.cam_ae_target[i];
         auto cap = std::make_unique<camera::V4l2Capture>(o);
 
+        const std::size_t compact_idx = active_idx++;
+        if (raw_frame_tap) {
+            cap->set_raw_frame_tap([raw_frame_tap, compact_idx](
+                                       const camera::Frame& frame) {
+                raw_frame_tap(compact_idx, frame);
+            });
+        }
+
         if (!trt) {
             // Decode-only: no detection, no prebake; DecodedFrame::bgr is
             // retained for the CPU consumer (AprilTag detection).
@@ -72,8 +82,7 @@ CameraSet make_frame_sources(const config::MainOptions& opts,
         // so for 3 cameras at det_frequency 10 they detect at frames ...0, 3, 6
         // of each period — ~50ms apart at 60fps instead of all at once.
         src_opts.det_phase = static_cast<int>(
-            active_idx * static_cast<std::size_t>(opts.det_frequency) / active_cams);
-        ++active_idx;
+            compact_idx * static_cast<std::size_t>(opts.det_frequency) / active_cams);
         src_opts.single_person = !opts.multi_person;
         src_opts.fake_bbox_if_empty = opts.bench_fake_bbox;
         // Subject-calibration recording taps MultiCameraDriver's frame tap.

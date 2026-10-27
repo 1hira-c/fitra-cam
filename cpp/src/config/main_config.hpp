@@ -83,6 +83,24 @@ struct MainOptions {
     double idle_enter_after_s = 10.0;  // consumer-zero dwell before standby
     double idle_tick_hz       = 2.0;   // driver loop throttle while idle (Hz)
 
+    // Event corpus recorder (Run mode only). Opt-in: full inference remains on
+    // so inferred person presence can trigger raw V4L2 capture. SSD is a bounded
+    // spool; remote_dir is a mounted filesystem target and stays empty to
+    // disable upload. See docs/design/core-pipeline-event-corpus-recorder.md.
+    bool        corpus_enabled = false;
+    std::string corpus_spool_dir = "outputs/pose-corpus";
+    std::string corpus_remote_dir;
+    double      corpus_pre_roll_s = 5.0;
+    double      corpus_post_roll_s = 10.0;
+    double      corpus_segment_s = 5.0;
+    double      corpus_upload_absent_s = 30.0;
+    double      corpus_presence_stale_s = 2.0;
+    int         corpus_queue_max_mib = 128;
+    int         corpus_ring_max_mib = 512;
+    double      corpus_spool_max_gib = 256.0;
+    double      corpus_min_free_gib = 10.0;
+    bool        corpus_remove_after_upload = true;
+
     // three_d
     bool   enable_3d = false;
     std::string calib;

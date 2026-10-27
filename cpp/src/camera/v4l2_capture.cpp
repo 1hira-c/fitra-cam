@@ -157,6 +157,11 @@ void V4l2Capture::start() {
     if (fmt.fmt.pix.pixelformat != want_fourcc) {
         throw std::runtime_error(std::string("driver did not accept ") + fmt_name + " format");
     }
+    capture_width_ = fmt.fmt.pix.width;
+    capture_height_ = fmt.fmt.pix.height;
+    bytes_per_line_ = fmt.fmt.pix.bytesperline;
+    size_image_ = fmt.fmt.pix.sizeimage;
+    pixel_format_fourcc_ = fmt.fmt.pix.pixelformat;
     if (static_cast<int>(fmt.fmt.pix.width)  != req_w
      || static_cast<int>(fmt.fmt.pix.height) != req_h) {
         FITRA_LOG_WARN("driver returned {}x{} (requested {}x{})",
@@ -176,8 +181,13 @@ void V4l2Capture::start() {
     sp.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     sp.parm.capture.timeperframe.numerator   = 1;
     sp.parm.capture.timeperframe.denominator = opts_.fps;
+    frame_interval_numerator_ = 0;
+    frame_interval_denominator_ = 0;
     if (xioctl(fd_, VIDIOC_S_PARM, &sp) < 0) {
         FITRA_LOG_WARN("VIDIOC_S_PARM failed; continuing with driver default fps");
+    } else {
+        frame_interval_numerator_ = sp.parm.capture.timeperframe.numerator;
+        frame_interval_denominator_ = sp.parm.capture.timeperframe.denominator;
     }
 
     // Request N mmap buffers.
@@ -332,10 +342,31 @@ void V4l2Capture::worker_loop() {
             // the previous frame's buffer (capacity retained) for the next fill.
             std::swap(latest_->data, spare_data_);
             latest_->seq         = seq;
+            latest_->v4l2_sequence = buf.sequence;
+            latest_->capture_width = capture_width_;
+            latest_->capture_height = capture_height_;
+            latest_->bytes_per_line = bytes_per_line_;
+            latest_->size_image = size_image_;
+            latest_->pixel_format_fourcc = pixel_format_fourcc_;
+            latest_->frame_interval_numerator = frame_interval_numerator_;
+            latest_->frame_interval_denominator = frame_interval_denominator_;
             latest_->captured_at = now;
             latest_->captured_mono_ns = captured_mono_ns;
             latest_->v4l2_timestamp = v4l2_timestamp;
             slot_cv_.notify_one();  // wake a consumer parked in wait_pop_latest
+        }
+        // Only this capture worker mutates latest_; consumers copy it under
+        // slot_mu_. Therefore the const callback can safely read it outside the
+        // lock, and a slow corpus copy cannot block the decode consumer. The
+        // V4L2 buffer itself was already re-queued above.
+        if (raw_frame_tap_) {
+            try {
+                raw_frame_tap_(*latest_);
+            } catch (const std::exception& e) {
+                FITRA_LOG_ERROR("v4l2 raw frame tap failed: {}", e.what());
+            } catch (...) {
+                FITRA_LOG_ERROR("v4l2 raw frame tap failed with unknown exception");
+            }
         }
         update_recv_fps(now);
     }

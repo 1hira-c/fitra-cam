@@ -8,6 +8,7 @@
 //   - calib-extrinsic: trt == nullptr                            (decode-only)
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -31,6 +32,8 @@ struct CameraSet {
 CameraSet make_frame_sources(const config::MainOptions& opts,
                              TrtStack* trt,
                              std::shared_ptr<std::atomic<bool>> recording_flag,
-                             const std::atomic<bool>* idle_flag = nullptr);
+                             const std::atomic<bool>* idle_flag = nullptr,
+                             std::function<void(std::size_t,
+                                                const camera::Frame&)> raw_frame_tap = {});
 
 }  // namespace fitra::app
