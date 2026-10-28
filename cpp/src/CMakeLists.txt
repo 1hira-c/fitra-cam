@@ -38,6 +38,14 @@ add_library(fitra_markerless_io STATIC lift/markerless_io.cpp)
 target_include_directories(fitra_markerless_io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(fitra_markerless_io PUBLIC fitra_lift PRIVATE Crow::Crow)
 
+# Dedicated batch capture writer/guide. The SHA-256 translation unit is reused
+# without bringing the event recorder's presence policy/uploader into this tool.
+add_library(fitra_markerless_recording STATIC
+    camera/markerless_recording.cpp
+    util/sha256.cpp)
+target_include_directories(fitra_markerless_recording PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(fitra_markerless_recording PUBLIC fitra_lift PRIVATE Crow::Crow)
+
 # Inference library (TRT engine wrapper, ONNX -> engine builder, YOLOX, RTMPose).
 add_library(fitra_infer STATIC
     infer/trt_engine.cpp

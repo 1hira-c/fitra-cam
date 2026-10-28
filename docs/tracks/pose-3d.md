@@ -10,6 +10,8 @@ subject calibration。vr-output トラックの上流 (= tracker の単一 produ
 数値・境界を検証するための基盤であり、metric scale・床・fitra Z-upは未確定。
 出力は任意単位の`fitra_markerless_relative_v1`で、通常の校正YAML/latestやruntimeへ適用しない。
 人物ありlive収集、身長/床の推定、案内UI/flow接続と実機精度の受け入れは残件。
+人物がいる機会に原本をまとめ撮りする370秒の案内・専用raw recorder・offline収録QCを追加した。
+→ [まとめ撮りrunbook](../runbook-markerless-capture.md)。撮影した人体の自動可視/静止判定は未実装。
 → [design/pose-3d-markerless-extrinsic.md](../design/pose-3d-markerless-extrinsic.md)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
@@ -146,6 +148,16 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-10-28 — マーカーレス校正のまとめ撮りとoffline収録QC
+
+校正96秒・独立検証64秒・反復96秒・将来のscale/floor用40秒等を、1セット370秒の
+動作案内にした。`markerless_record`はcamera節とintrinsicをpreflightし、明示`--record`でだけ
+原MJPEG/YUYV・capture/driver seq・kernel/host時刻・案内区間・校正snapshot・checksumを保存する。
+撮影後QCは保存とtimingを検査し、partition付き最大72組の再推論候補を出す。
+人物の可視性/静止/幾何/実機精度・十分な録画長を合格にしたとは扱わない。
+Release build、`main --help`、新規収録/QC testを含む全CTest 42/42が成功。
+手順・残件: [まとめ撮りrunbook](../runbook-markerless-capture.md)。
 
 ### 2026-10-28 — マーカーレス外部校正の相対幾何・オフライン検証基盤
 

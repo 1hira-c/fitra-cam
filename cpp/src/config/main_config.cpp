@@ -461,6 +461,20 @@ void load_intrinsic_calib(const YAML::Node& section, MainOptions& out) {
 
 }  // namespace
 
+void load_camera_config(const std::string& path, MainOptions& out) {
+    YAML::Node root;
+    try {
+        root = YAML::LoadFile(path);
+    } catch (const YAML::Exception& error) {
+        fail(std::string("failed to load ") + path + ": " + error.what());
+    }
+    ensure_map(root, "root");
+    if (!root["schema"] || parse_scalar<std::string>(root["schema"], "schema") != kMainConfigSchema)
+        fail("unsupported or missing camera config schema");
+    if (!root["cameras"]) fail("missing cameras section");
+    load_cameras(root["cameras"], out);
+}
+
 void load_main_config(const std::string& path, MainOptions& out) {
     YAML::Node root;
     try {

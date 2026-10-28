@@ -426,6 +426,11 @@ void absolutize_config_paths(MainOptions& opts);
 // stay empty so that subsequent CLI overrides can fill them in.
 void load_main_config(const std::string& path, MainOptions& out);
 
+// Dedicated raw-capture tools consume only schema+cameras. Other sections
+// (including legacy output settings) are deliberately ignored; camera keys
+// still use the canonical strict parser. Does not start runtime/outputs.
+void load_camera_config(const std::string& path, MainOptions& out);
+
 // Apply CLI flags (the same set that main.cpp historically parsed) on top of
 // `out`. `--config PATH`, `--help`, `--probe` are pre-extracted by the caller
 // and ignored here. Unknown flags and missing argument values throw

@@ -340,6 +340,11 @@ pinhole/fisheye、noise/outlier、退化、holdout分離、収集境界、strict
 metric scale・床・実機の精度/導入時間は別ゲートであり、合成GTや低再投影誤差だけで合格にしない。
 設計: [pose-3d-markerless-extrinsic](design/pose-3d-markerless-extrinsic.md)。
 
+将来の人物不在での再検証用には、[まとめ撮りrunbook](runbook-markerless-capture.md)に沿って
+raw payload・kernel/host capture時刻・source sequence・案内区間・intrinsic snapshotを収録する。
+`test_markerless_recording`が合成JPEG/clockでrecorderとPython標準libraryのQCを接続して検証する。
+capture-QCの成功は人体可視性や校正精度の成功ではなく、370秒の長さも実機未確定の初期収録予算。
+
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|
 | 0     | `cmake --build cpp/build && ./cpp/build/main --help`        | リンク成功、TRT runtime が初期化できる                                         |

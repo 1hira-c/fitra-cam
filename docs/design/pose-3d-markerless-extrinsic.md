@@ -142,6 +142,35 @@ Release build、既存を含む全CTest、`main --help`で統合回帰を確認�
 
 ## 残る制約
 
+### 人物がいる機会のまとめ撮り（2026-10-28追加）
+
+[撮影runbook](../runbook-markerless-capture.md)と`tools/markerless_record`で、
+校正A・独立検証B・反復C・将来の床/scale用・動作確認を1セット370秒で収録できるようにした。
+これは実機で確定した必要長ではなく、別pose/time区間を確保する初期予算である。
+`--record`を明示しない限り、cameraを開かず出力も作らない。
+設定は`load_camera_config`でcamera節だけを読み、runtimeのconfig loaderの厳格さを変えない。
+
+captureは既存V4L2の最新1slotを単一ownerでpollし、ファイルI/OをDQBUF threadへ入れない。
+raw MJPEG/YUYVを再圧縮せず、offset/size、process/kernel seq、kernel timestampと意味論、
+host DQBUF timestamp、実際の案内時刻、actual format、intrinsic実体とSHA-256を保存する。
+遅い書き込みで捨てたsourceとdriver gapは別に記録する。既存event corpusのperson triggerを
+偽装して流用せず、推論/relay/upload/校正適用を起動しない専用toolとした。
+raw payload上限32GiBと空き2GiB reserve、3秒camera停止をguardし、途中終了の原本も保持する。
+
+`check_markerless_capture.py`は標準libraryだけのoffline QCで、checksum、index範囲/連続性、
+時刻のknown/unknown/mixed/regression、source非再使用の20ms frame set、予定静止区間を検査する。
+原本bundleを変更せず、fit/validation/repeat/floor partition付き最大72候補をJSONへ出す。
+保存・timing QCと、人が見えている/静止している/幾何的に十分という判定は別で、
+`calibration_ready / person_visibility_checked / geometry_checked`はfalseを維持する。
+候補へ2D推論を付けて現行replayへ渡すadapterは未実装で、raw frame位置とtimestampを先に確保する。
+
+合成JPEGと模擬kernel時刻でrecorder→QC→候補出力、64bit時刻、途中終了、上書き拒否、
+capacity、時刻不明/混在/同期miss、corruption、unsafe path、camera-only preflightを検証する。
+2026-10-28にRelease configure/build、`main --help`、新規収録テストを含む全CTest 42/42が成功。
+収録テスト内ではPython標準libraryによる12ケースも実行した。既存640出力設定と1280出力設定で
+deviceを開かないpreflightのID/寸法照合を確認したが、物理camera割当とFOVの一致を確認した証拠ではない。
+撮影時の実fps・ブラー・全身可視性・drop率・所要容量・十分な録画長の実機受け入れは未実施。
+
 相対camera配置の精度と人体pose modelの系統誤差は未実証。非同期cameraでは静止でも手ぶれや
 露光差が残り、kernel timestampの意味も実機で確認が必要。holdoutは独立した真値ではなく
 自己整合の補助指標である。最新のSimCC posteriorやIMU融合を校正用実測へ戻さない。

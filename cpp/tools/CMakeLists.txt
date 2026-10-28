@@ -26,6 +26,26 @@ add_dependencies(fitra_test_markerless_replay fitra_markerless_extrinsic_replay)
 add_test(NAME test_markerless_replay COMMAND fitra_test_markerless_replay
     $<TARGET_FILE:fitra_markerless_extrinsic_replay>)
 
+add_executable(fitra_markerless_record markerless_record.cpp)
+target_link_libraries(fitra_markerless_record PRIVATE fitra_markerless_recording fitra_camera fitra_config)
+set_target_properties(fitra_markerless_record PROPERTIES
+    OUTPUT_NAME "markerless_record" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+
+add_executable(fitra_test_markerless_recording test_markerless_recording.cpp)
+target_link_libraries(fitra_test_markerless_recording PRIVATE fitra_markerless_recording opencv_imgcodecs)
+set_target_properties(fitra_test_markerless_recording PROPERTIES
+    OUTPUT_NAME "test_markerless_recording" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+add_dependencies(fitra_test_markerless_recording fitra_markerless_record)
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME test_markerless_recording COMMAND fitra_test_markerless_recording
+        "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_markerless_capture_qc.py"
+        $<TARGET_FILE:fitra_markerless_record>)
+else()
+    add_test(NAME test_markerless_recording COMMAND fitra_test_markerless_recording)
+    message(WARNING "Python3 unavailable: markerless capture QC integration tests are skipped")
+endif()
+
 add_executable(fitra_build_engines
     build_engines.cpp
 )
