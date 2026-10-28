@@ -332,6 +332,14 @@ fitra-cam/
 
 ## 検証戦略
 
+マーカーレス外部校正の相対幾何は人物不在でも検証できる独立したoffline段とする。
+`ctest --test-dir cpp/build --output-on-failure -R markerless`で、2/3cameraの合成GT、
+pinhole/fisheye、noise/outlier、退化、holdout分離、収集境界、strict replay/CLIを検証する。
+`tools/markerless_extrinsic_replay --intrinsics <YAML> --observations <JSONL> --output <NEW.json>`
+は任意scale・reference-camera軸の診断だけを出力し、通常の校正YAML/latestを更新しない。
+metric scale・床・実機の精度/導入時間は別ゲートであり、合成GTや低再投影誤差だけで合格にしない。
+設計: [pose-3d-markerless-extrinsic](design/pose-3d-markerless-extrinsic.md)。
+
 | Phase | 検証コマンド                                                  | 合格基準                                                                 |
 |-------|-----------------------------------------------------------|----------------------------------------------------------------------|
 | 0     | `cmake --build cpp/build && ./cpp/build/main --help`        | リンク成功、TRT runtime が初期化できる                                         |

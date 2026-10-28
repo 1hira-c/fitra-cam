@@ -1,5 +1,31 @@
 # Standalone CLI tools that consume the fitra_infer library.
 
+foreach(markerless_test extrinsic collection)
+    add_executable(fitra_test_markerless_${markerless_test}
+        test_markerless_${markerless_test}.cpp)
+    target_link_libraries(fitra_test_markerless_${markerless_test} PRIVATE fitra_lift)
+    set_target_properties(fitra_test_markerless_${markerless_test} PROPERTIES
+        OUTPUT_NAME "test_markerless_${markerless_test}"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+    add_test(NAME test_markerless_${markerless_test}
+        COMMAND fitra_test_markerless_${markerless_test})
+endforeach()
+
+add_executable(fitra_markerless_extrinsic_replay markerless_extrinsic_replay.cpp)
+target_link_libraries(fitra_markerless_extrinsic_replay PRIVATE fitra_markerless_io)
+set_target_properties(fitra_markerless_extrinsic_replay PROPERTIES
+    OUTPUT_NAME "markerless_extrinsic_replay"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+
+add_executable(fitra_test_markerless_replay test_markerless_replay.cpp)
+target_link_libraries(fitra_test_markerless_replay PRIVATE fitra_markerless_io Crow::Crow)
+set_target_properties(fitra_test_markerless_replay PROPERTIES
+    OUTPUT_NAME "test_markerless_replay"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+add_dependencies(fitra_test_markerless_replay fitra_markerless_extrinsic_replay)
+add_test(NAME test_markerless_replay COMMAND fitra_test_markerless_replay
+    $<TARGET_FILE:fitra_markerless_extrinsic_replay>)
+
 add_executable(fitra_build_engines
     build_engines.cpp
 )

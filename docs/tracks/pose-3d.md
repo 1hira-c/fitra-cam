@@ -3,7 +3,14 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-09-04)
+## 現状 (2026-10-28)
+
+**マーカーレス外部校正 (#66) は相対幾何の診断段階**。固定intrinsicとraw Halpe26対応から
+2〜3cameraの相対poseを求め、有界収集とJSONL replayを追加した。人物不在の合成GTで
+数値・境界を検証するための基盤であり、metric scale・床・fitra Z-upは未確定。
+出力は任意単位の`fitra_markerless_relative_v1`で、通常の校正YAML/latestやruntimeへ適用しない。
+人物ありlive収集、身長/床の推定、案内UI/flow接続と実機精度の受け入れは残件。
+→ [design/pose-3d-markerless-extrinsic.md](../design/pose-3d-markerless-extrinsic.md)
 
 `SlimeTrackerBus` + `TrackerExtractor` が tracker snapshot の **単一 producer**。
 Firmware UDP / VMT publisher / WebUI viz が同じ smoothing 履歴を共有する。Kalman は
@@ -139,6 +146,17 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-10-28 — マーカーレス外部校正の相対幾何・オフライン検証基盤
+
+固定pinhole/fisheye intrinsicとraw 2D対応から、Essential RANSACと共通scaleへのPnP登録、
+有界refinementで2〜3cameraの相対配置を推定するコアを追加した。純回転/低視差/平面・直線、
+観測不足とholdout不整合を拒否し、合成GTで回転と任意単位translationを再投影とは別に検証する。
+有界collectorは重複sourceを再採用せず、人物/stream/clock境界で旧収集を破棄する。
+`markerless_extrinsic_replay`がstrict JSONLを同じ入力境界で再生し、新規の診断JSONだけを出力する。
+metric/floor/runtime-readyは常にfalse。人物あり精度・所要時間・live接続の合格は主張しない。
+Release build、`main --help`、新規3件を含む全CTest 41/41が成功（Crow loopbackはホスト再実行）。
+設計・残件: [マーカーレス外部校正](../design/pose-3d-markerless-extrinsic.md)。
 
 ### 2026-09-04 — D50 lifecycle境界で床接地履歴を破棄
 

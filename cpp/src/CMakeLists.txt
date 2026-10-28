@@ -6,6 +6,8 @@ add_library(fitra_lift STATIC
     lift/calib_io.cpp
     lift/triangulator.cpp
     lift/extrinsic_solver.cpp
+    lift/markerless_extrinsic.cpp
+    lift/markerless_collection.cpp
     lift/apriltag_marker.cpp
     lift/floor_tag_map.cpp
     lift/floor_extrinsic_solver.cpp
@@ -29,6 +31,12 @@ target_link_libraries(fitra_lift PUBLIC
     opencv_imgproc      # apriltag_marker: cvtColor
     opencv_objdetect    # apriltag_marker: cv::aruco AprilTag detector
 )
+
+# Strict offline observation replay/reporting. Crow is used only for its JSON
+# parser; this target neither starts a server nor links inference/capture.
+add_library(fitra_markerless_io STATIC lift/markerless_io.cpp)
+target_include_directories(fitra_markerless_io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(fitra_markerless_io PUBLIC fitra_lift PRIVATE Crow::Crow)
 
 # Inference library (TRT engine wrapper, ONNX -> engine builder, YOLOX, RTMPose).
 add_library(fitra_infer STATIC
