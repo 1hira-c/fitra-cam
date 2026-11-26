@@ -12,7 +12,7 @@ subject calibration。vr-output トラックの上流 (= tracker の単一 produ
 人物ありlive収集、身長/床の推定、案内UI/flow接続と実機精度の受け入れは残件。
 実人物録画の480組でRTMPoseの生scoreを保持して入力できた。3台の相対幾何は4区間とも
 不合格。2台では姿勢を変えると同じカメラ間の推定回転が115度異なる例があり、別動作での検証が必要。
-同じ2台で床マットの5点を手で対応づけると、移動からの解は5点、立位からの解は1点と整合した。
+方式の比較対象は全台の相対姿勢・実寸・床と、未使用区間での3D復元精度。旧録画の床5点は現配置の採点から除外した。
 人物がいる機会に原本をまとめ撮りする370秒の案内・専用raw recorder・offline収録QCを追加した。
 → [まとめ撮りrunbook](../runbook-markerless-capture.md)。撮影した人体の自動可視/静止判定は未実装。
 → [design/pose-3d-markerless-extrinsic.md](../design/pose-3d-markerless-extrinsic.md)
@@ -151,6 +151,13 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-11-26 — 外部校正の採用基準を全カメラの復元精度に整理
+
+本番は設置時に実行するC++校正とし、各方式を同じ収録で全台の配置まで解いて比較する。
+旧録画の床5点とCPU試走の時間を採用判断から外した。C++を再実行した3台校正は実人物録画で
+4区間とも棄却。独立したペアの回転を直接・経由で比べると移動2.44度、着座移行14.79度の差があった。
+現配置での独立参照と再現性の測り方は[校正方式を選ぶ基準](../design/pose-3d-markerless-extrinsic.md#校正方式を選ぶ基準)に記載。
 
 ### 2026-11-26 — マーカーレス校正用に学習済みの背景照合を比較
 
