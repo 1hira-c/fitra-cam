@@ -259,6 +259,18 @@ void test_degeneracy() {
     expect_rejected(low_score, "all observations below confidence gate");
 }
 
+void test_raw_model_scores() {
+    auto scene = make_scene();
+    for (auto& sample : scene.samples)
+        for (auto& frame : sample.frames)
+            for (auto& point : frame.keypoints) point.score = 1.09375;
+    MarkerlessSolverOptions options;
+    options.min_score = 1.0625;
+    expect_recovery(scene, "raw scores above one", .01, 1e-3, options);
+    options.min_score = 1.125;
+    expect_rejected(scene, "raw scores below threshold", options);
+}
+
 template <typename Fn>
 void invalid_case(const char* label, Fn mutate) {
     auto scene = make_scene();
@@ -296,7 +308,10 @@ void test_input_validation() {
     invalid_case("nonfinite score", [](Scene& s) {
         s.samples[0].frames[0].keypoints[5].score = std::numeric_limits<double>::quiet_NaN();
     });
-    invalid_case("out-of-range score", [](Scene& s) { s.samples[0].frames[0].keypoints[5].score = 1.1; });
+    invalid_case("negative score", [](Scene& s) { s.samples[0].frames[0].keypoints[5].score = -0.1; });
+    invalid_case("score outside float32 range", [](Scene& s) {
+        s.samples[0].frames[0].keypoints[5].score = std::numeric_limits<double>::max();
+    });
     invalid_case("nonfinite pixel", [](Scene& s) {
         s.samples[0].frames[0].keypoints[5].pixel.x = std::numeric_limits<double>::infinity();
     });
@@ -322,6 +337,7 @@ int main() {
     test_validation_is_excluded_from_fit();
     test_camera_identity_and_third_view_support();
     test_degeneracy();
+    test_raw_model_scores();
     test_input_validation();
     if (failures) std::fprintf(stderr, "markerless geometry: %d failure(s)\n", failures);
     else std::puts("markerless geometry: all synthetic checks passed");

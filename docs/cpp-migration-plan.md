@@ -338,6 +338,8 @@ pinhole/fisheye、noise/outlier、退化、holdout分離、収集境界、strict
 `tools/markerless_extrinsic_replay --intrinsics <YAML> --observations <JSONL> --output <NEW.json>`
 は任意scale・reference-camera軸の診断だけを出力し、通常の校正YAML/latestを更新しない。
 metric scale・床・実機の精度/導入時間は別ゲートであり、合成GTや低再投影誤差だけで合格にしない。
+人物録画では1を超えるRTMPoseの生scoreも含め、撮影時の固定内参とcamera別kernel時刻でreplayする。
+同じカメラ配置で姿勢を変えて独立に解き、相対回転・基線方向の再現性と、解を固定した別動作での関節対応支持率を測る。
 設計: [pose-3d-markerless-extrinsic](design/pose-3d-markerless-extrinsic.md)。
 
 将来の人物不在での再検証用には、[まとめ撮りrunbook](runbook-markerless-capture.md)に沿って

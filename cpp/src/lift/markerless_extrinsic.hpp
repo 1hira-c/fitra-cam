@@ -26,6 +26,11 @@ struct MarkerlessKeypoint {
     int joint_index = -1;  // Raw Halpe26 index; facial landmarks 0..4 are excluded.
     cv::Point2d pixel{};
     double score = 0.0;
+
+    // RTMPose returns a nonnegative float peak score. It can exceed one.
+    static constexpr bool valid_score(double value) {
+        return value >= 0.0 && value <= std::numeric_limits<float>::max();
+    }
 };
 
 struct MarkerlessCameraFrame {

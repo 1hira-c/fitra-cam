@@ -98,6 +98,7 @@ int run(const std::vector<std::string>& arguments) {
 
 void check_roundtrip() {
     auto scene = markerless_test::make_scene();
+    scene.samples.front().frames.front().keypoints[5].score = 1.09375;
     // IDs greater than 2^53 and timestamps near int64's upper end must not pass
     // through floating point at the text boundary.
     for (auto& sample : scene.samples) {
@@ -113,6 +114,7 @@ void check_roundtrip() {
     CHECK(replay.records == scene.samples.size());
     CHECK(replay.collection.accepted == scene.samples.size());
     CHECK(replay.frame_sets.size() == scene.samples.size());
+    if (replay.frame_sets.size() != scene.samples.size()) return;
     for (std::size_t i = 0; i < replay.frame_sets.size(); ++i) {
         const auto& actual = replay.frame_sets[i];
         const auto& expected = scene.samples[i];

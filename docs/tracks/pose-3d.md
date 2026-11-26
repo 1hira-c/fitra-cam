@@ -3,13 +3,15 @@
 2D keypoint から **3D pose / bone tracker** を起こす経路。lift / IK / Kalman / roll 品質 /
 subject calibration。vr-output トラックの上流 (= tracker の単一 producer) を担う。
 
-## 現状 (2026-10-28)
+## 現状 (2026-11-26)
 
 **マーカーレス外部校正 (#66) は相対幾何の診断段階**。固定intrinsicとraw Halpe26対応から
-2〜3cameraの相対poseを求め、有界収集とJSONL replayを追加した。人物不在の合成GTで
-数値・境界を検証するための基盤であり、metric scale・床・fitra Z-upは未確定。
+2〜3cameraの相対poseを求め、有界収集とJSONL replayを追加した。合成GTで復元と境界を、
+実人物録画で入力の採否と相対解の再現性を調べている。metric scale・床・fitra Z-upは未確定。
 出力は任意単位の`fitra_markerless_relative_v1`で、通常の校正YAML/latestやruntimeへ適用しない。
 人物ありlive収集、身長/床の推定、案内UI/flow接続と実機精度の受け入れは残件。
+実人物録画の480組でRTMPoseの生scoreを保持して入力できた。3台の相対幾何は4区間とも
+不合格。2台では姿勢を変えると同じカメラ間の推定回転が115度異なる例があり、別動作での検証が必要。
 人物がいる機会に原本をまとめ撮りする370秒の案内・専用raw recorder・offline収録QCを追加した。
 → [まとめ撮りrunbook](../runbook-markerless-capture.md)。撮影した人体の自動可視/静止判定は未実装。
 → [design/pose-3d-markerless-extrinsic.md](../design/pose-3d-markerless-extrinsic.md)
@@ -148,6 +150,13 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-11-26 — マーカーレス校正で1を超えるRTMPoseスコアを受理
+
+RTMPoseの生scoreの範囲に入力検証を合わせた。同じ実人物録画480組の拒否は171→0組、
+リセットは42→0回。3台では4区間とも幾何検査で棄却した。2台の立位から得た解は区間内の
+検査を通ったが、別の移動区間での関節対応の支持率は26.8%だった。
+撮影時刻、固定内参、選択条件、カメラ対ごとの比較は[検証記録](../design/pose-3d-markerless-extrinsic.md)を参照。
 
 ### 2026-10-28 — マーカーレス校正のまとめ撮りとoffline収録QC
 

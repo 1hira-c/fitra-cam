@@ -101,7 +101,7 @@ std::string validate_markerless_inputs(const CalibrationSet& intrinsics,
                     || !joints.insert(point.joint_index).second)
                     return "invalid or duplicated Halpe26 joint index";
                 if (!std::isfinite(point.pixel.x) || !std::isfinite(point.pixel.y)
-                    || !std::isfinite(point.score) || point.score < 0.0 || point.score > 1.0)
+                    || !MarkerlessKeypoint::valid_score(point.score))
                     return "invalid keypoint value";
                 if (point.pixel.x < 0.0 || point.pixel.x >= in.width
                     || point.pixel.y < 0.0 || point.pixel.y >= in.height)

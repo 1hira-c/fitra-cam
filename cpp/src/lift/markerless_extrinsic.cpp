@@ -446,7 +446,7 @@ void refine(const std::vector<Track>& tracks, const CalibrationSet& cameras,
 }
 
 bool valid_options(const MarkerlessSolverOptions& options) {
-    return std::isfinite(options.min_score) && options.min_score >= 0.0 && options.min_score <= 1.0
+    return MarkerlessKeypoint::valid_score(options.min_score)
         && options.min_frame_sets >= 3 && options.min_pair_points >= 8
         && options.min_pair_points <= 100000 && options.holdout_stride >= 2
         && options.holdout_stride <= 1000
