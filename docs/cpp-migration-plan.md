@@ -332,6 +332,13 @@ fitra-cam/
 
 ## 検証戦略
 
+3台の背景・人体校正は `test_markerless_hybrid` で既知の基線長と床からのカメラ高、カメラ補正の採否、
+時刻重複、床の退化、留保区間での足の浮き、既存出力の保護を検証する。
+実画像では同じ設置・録画で、空室、人体の推定用区間、補正選択用区間、実時間追跡用区間を確保する。
+校正YAMLをrun経路に読み込み、保存MJPEGを実際の時刻差で流し、Freshな関節・軸とtracker出力を記録する。
+床・カメラ基線の実測、現配置の人物ライブ、SteamVRは別に評価する。
+[11/26の実時間再生結果](design/pose-3d-markerless-extrinsic.md#空室の3台初期値と人体による実寸校正)
+
 マーカーレス外部校正の相対幾何は人物不在でも検証できる独立したoffline段とする。
 `ctest --test-dir cpp/build --output-on-failure -R markerless`で、2/3cameraの合成GT、
 pinhole/fisheye、noise/outlier、退化、holdout分離、収集境界、strict replay/CLIを検証する。

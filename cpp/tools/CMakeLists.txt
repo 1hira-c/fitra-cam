@@ -11,6 +11,11 @@ foreach(markerless_test extrinsic collection)
         COMMAND fitra_test_markerless_${markerless_test})
 endforeach()
 
+add_executable(fitra_markerless_hybrid markerless_hybrid.cpp)
+target_link_libraries(fitra_markerless_hybrid PRIVATE fitra_markerless_io)
+set_target_properties(fitra_markerless_hybrid PROPERTIES
+    OUTPUT_NAME "markerless_hybrid" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+
 add_executable(fitra_markerless_extrinsic_replay markerless_extrinsic_replay.cpp)
 target_link_libraries(fitra_markerless_extrinsic_replay PRIVATE fitra_markerless_io)
 set_target_properties(fitra_markerless_extrinsic_replay PROPERTIES
@@ -38,6 +43,8 @@ set_target_properties(fitra_test_markerless_recording PROPERTIES
 add_dependencies(fitra_test_markerless_recording fitra_markerless_record)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME test_markerless_hybrid COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test_markerless_hybrid.py" $<TARGET_FILE:fitra_markerless_hybrid>)
     add_test(NAME test_markerless_recording COMMAND fitra_test_markerless_recording
         "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_markerless_capture_qc.py"
         $<TARGET_FILE:fitra_markerless_record>)
