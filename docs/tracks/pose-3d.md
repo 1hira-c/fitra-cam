@@ -152,6 +152,13 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 
 ## Changelog (新しい順)
 
+### 2026-11-26 — マーカーレス校正用に学習済みの背景照合を比較
+
+同じcam0・cam2の2時刻でDISK＋LightGlue、XFeat（相互最近傍・LighterGlue）、DeDoDe v2、
+屋内用LoFTRを比較した。固定家具の文字を自動で対応づけた一方、床マットの既知5点の正答は各方式0点。
+XFeatは両画像で同じ角を検出しても繰り返し模様を取り違えた。評価条件と対照実験は
+[マーカーレス外部校正の設計記録](../design/pose-3d-markerless-extrinsic.md)に記載した。
+
 ### 2026-11-26 — 床マットの特徴で人物から推定したカメラ配置を照合
 
 10/25のcam0・cam2で、人物と印刷タグを除いた床の角・継ぎ目を使って立位と移動の解を比較した。
