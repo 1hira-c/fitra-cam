@@ -12,6 +12,7 @@ subject calibration。vr-output トラックの上流 (= tracker の単一 produ
 人物ありlive収集、身長/床の推定、案内UI/flow接続と実機精度の受け入れは残件。
 実人物録画の480組でRTMPoseの生scoreを保持して入力できた。3台の相対幾何は4区間とも
 不合格。2台では姿勢を変えると同じカメラ間の推定回転が115度異なる例があり、別動作での検証が必要。
+同じ2台で床マットの5点を手で対応づけると、移動からの解は5点、立位からの解は1点と整合した。
 人物がいる機会に原本をまとめ撮りする370秒の案内・専用raw recorder・offline収録QCを追加した。
 → [まとめ撮りrunbook](../runbook-markerless-capture.md)。撮影した人体の自動可視/静止判定は未実装。
 → [design/pose-3d-markerless-extrinsic.md](../design/pose-3d-markerless-extrinsic.md)
@@ -150,6 +151,13 @@ per-tracker AxesHelper×10 / `#trackers-table` の state 色分け、`/stats3d`)
 加え、立位伸展 1m 横移動で foot tracker world 移動量 ≥ 0.7m / `freeze_pct` baseline +5pp 以内。
 
 ## Changelog (新しい順)
+
+### 2026-11-26 — 床マットの特徴で人物から推定したカメラ配置を照合
+
+10/25のcam0・cam2で、人物と印刷タグを除いた床の角・継ぎ目を使って立位と移動の解を比較した。
+床の5点を手動対応した結果、両カメラの再投影誤差の大きい方の中央値は立位23.67px、移動2.72px。
+同じ2台で汎用の特徴点を自動照合し、両時刻で再現した対応は0点だった。
+反復模様の誤対応検査と測定条件を[検証記録](../design/pose-3d-markerless-extrinsic.md)に残した。
 
 ### 2026-11-26 — マーカーレス校正で1を超えるRTMPoseスコアを受理
 
