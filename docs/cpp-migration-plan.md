@@ -339,6 +339,9 @@ fitra-cam/
 床・カメラ基線の実測、現配置の人物ライブ、SteamVRは別に評価する。
 [11/26の実時間再生結果](design/pose-3d-markerless-extrinsic.md#空室の3台初期値と人体による実寸校正)
 
+空室の相対姿勢は、別撮影で求めた姿勢との差と、マスクした同じ物理点を2台から残りの1台へ
+予測した画素誤差で検査する。[11/27の閉扉試行](design/pose-3d-markerless-extrinsic.md#2026-11-27-閉扉した現配置での再検証)
+
 マーカーレス外部校正の相対幾何は人物不在でも検証できる独立したoffline段とする。
 `ctest --test-dir cpp/build --output-on-failure -R markerless`で、2/3cameraの合成GT、
 pinhole/fisheye、noise/outlier、退化、holdout分離、収集境界、strict replay/CLIを検証する。

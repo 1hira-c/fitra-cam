@@ -319,7 +319,8 @@ cam2の向きを90度刻みで変えて候補を合わせても、既知5点の�
 2026-11-26。固定ChArUco内参と同じ配置の空室1組からRoMa v2で相対姿勢を解く。
 平面以外の固定物も使い、fisheyeを逆投影して3組のカメラ対と3視点の点を一緒に調整する。
 cam0を基準座標、cam0–1間を1とする。GPUの1回限りのRoMa推論・初期バンドル調整は
-現時点では実験用Pythonにある。C++ツールの入力は相対姿勢と元画像上の観測だけ。
+現時点ではオフラインの[実験用Pythonスクリプト](../../scripts/markerless_roma/)で行う。
+C++ツールの入力は相対姿勢と元画像上の観測だけ。
 
 ```bash
 python3 cpp/tools/export_markerless_background.py ROMA_RUN INTRINSICS.yml NEW_BACKGROUND.yml
@@ -375,3 +376,59 @@ JetsonのC++ runの入力だけを元のMJPEGに差し替え、各カメラの�
 別の9/19録画では人体予測の中央値13.76 pxで画像整合ゲートを超えた。
 11/26の現配置はドアを開けた空室で3台の相対解まで。今回の人体・実寸・追跡証拠は9/22の配置に属する。
 ローカルの動画、YAML、時刻・ログは `outputs/markerless-hybrid-20261126-QTVWSHGn/` にある。
+
+### 2026-11-27 閉扉した現配置での再検証
+
+空室で3台（1280×960）を3回撮影した。A・Bはカメラを開いて10フレーム、Cは120フレーム待った。
+各組を独立に解き、閉扉Cの同じ床上の4枚のタグ中心（ID 21〜24）で比較した。
+タグは余白ごと照合画像からマスクし、対応点からも除いた。タグの寸法と設置座標は使っていない。
+2台の観測から残り1台での中心位置を予測し、4点×3台の12誤差を元画像の画素単位で集計した。
+
+| 相対姿勢の推定に使った画像 | cam1の輝度250以上の画素 | 3視点で対応した点 | 予測誤差の中央値 | 95%点 |
+|---|---:|---:|---:|---:|
+| 11/26 開扉 | 32.47% | 178 | 1.82 px | 3.62 px |
+| 11/27 閉扉A | 66.87% | 107 | 1.52 px | 4.17 px |
+| 11/27 閉扉B | 0.88% | 647 | 0.54 px | 0.78 px |
+| 11/27 閉扉C | 0.09% | 671 | 0.50 px | 0.95 px |
+
+人体校正用の初期値には閉扉Cを選んだ。Cの姿勢を固定して別撮影のBで評価すると、
+7中心×3台の21誤差は中央値0.50 px、95%点1.68 px。BとCの相対回転の差は全カメラ対で最大0.0804度。
+Cの基線長比はcam0–1を1としてcam0–2が0.8275、cam1–2が0.5434だった。
+ドアとともに照明や露出も変化した。Cの3視点対応671点のうち652点は検証用タグから推定した床面の
+±0.02基線長に入る。現配置の人物の高さでの3D精度、実寸・床、人物ライブ追跡は人が入れる時に検証する。
+
+原本、追加マスク、対応場、採点明細はローカルの `outputs/markerless-roma2-closed-20261127-6ntnqZNY/` にある。
+同ディレクトリの `background-closed.yml` がCの相対姿勢と元画像上の3視点観測を持つ
+（SHA-256 `22f26ca9cbd18e170aeedb614b9b878fe923e29cbf5d41b4c1db5f48135e7c9d`）。
+リポジトリに収めたスクリプトでCの原本からJetson GPUで再計算し、推論の12配列、
+外したカメラでの予測誤差、出力YAMLのSHA-256が初回と一致した。
+
+### オフライン試行の再現
+
+検証に使ったRoMa v2.0.1のソースは `95c9968145c8906b7b59383258e9f73b02853d89`、
+DINOv3は `adc254450203739c8149213a7a69d8d905b4fcfa`。重み `romav2.0.1.pt` のSHA-256は
+`1557dec0d21b62366465f7ff4d5fdf228cc695d0582e196ad2b80e05230828b7`。
+GPU側はJetson用PyTorch 2.5.0a0（nv24.08）、torchvision 0.20.1。
+同版用のバッファ登録と任意演算のパッチはスクリプトと同じディレクトリに置いた。
+`run_roma.py` は環境変数 `ROMA_TRIAL` 以下の `hub/checkpoints/romav2.0.1.pt` と
+`hub/facebookresearch_dinov3_<commit>/` を読む。屋内設定は `scannet1500` の800/1024、双方向、seed 66。
+起動時に行分割した局所相関と元実装をGPUで照合する。画素処理・幾何にはシステムの
+OpenCV 4.5.4（aruco付き）・NumPy・SciPyを使った。
+
+次の例では `run_dir` を作業用ディレクトリ、`intrinsics` を撮影時のChArUco内参、
+`background` を新規出力YAMLとする。3枚の静止画は `raw0.jpg`〜`raw2.jpg` として置く。
+この配置で使った `extra_mask` は原画像のSHA-256ごとの追加除外矩形を持つJSONで、
+閉扉Cの原本には `closed-c-extra.json` が対応する。
+
+```bash
+tools=scripts/markerless_roma
+python3 "$tools/prepare.py" "$run_dir" --extra-mask "$extra_mask"
+python3 "$tools/run_roma.py" "$run_dir"
+OPENBLAS_NUM_THREADS=1 python3 "$tools/features.py" "$run_dir" roma
+OPENBLAS_NUM_THREADS=1 python3 "$tools/refine.py" "$run_dir" roma "$intrinsics"
+python3 cpp/tools/export_markerless_background.py "$run_dir" "$intrinsics" "$background"
+```
+
+既知の3台配置は `check_geometry.py INTRINSICS` で検査できる。上表の画像予測は
+`withheld.py`、`decode_holdout.py` で隠したタグを原画像から読み直し、
+`compare.py CLOSED_RUN OPEN_RUN/current INTRINSICS` で同じ観測に対する各組の姿勢を採点した。
