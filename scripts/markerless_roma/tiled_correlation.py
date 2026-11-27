@@ -1,5 +1,7 @@
 """Same per-pixel correlation as upstream, with bounded workspace on the Orin."""
 
+# Adapted from RoMa v2, Copyright (c) 2025 Johan Edstedt. See licenses/RoMaV2-MIT.txt.
+# SPDX-License-Identifier: MIT
 import torch
 from torch.nn import functional as F
 

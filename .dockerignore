@@ -9,6 +9,18 @@ cpp/build-*
 
 outputs
 
+# Locally supplied RoMa v2 calibration assets, including weight-bearing exports.
+**/RoMaV2/
+**/hub/facebookresearch_dinov3_*/
+**/romav2*.pt
+**/dinov3*.pth
+**/romav2*.onnx
+**/dinov3*.onnx
+**/romav2*.engine
+**/dinov3*.engine
+**/romav2*.plan
+**/dinov3*.plan
+
 python/.venv
 python/__pycache__
 **/__pycache__

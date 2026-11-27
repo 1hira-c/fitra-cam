@@ -15,6 +15,13 @@ cpp/.cache/
 windows/**/build*/
 windows/**/out/
 models/
+# Locally supplied model code and weights for optional RoMa v2 calibration.
+RoMaV2/
+romav2*.pt
+dinov3*.pth
+romav2*.onnx
+dinov3*.onnx
+**/hub/facebookresearch_dinov3_*/
 *.engine
 *.plan
 *.trt

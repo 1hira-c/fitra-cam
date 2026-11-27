@@ -405,6 +405,12 @@ Cの基線長比はcam0–1を1としてcam0–2が0.8275、cam1–2が0.5434だ
 
 ### オフライン試行の再現
 
+上記の空室校正では Edstedt らの RoMa v2 と Siméoni らの DINOv3 を利用した。
+実行者が公式配布元からモデルを用意し、`ROMA_TRIAL` を `outputs/roma-trial/` などの
+ローカルの作業ディレクトリに設定する。C++ の人体校正と実時間追跡には校正数値を渡す。
+重みを含む C++ 向け変換物を将来配布する際も同じ第三者条件を検討する。
+[利用・再配布条件と公式配布元](../../THIRD_PARTY_NOTICES.md#roma-v2)・[RoMa v2 論文](https://arxiv.org/abs/2511.15706)・[DINOv3 論文](https://arxiv.org/abs/2508.10104)
+
 検証に使ったRoMa v2.0.1のソースは `95c9968145c8906b7b59383258e9f73b02853d89`、
 DINOv3は `adc254450203739c8149213a7a69d8d905b4fcfa`。重み `romav2.0.1.pt` のSHA-256は
 `1557dec0d21b62366465f7ff4d5fdf228cc695d0582e196ad2b80e05230828b7`。

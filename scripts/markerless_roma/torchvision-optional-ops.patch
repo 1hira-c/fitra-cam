@@ -1,3 +1,7 @@
+Upstream: pytorch/vision v0.20.1, Copyright (c) Soumith Chintala 2016
+SPDX-License-Identifier: BSD-3-Clause
+See licenses/torchvision-BSD-3-Clause.txt for the full notice.
+
 --- a/torchvision/_meta_registrations.py
 +++ b/torchvision/_meta_registrations.py
 @@ -160,18 +160,19 @@

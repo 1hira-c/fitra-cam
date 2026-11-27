@@ -1,3 +1,7 @@
+Upstream: Parskatt/RoMaV2 v2.0.1, Copyright (c) 2025 Johan Edstedt
+SPDX-License-Identifier: MIT
+See licenses/RoMaV2-MIT.txt for the full notice.
+
 diff --git a/src/romav2/matcher.py b/src/romav2/matcher.py
 index 1c1ef6d..a0bf983 100644
 --- a/src/romav2/matcher.py
